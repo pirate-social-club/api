@@ -6,6 +6,7 @@ import type {
 import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
+import type { Client } from "../sql-client"
 import { openCommunityDb } from "./community-db-factory"
 import {
   assertPublicV0GateConfiguration,
@@ -91,6 +92,111 @@ async function recordCommunityGateUpdateAudit(input: {
 
 type CommunityGateSettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
+/**
+ * Buffer-safe gate update. The current access + gate-policy rows are read on the
+ * base client BEFORE the write tx (a buffered D1 write tx can't read them back
+ * mid-flight), so the 18_plus guard and audit snapshots are derived here and the tx
+ * body is write-only (UPDATE communities, DELETE + optional INSERT gate policy).
+ * Returns the pre-update snapshots for the audit record. Exported for buffer tests.
+ */
+export async function applyCommunityGateUpdateOnClient(
+  client: Client,
+  input: { communityId: string; body: UpdateCommunityGatesRequestBody; now: string },
+): Promise<{
+  previousAccess: CommunityAccessAuditSnapshot | null
+  previousGatePolicy: CommunityGatePolicyAuditSnapshot | null
+}> {
+  const currentAccessRows = await client.execute({
+    sql: `
+      SELECT membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope
+      FROM communities
+      WHERE community_id = ?1
+    `,
+    args: [input.communityId],
+  })
+  const previousAccess: CommunityAccessAuditSnapshot | null = currentAccessRows.rows[0]
+    ? accessSnapshotFromRow(currentAccessRows.rows[0] as Record<string, unknown>)
+    : null
+
+  if (
+    previousAccess?.default_age_gate_policy !== "18_plus"
+    && (input.body.default_age_gate_policy ?? "none") === "18_plus"
+  ) {
+    throw eligibilityFailed("18_plus can only be set during community creation")
+  }
+
+  const currentGatePolicyRows = await client.execute({
+    sql: `
+      SELECT scope, version, expression_json
+      FROM community_gate_policies
+      WHERE community_id = ?1
+        AND scope = 'membership'
+    `,
+    args: [input.communityId],
+  })
+  const previousGatePolicy: CommunityGatePolicyAuditSnapshot | null = currentGatePolicyRows.rows[0]
+    ? gatePolicySnapshotFromRow(currentGatePolicyRows.rows[0] as Record<string, unknown>)
+    : null
+
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        UPDATE communities
+        SET membership_mode = ?2,
+            default_age_gate_policy = ?3,
+            allow_anonymous_identity = ?4,
+            anonymous_identity_scope = ?5,
+            updated_at = ?6
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        input.body.membership_mode,
+        input.body.default_age_gate_policy ?? "none",
+        input.body.allow_anonymous_identity ? 1 : 0,
+        input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
+        input.now,
+      ],
+    })
+
+    await tx.execute({
+      sql: `
+        DELETE FROM community_gate_policies
+        WHERE community_id = ?1
+          AND scope = 'membership'
+      `,
+      args: [input.communityId],
+    })
+
+    if (input.body.gate_policy) {
+      await tx.execute({
+        sql: `
+          INSERT INTO community_gate_policies (
+            community_id, scope, version, expression_json, created_at, updated_at
+          ) VALUES (
+            ?1, 'membership', 1, ?2, ?3, ?3
+          )
+        `,
+        args: [input.communityId, JSON.stringify(input.body.gate_policy), input.now],
+      })
+    }
+
+    await tx.commit()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch (rollbackError) {
+      console.error("[community-gate-settings] rollback failed while updating gate settings", rollbackError)
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  return { previousAccess, previousGatePolicy }
+}
+
 export async function updateCommunityGates(input: {
   env: Env
   userId?: string
@@ -123,8 +229,6 @@ export async function updateCommunityGates(input: {
 
   try {
     const now = nowIso()
-    let previousAccess: CommunityAccessAuditSnapshot | null = null
-    let previousGatePolicy: CommunityGatePolicyAuditSnapshot | null = null
     const nextAccess: CommunityAccessAuditSnapshot = {
       membership_mode: input.body.membership_mode,
       default_age_gate_policy: input.body.default_age_gate_policy ?? "none",
@@ -134,97 +238,12 @@ export async function updateCommunityGates(input: {
     const nextGatePolicy: CommunityGatePolicyAuditSnapshot | null = input.body.gate_policy
       ? { scope: "membership", version: input.body.gate_policy.version, expression: input.body.gate_policy.expression }
       : null
-    const tx = await db.client.transaction("write")
-    try {
-      const currentAccessRows = await tx.execute({
-        sql: `
-          SELECT membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope
-          FROM communities
-          WHERE community_id = ?1
-        `,
-        args: [input.communityId],
-      })
-      previousAccess = currentAccessRows.rows[0]
-        ? accessSnapshotFromRow(currentAccessRows.rows[0] as Record<string, unknown>)
-        : null
+    const { previousAccess, previousGatePolicy } = await applyCommunityGateUpdateOnClient(db.client, {
+      communityId: input.communityId,
+      body: input.body,
+      now,
+    })
 
-      if (
-        previousAccess?.default_age_gate_policy !== "18_plus"
-        && nextAccess.default_age_gate_policy === "18_plus"
-      ) {
-        throw eligibilityFailed("18_plus can only be set during community creation")
-      }
-
-      const currentGatePolicyRows = await tx.execute({
-        sql: `
-          SELECT scope, version, expression_json
-          FROM community_gate_policies
-          WHERE community_id = ?1
-            AND scope = 'membership'
-        `,
-        args: [input.communityId],
-      })
-      previousGatePolicy = currentGatePolicyRows.rows[0]
-        ? gatePolicySnapshotFromRow(currentGatePolicyRows.rows[0] as Record<string, unknown>)
-        : null
-
-      await tx.execute({
-        sql: `
-          UPDATE communities
-          SET membership_mode = ?2,
-              default_age_gate_policy = ?3,
-              allow_anonymous_identity = ?4,
-              anonymous_identity_scope = ?5,
-              updated_at = ?6
-          WHERE community_id = ?1
-        `,
-        args: [
-          input.communityId,
-          input.body.membership_mode,
-          input.body.default_age_gate_policy ?? "none",
-          input.body.allow_anonymous_identity ? 1 : 0,
-          input.body.allow_anonymous_identity ? (input.body.anonymous_identity_scope ?? null) : null,
-          now,
-        ],
-      })
-
-      await tx.execute({
-        sql: `
-          DELETE FROM community_gate_policies
-          WHERE community_id = ?1
-            AND scope = 'membership'
-        `,
-        args: [input.communityId],
-      })
-
-      if (input.body.gate_policy) {
-        await tx.execute({
-          sql: `
-            INSERT INTO community_gate_policies (
-              community_id, scope, version, expression_json, created_at, updated_at
-            ) VALUES (
-              ?1, 'membership', 1, ?2, ?3, ?3
-            )
-          `,
-          args: [
-            input.communityId,
-            JSON.stringify(input.body.gate_policy),
-            now,
-          ],
-        })
-      }
-
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[community-gate-settings] rollback failed while updating gate settings", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
     await recordCommunityGateUpdateAudit({
       env: input.env,
       actorUserId: actor.userId,
