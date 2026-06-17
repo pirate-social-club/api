@@ -35,6 +35,7 @@ import {
   getCommentById,
   getCommunityCommentPolicy,
   insertComment,
+  getExistingCommentVoteValue,
   markCommentDeleted,
   setCommentRepliesLocked,
   setCommentStatus,
@@ -529,6 +530,9 @@ export async function castCommentVote(input: {
       throw notFoundError("Comment not found")
     }
 
+    // Read the prior vote BEFORE the tx — buffer-safe (a write tx can't read it
+    // back), so the count deltas computed in upsertCommentVote stay correct.
+    const previousValue = await getExistingCommentVoteValue(db.client, input.commentId, input.userId)
     const tx = await db.client.transaction("write")
     try {
       const result = await upsertCommentVote({
@@ -536,6 +540,7 @@ export async function castCommentVote(input: {
         commentId: input.commentId,
         userId: input.userId,
         value: input.value,
+        previousValue,
         now: nowIso(),
       })
       await tx.commit()
@@ -581,12 +586,16 @@ export async function deleteComment(input: {
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const deleted = await markCommentDeleted({
+      await markCommentDeleted({
         executor: tx,
         commentId: input.commentId,
         now: updatedAt,
       })
       await tx.commit()
+
+      // Reconstruct deterministically from the pre-tx row: the write tx can't read
+      // the updated row back, and markCommentDeleted sets exactly these fields.
+      const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -660,13 +669,17 @@ export async function removeCommentAsModerator(input: {
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const removed = await setCommentStatus({
+      await setCommentStatus({
         executor: tx,
         commentId: input.commentId,
         status: "removed",
         now: updatedAt,
       })
       await tx.commit()
+
+      // Reconstruct deterministically from the pre-tx row (buffered write tx can't
+      // read it back); setCommentStatus only changes status + updated_at.
+      const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({

@@ -430,14 +430,17 @@ export async function getCommentContext(input: {
   }
 }
 
-export async function upsertCommentVote(input: {
-  executor: DbExecutor
-  commentId: string
-  userId: string
-  value: -1 | 1
-  now: string
-}): Promise<{ comment_id: string; value: -1 | 1 }> {
-  const existing = await executeFirst(input.executor, {
+/**
+ * Read a user's current vote on a comment. Call this BEFORE opening the write tx
+ * (a buffered D1 write tx can't read it back), then pass the result to
+ * upsertCommentVote so the count deltas are correct.
+ */
+export async function getExistingCommentVoteValue(
+  executor: DbExecutor,
+  commentId: string,
+  userId: string,
+): Promise<-1 | 1 | null> {
+  const existing = await executeFirst(executor, {
     sql: `
       SELECT vote_value
       FROM comment_votes
@@ -445,9 +448,21 @@ export async function upsertCommentVote(input: {
         AND user_id = ?2
       LIMIT 1
     `,
-    args: [input.commentId, input.userId],
+    args: [commentId, userId],
   })
-  const previousValue = numberOrNull(rowValue(existing, "vote_value")) as -1 | 1 | null
+  return numberOrNull(rowValue(existing, "vote_value")) as -1 | 1 | null
+}
+
+export async function upsertCommentVote(input: {
+  executor: DbExecutor
+  commentId: string
+  userId: string
+  value: -1 | 1
+  /** The user's prior vote, read BEFORE the tx (buffer-safe). */
+  previousValue: -1 | 1 | null
+  now: string
+}): Promise<{ comment_id: string; value: -1 | 1 }> {
+  const previousValue = input.previousValue
 
   await input.executor.execute({
     sql: `
@@ -487,11 +502,17 @@ export async function upsertCommentVote(input: {
   }
 }
 
+/**
+ * Write-only: marks a comment deleted. Buffer-safe — issues only the UPDATE so it
+ * can run inside a buffered D1 write tx (a readback would not see the row until
+ * commit). The caller reconstructs the resulting Comment deterministically from the
+ * pre-tx row plus the deleted-state fields this statement sets.
+ */
 export async function markCommentDeleted(input: {
   executor: DbExecutor
   commentId: string
   now: string
-}): Promise<Comment> {
+}): Promise<void> {
   await input.executor.execute({
     sql: `
       UPDATE comments
@@ -503,20 +524,18 @@ export async function markCommentDeleted(input: {
     `,
     args: [input.commentId, input.now],
   })
-
-  const updated = await getCommentById(input.executor, input.commentId)
-  if (!updated) {
-    throw internalError("Comment row is missing after delete")
-  }
-  return updated
 }
 
+/**
+ * Write-only: sets a comment's moderation status. Buffer-safe (see
+ * {@link markCommentDeleted}); caller reconstructs the Comment from the pre-tx row.
+ */
 export async function setCommentStatus(input: {
   executor: DbExecutor
   commentId: string
   status: "published" | "hidden" | "removed"
   now: string
-}): Promise<Comment> {
+}): Promise<void> {
   await input.executor.execute({
     sql: `
       UPDATE comments
@@ -526,12 +545,6 @@ export async function setCommentStatus(input: {
     `,
     args: [input.commentId, input.status, input.now],
   })
-
-  const updated = await getCommentById(input.executor, input.commentId)
-  if (!updated) {
-    throw internalError("Comment row is missing after status update")
-  }
-  return updated
 }
 
 export async function setCommentRepliesLocked(input: {

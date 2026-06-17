@@ -13,6 +13,14 @@ import { getPostById } from "../src/lib/posts/community-post-query-store"
 import { resolvePostProjectionSchema } from "../src/lib/posts/community-post-projection"
 import type { Post } from "../src/types"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
+import type {
+  CommunityCommentProjectionRow,
+  CommunityDatabaseBindingRow,
+  CommunityPostProjectionRow,
+  CommunityRow,
+} from "../src/lib/auth/auth-db-rows"
+import type { UserRepository } from "../src/lib/auth/repositories"
+import type { Env, User } from "../src/types"
 
 /**
  * Test-only convenience: `insertPost` is now write-only (returns a draft, requires
@@ -31,14 +39,6 @@ export async function insertPostForTest(
   }
   return post
 }
-import type {
-  CommunityCommentProjectionRow,
-  CommunityDatabaseBindingRow,
-  CommunityPostProjectionRow,
-  CommunityRow,
-} from "../src/lib/auth/auth-db-rows"
-import type { UserRepository } from "../src/lib/auth/repositories"
-import type { Env, User } from "../src/types"
 
 export async function cleanupCommunityTestArtifacts(cleanupPaths: string[]): Promise<void> {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
