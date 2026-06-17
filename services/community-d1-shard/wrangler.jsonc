@@ -12,12 +12,16 @@
     // A read is authorized only if the community is mapped here AND maps to the
     // requested binding (assertCommunityBinding) — guards cross-tenant access via
     // a stale/poisoned routing row. Updated as communities are migrated onto this shard.
-    "COMMUNITY_D1_BINDING_MAP_JSON": "{}"
-  }
-  // d1_databases is added at provisioning time, e.g.:
-  //   "d1_databases": [
-  //     { "binding": "DB_CMTY_PILOT", "database_name": "cmty-pilot-staging", "database_id": "<from wrangler d1 create>" }
-  //   ]
+    // PR2 pilot: cmt_a43c... ("Georgia Place Smoke") → DB_CMTY_PILOT.
+    "COMMUNITY_D1_BINDING_MAP_JSON": "{\"cmt_a43c487541154b358837c726b98aea2e\":\"DB_CMTY_PILOT\"}"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB_CMTY_PILOT",
+      "database_name": "cmty-pilot-staging",
+      "database_id": "81369dab-8d38-4a7f-842f-dd3bb5c2fd30"
+    }
+  ]
   // The RPC surface validates the requested bindingName against these bound
   // namespaces (resolveD1), so only declared D1s here are reachable.
 }
