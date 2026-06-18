@@ -76,7 +76,8 @@ karaokeSessions.get("/:sessionId/debug", async (c) => {
     return errorResponse(requestId, 503, "karaoke_runtime_unavailable", "Karaoke runtime is unavailable")
   }
   const stub = namespace.get(namespace.idFromName(sessionId))
-  return await stub.fetch(`https://karaoke-runtime.internal/debug?sessionId=${encodeURIComponent(sessionId)}`)
+  const all = c.req.query("all") === "1" ? "&all=1" : ""
+  return await stub.fetch(`https://karaoke-runtime.internal/debug?sessionId=${encodeURIComponent(sessionId)}${all}`)
 })
 
 export default karaokeSessions
