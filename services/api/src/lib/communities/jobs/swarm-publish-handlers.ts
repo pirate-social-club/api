@@ -16,7 +16,7 @@ import {
   publishFeedReference,
   publishJsonToSwarm,
 } from "../../swarm/swarm-publisher"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
 import { THREAD_SNAPSHOT_MIN_INTERVAL_MS } from "./runner-types"
@@ -41,7 +41,7 @@ function serializeSwarmComment(comment: Comment): Comment {
 }
 
 export async function runCommentBodyMirror(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<CommentBodyMirrorPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id
@@ -89,7 +89,7 @@ export async function runCommentBodyMirror(input: CommunityJobHandlerInput): Pro
 }
 
 export async function runThreadSnapshotPublish(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<ThreadSnapshotPayload>(input.job.payload_json)
     const threadRootPostId = payload?.thread_root_post_id ?? input.job.subject_id

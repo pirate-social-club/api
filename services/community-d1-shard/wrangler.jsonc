@@ -13,13 +13,18 @@
     // requested binding (assertCommunityBinding) — guards cross-tenant access via
     // a stale/poisoned routing row. Updated as communities are migrated onto this shard.
     // PR2 pilot: cmt_a43c... ("Georgia Place Smoke") → DB_CMTY_PILOT.
-    "COMMUNITY_D1_BINDING_MAP_JSON": "{\"cmt_a43c487541154b358837c726b98aea2e\":\"DB_CMTY_PILOT\"}"
+    "COMMUNITY_D1_BINDING_MAP_JSON": "{\"cmt_a43c487541154b358837c726b98aea2e\":\"DB_CMTY_PILOT\",\"cmt_541911f4cd9145398b7fa79ddc0542fe\":\"DB_CMTY_FIXTURE\"}"
   },
   "d1_databases": [
     {
       "binding": "DB_CMTY_PILOT",
       "database_name": "cmty-pilot-staging",
       "database_id": "81369dab-8d38-4a7f-842f-dd3bb5c2fd30"
+    },
+    {
+      "binding": "DB_CMTY_FIXTURE",
+      "database_name": "cmty-d1-fixture-staging",
+      "database_id": "0c155e97-cbcb-47f5-ac7c-3e5c0b88ab60"
     }
   ]
   // The RPC surface validates the requested bindingName against these bound

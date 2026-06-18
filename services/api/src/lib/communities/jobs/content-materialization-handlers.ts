@@ -9,7 +9,7 @@ import { materializePostTranslation } from "../../localization/post-translation-
 import { getPostById } from "../../posts/community-post-query-store"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { loadCommunityProjection } from "../create/service"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
 
@@ -33,7 +33,7 @@ type CommunityTextTranslationPayload = {
 }
 
 export async function runPostTranslationMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<PostTranslationPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id.split(":")[0] ?? input.job.subject_id
@@ -54,7 +54,7 @@ export async function runPostTranslationMaterialize(input: CommunityJobHandlerIn
 }
 
 export async function runPostLabelMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<PostLabelPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id
@@ -86,7 +86,7 @@ export async function runPostLabelMaterialize(input: CommunityJobHandlerInput): 
 }
 
 export async function runCommentTranslationMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<CommentTranslationPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id.split(":")[0] ?? input.job.subject_id
@@ -107,7 +107,7 @@ export async function runCommentTranslationMaterialize(input: CommunityJobHandle
 }
 
 export async function runCommunityTextTranslationMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseCommunityTextMaterializePayload(input.job.payload_json) as CommunityTextTranslationPayload | null
     const locale = payload?.locale ?? null

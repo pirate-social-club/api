@@ -1,7 +1,7 @@
 import type { Client } from "../sql-client"
 import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import { safeRollback } from "../transactions"
 import { enqueueCommunityJob } from "../communities/jobs/store"
@@ -236,7 +236,7 @@ export async function createComment(input: {
     }
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
@@ -523,7 +523,7 @@ export async function castCommentVote(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)
@@ -580,7 +580,7 @@ export async function deleteComment(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     await requireMemberAccess(db.client, projection.community_id, input.userId)
 
@@ -660,7 +660,7 @@ export async function removeCommentAsModerator(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
@@ -746,7 +746,7 @@ export async function setCommentReplyLock(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {

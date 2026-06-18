@@ -2,7 +2,7 @@ import { getCommentById } from "../../comments/community-comment-store"
 import { internalError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getPostById } from "../../posts/community-post-query-store"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
 
@@ -21,7 +21,7 @@ type PostProjectionSyncPayload = {
 }
 
 export async function runCommentProjectionSync(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<CommentProjectionSyncPayload>(input.job.payload_json)
     const commentId = payload?.comment_id ?? input.job.subject_id
@@ -65,7 +65,7 @@ export async function runCommentProjectionSync(input: CommunityJobHandlerInput):
 }
 
 export async function runPostProjectionSync(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<PostProjectionSyncPayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id
