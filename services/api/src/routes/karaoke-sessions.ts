@@ -22,16 +22,29 @@ function errorResponse(requestId: string, status: number, code: string, message:
 
 karaokeSessions.get("/:sessionId/websocket", async (c) => {
   const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
+  const sessionId = c.req.param("sessionId")
+  const namespace = c.env.KARAOKE_SESSION_RUNTIME
+  // TEMPORARY: log WS-route progress into the DO debug buffer (worker-isolate
+  // rejections are otherwise invisible). Best-effort, awaited.
+  const dlog = async (event: string, detail: string) => {
+    try {
+      if (namespace) await namespace.get(namespace.idFromName(sessionId)).fetch(`https://karaoke-runtime.internal/debug-log?sessionId=${encodeURIComponent(sessionId)}&event=${encodeURIComponent(event)}&detail=${encodeURIComponent(detail)}`)
+    } catch { /* best-effort */ }
+  }
+  await dlog("ws_route_entry", `upgrade=${c.req.header("upgrade") ?? ""} origin=${c.req.header("origin") ?? ""} hasToken=${!!c.req.query("token")}`)
   if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+    await dlog("ws_reject", "upgrade_required")
     return errorResponse(requestId, 426, "websocket_upgrade_required", "WebSocket upgrade is required")
   }
   const origin = c.req.header("origin")
   if (!origin || !isAllowedKaraokeWebSocketOrigin(origin, c.env)) {
+    await dlog("ws_reject", `origin_not_allowed:${origin ?? "none"}`)
     return errorResponse(requestId, 403, "karaoke_origin_not_allowed", "WebSocket origin is not allowed")
   }
   const token = c.req.query("token")?.trim()
   const signingKey = c.env.KARAOKE_GATEWAY_SIGNING_KEY?.trim()
   if (!token || !signingKey || signingKey.length < 32) {
+    await dlog("ws_reject", `token_or_key_missing hasToken=${!!token} keyLen=${signingKey?.length ?? 0}`)
     return errorResponse(requestId, 401, "karaoke_gateway_invalid_token", "Karaoke gateway token is invalid")
   }
   const verified = await verifyKaraokeGatewayToken({
@@ -40,16 +53,18 @@ karaokeSessions.get("/:sessionId/websocket", async (c) => {
     token,
   })
   if (verified.error) {
+    await dlog("ws_reject", `token_verify:${verified.error}`)
     return errorResponse(requestId, 401, `karaoke_gateway_${verified.error}`, "Karaoke gateway token is invalid")
   }
-  const sessionId = c.req.param("sessionId")
   if (verified.claims.sessionId !== sessionId) {
+    await dlog("ws_reject", "session_mismatch")
     return errorResponse(requestId, 403, "karaoke_gateway_session_mismatch", "Karaoke gateway session does not match")
   }
-  const namespace = c.env.KARAOKE_SESSION_RUNTIME
   if (!namespace) {
+    await dlog("ws_reject", "runtime_unavailable")
     return errorResponse(requestId, 503, "karaoke_runtime_unavailable", "Karaoke runtime is unavailable")
   }
+  await dlog("ws_route_forward", "")
   const stub = namespace.get(namespace.idFromName(sessionId))
   return await stub.fetch("https://karaoke-runtime.internal/websocket", {
     headers: {

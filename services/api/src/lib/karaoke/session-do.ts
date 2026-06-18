@@ -186,7 +186,7 @@ export class KaraokeSessionRuntimeDO {
   async fetch(request: Request): Promise<Response> {
     await this.schemaReady;
     const url = new URL(request.url);
-    if (url.pathname !== "/debug") {
+    if (url.pathname !== "/debug" && url.pathname !== "/debug-log") {
       pushKaraokeDebug(request.headers.get("x-karaoke-session-id") ?? url.searchParams.get("sessionId") ?? this.meta?.sessionId, "do_fetch", { method: request.method, path: url.pathname });
     }
 
@@ -211,6 +211,10 @@ export class KaraokeSessionRuntimeDO {
     }
     if (request.method === "GET" && url.pathname === "/websocket") {
       return await this.handleWebSocketUpgrade(request);
+    }
+    if (request.method === "GET" && url.pathname === "/debug-log") {
+      pushKaraokeDebug(url.searchParams.get("sessionId") ?? undefined, url.searchParams.get("event") ?? "ws_route", { detail: url.searchParams.get("detail") ?? "" });
+      return new Response("ok");
     }
     if (request.method === "GET" && url.pathname === "/debug") {
       // Admin-gated at the worker route; returns the temporary [karaoke-debug] trace.
