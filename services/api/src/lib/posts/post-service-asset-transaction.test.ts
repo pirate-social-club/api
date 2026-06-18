@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { createClient } from "@libsql/client"
+import { existsSync, unlinkSync } from "node:fs"
 
 import type { Env } from "../../env"
 
@@ -8,7 +9,8 @@ type TestClient = ReturnType<typeof createClient>
 let activeClient: TestClient | null = null
 let events: string[] = []
 const communityDbFactoryModule = "../communities/community-db-factory"
-const communityDbFactoryPath = new URL("../communities/community-db-factory.ts", import.meta.url).pathname
+const communityDbFactoryUrl = new URL("../communities/community-db-factory.ts", import.meta.url)
+const communityDbFactoryPath = communityDbFactoryUrl.pathname
 const communityCreateRepositoryModule = "../communities/create/repository"
 const communityCreateRepositoryPath = new URL("../communities/create/repository.ts", import.meta.url).pathname
 const communityCreateSharedModule = "../communities/create/shared"
@@ -65,6 +67,7 @@ const communityDbFactoryMock = () => ({
 
 mock.module(communityDbFactoryModule, communityDbFactoryMock)
 mock.module(communityDbFactoryPath, communityDbFactoryMock)
+mock.module(communityDbFactoryUrl.href, communityDbFactoryMock)
 
 const communityCreateRepositoryMock = () => ({
   assertPublicV0GateConfiguration: () => {},
@@ -259,6 +262,13 @@ mock.module(songArtifactPostResolutionPath, songArtifactPostResolutionMock)
 mock.module(songArtifactPostResolutionUrl.href, songArtifactPostResolutionMock)
 
 const clients: TestClient[] = []
+const dbPaths: string[] = []
+
+function createTestClient(label: string): TestClient {
+  const path = `/tmp/post-service-asset-transaction-${label}-${crypto.randomUUID()}.sqlite`
+  dbPaths.push(path)
+  return createClient({ url: `file:${path}` })
+}
 
 afterEach(async () => {
   const { setPostAssetCreatorsForTests } = await import("./post-service")
@@ -267,6 +277,11 @@ afterEach(async () => {
   events = []
   for (const client of clients.splice(0)) {
     client.close()
+  }
+  for (const path of dbPaths.splice(0)) {
+    if (existsSync(path)) {
+      unlinkSync(path)
+    }
   }
 })
 
@@ -358,7 +373,7 @@ describe("createPost", () => {
   // seeding control-plane bundle/upload fixtures or partitioning CI into
   // test:unit + test:routes (which avoids the cross-file mock contamination).
   test.skip("creates video assets after the post transaction commits", async () => {
-    const client = createClient({ url: "file::memory:" })
+    const client = createTestClient("video")
     clients.push(client)
     activeClient = client
     await createPostTables(client)
@@ -465,7 +480,7 @@ describe("createPost", () => {
   })
 
   test.skip("creates song assets after the post transaction commits", async () => {
-    const client = createClient({ url: "file::memory:" })
+    const client = createTestClient("song")
     clients.push(client)
     activeClient = client
     await createPostTables(client)
