@@ -132,6 +132,20 @@ export type PurchaseSettlementReconciliationSummary = {
   errors: number
 }
 
+/**
+ * Quote-consumption eligibility, evaluated on the base client BEFORE the settlement
+ * write tx. Replaces the former in-tx `rowsAffected === 0` branch (a buffered D1 write
+ * tx can't surface rowsAffected mid-flight). 'active' is consumed by the conditional
+ * UPDATE; 'consumed' is an idempotent re-settlement (deterministic purchaseId + the
+ * purchases PK de-dupe the writes); any terminal state (expired/failed) or a missing
+ * quote is not consumable.
+ */
+export function assertPurchaseQuoteConsumable(status: string | null | undefined): void {
+  if (status !== "active" && status !== "consumed") {
+    throw conflictError("Purchase quote could not be consumed")
+  }
+}
+
 async function finalizeLocalPurchaseSettlement(input: {
   client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
   communityId: string
@@ -185,6 +199,15 @@ async function finalizeLocalPurchaseSettlement(input: {
   if (!listing) {
     throw notFoundError("Listing not found")
   }
+
+  // Quote-consumption eligibility BEFORE the tx — a buffered D1 write tx can't read
+  // the quote's UPDATE rowsAffected back mid-flight. Re-read the authoritative status:
+  // 'active' will be consumed by the conditional UPDATE below; 'consumed' is an
+  // idempotent re-settlement (purchaseId is deterministic + purchases.purchase_id is
+  // the PK, so the writes below de-dupe via ON CONFLICT); any terminal state
+  // (expired/failed) is not consumable.
+  const liveQuote = await getPurchaseQuoteRow(input.client, input.communityId, input.quote.quote_id)
+  assertPurchaseQuoteConsumable(liveQuote?.status ?? null)
 
   const tx = await input.client.transaction("write")
   try {
@@ -321,7 +344,10 @@ async function finalizeLocalPurchaseSettlement(input: {
       ],
     })
 
-    const quoteUpdate = await tx.execute({
+    // Conditional + idempotent: consumes the quote only if still 'active'. Eligibility
+    // was already enforced pre-tx, so we no longer branch on rowsAffected here (a
+    // buffered D1 write tx can't surface it mid-flight).
+    await tx.execute({
       sql: `
         UPDATE purchase_quotes
         SET status = 'consumed',
@@ -333,9 +359,6 @@ async function finalizeLocalPurchaseSettlement(input: {
       `,
       args: [input.communityId, input.quote.quote_id, input.createdAt],
     })
-    if ((quoteUpdate.rowsAffected ?? 0) === 0 && input.quote.status !== "consumed") {
-      throw conflictError("Purchase quote could not be consumed")
-    }
 
     await tx.execute({
       sql: `

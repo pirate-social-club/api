@@ -3,7 +3,7 @@ import { createClient } from "@libsql/client"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { runCommunityJob } from "../src/lib/communities/jobs/handlers"
-import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { insertPostForTest as insertPost } from "./community-test-helpers"
 import {
   generateAndStoreLinkSummary,
   translateAndStoreLinkSummary,

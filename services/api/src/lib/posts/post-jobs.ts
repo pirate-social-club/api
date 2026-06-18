@@ -3,6 +3,7 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
+import type { PostWriteDraft } from "./community-post-create-store"
 import { isRetryableLinkSummaryErrorMessage } from "./link-enrichment/retryable-errors"
 import { normalizeLinkUrl } from "./link-enrichment/url-normalization"
 
@@ -33,7 +34,7 @@ async function enqueuePostTranslationJob(input: {
 export async function enqueuePostTranslationPrewarmJobs(input: {
   client: DbExecutor
   communityId: string
-  post: Post
+  post: PostWriteDraft
   createdAt: string
 }): Promise<void> {
   const translationPolicy = input.post.translation_policy ?? "none"
@@ -106,7 +107,7 @@ async function enqueuePostLabelJob(input: {
 export async function enqueueEmbedHydrateIfNeeded(input: {
   client: DbExecutor
   communityId: string
-  post: Post
+  post: PostWriteDraft
   createdAt: string
 }): Promise<void> {
   if (input.post.post_type !== "link" || !input.post.link_url?.trim()) {
@@ -254,7 +255,7 @@ export async function enqueuePostLabelIfNeeded(input: {
   client: DbExecutor
   community: Pick<Community, "label_policy">
   communityId: string
-  post: Post
+  post: PostWriteDraft
   createdAt: string
 }): Promise<void> {
   if (input.post.status !== "published") {
