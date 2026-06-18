@@ -9,6 +9,7 @@
     "generate:migrations": "bun run scripts/generate-migration-manifest.ts",
     "check:migrations": "bun run scripts/check-migration-manifest.ts",
     "backfill:migrations": "bun run scripts/backfill-community-migrations.ts",
+    "backfill:routing": "bun run scripts/backfill-community-routing.ts",
     "check": "tsc --noEmit",
     "test": "bun test",
     "smoke:provision": "bun run scripts/smoke-provision.ts"

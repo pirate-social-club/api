@@ -7,7 +7,7 @@ import type { ProfileRepository, UserRepository } from "../src/lib/auth/reposito
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/commerce/asset-delivery"
 import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
-import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { insertPostForTest as insertPost } from "./community-test-helpers"
 import {
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,

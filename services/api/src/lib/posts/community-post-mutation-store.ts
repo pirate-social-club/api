@@ -3,11 +3,17 @@ import { internalError } from "../errors"
 import type { Post } from "../../types"
 import { getPostById } from "./community-post-query-store"
 
+/**
+ * Marks a post deleted. WRITE-ONLY (no in-tx readback) so it is safe inside a
+ * buffered D1 write transaction, where a read of the just-written row would see
+ * nothing until commit. Callers that need the post read it after commit (or, for
+ * the deterministic status/updated_at, construct it from their inputs).
+ */
 export async function markPostDeleted(input: {
   executor: DbExecutor
   postId: string
   now: string
-}): Promise<Post> {
+}): Promise<void> {
   await input.executor.execute({
     sql: `
       UPDATE posts
@@ -17,12 +23,6 @@ export async function markPostDeleted(input: {
     `,
     args: [input.postId, input.now],
   })
-
-  const updated = await getPostById(input.executor, input.postId)
-  if (!updated) {
-    throw internalError("Post row is missing after delete")
-  }
-  return updated
 }
 
 export async function setPostStatus(input: {

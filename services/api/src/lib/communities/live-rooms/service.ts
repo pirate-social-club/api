@@ -190,13 +190,13 @@ async function createLiveRoomPreflight(input: {
   return prepared
 }
 
-async function createLiveRoomInTransaction(input: {
+// Exported for buffer-safety regression tests (asserts the tx body is write-only).
+export async function createLiveRoomInTransaction(input: {
   tx: LiveRoomExecutor
   userId: string
   communityId: string
   prepared: PreparedLiveRoomCreate
 }): Promise<{
-  room: LiveRoom
   anchorPost: LiveRoomAnchorPost
   liveRoomId: string
   createdAt: string
@@ -319,7 +319,8 @@ async function createLiveRoomInTransaction(input: {
   }
 
   return {
-    room: await getHydratedLiveRoom(input.tx, input.communityId, liveRoomId),
+    // No in-tx readback: a buffered D1 write tx can't hydrate the room back. Callers
+    // read it via getHydratedLiveRoom(db.client, ...) AFTER commit.
     anchorPost: {
       post_id: anchorPostId,
       community_id: input.communityId,
@@ -437,7 +438,7 @@ export async function createLiveRoom(input: {
       anchorPost: created.anchorPost,
       createdAt: created.createdAt,
     })
-    return serializeLiveRoom(created.room)
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, created.liveRoomId))
   } finally {
     db.close()
   }
@@ -521,7 +522,7 @@ export async function publishLiveRoom(input: {
       createdAt: created.createdAt,
     })
     return {
-      room: serializeLiveRoom(created.room),
+      room: serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, created.liveRoomId)),
       listing,
     }
   } finally {
@@ -953,9 +954,7 @@ export async function cancelLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      const canceledRoom = await getHydratedLiveRoom(tx, input.communityId, input.liveRoomId)
       await tx.commit()
-      return serializeLiveRoom(canceledRoom)
     } catch (error) {
       try {
         await tx.rollback()
@@ -966,6 +965,8 @@ export async function cancelLiveRoom(input: {
     } finally {
       tx.close()
     }
+    // Hydrate AFTER commit — the buffered write tx can't read the room back.
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {
     db.close()
   }
@@ -1115,9 +1116,7 @@ export async function endLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      const endedRoom = await getHydratedLiveRoom(tx, input.communityId, input.liveRoomId)
       await tx.commit()
-      return serializeLiveRoom(endedRoom)
     } catch (error) {
       try {
         await tx.rollback()
@@ -1128,6 +1127,8 @@ export async function endLiveRoom(input: {
     } finally {
       tx.close()
     }
+    // Hydrate AFTER commit — the buffered write tx can't read the room back.
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {
     db.close()
   }

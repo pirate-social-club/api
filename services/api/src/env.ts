@@ -1,3 +1,5 @@
+import type { ShardRpc } from "@pirate/api-shared"
+
 export type Env = {
   // Runtime
   BUILD_GIT_REF?: string
@@ -23,6 +25,10 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
+  /** Phase-0 flag: route community reads through the routing directory. "true" enables; default off. */
+  COMMUNITY_READ_ROUTING_ENABLED?: string
+  /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
+  COMMUNITY_D1_SHARD?: ShardRpc
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
   COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
@@ -36,6 +42,10 @@ export type Env = {
   AUTH_UPSTREAM_JWT_ISSUER?: string
   AUTH_UPSTREAM_JWT_AUDIENCE?: string
   AUTH_UPSTREAM_JWT_SHARED_SECRET?: string
+  // Staging-only test issuer (see lib/auth/staging-test-auth.ts). Fails closed unless
+  // ENVIRONMENT=staging AND STAGING_TEST_AUTH_ENABLED opted in AND the secret is set.
+  STAGING_TEST_AUTH_ENABLED?: string
+  STAGING_TEST_JWT_SHARED_SECRET?: string
   PIRATE_APP_JWT_PRIVATE_KEY?: string
   PIRATE_APP_JWT_PUBLIC_KEY?: string
   PIRATE_APP_JWT_ISSUER?: string

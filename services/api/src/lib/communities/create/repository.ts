@@ -17,7 +17,7 @@ import type { ActorContext, AdminActorContext } from "../../auth-middleware"
 import type { Env } from "../../../env"
 import type { Community } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import { normalizeCommunityCountryCode } from "../country-code"
 import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
 import type {
@@ -156,7 +156,11 @@ export async function loadCommunityLocalSnapshot(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
-  const db = await openCommunityDb(env, repo, communityId).catch(() => null)
+  // Routed read: follows the community's backend (D1 via shard read RPC when flipped,
+  // else legacy Turso). Read-only (SELECTs only), so a flipped community's snapshot
+  // reads reflect D1 instead of stale Turso. Closes #48 for donation/rules/gate
+  // snapshot reads. Falls back to null on any open failure, as before.
+  const db = await openCommunityReadClient(env, repo, communityId).catch(() => null)
   if (!db) {
     return null
   }
