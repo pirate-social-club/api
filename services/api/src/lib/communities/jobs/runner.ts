@@ -1,6 +1,6 @@
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import { logPipelineError, logPipelineInfo, summarizeReference } from "../../observability/pipeline-log"
 import {
   findNextRunnableCommunityJob,
@@ -37,7 +37,7 @@ export async function processCommunityJobById(input: {
   jobId: string
   communityRepository: CommunityJobRepository
 }): Promise<CommunityJobRow | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const existing = await getCommunityJobById({
       client: db.client,
@@ -108,7 +108,7 @@ export async function processNextCommunityJob(input: {
   communityId: string
   communityRepository: CommunityJobRepository
 }): Promise<CommunityJobRow | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const next = await findNextRunnableCommunityJob({
       client: db.client,
