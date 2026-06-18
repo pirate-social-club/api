@@ -27,7 +27,7 @@ import {
   KARAOKE_SNAPSHOT_TABLE_DDL,
 } from "./snapshot-migrations";
 import { KaraokeSttConfigurationError, resolveKaraokeSttAdapter } from "./stt-adapter-resolver";
-import { noteKaraokeFrame, pushKaraokeDebug, readKaraokeDebug } from "./karaoke-debug-buffer";
+import { noteKaraokeFrame, pushKaraokeDebug, readKaraokeDebug, registerKaraokeDebugSql } from "./karaoke-debug-buffer";
 
 const WS_ATTEMPT_TAG_PREFIX = "attempt:";
 const TRUSTED_GATEWAY_HEADERS = [
@@ -179,6 +179,7 @@ export class KaraokeSessionRuntimeDO {
       this.ctx.storage.sql.exec(KARAOKE_SNAPSHOT_TABLE_DDL);
       this.ctx.storage.sql.exec(KARAOKE_OUTBOX_TABLE_DDL);
       this.ctx.storage.sql.exec(KARAOKE_OUTBOX_INDEX_DDL);
+      registerKaraokeDebugSql((query, ...bindings) => this.ctx.storage.sql.exec(query, ...(bindings as never[])));
     });
   }
 
