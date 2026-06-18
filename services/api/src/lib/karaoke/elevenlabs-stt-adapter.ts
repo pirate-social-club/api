@@ -5,6 +5,7 @@ import type {
 } from "@pirate/karaoke-runtime"
 
 import { KaraokeSttEventEmitter } from "./stt-event-emitter"
+import { pushKaraokeDebug } from "./karaoke-debug-buffer"
 
 export const ELEVENLABS_DEFAULT_STT_WEBSOCKET_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 export const ELEVENLABS_DEFAULT_STT_MODEL = "scribe_v2_realtime"
@@ -173,20 +174,26 @@ export class ElevenLabsKaraokeSttAdapter {
     this.streamGeneration = crypto.randomUUID()
     this.emitter = new KaraokeSttEventEmitter(input.sessionId, input.attemptId, input.onMessage)
 
-    console.info("[karaoke-debug] eleven_connecting", { sessionId: input.sessionId, model: this.model })
-    const socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
-    console.info("[karaoke-debug] eleven_connected", { sessionId: input.sessionId })
+    pushKaraokeDebug(input.sessionId, "eleven_connecting", { model: this.model })
+    let socket: KaraokeSttSocket
+    try {
+      socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
+    } catch (error) {
+      pushKaraokeDebug(input.sessionId, "eleven_connect_failed", { message: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
+    pushKaraokeDebug(input.sessionId, "eleven_connected", {})
     this.socket = socket
     socket.addEventListener("message", (event) => {
-      console.info("[karaoke-debug] eleven_msg", { len: typeof event.data === "string" ? event.data.length : -1 })
+      pushKaraokeDebug(input.sessionId, "eleven_msg", { len: typeof event.data === "string" ? event.data.length : -1 })
       this.inbound = this.inbound.then(() => this.handleMessage(event.data)).catch(() => undefined)
     })
     socket.addEventListener("close", () => {
-      console.info("[karaoke-debug] eleven_close", { sessionId: input.sessionId })
+      pushKaraokeDebug(input.sessionId, "eleven_close", {})
       this.markClosed()
     })
     socket.addEventListener("error", () => {
-      console.info("[karaoke-debug] eleven_error", { sessionId: input.sessionId })
+      pushKaraokeDebug(input.sessionId, "eleven_error", {})
       this.markClosed()
     })
   }

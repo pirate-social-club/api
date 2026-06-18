@@ -27,6 +27,7 @@ import {
   KARAOKE_SNAPSHOT_TABLE_DDL,
 } from "./snapshot-migrations";
 import { KaraokeSttConfigurationError, resolveKaraokeSttAdapter } from "./stt-adapter-resolver";
+import { noteKaraokeFrame, pushKaraokeDebug, readKaraokeDebug } from "./karaoke-debug-buffer";
 
 const WS_ATTEMPT_TAG_PREFIX = "attempt:";
 const TRUSTED_GATEWAY_HEADERS = [
@@ -207,6 +208,11 @@ export class KaraokeSessionRuntimeDO {
     if (request.method === "GET" && url.pathname === "/websocket") {
       return await this.handleWebSocketUpgrade(request);
     }
+    if (request.method === "GET" && url.pathname === "/debug") {
+      // Admin-gated at the worker route; returns the temporary [karaoke-debug] ring buffer.
+      const sid = url.searchParams.get("sessionId") ?? this.meta?.sessionId ?? "";
+      return Response.json(readKaraokeDebug(sid));
+    }
 
     return this.notFound();
   }
@@ -224,7 +230,7 @@ export class KaraokeSessionRuntimeDO {
         await this.effectRunner!.reportTransportError(decoded.error, this.host!.snapshot().state);
         return;
       }
-      console.info("[karaoke-debug] audio_frame", { sessionId: this.meta?.sessionId, bytes: (message as ArrayBuffer).byteLength });
+      noteKaraokeFrame(this.meta?.sessionId, (message as ArrayBuffer).byteLength);
       await this.host!.handleAudioFrame(decoded.frame);
       await this.persistSnapshotIfNeeded();
       return;
@@ -242,7 +248,7 @@ export class KaraokeSessionRuntimeDO {
       await this.sendSessionError(server, "WebSocket message is not a KaraokeClientEvent");
       return;
     }
-    console.info("[karaoke-debug] client_event", { sessionId: this.meta?.sessionId, type: clientEvent.type });
+    pushKaraokeDebug(this.meta?.sessionId, "client_event", { type: clientEvent.type });
     await this.host!.handleClientEvent(clientEvent);
     await this.persistSnapshotIfNeeded();
   }
@@ -433,7 +439,7 @@ export class KaraokeSessionRuntimeDO {
     const server = pair[1];
     server.serializeAttachment(trusted.attachment);
     this.ctx.acceptWebSocket(server, [this.attemptTag()]);
-    console.info("[karaoke-debug] ws_accepted", { requestId: trusted.attachment.requestId });
+    pushKaraokeDebug(trusted.attachment.sessionId, "ws_accepted", { requestId: trusted.attachment.requestId });
     return new Response(null, {
       headers: { "x-request-id": trusted.attachment.requestId },
       status: 101,
@@ -480,7 +486,7 @@ export class KaraokeSessionRuntimeDO {
         throw error;
       }
     }
-    console.info("[karaoke-debug] host_init", { sessionId: restored.state.sessionId, attemptId: restored.state.attemptId, adapter: sttAdapter.constructor.name, status: restored.state.status });
+    pushKaraokeDebug(restored.state.sessionId, "host_init", { attemptId: restored.state.attemptId, adapter: sttAdapter.constructor.name, status: restored.state.status });
     await this.initializeHost(restored.state, sttAdapter, {
       lastClientSequence: restored.lastClientSequence,
       lastSttSequence: restored.lastSttSequence,

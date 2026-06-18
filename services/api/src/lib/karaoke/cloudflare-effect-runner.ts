@@ -7,6 +7,7 @@ import {
   type KaraokeTransportError,
   type KaraokeTransportEnvelope,
 } from "@pirate/karaoke-runtime";
+import { pushKaraokeDebug } from "./karaoke-debug-buffer";
 
 export interface OutboxRow {
   eventId: string;
@@ -155,7 +156,7 @@ export class CloudflareKaraokeEffectRunner {
     if (!built) {
       return;
     }
-    console.info("[karaoke-debug] emit_effect", { sessionId: state.sessionId, type: effect.type });
+    pushKaraokeDebug(state.sessionId, "emit_effect", { type: effect.type });
     await this.persistRowsBeforeBroadcast([built], state);
     await this.broadcast(built.event);
     await this.outbox.markDelivered({
@@ -169,7 +170,7 @@ export class CloudflareKaraokeEffectRunner {
     event: KaraokeStreamingSttEvent,
     state: KaraokeSessionState,
   ): Promise<void> {
-    console.info("[karaoke-debug] relay_stt", { sessionId: state.sessionId, type: event.type, textLen: (event.text ?? "").length, words: event.words?.length ?? 0 });
+    pushKaraokeDebug(state.sessionId, "relay_stt", { type: event.type, textLen: (event.text ?? "").length, words: event.words?.length ?? 0 });
     const sequence = this.serverSequence;
     this.serverSequence += 1;
     const relayEvent: KaraokeServerEvent = {
@@ -186,7 +187,7 @@ export class CloudflareKaraokeEffectRunner {
     error: KaraokeTransportError,
     state: KaraokeSessionState,
   ): Promise<void> {
-    console.info("[karaoke-debug] session_error", { sessionId: state.sessionId, code: error.code });
+    pushKaraokeDebug(state.sessionId, "session_error", { code: error.code });
     const sequence = this.serverSequence;
     this.serverSequence += 1;
     const built = buildSessionErrorServerEvent(state, sequence, error);

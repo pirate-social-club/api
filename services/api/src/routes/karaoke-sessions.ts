@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import type { Env } from "../env"
+import { authenticateAdminTokenOnly } from "../lib/auth-middleware"
 import { isAllowedKaraokeWebSocketOrigin } from "../lib/http/allowed-origins"
 import { verifyKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
 
@@ -60,6 +61,22 @@ karaokeSessions.get("/:sessionId/websocket", async (c) => {
       "x-karaoke-subject": verified.claims.subject,
     },
   })
+})
+
+// TEMPORARY admin-gated debug: returns the DO's [karaoke-debug] ring buffer for a session.
+karaokeSessions.get("/:sessionId/debug", async (c) => {
+  const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
+  const admin = authenticateAdminTokenOnly({ env: c.env, token: c.req.header("x-admin-token") })
+  if (!admin) {
+    return errorResponse(requestId, 401, "admin_token_required", "Admin token required")
+  }
+  const sessionId = c.req.param("sessionId")
+  const namespace = c.env.KARAOKE_SESSION_RUNTIME
+  if (!namespace) {
+    return errorResponse(requestId, 503, "karaoke_runtime_unavailable", "Karaoke runtime is unavailable")
+  }
+  const stub = namespace.get(namespace.idFromName(sessionId))
+  return await stub.fetch(`https://karaoke-runtime.internal/debug?sessionId=${encodeURIComponent(sessionId)}`)
 })
 
 export default karaokeSessions
