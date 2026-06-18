@@ -173,15 +173,20 @@ export class ElevenLabsKaraokeSttAdapter {
     this.streamGeneration = crypto.randomUUID()
     this.emitter = new KaraokeSttEventEmitter(input.sessionId, input.attemptId, input.onMessage)
 
+    console.info("[karaoke-debug] eleven_connecting", { sessionId: input.sessionId, model: this.model })
     const socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
+    console.info("[karaoke-debug] eleven_connected", { sessionId: input.sessionId })
     this.socket = socket
     socket.addEventListener("message", (event) => {
+      console.info("[karaoke-debug] eleven_msg", { len: typeof event.data === "string" ? event.data.length : -1 })
       this.inbound = this.inbound.then(() => this.handleMessage(event.data)).catch(() => undefined)
     })
     socket.addEventListener("close", () => {
+      console.info("[karaoke-debug] eleven_close", { sessionId: input.sessionId })
       this.markClosed()
     })
     socket.addEventListener("error", () => {
+      console.info("[karaoke-debug] eleven_error", { sessionId: input.sessionId })
       this.markClosed()
     })
   }

@@ -224,6 +224,7 @@ export class KaraokeSessionRuntimeDO {
         await this.effectRunner!.reportTransportError(decoded.error, this.host!.snapshot().state);
         return;
       }
+      console.info("[karaoke-debug] audio_frame", { sessionId: this.meta?.sessionId, bytes: (message as ArrayBuffer).byteLength });
       await this.host!.handleAudioFrame(decoded.frame);
       await this.persistSnapshotIfNeeded();
       return;
@@ -241,6 +242,7 @@ export class KaraokeSessionRuntimeDO {
       await this.sendSessionError(server, "WebSocket message is not a KaraokeClientEvent");
       return;
     }
+    console.info("[karaoke-debug] client_event", { sessionId: this.meta?.sessionId, type: clientEvent.type });
     await this.host!.handleClientEvent(clientEvent);
     await this.persistSnapshotIfNeeded();
   }
@@ -431,6 +433,7 @@ export class KaraokeSessionRuntimeDO {
     const server = pair[1];
     server.serializeAttachment(trusted.attachment);
     this.ctx.acceptWebSocket(server, [this.attemptTag()]);
+    console.info("[karaoke-debug] ws_accepted", { requestId: trusted.attachment.requestId });
     return new Response(null, {
       headers: { "x-request-id": trusted.attachment.requestId },
       status: 101,
@@ -477,6 +480,7 @@ export class KaraokeSessionRuntimeDO {
         throw error;
       }
     }
+    console.info("[karaoke-debug] host_init", { sessionId: restored.state.sessionId, attemptId: restored.state.attemptId, adapter: sttAdapter.constructor.name, status: restored.state.status });
     await this.initializeHost(restored.state, sttAdapter, {
       lastClientSequence: restored.lastClientSequence,
       lastSttSequence: restored.lastSttSequence,
