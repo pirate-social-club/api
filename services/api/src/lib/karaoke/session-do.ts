@@ -27,7 +27,7 @@ import {
   KARAOKE_SNAPSHOT_TABLE_DDL,
 } from "./snapshot-migrations";
 import { KaraokeSttConfigurationError, resolveKaraokeSttAdapter } from "./stt-adapter-resolver";
-import { noteKaraokeFrame, pushKaraokeDebug, readAllKaraokeDebug, readKaraokeDebug, registerKaraokeDebugSql } from "./karaoke-debug-buffer";
+import { getKaraokeDebugStatus, noteKaraokeFrame, pushKaraokeDebug, readAllKaraokeDebug, readKaraokeDebug, registerKaraokeDebugSql } from "./karaoke-debug-buffer";
 
 const WS_ATTEMPT_TAG_PREFIX = "attempt:";
 const TRUSTED_GATEWAY_HEADERS = [
@@ -216,7 +216,7 @@ export class KaraokeSessionRuntimeDO {
       // Admin-gated at the worker route; returns the temporary [karaoke-debug] trace.
       const sid = url.searchParams.get("sessionId") ?? this.meta?.sessionId ?? "";
       if (url.searchParams.get("all") === "1") {
-        return Response.json({ session: readKaraokeDebug(sid), all: readAllKaraokeDebug() });
+        return Response.json({ status: getKaraokeDebugStatus(), session: readKaraokeDebug(sid), all: readAllKaraokeDebug() });
       }
       return Response.json(readKaraokeDebug(sid));
     }

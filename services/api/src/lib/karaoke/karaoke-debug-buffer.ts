@@ -21,6 +21,11 @@ type SqlExec = (query: string, ...bindings: unknown[]) => { toArray(): Array<Rec
 
 let sql: SqlExec | null = null;
 let initialized = false;
+let lastError: string | null = null;
+
+export function getKaraokeDebugStatus(): { registered: boolean; initialized: boolean; lastError: string | null } {
+  return { registered: sql !== null, initialized, lastError };
+}
 
 function nowMs(): number {
   try {
@@ -35,11 +40,11 @@ export function registerKaraokeDebugSql(exec: SqlExec): void {
   sql = exec;
   if (initialized) return;
   try {
-    sql(`CREATE TABLE IF NOT EXISTS __karaoke_debug (seq INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER, session_id TEXT, event TEXT, data TEXT)`);
+    sql(`CREATE TABLE IF NOT EXISTS __karaoke_debug (seq INTEGER PRIMARY KEY, t INTEGER, session_id TEXT, event TEXT, data TEXT)`);
     sql(`CREATE TABLE IF NOT EXISTS __karaoke_debug_frames (session_id TEXT PRIMARY KEY, count INTEGER, bytes INTEGER, first_t INTEGER, last_t INTEGER)`);
     initialized = true;
-  } catch {
-    // best-effort
+  } catch (error) {
+    lastError = `register: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 
@@ -51,8 +56,8 @@ export function pushKaraokeDebug(
   const key = sessionId || "unknown";
   try {
     sql?.(`INSERT INTO __karaoke_debug (t, session_id, event, data) VALUES (?, ?, ?, ?)`, nowMs(), key, event, JSON.stringify(data ?? {}));
-  } catch {
-    // best-effort
+  } catch (error) {
+    lastError = `push(${event}): ${error instanceof Error ? error.message : String(error)}`;
   }
   try {
     console.info("[karaoke-debug]", event, JSON.stringify(data ?? {}));
