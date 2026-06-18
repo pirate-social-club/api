@@ -392,6 +392,7 @@ export async function createComment(input: {
           thread_root_post_id: draft.thread_root_post_id,
         }),
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only (fresh comment, no dedup SELECT)
       })
 
       await enqueueCommunityJob({
@@ -404,6 +405,7 @@ export async function createComment(input: {
           thread_root_post_id: input.threadRootPostId,
         }),
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent thread snapshot republish)
       })
 
       await enqueueCommentTranslationPrewarmJobs({
@@ -411,6 +413,7 @@ export async function createComment(input: {
         communityId: input.communityId,
         comment: draft,
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only prewarm jobs (fresh comment)
       })
 
       await tx.commit()
