@@ -33,7 +33,7 @@
     "test:routes": "bun test --max-concurrency=1 tests/routes tests/community-membership-reconciliation.test.ts",
     "test:integration": "vitest run --config vitest.config.ts",
     "check:integration": "tsgo --noEmit -p tests/integration/tsconfig.json",
-    "coverage": "bun test --coverage",
+    "coverage": "bun test --coverage src tests/lib",
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "smoke:story-remix-cycle": "bun run scripts/smoke-story-remix-cycle.ts",
     "live-room:e2e:local": "bun run scripts/live-room-local-e2e.ts",
