@@ -27,7 +27,7 @@ import {
   KARAOKE_SNAPSHOT_TABLE_DDL,
 } from "./snapshot-migrations";
 import { KaraokeSttConfigurationError, resolveKaraokeSttAdapter } from "./stt-adapter-resolver";
-import { noteKaraokeFrame, pushKaraokeDebug, readKaraokeDebug, registerKaraokeDebugSql } from "./karaoke-debug-buffer";
+import { noteKaraokeFrame, pushKaraokeDebug, readAllKaraokeDebug, readKaraokeDebug, registerKaraokeDebugSql } from "./karaoke-debug-buffer";
 
 const WS_ATTEMPT_TAG_PREFIX = "attempt:";
 const TRUSTED_GATEWAY_HEADERS = [
@@ -186,6 +186,9 @@ export class KaraokeSessionRuntimeDO {
   async fetch(request: Request): Promise<Response> {
     await this.schemaReady;
     const url = new URL(request.url);
+    if (url.pathname !== "/debug") {
+      pushKaraokeDebug(request.headers.get("x-karaoke-session-id") ?? url.searchParams.get("sessionId") ?? this.meta?.sessionId, "do_fetch", { method: request.method, path: url.pathname });
+    }
 
     if (request.method === "POST" && url.pathname === "/init") {
       return await this.handleInit(request);
@@ -210,8 +213,11 @@ export class KaraokeSessionRuntimeDO {
       return await this.handleWebSocketUpgrade(request);
     }
     if (request.method === "GET" && url.pathname === "/debug") {
-      // Admin-gated at the worker route; returns the temporary [karaoke-debug] ring buffer.
+      // Admin-gated at the worker route; returns the temporary [karaoke-debug] trace.
       const sid = url.searchParams.get("sessionId") ?? this.meta?.sessionId ?? "";
+      if (url.searchParams.get("all") === "1") {
+        return Response.json({ session: readKaraokeDebug(sid), all: readAllKaraokeDebug() });
+      }
       return Response.json(readKaraokeDebug(sid));
     }
 

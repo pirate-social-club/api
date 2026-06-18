@@ -77,6 +77,15 @@ export function noteKaraokeFrame(sessionId: string | undefined, bytes: number): 
   }
 }
 
+/** Diagnostic: every row across all session keys (to detect mis-keyed pushes). */
+export function readAllKaraokeDebug(): Array<{ seq: number; t: number; session_id: string; event: string; data: string }> {
+  try {
+    return (sql?.(`SELECT seq, t, session_id, event, data FROM __karaoke_debug ORDER BY seq`).toArray() ?? []) as Array<{ seq: number; t: number; session_id: string; event: string; data: string }>;
+  } catch {
+    return [];
+  }
+}
+
 export function readKaraokeDebug(sessionId: string): KaraokeDebugEntry[] {
   const out: KaraokeDebugEntry[] = [];
   try {
