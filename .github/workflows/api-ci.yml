@@ -138,6 +138,20 @@ jobs:
         working-directory: services/zkpassport-verifier-container
         run: bun run test
 
+      - name: Check out web repo for cross-repo file deps
+        # services/api depends on @pirate/karaoke-runtime via
+        # file:../../../web/packages/karaoke-runtime — CI must mirror the
+        # workspace layout (web as a sibling) so the file: path resolves.
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/web
+          ref: release/karaoke-web
+          path: .cross-repo/web
+
+      - name: Link web repo for cross-repo file deps
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
+
       - name: Install API dependencies
         working-directory: services/api
         run: bun install --frozen-lockfile
@@ -231,6 +245,10 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.21
+
+      - name: Install shared dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
 
       - name: Install issuer dependencies
         working-directory: services/community-protocol-issuer

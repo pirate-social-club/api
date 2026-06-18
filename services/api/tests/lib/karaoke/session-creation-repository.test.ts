@@ -46,7 +46,8 @@ async function setup(): Promise<Client> {
 
 const key = {
   communityId: "community-1",
-  idempotencyKey: "5a59af75-bf63-41d7-b181-fc3620d2c7c7",
+  // Low-entropy fixture UUID (valid v4) so a secret scanner does not flag it.
+  idempotencyKey: "11111111-1111-4111-8111-111111111111",
   postId: "post-1",
   subjectUserId: "user-1",
 }
