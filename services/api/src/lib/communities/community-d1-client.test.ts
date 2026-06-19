@@ -9,15 +9,29 @@ function fakeShard() {
     calls,
     execute: async (input: any) => {
       calls.push({ m: "execute", input })
-      return { rows: [{ read: 1 }] }
+      return { ok: true as const, value: { rows: [{ read: 1 }] } }
     },
     batch: async (input: any) => {
       calls.push({ m: "batch", input })
-      return input.statements.map(() => ({ rows: [] }))
+      return { ok: true as const, value: input.statements.map(() => ({ rows: [] })) }
     },
     batchWrite: async (input: any) => {
       calls.push({ m: "batchWrite", input })
-      return input.statements.map(() => ({ rows: [], rowsAffected: 1 }))
+      return {
+        ok: true as const,
+        value: input.statements.map(() => ({ rows: [], rowsAffected: 1 })),
+      }
+    },
+    communityD1Bind: async (input: any) => {
+      calls.push({ m: "communityD1Bind", input })
+      return {
+        ok: true as const,
+        value: { bindingName: "DB_CMTY_NEW", shardWorkerId: "shard-1", allocated: true },
+      }
+    },
+    communityD1LoadSnapshot: async (input: any) => {
+      calls.push({ m: "communityD1LoadSnapshot", input })
+      return { ok: true as const, value: { rowsAffected: input.statements.length, loaded: true } }
     },
   }
 }

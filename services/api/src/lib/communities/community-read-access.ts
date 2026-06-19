@@ -1,4 +1,4 @@
-import type { ShardReadRpc, ShardSqlStatement } from "@pirate/api-shared"
+import type { ShardReadRpc, ShardResult, ShardSqlStatement } from "@pirate/api-shared"
 import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
@@ -77,6 +77,20 @@ function toShardStatement(statement: InStatement | string): ShardSqlStatement | 
 }
 
 /**
+ * Unwrap a `ShardResult<T>`: return the value on success, or throw an HttpError
+ * with the original code on failure. The code is preserved across the
+ * WorkerEntrypoint boundary because the shard returns errors as VALUES
+ * (step 2.5), not thrown errors. Security denies (shard_binding_not_allowed)
+ * are 403; everything else is 500. The retryable flag matches the shard's
+ * "is this transient?" semantics where applicable.
+ */
+function unwrap<T>(r: ShardResult<T>, retryable = true): T {
+  if (r.ok) return r.value
+  const status = r.code === "shard_binding_not_allowed" ? 403 : 500
+  throw new HttpError(status, r.code, r.message, retryable)
+}
+
+/**
  * PR2: real D1 read client backed by the shard Worker over the service-binding
  * RPC. Returns a `ReadClient` (no `transaction`) so the write surface is
  * unrepresentable here — writes remain PR3. The shard re-validates `bindingName`
@@ -88,17 +102,24 @@ export function makeShardReadClient(shard: ShardReadRpc, binding: ResolvedCommun
     throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)
   }
   return {
-    execute: (statement) =>
-      shard.execute({ communityId: binding.communityId, bindingName, statement: toShardStatement(statement) }),
+    execute: async (statement) => {
+      const r = await shard.execute({
+        communityId: binding.communityId,
+        bindingName,
+        statement: toShardStatement(statement),
+      })
+      return unwrap(r)
+    },
     batch: async (statements, mode) => {
       if (mode === "write") {
         throw new HttpError(400, "read_only_violation", "Write batch is not allowed on the D1 shard read client")
       }
-      return shard.batch({
+      const r = await shard.batch({
         communityId: binding.communityId,
         bindingName,
         statements: statements.map((s) => toShardStatement(s) as ShardSqlStatement),
       })
+      return unwrap(r)
     },
   }
 }

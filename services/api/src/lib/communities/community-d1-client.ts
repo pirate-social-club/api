@@ -1,4 +1,4 @@
-import { isReadOnlyStatement, type ShardRpc, type ShardSqlStatement } from "@pirate/api-shared"
+import { isReadOnlyStatement, type ShardResult, type ShardRpc, type ShardSqlStatement } from "@pirate/api-shared"
 import { HttpError } from "../errors"
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
@@ -15,6 +15,11 @@ import type { ResolvedCommunityBinding } from "./community-binding-resolver"
  * an empty result immediately — real results arrive only at commit. A site that
  * reads-and-branches on a statement's result INSIDE a write tx is unsupported and
  * must be refactored to do that read before opening the tx.
+ *
+ * Step 2.5: the shard returns errors as `ShardResult<T>` values (not thrown),
+ * so the custom error codes survive the WorkerEntrypoint RPC boundary. This
+ * client unwraps the result and re-throws as an HttpError with the original
+ * code preserved.
  */
 
 const EMPTY_RESULT: QueryResult = Object.freeze({ rows: [] }) as QueryResult
@@ -30,6 +35,18 @@ function toShardStatement(statement: InStatement | string): ShardSqlStatement | 
 /** Normalize to the write contract shape (string → {sql}); batchWrite needs objects. */
 function normalizeWrite(statement: InStatement | string): ShardSqlStatement {
   return typeof statement === "string" ? { sql: statement } : { sql: statement.sql, args: statement.args }
+}
+
+/**
+ * Unwrap a `ShardResult<T>`: return the value on success, or throw an HttpError
+ * with the original code on failure. Security denies (`shard_binding_not_allowed`)
+ * are 403; everything else is 500. The retryable flag matches the shard's
+ * "is this transient?" semantics where applicable.
+ */
+function unwrap<T>(r: ShardResult<T>, retryable = true): T {
+  if (r.ok) return r.value
+  const status = r.code === "shard_binding_not_allowed" ? 403 : 500
+  throw new HttpError(status, r.code, r.message, retryable)
 }
 
 /** Buffers statements and commits them as one atomic D1 batch. */
@@ -66,11 +83,12 @@ class BufferingD1WriteTransaction implements Transaction {
     this.assertOpen()
     this.finalized = true
     if (this.buffer.length === 0) return
-    await this.shard.batchWrite({
+    const r = await this.shard.batchWrite({
       communityId: this.communityId,
       bindingName: this.bindingName,
       statements: this.buffer.map(normalizeWrite),
     })
+    unwrap(r)
   }
 
   async rollback(): Promise<void> {
@@ -90,16 +108,22 @@ class ReadThroughD1Transaction implements Transaction {
     private readonly bindingName: string,
   ) {}
 
-  execute(statement: InStatement | string): Promise<QueryResult> {
-    return this.shard.execute({ communityId: this.communityId, bindingName: this.bindingName, statement: toShardStatement(statement) })
+  async execute(statement: InStatement | string): Promise<QueryResult> {
+    const r = await this.shard.execute({
+      communityId: this.communityId,
+      bindingName: this.bindingName,
+      statement: toShardStatement(statement),
+    })
+    return unwrap(r)
   }
 
-  batch(statements: InStatement[]): Promise<QueryResult[]> {
-    return this.shard.batch({
+  async batch(statements: InStatement[]): Promise<QueryResult[]> {
+    const r = await this.shard.batch({
       communityId: this.communityId,
       bindingName: this.bindingName,
       statements: statements.map((s) => toShardStatement(s) as ShardSqlStatement),
     })
+    return unwrap(r)
   }
 
   async commit(): Promise<void> {}
@@ -117,20 +141,23 @@ export function makeCommunityD1Client(shard: ShardRpc, binding: ResolvedCommunit
   return {
     execute: async (statement) => {
       if (isReadOnlyStatement(sqlOf(statement))) {
-        return shard.execute({ communityId, bindingName, statement: toShardStatement(statement) })
+        const r = await shard.execute({ communityId, bindingName, statement: toShardStatement(statement) })
+        return unwrap(r)
       }
-      const results = await shard.batchWrite({ communityId, bindingName, statements: [normalizeWrite(statement)] })
-      return results[0] ?? EMPTY_RESULT
+      const r = await shard.batchWrite({ communityId, bindingName, statements: [normalizeWrite(statement)] })
+      return unwrap(r)[0] ?? EMPTY_RESULT
     },
     batch: async (statements, mode) => {
       if (mode === "write") {
-        return shard.batchWrite({ communityId, bindingName, statements: statements.map(normalizeWrite) })
+        const r = await shard.batchWrite({ communityId, bindingName, statements: statements.map(normalizeWrite) })
+        return unwrap(r)
       }
-      return shard.batch({
+      const r = await shard.batch({
         communityId,
         bindingName,
         statements: statements.map((s) => toShardStatement(s) as ShardSqlStatement),
       })
+      return unwrap(r)
     },
     transaction: async (mode) =>
       mode === "read"

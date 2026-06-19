@@ -28,7 +28,9 @@ is exhausted in PR #57.
 | 0 | ✅ Shipped (PR #57) | `1b86876` | §8.0 | Request-aware resolver; the load-bearing v1-scope fix. |
 | 1 | ✅ Shipped (live on staging) | this PR | §8.2 | Keystone: shard's `d1_pool` + de-staticized allowlist. 26 unit tests pass including the §8.2 keystone test. Pool D1 `community-d1-shard-pool-staging` is live in EEUR with the 2 pilots seeded. Shard deployed to `community-d1-shard-staging` v `3714fbf0-393a-406a-9952-ff6507972174`. |
 | 2 | ✅ Shipped (live on staging) | this PR | §8.3 | `communityD1Bind` RPC + concurrent-allocator catch + quarantine-window-respecting free-pool scan. 9 new runShardBind tests, total 35 pass including all §8.3 cases (idempotency, concurrent UNIQUE catch, pool exhausted, quarantine, BINDING_NOT_INITIALIZED, missing D1_POOL). Shard deployed v `2523116f-2d3d-4144-8150-5ad86178d60e`. |
-| 3 | ⬜ Pending | — | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard. |
+| 2.5 | ✅ Shipped (live on staging) | this PR | (contract fix, no §X) | All shard RPCs now return `ShardResult<T>` (typed errors as VALUES) instead of throwing. Custom error codes survive the WorkerEntrypoint RPC boundary — the API can now distinguish `shard_pool_write_conflict` (retry) from `shard_pool_exhausted` (fail to ops) from `shard_binding_not_allowed` (security deny). Live smoke verified: poisoned pair returns `code: "shard_binding_not_allowed"`, empty pool returns `code: "shard_pool_exhausted"` — no more "error:unknown". |
+| 3 | ✅ Shipped (live on staging) | this PR | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard (`isBootstrapAllowedStatement`, allows CREATE TABLE IF NOT EXISTS + INSERT) + pool-table re-validation (§4.2 invariant against release+reallocate) + last_loaded_at set on success + idempotent no-op on retry. 9 new runShardLoadSnapshot tests, total 44 pass including all §8.4 cases (load, idempotency, BINDING_NOT_ALLOCATED with stale cache, bootstrap guard rejects DROP/SELECT, BINDING_NOT_ALLOWED, empty statements still marks loaded). Shard deployed v `1a89838a-3f86-4277-9cc7-63965b650f4d`. |
+| 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
 | 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
 | 5 | ⬜ Pending | — | §8.5 | Reconciliation sweep (cron Worker). |
 | 6 | ⬜ Pending | — | (operator runbook) | `allocate-d1-pool.ts` — can run in parallel with 1–5. |
@@ -383,7 +385,7 @@ after `communityD1Bind` claims it. Order: claim → load.
 
 ## Step 3 — Shard `communityD1LoadSnapshot` RPC + bootstrap guard
 
-**Status:** Pending.
+**Status:** ✅ Shipped live on staging.
 
 **Scope:** New RPC per §4.2. Atomic `batchWrite` of schema DDL +
 snapshot rows. Sets `d1_pool.last_loaded_at = now()` only on full

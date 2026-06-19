@@ -143,13 +143,13 @@ test("makeShardReadClient dispatches execute/batch to the shard RPC with communi
   const shard = {
     execute: async (input: unknown) => {
       calls.push(["execute", input])
-      return { rows: [{ ok: 1 }] }
+      return { ok: true as const, value: { rows: [{ ok: 1 }] } }
     },
     batch: async (input: unknown) => {
       calls.push(["batch", input])
-      return [{ rows: [] }]
+      return { ok: true as const, value: [{ rows: [] }] }
     },
-  }
+  } as unknown as Parameters<typeof makeShardReadClient>[0]
   const binding = {
     communityId: "cmt_d1",
     backend: "d1",
@@ -164,12 +164,45 @@ test("makeShardReadClient dispatches execute/batch to the shard RPC with communi
   const client = makeShardReadClient(shard, binding)
   const r = await client.execute("SELECT 1")
   expect(r.rows).toEqual([{ ok: 1 }])
-  expect(calls[0][1]).toMatchObject({ communityId: "cmt_d1", bindingName: "DB_CMTY_PILOT", statement: "SELECT 1" })
+  expect(calls[0]![1]).toMatchObject({ communityId: "cmt_d1", bindingName: "DB_CMTY_PILOT", statement: "SELECT 1" })
 
   // Write batch mode is rejected client-side (defense in depth; shard also guards).
   await expect(client.batch([{ sql: "INSERT INTO t VALUES (1)" }], "write")).rejects.toMatchObject({
     code: "read_only_violation",
   })
+})
+
+test("makeShardReadClient preserves shard error codes across the boundary (step 2.5)", async () => {
+  // The shard returns a typed error as a VALUE (ShardResult), not as a thrown
+  // Error. The client unwraps it and re-throws as an HttpError with the
+  // original code preserved — so the API can distinguish shard_pool_write_conflict
+  // (retry) from shard_pool_exhausted (fail to ops) from shard_binding_not_allowed
+  // (security deny). This test pins the code-preservation contract that the
+  // WorkerEntrypoint boundary would otherwise strip.
+  const cases: Array<{ code: string; expectedStatus: number }> = [
+    { code: "shard_binding_not_allowed", expectedStatus: 403 },
+    { code: "shard_pool_write_conflict", expectedStatus: 500 },
+    { code: "shard_pool_exhausted", expectedStatus: 500 },
+    { code: "shard_unknown_binding", expectedStatus: 500 },
+  ]
+  for (const { code, expectedStatus } of cases) {
+    const shard = {
+      execute: async () => ({ ok: false as const, code, message: `shard says ${code}` }),
+      batch: async () => ({ ok: false as const, code, message: `shard says ${code}` }),
+    } as unknown as Parameters<typeof makeShardReadClient>[0]
+    const binding = {
+      communityId: "cmt_d1",
+      backend: "d1",
+      provisioningState: "ready",
+      shardWorkerId: "shard-1",
+      bindingName: "DB_CMTY_PILOT",
+      region: "enam",
+      tursoDatabaseBindingId: null,
+      decommissionedAt: null,
+    } as ResolvedCommunityBinding
+    const client = makeShardReadClient(shard, binding)
+    await expect(client.execute("SELECT 1")).rejects.toMatchObject({ code, status: expectedStatus })
+  }
 })
 
 test("makeShardReadClient throws if the d1 routing row has no binding_name", () => {
@@ -183,7 +216,10 @@ test("makeShardReadClient throws if the d1 routing row has no binding_name", () 
     tursoDatabaseBindingId: null,
     decommissionedAt: null,
   } as ResolvedCommunityBinding
-  const shard = { execute: async () => ({ rows: [] }), batch: async () => [] }
+  const shard = {
+    execute: async () => ({ ok: true as const, value: { rows: [] } }),
+    batch: async () => ({ ok: true as const, value: [] }),
+  } as unknown as Parameters<typeof makeShardReadClient>[0]
   expect(() => makeShardReadClient(shard, binding)).toThrow(HttpError)
 })
 

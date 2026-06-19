@@ -109,3 +109,31 @@ export function isWriteAllowedStatement(sql: string): boolean {
   if (/^WITH\b/i.test(stripped)) return DML_VERB.test(stripped)
   return false
 }
+
+// Destructive DDL — never allowed on the bootstrap path. CREATE TABLE IF NOT
+// EXISTS is allowed (it's the schema bootstrap); everything else (DROP/ALTER/
+// ATTACH/DETACH/VACUUM/ANALYZE/REINDEX/TRUNCATE/GRANT/REVOKE/PRAGMA) is not.
+const FORBIDDEN_BOOTSTRAP_VERB =
+  /\b(DROP|ALTER|ATTACH|DETACH|VACUUM|ANALYZE|REINDEX|TRUNCATE|GRANT|REVOKE|PRAGMA)\b/i
+
+const DML_OR_DDL_VERB = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE)\b/i
+
+/**
+ * Guard for the bootstrap path (shard `communityD1LoadSnapshot`, step 3 of the
+ * D1-native workstream). A POSITIVE ALLOWLIST, slightly wider than
+ * `isWriteAllowedStatement` — it permits `CREATE TABLE IF NOT EXISTS` (DDL)
+ * because the bootstrap path applies the community schema to a fresh D1
+ * binding. It still rejects destructive DDL (DROP/ALTER/...), PRAGMA, SELECT
+ * (reads use `execute`/`batch`), and statement batching. Same fail-closed
+ * lexical posture: a guardrail for our own schema-bootstrap builder, not a SQL
+ * authorizer for untrusted input.
+ */
+export function isBootstrapAllowedStatement(sql: string): boolean {
+  const stripped = stripLeadingNoise(sql)
+  if (hasStatementBatch(stripped)) return false
+  if (FORBIDDEN_BOOTSTRAP_VERB.test(stripped)) return false
+  if (/^(INSERT|UPDATE|DELETE|REPLACE|CREATE)\b/i.test(stripped)) return true
+  // A CTE is bootstrap only if it wraps a DML or DDL verb.
+  if (/^WITH\b/i.test(stripped)) return DML_OR_DDL_VERB.test(stripped)
+  return false
+}

@@ -1,13 +1,18 @@
 import {
   isReadOnlyStatement,
   isWriteAllowedStatement,
+  isBootstrapAllowedStatement,
   readOnlyVerb,
   SHARD_READ_ERROR,
   type ShardBatchReadRequest,
   type ShardBindRequest,
+  type ShardLoadSnapshotRequest,
+  type ShardLoadSnapshotResponse,
   type ShardBindResponse,
+  type ShardError,
   type ShardQueryResult,
   type ShardReadRequest,
+  type ShardResult,
   type ShardSqlStatement,
   type ShardWriteRequest,
 } from "@pirate/api-shared"
@@ -15,7 +20,8 @@ import {
 /**
  * Pure shard read/write logic, free of the `cloudflare:workers` runtime import so it
  * is unit-testable under bun. The WorkerEntrypoint in index.ts is a thin wiring
- * shell over `runShardRead` / `runShardBatch` / `runShardWrite`.
+ * shell over `runShardRead` / `runShardBatch` / `runShardWrite` / `runShardBind` /
+ * `runShardLoadSnapshot`.
  *
  * Step 1 of the D1-native workstream (D1-NATIVE-PROVISIONING-DESIGN.md §3, §5):
  * `assertCommunityBinding` reads from the shard-owned `d1_pool` D1 (the
@@ -23,6 +29,15 @@ import {
  * `COMMUNITY_D1_BINDING_MAP_JSON` is now ONLY a cold-start seed: it is read once
  * on the first cache miss and INSERT OR IGNORE'd into `d1_pool`. After that, the
  * pool table is the runtime source of truth.
+ *
+ * Step 2.5: all expected shard failures are returned as VALUES (not thrown) via
+ * the `ShardResult<T>` discriminated union. Throwing across a WorkerEntrypoint
+ * RPC boundary strips custom `Error` properties — `code` is lost, and the
+ * caller cannot distinguish `shard_pool_write_conflict` (retry) from
+ * `shard_pool_exhausted` (fail to ops) from `shard_binding_not_allowed`
+ * (security deny). The §4.1 acceptance criteria depend on this distinction.
+ * Throwing stays for genuinely unexpected errors (D1 driver failures, etc.)
+ * which the API remaps to a generic 500.
  *
  * The two-gate authorization property is preserved: the control-plane
  * `community_database_routing` row is never trusted on its own — a poisoned row
@@ -93,11 +108,8 @@ export function resetPoolCacheForTests(): void {
   poolCache.clear()
 }
 
-export class ShardReadError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message)
-    this.name = "ShardReadError"
-  }
+function err(code: ShardError["code"], message: string): ShardError {
+  return { ok: false, code, message }
 }
 
 /** Parse the (communityId → bindingName) seed JSON; fail-closed to {} on bad/missing JSON. */
@@ -123,11 +135,6 @@ function communityBindingMap(env: ShardEnv): Record<string, string> {
  * If a binding in the env JSON has no `wrangler d1_databases` entry on this
  * shard, the seed is skipped for that binding — the pool table only tracks
  * real D1 namespaces.
- *
- * If the env JSON disagrees with an existing pool row's `community_id`, the
- * existing row wins (the seed is non-authoritative once step 2's allocator
- * lands; before that, the env JSON is the only source and the row was either
- * already seeded with the same value or never existed).
  */
 async function ensurePoolSeeded(env: ShardEnv, pool: D1Database): Promise<void> {
   const countRow = await pool.prepare("SELECT COUNT(*) AS n FROM d1_pool").first()
@@ -149,42 +156,34 @@ async function ensurePoolSeeded(env: ShardEnv, pool: D1Database): Promise<void> 
 
 /**
  * Authorize a (communityId, bindingName) pair against this shard's allowlist.
+ * Returns the error (as a value) rather than throwing, so the code survives the
+ * WorkerEntrypoint boundary losslessly.
  *
- * Runtime source of truth: the shard-owned `d1_pool` D1 table (the
- * `D1_POOL` binding). Rejects unless the community maps to exactly this
- * binding in the pool — so a stale/poisoned control-plane routing row for
- * community A cannot read community B's (otherwise valid) D1 binding on the
- * same shard.
- *
- * Performance: backed by an in-memory cache keyed by communityId. Stable
- * rows cache for POOL_CACHE_TTL_MS; rows carrying `last_error` cache for
- * POOL_CACHE_SHORT_TTL_MS so a recovery is observed quickly.
- *
- * The cache is per-isolate (a Map at module scope). Cross-isolate
- * invalidation on a pool-row update is NOT implemented in step 1 — the
- * quarantine window (QUARANTINE_WINDOW_MS) bounds the staleness window
- * instead, so correctness is independent of cross-isolate broadcast.
+ * Runtime source of truth: the shard-owned `d1_pool` D1 table. Rejects unless
+ * the community maps to exactly this binding in the pool — so a
+ * stale/poisoned control-plane routing row for community A cannot read
+ * community B's (otherwise valid) D1 binding on the same shard.
  */
 export async function assertCommunityBinding(
   env: ShardEnv,
   communityId: string,
   bindingName: string,
-): Promise<void> {
+): Promise<ShardError | null> {
   const now = Date.now()
   const cached = poolCache.get(communityId)
   if (cached && cached.expiresAt > now) {
     if (cached.bindingName !== bindingName) {
-      throw new ShardReadError(
+      return err(
         SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
         `community ${communityId} is not authorized to read binding ${bindingName} on this shard`,
       )
     }
-    return
+    return null
   }
 
   const pool = env.D1_POOL
   if (!pool) {
-    throw new ShardReadError(
+    return err(
       SHARD_READ_ERROR.UNKNOWN_BINDING,
       "D1_POOL binding is not configured on this shard",
     )
@@ -202,11 +201,12 @@ export async function assertCommunityBinding(
   poolCache.set(communityId, { bindingName: expected ?? null, expiresAt: now + ttl })
 
   if (!expected || expected !== bindingName) {
-    throw new ShardReadError(
+    return err(
       SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
       `community ${communityId} is not authorized to read binding ${bindingName} on this shard`,
     )
   }
+  return null
 }
 
 /**
@@ -215,14 +215,14 @@ export async function assertCommunityBinding(
  * stale/poisoned control-plane routing row cannot steer us to an arbitrary
  * binding — unknown names are rejected, not silently served.
  */
-export function resolveD1(env: ShardEnv, bindingName: string): D1Database {
+export function resolveD1(env: ShardEnv, bindingName: string): D1Database | ShardError {
   const candidate = env[bindingName]
   if (
     !candidate ||
     typeof (candidate as D1Database).prepare !== "function" ||
     typeof (candidate as D1Database).batch !== "function"
   ) {
-    throw new ShardReadError(
+    return err(
       SHARD_READ_ERROR.UNKNOWN_BINDING,
       `Unknown or non-D1 binding on this shard: ${bindingName}`,
     )
@@ -234,24 +234,34 @@ function prepareGuarded(
   db: D1Database,
   statement: ShardSqlStatement | string,
   allowed: (sql: string) => boolean,
-  errorCode: string,
+  errorCode: ShardError["code"],
   guardName: string,
-): D1PreparedStatement {
+): D1PreparedStatement | ShardError {
   const sql = typeof statement === "string" ? statement : statement.sql
   const args = typeof statement === "string" ? [] : statement.args ?? []
   if (!allowed(sql)) {
-    throw new ShardReadError(errorCode, `Statement rejected by shard ${guardName} guard: ${readOnlyVerb(sql)}`)
+    return err(errorCode, `Statement rejected by shard ${guardName} guard: ${readOnlyVerb(sql)}`)
   }
   const prepared = db.prepare(sql)
   return args.length > 0 ? prepared.bind(...args) : prepared
 }
 
-function prepareReadOnly(db: D1Database, statement: ShardSqlStatement | string): D1PreparedStatement {
+function prepareReadOnly(db: D1Database, statement: ShardSqlStatement | string): D1PreparedStatement | ShardError {
   return prepareGuarded(db, statement, isReadOnlyStatement, SHARD_READ_ERROR.READ_ONLY_VIOLATION, "read-only")
 }
 
-function prepareWrite(db: D1Database, statement: ShardSqlStatement): D1PreparedStatement {
+function prepareWrite(db: D1Database, statement: ShardSqlStatement): D1PreparedStatement | ShardError {
   return prepareGuarded(db, statement, isWriteAllowedStatement, SHARD_READ_ERROR.WRITE_NOT_ALLOWED, "write")
+}
+
+function prepareBootstrap(db: D1Database, statement: ShardSqlStatement): D1PreparedStatement | ShardError {
+  return prepareGuarded(
+    db,
+    statement,
+    isBootstrapAllowedStatement,
+    SHARD_READ_ERROR.WRITE_NOT_ALLOWED,
+    "bootstrap",
+  )
 }
 
 function toResult(result: D1Result): ShardQueryResult {
@@ -262,19 +272,36 @@ function toResult(result: D1Result): ShardQueryResult {
   }
 }
 
-export async function runShardRead(env: ShardEnv, input: ShardReadRequest): Promise<ShardQueryResult> {
-  await assertCommunityBinding(env, input.communityId, input.bindingName)
-  const db = resolveD1(env, input.bindingName)
-  const result = await prepareReadOnly(db, input.statement).all()
-  return toResult(result)
+export async function runShardRead(
+  env: ShardEnv,
+  input: ShardReadRequest,
+): Promise<ShardResult<ShardQueryResult>> {
+  const authError = await assertCommunityBinding(env, input.communityId, input.bindingName)
+  if (authError) return authError
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  const prepared = prepareReadOnly(dbOrError, input.statement)
+  if (!("all" in prepared)) return prepared
+  const result = await prepared.all()
+  return { ok: true, value: toResult(result) }
 }
 
-export async function runShardBatch(env: ShardEnv, input: ShardBatchReadRequest): Promise<ShardQueryResult[]> {
-  await assertCommunityBinding(env, input.communityId, input.bindingName)
-  const db = resolveD1(env, input.bindingName)
-  const prepared = input.statements.map((statement) => prepareReadOnly(db, statement))
-  const results = await db.batch(prepared)
-  return results.map(toResult)
+export async function runShardBatch(
+  env: ShardEnv,
+  input: ShardBatchReadRequest,
+): Promise<ShardResult<ShardQueryResult[]>> {
+  const authError = await assertCommunityBinding(env, input.communityId, input.bindingName)
+  if (authError) return authError
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  const prepared: D1PreparedStatement[] = []
+  for (const statement of input.statements) {
+    const p = prepareReadOnly(dbOrError, statement)
+    if (!("all" in p)) return p
+    prepared.push(p)
+  }
+  const results = await dbOrError.batch(prepared)
+  return { ok: true, value: results.map(toResult) }
 }
 
 /**
@@ -283,21 +310,27 @@ export async function runShardBatch(env: ShardEnv, input: ShardBatchReadRequest)
  * authorization as reads; DML/SELECT only (DDL/PRAGMA rejected). Empty batch is a
  * no-op (returns []).
  */
-export async function runShardWrite(env: ShardEnv, input: ShardWriteRequest): Promise<ShardQueryResult[]> {
-  await assertCommunityBinding(env, input.communityId, input.bindingName)
-  const db = resolveD1(env, input.bindingName)
-  if (input.statements.length === 0) return []
-  const prepared = input.statements.map((statement) => prepareWrite(db, statement))
-  const results = await db.batch(prepared)
-  return results.map(toResult)
+export async function runShardWrite(
+  env: ShardEnv,
+  input: ShardWriteRequest,
+): Promise<ShardResult<ShardQueryResult[]>> {
+  const authError = await assertCommunityBinding(env, input.communityId, input.bindingName)
+  if (authError) return authError
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  if (input.statements.length === 0) return { ok: true, value: [] }
+  const prepared: D1PreparedStatement[] = []
+  for (const statement of input.statements) {
+    const p = prepareWrite(dbOrError, statement)
+    if (!("all" in p)) return p
+    prepared.push(p)
+  }
+  const results = await dbOrError.batch(prepared)
+  return { ok: true, value: results.map(toResult) }
 }
 
 /**
  * Maximum retries on optimistic-lock conflict during allocator UPDATE.
- * A concurrent allocator is the only realistic source of conflict; with
- * the free-pool query using ORDER BY binding_name LIMIT 1, conflicts are
- * rare. Five retries is enough to absorb a few concurrent allocations
- * without unbounded spinning.
  */
 const MAX_BIND_ATTEMPTS = 5
 
@@ -322,28 +355,16 @@ function isUniqueCommunityViolation(e: unknown): boolean {
  * Step 2 of the D1-native workstream: allocate a D1 binding from the shard's
  * pool for `communityId`. Idempotent on `communityId` — repeated calls return
  * the same binding, with `allocated: false` on subsequent calls. Concurrent
- * calls for the same community are handled by the UNIQUE(community_id) catch:
- * the loser re-queries by community_id and returns the winner's binding.
- *
- * Selection: a free binding is one with `community_id IS NULL` AND outside
- * the quarantine window (`released_at IS NULL OR released_at < now() -
- * QUARANTINE_WINDOW_MS`). The quarantine is the §5 mitigation for the
- * stale-cache + release+reallocate cross-tenant hole.
- *
- * Atomicity: the free-binding SELECT and the version-conditional UPDATE are
- * NOT in a single transaction (D1 has none, and a transaction across
- * statements would defeat the point of the optimistic lock). On a
- * version mismatch (0 rows affected), the allocator retries with a fresh
- * SELECT up to MAX_BIND_ATTEMPTS times. On UNIQUE(community_id) violation
- * (concurrent allocator claimed the same communityId between our SELECT
- * and UPDATE), the allocator re-queries and returns the winner's binding.
- *
+ * calls for the same community are handled by the UNIQUE(community_id) catch.
  * See D1-NATIVE-PROVISIONING-DESIGN.md §3.3, §4.1, §8.3.
  */
-export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Promise<ShardBindResponse> {
+export async function runShardBind(
+  env: ShardEnv,
+  input: ShardBindRequest,
+): Promise<ShardResult<ShardBindResponse>> {
   const pool = env.D1_POOL
   if (!pool) {
-    throw new ShardReadError(
+    return err(
       SHARD_READ_ERROR.UNKNOWN_BINDING,
       "D1_POOL binding is not configured on this shard",
     )
@@ -352,26 +373,25 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
   const shardWorkerId = String(env.COMMUNITY_D1_SHARD_WORKER_ID ?? "community-d1-shard-staging")
 
   // 1. Idempotency: if communityId is already in the pool, return its binding.
-  //    No allocation. This is the path the retry path takes — second
-  //    communityD1Bind(X) for the same X returns allocated: false.
   const existing = await pool
     .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
     .bind(input.communityId)
     .first()
   if (existing) {
     return {
-      bindingName: String((existing as { binding_name: string }).binding_name),
-      shardWorkerId,
-      allocated: false,
+      ok: true,
+      value: {
+        bindingName: String((existing as { binding_name: string }).binding_name),
+        shardWorkerId,
+        allocated: false,
+      },
     }
   }
 
-  // 2. Allocate: pick a free binding (with quarantine filter) and claim it
-  //    with an optimistic-lock UPDATE.
+  // 2. Allocate: pick a free binding (with quarantine filter) and claim it.
   const quarantineThreshold = new Date(Date.now() - QUARANTINE_WINDOW_MS).toISOString()
 
   for (let attempt = 0; attempt < MAX_BIND_ATTEMPTS; attempt++) {
-    // 2a. Pick a free binding outside the quarantine window.
     const freeRow = await pool
       .prepare(
         "SELECT binding_name, version FROM d1_pool " +
@@ -382,7 +402,7 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
       .bind(quarantineThreshold)
       .first()
     if (!freeRow) {
-      throw new ShardReadError(
+      return err(
         SHARD_READ_ERROR.POOL_EXHAUSTED,
         "d1_pool has no free (non-quarantined) binding to allocate",
       )
@@ -390,10 +410,6 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
     const freeBinding = String((freeRow as { binding_name: string; version: number }).binding_name)
     const freeVersion = Number((freeRow as { binding_name: string; version: number }).version)
 
-    // 2b. Verify the chosen binding is actually a bound D1 namespace on this
-    //     Worker (defends against wrangler config drift: a d1_pool row exists
-    //     but the binding isn't bound). Mark last_error and return an explicit
-    //     code so ops can see it.
     if (!env[freeBinding]) {
       await pool
         .prepare(
@@ -402,15 +418,12 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
         )
         .bind(freeBinding, "binding not initialized on this shard", freeVersion)
         .run()
-      throw new ShardReadError(
+      return err(
         SHARD_READ_ERROR.BINDING_NOT_INITIALIZED,
         `Binding ${freeBinding} has a d1_pool row but is not a bound D1 namespace on this shard`,
       )
     }
 
-    // 2c. Optimistic-lock UPDATE: claim the binding for this communityId.
-    //     If version doesn't match (concurrent allocator raced us), 0 rows
-    //     are affected and we retry from 2a.
     try {
       const updateResult = await pool
         .prepare(
@@ -424,13 +437,12 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
         .run()
 
       if (updateResult.meta?.changes && updateResult.meta.changes > 0) {
-        return { bindingName: freeBinding, shardWorkerId, allocated: true }
+        return {
+          ok: true,
+          value: { bindingName: freeBinding, shardWorkerId, allocated: true },
+        }
       }
-      // 0 rows affected — version mismatch. Retry.
     } catch (e) {
-      // UNIQUE(community_id) violation: a concurrent allocator claimed this
-      // communityId between our SELECT and UPDATE. Re-query and return the
-      // winner's binding with allocated: false.
       if (isUniqueCommunityViolation(e)) {
         const winner = await pool
           .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
@@ -438,21 +450,136 @@ export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Prom
           .first()
         if (winner) {
           return {
-            bindingName: String((winner as { binding_name: string }).binding_name),
-            shardWorkerId,
-            allocated: false,
+            ok: true,
+            value: {
+              bindingName: String((winner as { binding_name: string }).binding_name),
+              shardWorkerId,
+              allocated: false,
+            },
           }
         }
-        // The winner's row was somehow deleted between the violation and our
-        // re-query (extremely unlikely). Fall through to retry.
       } else {
         throw e
       }
     }
   }
 
-  throw new ShardReadError(
+  return err(
     SHARD_READ_ERROR.POOL_WRITE_CONFLICT,
     "d1_pool allocator exhausted retries on optimistic-lock conflict",
   )
+}
+
+/**
+ * Step 3 of the D1-native workstream: load the community schema + snapshot
+ * rows into the allocated D1 binding. Atomic `batchWrite` of DDL + rows.
+ *
+ * Three invariants enforced server-side, in addition to the existing
+ * `assertCommunityBinding` + `resolveD1`:
+ *
+ *  1. **Pool-table re-validation before any write (§4.2).** The existing
+ *     `assertCommunityBinding` checks the in-memory pool cache, which can be
+ *     stale. Before any write, this RPC re-`SELECT community_id FROM d1_pool
+ *     WHERE binding_name = ?` and confirms the row's `community_id` matches
+ *     `input.communityId`. If the row's `community_id` is NULL (released) or a
+ *     different community, reject with `shard_binding_not_allocated`. This is
+ *     the last line of defense against the release+reallocate window.
+ *  2. **Idempotency on retry.** If `last_loaded_at` is already set for this
+ *     binding, the load is a no-op. The retry path in
+ *     `resolveProvisioningRetryAction` calls this twice for the same community
+ *     — the second call returns `loaded: false` with `rowsAffected: 0` and
+ *     leaves `last_loaded_at` unchanged.
+ *  3. **Bootstrap guard.** Schema DDL is allowed here (CREATE TABLE IF NOT
+ *     EXISTS + INSERT only) via `isBootstrapAllowedStatement`; the existing
+ *     `isWriteAllowedStatement` (used by `runShardWrite`) rejects DDL by
+ *     design.
+ *
+ * On full success, sets `last_loaded_at = now()` and clears `last_error` on
+ * the pool row. The `provision()` orchestrator (step 4) then advances the
+ * routing row from `provisioning` to `ready`.
+ *
+ * See D1-NATIVE-PROVISIONING-DESIGN.md §4.2, §6.1, §8.4.
+ */
+export async function runShardLoadSnapshot(
+  env: ShardEnv,
+  input: ShardLoadSnapshotRequest,
+): Promise<ShardResult<ShardLoadSnapshotResponse>> {
+  const authError = await assertCommunityBinding(env, input.communityId, input.bindingName)
+  if (authError) return authError
+  const pool = env.D1_POOL
+  if (!pool) {
+    return err(
+      SHARD_READ_ERROR.UNKNOWN_BINDING,
+      "D1_POOL binding is not configured on this shard",
+    )
+  }
+
+  // 1. Pool-table re-validation (the §4.2 invariant). assertCommunityBinding
+  //    checked the cache; this re-reads the pool row to confirm the binding is
+  //    still allocated to this community at write time.
+  const row = await pool
+    .prepare(
+      "SELECT community_id, last_loaded_at FROM d1_pool WHERE binding_name = ?1",
+    )
+    .bind(input.bindingName)
+    .first()
+  if (!row) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
+      `binding ${input.bindingName} has no d1_pool row — cannot load snapshot`,
+    )
+  }
+  const r = row as { community_id: string | null; last_loaded_at: string | null }
+  if (r.community_id !== input.communityId) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
+      `binding ${input.bindingName} is allocated to ${String(r.community_id)} (not ${input.communityId}); refusing to load snapshot`,
+    )
+  }
+
+  // 2. Idempotency: if already loaded, no-op. Returns the existing
+  //    last_loaded_at (the retry path expects an idempotent no-op).
+  if (r.last_loaded_at) {
+    return { ok: true, value: { rowsAffected: 0, loaded: false } }
+  }
+
+  // 3. Bootstrap guard: DDL + INSERTs only, run as one atomic batch.
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  if (input.statements.length === 0) {
+    // Empty statements + no prior load: still mark loaded (the schema is
+    // expected to already be in place via migration; this is a no-op seed).
+    await pool
+      .prepare(
+        "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
+          "WHERE binding_name = ?1 AND last_loaded_at IS NULL",
+      )
+      .bind(input.bindingName, new Date().toISOString())
+      .run()
+    return { ok: true, value: { rowsAffected: 0, loaded: true } }
+  }
+  const prepared: D1PreparedStatement[] = []
+  for (const statement of input.statements) {
+    const p = prepareBootstrap(dbOrError, statement)
+    if (!("all" in p)) return p
+    prepared.push(p)
+  }
+  const results = await dbOrError.batch(prepared)
+  const rowsAffected = results.reduce(
+    (sum, r) => sum + (r.meta?.changes ?? 0),
+    0,
+  )
+
+  // 4. Mark loaded on the pool row. Only set last_loaded_at if the batch
+  //    succeeded — a partial batch is an atomic D1 failure (all-or-nothing),
+  //    so if we reach this point, everything committed.
+  await pool
+    .prepare(
+      "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
+        "WHERE binding_name = ?1",
+    )
+    .bind(input.bindingName, new Date().toISOString())
+    .run()
+
+  return { ok: true, value: { rowsAffected, loaded: true } }
 }

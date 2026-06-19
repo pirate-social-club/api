@@ -40,8 +40,8 @@ export type ShardBatchReadRequest = {
 }
 
 export interface ShardReadRpc {
-  execute(input: ShardReadRequest): Promise<ShardQueryResult>
-  batch(input: ShardBatchReadRequest): Promise<ShardQueryResult[]>
+  execute(input: ShardReadRequest): Promise<ShardResult<ShardQueryResult>>
+  batch(input: ShardBatchReadRequest): Promise<ShardResult<ShardQueryResult[]>>
 }
 
 /**
@@ -59,7 +59,7 @@ export type ShardWriteRequest = {
 }
 
 export interface ShardWriteRpc {
-  batchWrite(input: ShardWriteRequest): Promise<ShardQueryResult[]>
+  batchWrite(input: ShardWriteRequest): Promise<ShardResult<ShardQueryResult[]>>
 }
 
 /**
@@ -68,7 +68,7 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc {}
 
 /**
  * Step 2 of the D1-native workstream. Allocates a D1 binding from the shard's
@@ -94,10 +94,72 @@ export type ShardBindResponse = {
 }
 
 export interface ShardPoolRpc {
-  communityD1Bind(input: ShardBindRequest): Promise<ShardBindResponse>
+  communityD1Bind(input: ShardBindRequest): Promise<ShardResult<ShardBindResponse>>
 }
 
-/** Error codes the shard RPC surface raises (mapped to HttpError on the API side). */
+/**
+ * Step 3 of the D1-native workstream. Loads the community schema + snapshot
+ * rows into the allocated D1 binding via an atomic `batch()`. Idempotent on
+ * retry: if `last_loaded_at` is already set for this binding, the load is a
+ * no-op. The shard re-validates the pool row before any write (the §4.2
+ * invariant against the release+reallocate window) and sets
+ * `last_loaded_at = now()` on full success. DDL allowed (CREATE TABLE IF NOT
+ * EXISTS + INSERT only) — the existing `WRITE_NOT_ALLOWED` guard is too strict
+ * for bootstrap; a separate `isBootstrapAllowedStatement` guard applies here.
+ */
+export type ShardLoadSnapshotRequest = {
+  communityId: string
+  bindingName: string
+  /** Ordered D1 statements: schema DDL first, then snapshot rows. */
+  statements: ShardSqlStatement[]
+}
+
+export type ShardLoadSnapshotResponse = {
+  /** Total rows affected across the batch (DDL counts as 0, INSERTs as their count). */
+  rowsAffected: number
+  /**
+   * True if this call performed the load; false if it was a no-op because
+   * `last_loaded_at` was already set (idempotent re-run). The retry path in
+   * `resolveProvisioningRetryAction` calls this twice for the same community
+   * — the second call is a no-op.
+   */
+  loaded: boolean
+}
+
+export interface ShardBootstrapRpc {
+  communityD1LoadSnapshot(input: ShardLoadSnapshotRequest): Promise<ShardResult<ShardLoadSnapshotResponse>>
+}
+
+/**
+ * Discriminated-union return type for all shard RPCs. The shard returns errors
+ * as VALUES (not thrown) so they survive the WorkerEntrypoint boundary
+ * losslessly. The Cloudflare Workers RPC layer strips custom properties from
+ * thrown `Error` subclasses across the boundary, so `{ ok: false, code }` is
+ * the only way the API can distinguish `shard_pool_write_conflict` (retry)
+ * from `shard_pool_exhausted` (fail to ops) from `shard_binding_not_allowed`
+ * (security deny) — see D1-NATIVE-PROVISIONING-DESIGN.md §4.1 acceptance
+ * criteria. Throwing stays for genuinely unexpected errors (the `try`/
+ * `catch` in the API remaps those to a generic 500).
+ */
+export type ShardErrorCode =
+  | "shard_unknown_binding"
+  | "shard_binding_not_allowed"
+  | "shard_read_only_violation"
+  | "shard_write_not_allowed"
+  | "shard_pool_exhausted"
+  | "shard_pool_write_conflict"
+  | "shard_binding_not_initialized"
+  | "shard_binding_not_allocated"
+
+export type ShardError = {
+  ok: false
+  code: ShardErrorCode
+  message: string
+}
+
+export type ShardResult<T> = { ok: true; value: T } | ShardError
+
+/** Error codes the shard RPC surface uses (string constants for the ShardErrorCode union). */
 export const SHARD_READ_ERROR = {
   /** bindingName is not in the shard's allowlist of bound D1 namespaces. */
   UNKNOWN_BINDING: "shard_unknown_binding",
@@ -125,4 +187,13 @@ export const SHARD_READ_ERROR = {
    * the row and retries; this error is for an unrecoverable case.
    */
   BINDING_NOT_INITIALIZED: "shard_binding_not_initialized",
+  /**
+   * A communityD1LoadSnapshot call was made for a binding whose `d1_pool`
+   * row's `community_id` does not match the request's `communityId`, or the
+   * row was released (community_id IS NULL). The last line of defense against
+   * the release+reallocate window: even if the cache says "this binding is
+   * for community X", the pool-table re-validation before the load confirms
+   * it.
+   */
+  BINDING_NOT_ALLOCATED: "shard_binding_not_allocated",
 } as const
