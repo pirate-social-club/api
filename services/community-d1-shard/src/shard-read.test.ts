@@ -7,6 +7,7 @@ import {
   resetPoolCacheForTests,
   resolveD1,
   runShardBatch,
+  runShardBind,
   runShardRead,
   runShardWrite,
   ShardReadError,
@@ -52,18 +53,26 @@ type FakePoolRow = {
 }
 
 /**
- * Minimal in-memory fake of the d1_pool D1. Supports the four queries
- * assertCommunityBinding + ensurePoolSeeded actually issue:
+ * Minimal in-memory fake of the d1_pool D1. Supports the queries
+ * assertCommunityBinding, ensurePoolSeeded, and runShardBind actually issue:
  *   - SELECT COUNT(*) AS n FROM d1_pool
  *   - SELECT binding_name, last_error FROM d1_pool WHERE community_id = ?1
+ *   - SELECT binding_name, version FROM d1_pool WHERE community_id IS NULL ... (free-pool scan)
  *   - INSERT OR IGNORE INTO d1_pool (...) VALUES (...)
+ *   - UPDATE d1_pool SET ... WHERE binding_name = ? AND version = ? (optimistic lock)
+ *   - UPDATE d1_pool SET last_error = ? WHERE binding_name = ? AND version = ?
  *
- * Anything else returns an empty result. The fake is intentionally narrow
- * — the production code's query set is small and stable.
+ * The `simulateUniqueCommunityIdViolation` flag, when set, makes the next
+ * community-claiming UPDATE throw a SQLITE_CONSTRAINT_UNIQUE error — used by
+ * the concurrent-allocator test (§8.3).
  */
-function fakePoolD1(initialRows: FakePoolRow[] = []) {
+function fakePoolD1(
+  initialRows: FakePoolRow[] = [],
+  options?: { simulateUniqueCommunityIdViolation?: boolean },
+) {
   const calls: FakeCall[] = []
   const rows: FakePoolRow[] = [...initialRows]
+  const opts = { simulateUniqueCommunityIdViolation: false, ...options }
   function stmt(sql: string) {
     const s: any = {
       _sql: sql,
@@ -81,9 +90,23 @@ function fakePoolD1(initialRows: FakePoolRow[] = []) {
         if (/SELECT COUNT\(\*\) AS n FROM d1_pool/.test(sql)) {
           return { n: rows.length }
         }
-        if (/SELECT binding_name, last_error FROM d1_pool WHERE community_id = \?1/.test(sql)) {
+        // Both assertCommunityBinding ("SELECT binding_name, last_error") and
+        // runShardBind ("SELECT binding_name") query by community_id — match
+        // the WHERE clause and ignore the column list.
+        if (/FROM d1_pool\s+WHERE community_id = \?1/.test(sql)) {
           const communityId = s._args[0] as string
           return rows.find((r) => r.community_id === communityId) ?? null
+        }
+        if (/FROM d1_pool\s+WHERE community_id IS NULL/.test(sql)) {
+          const quarantineThreshold = s._args[0] as string
+          const free = rows
+            .filter(
+              (r) =>
+                r.community_id === null &&
+                (r.released_at === null || r.released_at < quarantineThreshold),
+            )
+            .sort((a, b) => a.binding_name.localeCompare(b.binding_name))[0]
+          return free ?? null
         }
         return null
       },
@@ -104,6 +127,59 @@ function fakePoolD1(initialRows: FakePoolRow[] = []) {
             version: 0,
           })
           return { success: true, meta: { changes: 1, last_row_id: rows.length } }
+        }
+        if (/UPDATE d1_pool SET last_error = \?2/.test(sql)) {
+          const [binding_name, _last_error, _version] = s._args as [string, string, number]
+          const row = rows.find((r) => r.binding_name === binding_name)
+          if (row) {
+            row.last_error = _last_error
+            row.version += 1
+            return { success: true, meta: { changes: 1, last_row_id: 0 } }
+          }
+          return { success: true, meta: { changes: 0, last_row_id: 0 } }
+        }
+        if (/UPDATE d1_pool SET\s+community_id = \?2/.test(sql)) {
+          // Optimistic-lock UPDATE: claim a free binding for a communityId.
+          const [binding_name, community_id, allocated_at, version] = s._args as [
+            string,
+            string,
+            string,
+            number,
+          ]
+          if (opts.simulateUniqueCommunityIdViolation) {
+            opts.simulateUniqueCommunityIdViolation = false
+            // Simulate the race: a concurrent allocator already claimed
+            // community_id. Mutate the row to reflect the winner's state, then
+            // throw the UNIQUE violation. The loser's re-query (SELECT WHERE
+            // community_id = X) will find this row and return the winner's
+            // binding with allocated: false.
+            const winnerRow = rows.find((r) => r.binding_name === binding_name)
+            if (winnerRow) {
+              winnerRow.community_id = community_id
+              winnerRow.allocated_at = allocated_at
+              winnerRow.released_at = null
+              winnerRow.last_loaded_at = null
+              winnerRow.last_error = null
+              winnerRow.version += 1
+            }
+            const e = new Error(
+              "UNIQUE constraint failed: d1_pool.community_id",
+            ) as Error & { rawCode?: string; code?: string }
+            e.rawCode = "SQLITE_CONSTRAINT_UNIQUE"
+            e.code = "SQLITE_CONSTRAINT_UNIQUE"
+            throw e
+          }
+          const row = rows.find((r) => r.binding_name === binding_name)
+          if (!row || row.version !== version || row.community_id !== null) {
+            return { success: true, meta: { changes: 0, last_row_id: 0 } }
+          }
+          row.community_id = community_id
+          row.allocated_at = allocated_at
+          row.released_at = null
+          row.last_loaded_at = null
+          row.last_error = null
+          row.version += 1
+          return { success: true, meta: { changes: 1, last_row_id: 0 } }
         }
         return { success: true, meta: { changes: 0, last_row_id: 0 } }
       },
@@ -463,5 +539,152 @@ describe("runShardWrite (atomic write batch)", () => {
     const db = fakeD1()
     expect(await runShardWrite(envWith(db), { communityId: "cmt_1", bindingName: "DB_CMTY_PILOT", statements: [] })).toEqual([])
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe("runShardBind (step 2 — d1_pool allocator)", () => {
+  const NOW = "2026-06-19T12:00:00Z"
+  const SHARD_ID = "community-d1-shard-staging"
+
+  function envForAllocator(
+    pool: FakePoolD1,
+    extraBindings: Record<string, unknown> = {},
+  ): ShardEnv {
+    return {
+      ...envWith(fakeD1(), { pool }),
+      ...extraBindings,
+    } as ShardEnv
+  }
+
+  test("§8.3 — allocates a free binding for an unknown community (allocated: true)", async () => {
+    // 2 already-allocated pilots + 1 free binding (NEW_DB).
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_PILOT", community_id: "cmt_pilot", allocated_at: "t0", last_error: null, released_at: null, version: 0 },
+      { binding_name: "DB_CMTY_FIXTURE", community_id: "cmt_fixture", allocated_at: "t0", last_error: null, released_at: null, version: 0 },
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r).toEqual({ bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true })
+    // Pool row is now claimed.
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.community_id).toBe("cmt_new")
+    expect(claimed?.allocated_at).toBe(NOW)
+  })
+
+  test("§8.3 — idempotency: second call for the same community returns the same binding, allocated: false", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: "cmt_new", allocated_at: NOW, last_error: null, released_at: null, version: 1 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r1 = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    const r2 = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r1).toEqual({ bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false })
+    expect(r2).toEqual({ bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false })
+  })
+
+  test("§8.3 — concurrent allocation: UNIQUE(community_id) violation is caught and the winner's binding is returned", async () => {
+    // Simulate a race: the allocator sees no row for communityId X (initial
+    // SELECT returns null), picks the free row, but a concurrent allocator
+    // already won — the fake's UPDATE mutates the row to the winner's state
+    // AND throws the UNIQUE violation. The loser's re-query (SELECT WHERE
+    // community_id = X) finds the winner's row and returns it with
+    // allocated: false.
+    const pool = fakePoolD1(
+      [
+        { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, version: 0 },
+      ],
+      { simulateUniqueCommunityIdViolation: true },
+    )
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r.allocated).toBe(false)
+    expect(r.bindingName).toBe("DB_CMTY_NEW")
+  })
+
+  test("rejects with shard_pool_exhausted when the pool has no free bindings", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_PILOT", community_id: "cmt_pilot", allocated_at: "t0", last_error: null, released_at: null, version: 0 },
+      { binding_name: "DB_CMTY_FIXTURE", community_id: "cmt_fixture", allocated_at: "t0", last_error: null, released_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_PILOT: fakeD1(), DB_CMTY_FIXTURE: fakeD1() })
+    await expect(runShardBind(env, { communityId: "cmt_new", now: NOW })).rejects.toMatchObject({
+      code: "shard_pool_exhausted",
+    })
+  })
+
+  test("respects the quarantine window: a recently released binding is not allocated", async () => {
+    // The released_at is in the future relative to (now - QUARANTINE_WINDOW_MS).
+    // The free-pool filter excludes it.
+    const justReleased = new Date(Date.now() - 1000).toISOString() // 1s ago — within quarantine
+    const pool = fakePoolD1([
+      {
+        binding_name: "DB_CMTY_NEW",
+        community_id: null,
+        allocated_at: null,
+        last_error: null,
+        released_at: justReleased,
+        version: 0,
+      },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() })
+    await expect(runShardBind(env, { communityId: "cmt_new", now: NOW })).rejects.toMatchObject({
+      code: "shard_pool_exhausted",
+    })
+  })
+
+  test("a binding past the quarantine window is allocatable", async () => {
+    const longAgoReleased = new Date(Date.now() - QUARANTINE_WINDOW_MS - 60_000).toISOString()
+    const pool = fakePoolD1([
+      {
+        binding_name: "DB_CMTY_NEW",
+        community_id: null,
+        allocated_at: null,
+        last_error: null,
+        released_at: longAgoReleased,
+        version: 0,
+      },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r.allocated).toBe(true)
+    expect(r.bindingName).toBe("DB_CMTY_NEW")
+  })
+
+  test("rejects with shard_binding_not_initialized when the pool row's binding isn't actually bound on this Worker", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_ORPHAN", community_id: null, allocated_at: null, last_error: null, released_at: null, version: 0 },
+    ])
+    // envForAllocator only has DB_CMTY_PILOT / DB_CMTY_FIXTURE bound — no DB_CMTY_ORPHAN.
+    const env = envForAllocator(pool)
+    await expect(runShardBind(env, { communityId: "cmt_new", now: NOW })).rejects.toMatchObject({
+      code: "shard_binding_not_initialized",
+    })
+    // last_error recorded for ops visibility.
+    const orphan = pool.rows.find((r) => r.binding_name === "DB_CMTY_ORPHAN")
+    expect(orphan?.last_error).toMatch(/not initialized/i)
+  })
+
+  test("rejects with shard_unknown_binding when D1_POOL is absent", async () => {
+    const env = {
+      DB_CMTY_PILOT: fakeD1() as unknown as D1Database,
+      COMMUNITY_D1_SHARD_WORKER_ID: SHARD_ID,
+    } as ShardEnv
+    await expect(runShardBind(env, { communityId: "cmt_new", now: NOW })).rejects.toMatchObject({
+      code: "shard_unknown_binding",
+    })
+  })
+
+  test("shardWorkerId defaults to 'community-d1-shard-staging' when COMMUNITY_D1_SHARD_WORKER_ID is not set", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, version: 0 },
+    ])
+    const env = {
+      DB_CMTY_PILOT: fakeD1() as unknown as D1Database,
+      DB_CMTY_NEW: fakeD1() as unknown as D1Database,
+      D1_POOL: pool as unknown as D1Database,
+    } as ShardEnv
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r.shardWorkerId).toBe("community-d1-shard-staging")
   })
 })

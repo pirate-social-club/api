@@ -68,7 +68,34 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc {}
+
+/**
+ * Step 2 of the D1-native workstream. Allocates a D1 binding from the shard's
+ * pool (the `d1_pool` table; see D1-NATIVE-PROVISIONING-DESIGN.md §3.3, §4.1).
+ * Idempotent on `communityId`: repeated calls for the same community return
+ * the same binding, with `allocated: false` on subsequent calls. Concurrent
+ * calls for the same community are handled by the UNIQUE(community_id) catch
+ * — both succeed with the same binding, exactly one reports `allocated: true`.
+ */
+export type ShardBindRequest = {
+  communityId: string
+  /** ISO timestamp; recorded as allocated_at on the pool row. */
+  now: string
+}
+
+export type ShardBindResponse = {
+  /** The binding allocated to (or already held by) communityId. */
+  bindingName: string
+  /** The shard's worker id; the API writes this to community_database_routing.shard_worker_id. */
+  shardWorkerId: string
+  /** True if this call performed the allocation; false if the binding was already held. */
+  allocated: boolean
+}
+
+export interface ShardPoolRpc {
+  communityD1Bind(input: ShardBindRequest): Promise<ShardBindResponse>
+}
 
 /** Error codes the shard RPC surface raises (mapped to HttpError on the API side). */
 export const SHARD_READ_ERROR = {
@@ -85,4 +112,17 @@ export const SHARD_READ_ERROR = {
   READ_ONLY_VIOLATION: "shard_read_only_violation",
   /** A write-path statement was DDL/PRAGMA/connection verb (not allowed at runtime). */
   WRITE_NOT_ALLOWED: "shard_write_not_allowed",
+  /** The pool has no free (non-quarantined) binding to allocate. */
+  POOL_EXHAUSTED: "shard_pool_exhausted",
+  /**
+   * Optimistic-lock collision on a pool row during allocation. Transient —
+   * the caller retries the whole communityD1Bind call.
+   */
+  POOL_WRITE_CONFLICT: "shard_pool_write_conflict",
+  /**
+   * The chosen binding has a d1_pool row but is not actually a bound D1
+   * namespace on this Worker (wrangler config drift). The allocator frees
+   * the row and retries; this error is for an unrecoverable case.
+   */
+  BINDING_NOT_INITIALIZED: "shard_binding_not_initialized",
 } as const

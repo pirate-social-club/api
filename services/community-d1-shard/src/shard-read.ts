@@ -4,6 +4,8 @@ import {
   readOnlyVerb,
   SHARD_READ_ERROR,
   type ShardBatchReadRequest,
+  type ShardBindRequest,
+  type ShardBindResponse,
   type ShardQueryResult,
   type ShardReadRequest,
   type ShardSqlStatement,
@@ -36,6 +38,13 @@ export type ShardEnv = {
    * this env var is not consulted again for that isolate (until cache expiry).
    */
   COMMUNITY_D1_BINDING_MAP_JSON?: string
+  /**
+   * The shard's own worker id, returned in `communityD1Bind` responses so the
+   * API can populate `community_database_routing.shard_worker_id`. Defaults to
+   * "community-d1-shard-staging" for the staging deploy; can be overridden in
+   * wrangler.jsonc for other environments.
+   */
+  COMMUNITY_D1_SHARD_WORKER_ID?: string
   /** Shard-owned pool metadata D1. The runtime allowlist lives here. */
   D1_POOL?: D1Database
   [binding: string]: D1Database | string | undefined
@@ -281,4 +290,169 @@ export async function runShardWrite(env: ShardEnv, input: ShardWriteRequest): Pr
   const prepared = input.statements.map((statement) => prepareWrite(db, statement))
   const results = await db.batch(prepared)
   return results.map(toResult)
+}
+
+/**
+ * Maximum retries on optimistic-lock conflict during allocator UPDATE.
+ * A concurrent allocator is the only realistic source of conflict; with
+ * the free-pool query using ORDER BY binding_name LIMIT 1, conflicts are
+ * rare. Five retries is enough to absorb a few concurrent allocations
+ * without unbounded spinning.
+ */
+const MAX_BIND_ATTEMPTS = 5
+
+/**
+ * Detect a UNIQUE(community_id) violation on d1_pool.community_id. libsql
+ * exposes this as a LibsqlError with rawCode "SQLITE_CONSTRAINT_UNIQUE"
+ * and a message containing "UNIQUE constraint failed". We check both to
+ * stay robust across libsql versions.
+ */
+function isUniqueCommunityViolation(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false
+  const err = e as { rawCode?: string; code?: string; message?: string }
+  if (err.rawCode === "SQLITE_CONSTRAINT_UNIQUE") return true
+  if (err.code === "SQLITE_CONSTRAINT_UNIQUE") return true
+  if (typeof err.message === "string" && /UNIQUE constraint failed:.*community_id/i.test(err.message)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Step 2 of the D1-native workstream: allocate a D1 binding from the shard's
+ * pool for `communityId`. Idempotent on `communityId` — repeated calls return
+ * the same binding, with `allocated: false` on subsequent calls. Concurrent
+ * calls for the same community are handled by the UNIQUE(community_id) catch:
+ * the loser re-queries by community_id and returns the winner's binding.
+ *
+ * Selection: a free binding is one with `community_id IS NULL` AND outside
+ * the quarantine window (`released_at IS NULL OR released_at < now() -
+ * QUARANTINE_WINDOW_MS`). The quarantine is the §5 mitigation for the
+ * stale-cache + release+reallocate cross-tenant hole.
+ *
+ * Atomicity: the free-binding SELECT and the version-conditional UPDATE are
+ * NOT in a single transaction (D1 has none, and a transaction across
+ * statements would defeat the point of the optimistic lock). On a
+ * version mismatch (0 rows affected), the allocator retries with a fresh
+ * SELECT up to MAX_BIND_ATTEMPTS times. On UNIQUE(community_id) violation
+ * (concurrent allocator claimed the same communityId between our SELECT
+ * and UPDATE), the allocator re-queries and returns the winner's binding.
+ *
+ * See D1-NATIVE-PROVISIONING-DESIGN.md §3.3, §4.1, §8.3.
+ */
+export async function runShardBind(env: ShardEnv, input: ShardBindRequest): Promise<ShardBindResponse> {
+  const pool = env.D1_POOL
+  if (!pool) {
+    throw new ShardReadError(
+      SHARD_READ_ERROR.UNKNOWN_BINDING,
+      "D1_POOL binding is not configured on this shard",
+    )
+  }
+
+  const shardWorkerId = String(env.COMMUNITY_D1_SHARD_WORKER_ID ?? "community-d1-shard-staging")
+
+  // 1. Idempotency: if communityId is already in the pool, return its binding.
+  //    No allocation. This is the path the retry path takes — second
+  //    communityD1Bind(X) for the same X returns allocated: false.
+  const existing = await pool
+    .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
+    .bind(input.communityId)
+    .first()
+  if (existing) {
+    return {
+      bindingName: String((existing as { binding_name: string }).binding_name),
+      shardWorkerId,
+      allocated: false,
+    }
+  }
+
+  // 2. Allocate: pick a free binding (with quarantine filter) and claim it
+  //    with an optimistic-lock UPDATE.
+  const quarantineThreshold = new Date(Date.now() - QUARANTINE_WINDOW_MS).toISOString()
+
+  for (let attempt = 0; attempt < MAX_BIND_ATTEMPTS; attempt++) {
+    // 2a. Pick a free binding outside the quarantine window.
+    const freeRow = await pool
+      .prepare(
+        "SELECT binding_name, version FROM d1_pool " +
+          "WHERE community_id IS NULL " +
+          "AND (released_at IS NULL OR released_at < ?1) " +
+          "ORDER BY binding_name LIMIT 1",
+      )
+      .bind(quarantineThreshold)
+      .first()
+    if (!freeRow) {
+      throw new ShardReadError(
+        SHARD_READ_ERROR.POOL_EXHAUSTED,
+        "d1_pool has no free (non-quarantined) binding to allocate",
+      )
+    }
+    const freeBinding = String((freeRow as { binding_name: string; version: number }).binding_name)
+    const freeVersion = Number((freeRow as { binding_name: string; version: number }).version)
+
+    // 2b. Verify the chosen binding is actually a bound D1 namespace on this
+    //     Worker (defends against wrangler config drift: a d1_pool row exists
+    //     but the binding isn't bound). Mark last_error and return an explicit
+    //     code so ops can see it.
+    if (!env[freeBinding]) {
+      await pool
+        .prepare(
+          "UPDATE d1_pool SET last_error = ?2, version = version + 1 " +
+            "WHERE binding_name = ?1 AND version = ?3",
+        )
+        .bind(freeBinding, "binding not initialized on this shard", freeVersion)
+        .run()
+      throw new ShardReadError(
+        SHARD_READ_ERROR.BINDING_NOT_INITIALIZED,
+        `Binding ${freeBinding} has a d1_pool row but is not a bound D1 namespace on this shard`,
+      )
+    }
+
+    // 2c. Optimistic-lock UPDATE: claim the binding for this communityId.
+    //     If version doesn't match (concurrent allocator raced us), 0 rows
+    //     are affected and we retry from 2a.
+    try {
+      const updateResult = await pool
+        .prepare(
+          "UPDATE d1_pool SET " +
+            "community_id = ?2, allocated_at = ?3, " +
+            "released_at = NULL, last_loaded_at = NULL, last_error = NULL, " +
+            "version = version + 1 " +
+            "WHERE binding_name = ?1 AND version = ?4",
+        )
+        .bind(freeBinding, input.communityId, input.now, freeVersion)
+        .run()
+
+      if (updateResult.meta?.changes && updateResult.meta.changes > 0) {
+        return { bindingName: freeBinding, shardWorkerId, allocated: true }
+      }
+      // 0 rows affected — version mismatch. Retry.
+    } catch (e) {
+      // UNIQUE(community_id) violation: a concurrent allocator claimed this
+      // communityId between our SELECT and UPDATE. Re-query and return the
+      // winner's binding with allocated: false.
+      if (isUniqueCommunityViolation(e)) {
+        const winner = await pool
+          .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
+          .bind(input.communityId)
+          .first()
+        if (winner) {
+          return {
+            bindingName: String((winner as { binding_name: string }).binding_name),
+            shardWorkerId,
+            allocated: false,
+          }
+        }
+        // The winner's row was somehow deleted between the violation and our
+        // re-query (extremely unlikely). Fall through to retry.
+      } else {
+        throw e
+      }
+    }
+  }
+
+  throw new ShardReadError(
+    SHARD_READ_ERROR.POOL_WRITE_CONFLICT,
+    "d1_pool allocator exhausted retries on optimistic-lock conflict",
+  )
 }

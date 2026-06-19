@@ -27,7 +27,7 @@ is exhausted in PR #57.
 |---|---|---|---|---|
 | 0 | ✅ Shipped (PR #57) | `1b86876` | §8.0 | Request-aware resolver; the load-bearing v1-scope fix. |
 | 1 | ✅ Shipped (live on staging) | this PR | §8.2 | Keystone: shard's `d1_pool` + de-staticized allowlist. 26 unit tests pass including the §8.2 keystone test. Pool D1 `community-d1-shard-pool-staging` is live in EEUR with the 2 pilots seeded. Shard deployed to `community-d1-shard-staging` v `3714fbf0-393a-406a-9952-ff6507972174`. |
-| 2 | ⬜ Pending | — | §8.3 | `communityD1Bind` RPC + concurrent-allocator catch. |
+| 2 | ✅ Shipped (live on staging) | this PR | §8.3 | `communityD1Bind` RPC + concurrent-allocator catch + quarantine-window-respecting free-pool scan. 9 new runShardBind tests, total 35 pass including all §8.3 cases (idempotency, concurrent UNIQUE catch, pool exhausted, quarantine, BINDING_NOT_INITIALIZED, missing D1_POOL). Shard deployed v `2523116f-2d3d-4144-8150-5ad86178d60e`. |
 | 3 | ⬜ Pending | — | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard. |
 | 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
 | 5 | ⬜ Pending | — | §8.5 | Reconciliation sweep (cron Worker). |
@@ -341,7 +341,7 @@ gate.
 
 ## Step 2 — Shard `communityD1Bind` RPC + idempotency
 
-**Status:** Pending.
+**Status:** ✅ Shipped live on staging.
 
 **Scope:** New RPC on `CommunityD1Shard` (services/community-d1-shard/
 src/index.ts). Per §3.3, §4.1: get-or-allocate keyed on `community_id`,
