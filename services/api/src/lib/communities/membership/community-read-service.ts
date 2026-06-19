@@ -5,7 +5,7 @@ import {
 import { notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { loadCommunityProjection, requireOwnedCommunity } from "../create/service"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { Env } from "../../../env"
 import type { Community } from "../../../types"
 import type { CommunityMembershipRepository } from "./types"
@@ -44,7 +44,7 @@ export async function getCommunity(input: {
     return canonical
   }
 
-  const db = await openCommunityDb(input.env, input.repository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.repository, input.communityId)
   try {
     const localized = await buildLocalizedCommunity({
       executor: db.client,

@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import { safeRollback } from "../transactions"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
@@ -99,7 +99,7 @@ export async function createPost(input: {
 
   assertPostCreateRequest(input.body, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {

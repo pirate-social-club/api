@@ -1,4 +1,4 @@
-import type { Client } from "../../sql-client"
+import type { ReadClient } from "../../sql-client"
 import { requiredString, rowValue, stringOrNull } from "../../sql-row"
 import type { CommunityFollowStatus } from "./follow-store"
 
@@ -18,7 +18,7 @@ export type CommunityFollowProjectionSourceRow = {
 }
 
 export async function listCommunityMembershipProjectionSources(input: {
-  client: Client
+  client: ReadClient
   communityId: string
   limit: number
 }): Promise<CommunityMembershipProjectionSourceRow[]> {
@@ -45,7 +45,7 @@ export async function listCommunityMembershipProjectionSources(input: {
 }
 
 export async function listCommunityFollowProjectionSources(input: {
-  client: Client
+  client: ReadClient
   communityId: string
   limit: number
 }): Promise<CommunityFollowProjectionSourceRow[]> {

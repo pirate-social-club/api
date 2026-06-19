@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -39,7 +39,7 @@ export async function castPostVote(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)

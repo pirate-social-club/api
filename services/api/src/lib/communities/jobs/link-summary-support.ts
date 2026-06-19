@@ -8,7 +8,7 @@ import {
   writeLinkEnrichmentSnapshotToPost,
 } from "../../posts/link-enrichment/summary-fanout"
 import { getControlPlaneClient } from "../../runtime-deps"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { enqueueCommunityJob } from "./store"
 
@@ -56,7 +56,7 @@ export async function fanoutLinkSummarySnapshot(input: {
   let failed = 0
   for (const usage of usages) {
     try {
-      const db = await openCommunityDb(input.handlerInput.env, input.handlerInput.communityRepository, usage.community_id)
+      const db = await openCommunityWriteClient(input.handlerInput.env, input.handlerInput.communityRepository, usage.community_id)
       try {
         await writeLinkEnrichmentSnapshotToPost({
           client: db.client,
@@ -96,7 +96,7 @@ export async function enqueueSummaryTranslations(input: {
   payloadPostId: string | null
   now: string
 }): Promise<void> {
-  const queueDb = await openCommunityDb(
+  const queueDb = await openCommunityWriteClient(
     input.handlerInput.env,
     input.handlerInput.communityRepository,
     input.handlerInput.job.community_id,

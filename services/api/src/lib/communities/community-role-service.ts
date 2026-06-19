@@ -8,7 +8,7 @@ import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import type { Client } from "../sql-client"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
 import {
   loadCommunityProjection,
   type CommunityMutationActor,
@@ -100,7 +100,7 @@ async function hasActiveCommunityAdminRole(input: {
   communityId: string
   userId: string
 }): Promise<boolean> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -272,7 +272,7 @@ export async function grantCommunityRole(input: {
   })
   await requireTargetUser({ userRepository: input.userRepository, userId: targetUserId })
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   const now = nowIso()
   let changed = false
   try {
@@ -321,7 +321,7 @@ export async function revokeCommunityRole(input: {
   })
   await requireTargetUser({ userRepository: input.userRepository, userId: targetUserId })
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   const now = nowIso()
   let changed = false
   try {

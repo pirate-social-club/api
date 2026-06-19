@@ -130,16 +130,23 @@ export async function enqueueCommunityJob(input: {
   payloadJson?: string | null
   availableAt?: string | null
   createdAt: string
+  // Set false when enqueuing INSIDE a transaction("write"): the dedup lookup below is a
+  // SELECT, which cannot run in the routed D1 write client's buffered batch (the shard
+  // write guard rejects reads). Callers inside a write tx accept that a fresh subject's
+  // job is enqueued without the dedup optimization (jobs are idempotent on the runner).
+  dedupe?: boolean
 }): Promise<CommunityJobRow> {
-  const existing = await findLatestCommunityJobBySubjectAndType({
-    client: input.client,
-    jobType: input.jobType,
-    subjectType: input.subjectType,
-    subjectId: input.subjectId,
-  })
+  if (input.dedupe !== false) {
+    const existing = await findLatestCommunityJobBySubjectAndType({
+      client: input.client,
+      jobType: input.jobType,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+    })
 
-  if (existing && (existing.status === "queued" || existing.status === "running")) {
-    return existing
+    if (existing && (existing.status === "queued" || existing.status === "running")) {
+      return existing
+    }
   }
 
   const jobId = makeId("cjb")
@@ -165,21 +172,25 @@ export async function enqueueCommunityJob(input: {
     ],
   })
 
-  const created = await executeFirst(input.client, {
-    sql: `
-      SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
-      FROM community_jobs
-      WHERE job_id = ?1
-      LIMIT 1
-    `,
-    args: [jobId],
-  })
-
-  if (!created) {
-    throw new Error("Community job is missing after enqueue")
+  // Deterministic return: the inserted row is fully known here, so construct it directly
+  // instead of reading it back. A SELECT-after-INSERT would cross the routed write client's
+  // separate write-RPC / read-RPC boundary, which is NOT read-after-write consistent on D1
+  // (the readback can miss the just-written row). Mirrors the INSERT column values above.
+  return {
+    job_id: jobId,
+    community_id: input.communityId,
+    job_type: input.jobType,
+    subject_type: input.subjectType,
+    subject_id: input.subjectId,
+    status: "queued" as CommunityJobStatus,
+    payload_json: input.payloadJson ?? null,
+    result_ref: null,
+    error_code: null,
+    attempt_count: 0,
+    available_at: input.availableAt ?? null,
+    created_at: input.createdAt,
+    updated_at: input.createdAt,
   }
-
-  return toCommunityJobRow(created)
 }
 
 export async function markCommunityJobRunning(input: {

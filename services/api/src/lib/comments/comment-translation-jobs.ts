@@ -13,6 +13,7 @@ async function enqueueCommentTranslationJob(input: {
   commentId: string
   locale: string
   createdAt: string
+  dedupe?: boolean
 }): Promise<void> {
   await enqueueCommunityJob({
     client: input.client,
@@ -25,6 +26,7 @@ async function enqueueCommentTranslationJob(input: {
       locale: input.locale,
     }),
     createdAt: input.createdAt,
+    dedupe: input.dedupe,
   })
 }
 
@@ -33,6 +35,7 @@ export async function enqueueCommentTranslationPrewarmJobs(input: {
   communityId: string
   comment: CommentWriteDraft
   createdAt: string
+  dedupe?: boolean
 }): Promise<void> {
   if (input.comment.status !== "published" || !String(input.comment.body ?? "").trim()) {
     return
@@ -48,6 +51,7 @@ export async function enqueueCommentTranslationPrewarmJobs(input: {
       commentId: input.comment.comment_id,
       locale,
       createdAt: input.createdAt,
+      dedupe: input.dedupe,
     })
   }
 }

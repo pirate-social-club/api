@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import { pruneStaleLiveRoomViewerSessions } from "../live-rooms/viewer-sessions"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
@@ -31,7 +31,7 @@ function resolveLiveRoomViewerSessionPruneCutoff(payload: LiveRoomViewerSessions
 
 export async function runLiveRoomViewerSessionsPrune(input: CommunityJobHandlerInput): Promise<string | null> {
   const payload = parseJobPayload<LiveRoomViewerSessionsPrunePayload>(input.job.payload_json)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const prunedCount = await pruneStaleLiveRoomViewerSessions(db.client, {
       communityId: input.job.community_id,
