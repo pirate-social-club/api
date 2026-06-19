@@ -116,3 +116,65 @@ export async function upsertTursoCommunityRoutingRow(
 
   return { inserted: (result.rowsAffected ?? 0) > 0 }
 }
+
+export type UpsertD1RoutingRowInput = {
+  communityId: string
+  shardWorkerId: string
+  bindingName: string
+  region: string
+  now: string
+  provisioningState?: CommunityProvisioningState
+}
+
+/**
+ * Seed (or advance) a `backend='d1'` routing row for a community born on D1.
+ *
+ * Unlike the Turso backfill writer (`upsertTursoCommunityRoutingRow`, which is
+ * `DO NOTHING` because it only describes pre-existing Turso communities), the
+ * D1-native provisioning path owns the row's lifecycle: it may write the row at
+ * `provisioning_state='provisioning'` while the shard binding is being loaded
+ * and then advance it to `'ready'` (or `'degraded'`) once load completes. So
+ * this is `DO UPDATE`, but guarded `WHERE backend = 'd1'` so it can NEVER
+ * clobber or downgrade a `backend='turso'` row that happens to share the
+ * community_id — a stale call cannot steal a Turso community onto a shard.
+ *
+ * The d1 column shape satisfies the 0117 `chk_d1_fields` CHECK
+ * (`shard_worker_id`/`binding_name`/`region` NOT NULL, `turso_database_binding_id`
+ * NULL). Each community is allocated its OWN shard binding 1:1 (the binding name
+ * is unique to the community) — the shard authorizes the (community_id,
+ * bindingName) pair, so isolation is at the binding/database level, not a shared
+ * partition.
+ *
+ * Returns whether the row was inserted or updated (false = a conflicting
+ * `backend='turso'` row blocked the write).
+ */
+export async function upsertD1CommunityRoutingRow(
+  executor: DbExecutor,
+  input: UpsertD1RoutingRowInput,
+): Promise<{ written: boolean }> {
+  const result = await executor.execute({
+    sql: `
+      INSERT INTO community_database_routing
+        (community_id, backend, provisioning_state, shard_worker_id, binding_name, region,
+         created_at, updated_at)
+      VALUES (?1, 'd1', ?2, ?3, ?4, ?5, ?6, ?6)
+      ON CONFLICT (community_id) DO UPDATE SET
+        provisioning_state = excluded.provisioning_state,
+        shard_worker_id = excluded.shard_worker_id,
+        binding_name = excluded.binding_name,
+        region = excluded.region,
+        updated_at = excluded.updated_at
+      WHERE community_database_routing.backend = 'd1'
+    `,
+    args: [
+      input.communityId,
+      input.provisioningState ?? "ready",
+      input.shardWorkerId,
+      input.bindingName,
+      input.region,
+      input.now,
+    ],
+  })
+
+  return { written: (result.rowsAffected ?? 0) > 0 }
+}

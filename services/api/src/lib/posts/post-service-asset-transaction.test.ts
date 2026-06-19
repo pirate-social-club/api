@@ -82,6 +82,8 @@ const communityCreateRepositoryMock = () => ({
   buildBootstrapInitialSettings: () => ({}),
   buildBootstrapRules: () => [],
   buildPendingCommunityDatabaseUrl: (communityId: string) => `libsql://pending-${communityId}.invalid`,
+  buildPendingD1CommunityBindingUrl: (communityId: string) => `d1://pending-${communityId}.invalid`,
+  isPendingD1CommunityBindingUrl: () => false,
   buildProvisionOperatorBootstrapPayload: () => ({}),
   communityMutationActorFromUserId: (userId: string) => ({
     userId,

@@ -453,6 +453,60 @@ export async function persistProvisionedCommunityDatabaseAccess(
   }
 }
 
+/**
+ * Finalize a D1-native community's binding row once the shard has allocated a
+ * concrete binding. Counterpart to `persistProvisionedCommunityDatabaseAccess`
+ * for the credential-free D1 path: there is no token, so this writes ONLY the
+ * `community_database_bindings` row (no `community_db_credentials`).
+ *
+ * Replaces the `d1://pending-…invalid` sentinel written at create time with the
+ * resolved `d1://shard/<bindingName>` URL and flips `requires_credentials` to 0,
+ * so the legacy `openCommunityDb` path no longer hands libsql a `d1://pending`
+ * URL it cannot parse (audit gap 1).
+ *
+ * `database_name` is set to the (unique) `bindingName` — NOT a constant like
+ * "main" — because `idx_community_bindings_active_target` is UNIQUE over
+ * `(organization_slug, group_name, database_name)` among active rows; every
+ * D1-native community shares `organization_slug='shard'`/`group_name='shard'`,
+ * so the binding name is what keeps each active target distinct (matches the
+ * 1:1 database-per-community allocation model).
+ */
+export async function persistProvisionedD1Binding(
+  client: Client,
+  input: {
+    communityDatabaseBindingId: string
+    bindingName: string
+    databaseUrl: string
+    region: string
+    updatedAt: string
+  },
+): Promise<void> {
+  await client.execute({
+    sql: `
+      UPDATE community_database_bindings
+      SET organization_slug = 'shard',
+          group_name = 'shard',
+          group_id = NULL,
+          database_name = ?2,
+          database_id = NULL,
+          database_url = ?3,
+          location = ?4,
+          requires_credentials = 0,
+          status = 'active',
+          transferred_at = NULL,
+          updated_at = ?5
+      WHERE community_database_binding_id = ?1
+    `,
+    args: [
+      input.communityDatabaseBindingId,
+      input.bindingName,
+      input.databaseUrl,
+      input.region,
+      input.updatedAt,
+    ],
+  })
+}
+
 export async function markCommunityProvisioningFailed(
   client: Client,
   input: {

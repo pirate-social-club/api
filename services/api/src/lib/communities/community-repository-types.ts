@@ -36,7 +36,7 @@ export interface CommunityJobReadRepository {
   getLatestCommunityProvisioningJob(communityId: string): Promise<JobRow | null>
 }
 
-export type CommunityProvisioningMode = "local_dev" | "turso_operator"
+export type CommunityProvisioningMode = "local_dev" | "turso_operator" | "d1_native"
 
 export type InitialCommunityDatabaseBinding = {
   organizationSlug: string
