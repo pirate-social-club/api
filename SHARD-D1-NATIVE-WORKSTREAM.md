@@ -1,5 +1,11 @@
 # Shard D1-Native Workstream — Implementation Tracking
 
+> **Deploy surface:** the API D1 workstream lives on `pirate-api-d1-staging`
+> (Worker v `0e64adc9-8298-4d3c-a716-6f804149e79b`). The shared
+> `pirate-api-staging` is reserved for the karaoke workstream; the two
+> workstreams do NOT clobber each other. All step 1-4 deploys below
+> target `pirate-api-d1-staging`.
+
 PR-series tracking for the workstream after PR #57 lands. The design
 is in `D1-NATIVE-PROVISIONING-DESIGN.md` (10 sections, keystone +
 security + RPC contract + failure model + v1 scope + acceptance
