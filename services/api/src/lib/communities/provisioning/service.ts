@@ -78,6 +78,17 @@ function isSameNamespaceRoot(
   return left.family === right.family && left.normalized_root_label === right.normalized_root_label
 }
 
+function provisioningFailureErrorCode(mode: CommunityProvisioningMode): string {
+  switch (mode) {
+    case "turso_operator":
+      return "turso_operator_provision_failed"
+    case "d1_native":
+      return "d1_native_provision_failed"
+    default:
+      return "local_dev_bootstrap_failed"
+  }
+}
+
 function communityProvisioningFailureDetails(
   error: unknown,
   mode: CommunityProvisioningMode,
@@ -337,7 +348,7 @@ async function createNamespacelessCommunity(input: {
       communityId,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
+      errorCode: provisioningFailureErrorCode(backend.mode),
       createdAt: nowIso(),
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
@@ -498,7 +509,7 @@ async function provisionNamespacedCommunity(input: {
         communityId,
         jobId: prepared.job.job_id,
         actorUserId: auth.userId,
-        errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
+        errorCode: provisioningFailureErrorCode(backend.mode),
         createdAt: failedAt,
         metadata: {
           binding_id: prepared.binding.community_database_binding_id,
