@@ -9,6 +9,7 @@ import {
   prepareVerifiedNamespace,
   requestJson,
 } from "./community-routes-test-helpers"
+import type { ShardRpc } from "@pirate/api-shared"
 
 let cleanup: (() => Promise<void>) | null = null
 const COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS = 30_000
@@ -538,5 +539,104 @@ membership_mode: "request",
     } finally {
       globalThis.fetch = originalFetch
     }
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
+})
+
+describe("d1_native community provisioning (step 4 of the D1-native workstream)", () => {
+  // §8.1 acceptance criterion: a namespaceless community create with
+  // COMMUNITY_PROVISION_BACKEND=d1_native and a (fake) COMMUNITY_D1_SHARD
+  // reaches markCommunityProvisioningSucceeded AND produces a
+  // community_database_routing row at backend='d1', provisioning_state='ready'.
+  // This is the test slice 4 of PR #57 couldn't reach: the d1_native
+  // orchestrator (step 4) was not wired. Now that the orchestrator runs
+  // bind → load → upsertRouting('ready') → persistProvisionedD1Binding, the
+  // service test exercises the full route end-to-end.
+  testWithTimeout("§8.1 — namespaceless d1_native create reaches provisioning_succeeded with a backend='d1' routing row at 'ready'", async () => {
+    const calls: Array<{ m: string; input: unknown }> = []
+    const fakeShard: ShardRpc = {
+      async communityD1Bind(input: { communityId: string; now: string }) {
+        calls.push({ m: "communityD1Bind", input })
+        return {
+          ok: true,
+          value: {
+            bindingName: "DB_CMTY_ROUTE_TEST",
+            shardWorkerId: "community-d1-shard-staging",
+            allocated: true,
+          },
+        }
+      },
+      async communityD1LoadSnapshot(input: { communityId: string; bindingName: string; statements: unknown[] }) {
+        calls.push({ m: "communityD1LoadSnapshot", input })
+        return { ok: true, value: { rowsAffected: 0, loaded: true } }
+      },
+    } as unknown as ShardRpc
+
+    const ctx = await createRouteTestContext({
+      COMMUNITY_PROVISION_BACKEND: "d1_native",
+      COMMUNITY_D1_SHARD: fakeShard,
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-d1-native-route-test")
+
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "D1 Native Route Club",
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+
+    if (response.status !== 202) {
+      const errBody = await json(response)
+      throw new Error(`expected 202, got ${response.status}: ${JSON.stringify(errBody)}`)
+    }
+    const body = (await response.json()) as {
+      community: { id: string; display_name: string; provisioning_state: string }
+      job: { status: string }
+    }
+    expect(body.community.display_name).toBe("D1 Native Route Club")
+    expect(body.community.provisioning_state).toBe("active")
+    expect(body.job.status).toBe("succeeded")
+
+    // The community ID is com_xxx; the underlying id (no com_ prefix) is what
+    // the routing row uses for the d1_native path.
+    const communityIdBare = body.community.id.replace(/^com_/, "")
+
+    // Orchestrator call sequence: bind → load (the upsertRouting and
+    // persistBinding are repo calls, not shard RPCs, so they don't appear
+    // in `calls`).
+    expect(calls.map((c) => c.m)).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+    ])
+
+    // Query the control plane directly: routing row at backend='d1',
+    // provisioning_state='ready'; binding row's URL updated to d1://shard/<binding>.
+    const routingRow = (await ctx.client.execute({
+      sql: `SELECT backend, provisioning_state, shard_worker_id, binding_name, region
+            FROM community_database_routing WHERE community_id = ?1`,
+      args: [communityIdBare],
+    })).rows[0] as Record<string, unknown>
+    expect(routingRow).toMatchObject({
+      backend: "d1",
+      provisioning_state: "ready",
+      shard_worker_id: "community-d1-shard-staging",
+      binding_name: "DB_CMTY_ROUTE_TEST",
+      region: "weur",
+    })
+
+    const bindingRow = (await ctx.client.execute({
+      sql: `SELECT database_url, database_name, organization_slug, group_name, location, requires_credentials, status
+            FROM community_database_bindings WHERE community_id = ?1`,
+      args: [communityIdBare],
+    })).rows[0] as Record<string, unknown>
+    expect(bindingRow).toMatchObject({
+      database_url: "d1://shard/DB_CMTY_ROUTE_TEST",
+      database_name: "DB_CMTY_ROUTE_TEST",
+      organization_slug: "shard",
+      group_name: "shard",
+      location: "weur",
+      requires_credentials: 0,
+      status: "active",
+    })
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 })

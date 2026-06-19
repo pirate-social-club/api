@@ -286,6 +286,7 @@ async function createNamespacelessCommunity(input: {
       communityId,
       namespaceVerificationId: null,
       routeSlug: null,
+      communityRepository: input.communityRepository,
     })
     await persistProvisionedCommunityCredential({
       env: input.env,
@@ -466,6 +467,7 @@ async function provisionNamespacedCommunity(input: {
       communityId,
       namespaceVerificationId,
       routeSlug,
+      communityRepository: repo,
     })
     await persistProvisionedCommunityCredential({
       env,

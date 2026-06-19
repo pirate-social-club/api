@@ -2,6 +2,7 @@ import { buildLocalCommunityDbUrl } from "../community-local-db"
 import type { LocalCommunitySnapshot } from "../community-local-db"
 import type {
   CommunityProvisioningMode,
+  CommunityProvisioningRepository,
   InitialCommunityDatabaseBinding,
 } from "../community-repository-types"
 import {
@@ -12,7 +13,7 @@ import {
   resolveCommunityDbRoot,
   resolveCommunityProvisionGroupLocation,
 } from "../create/repository"
-import { internalError, notImplementedError } from "../../errors"
+import { HttpError, internalError } from "../../errors"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
@@ -36,6 +37,12 @@ type ProvisionInput = {
   communityId: string
   namespaceVerificationId: string | null
   routeSlug: string | null
+  /**
+   * d1_native orchestrator uses this to seed the routing row at 'ready' and
+   * to persist the resolved d1 binding URL (gap 1 — see D1-NATIVE-PROVISIONING-DESIGN.md
+   * §3, §4). Unused by the local_dev / turso_operator backends.
+   */
+  communityRepository: CommunityProvisioningRepository
 }
 
 export type ProvisionedCommunityCredential = {
@@ -208,10 +215,165 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       provisioningMode: "d1_native",
     }
   },
-  async provision() {
-    throw notImplementedError(
-      "d1_native provisioning is not yet wired: the shard pool + allocator RPC are required",
-    )
+  /**
+   * Step 4 of the D1-native workstream: the d1_native orchestrator. Allocates
+   * a binding from the shard pool, loads the snapshot (idempotent no-op for
+   * v1 — the schema is in the binding's pre-applied migrations, the data load
+   * is a follow-up slice), seeds the routing row at 'ready', and persists the
+   * resolved d1:// URL on the binding row.
+   *
+   * Branches on raw `ShardResult` (`.ok` / `.code`) at every step, not via
+   * throw+re-catch — each error code has a distinct recovery path that the
+   * service's catch block can't easily reconstruct from a generic throw.
+   * The unwrap helper is right for the DML read/write path (the consumer just
+   * wants the value or a hard error); the orchestrator is the one case that
+   * needs to inspect codes for control flow.
+   */
+  async provision(input: ProvisionInput): Promise<ProvisionedCommunityDatabase> {
+    const communityId = input.communityId
+    const now = new Date().toISOString()
+    const initialBinding = this.initialBinding({
+      env: input.env,
+      communityId,
+      databaseRegion: input.body.database_region,
+    })
+    const shard = input.env.COMMUNITY_D1_SHARD
+    if (!shard) {
+      // Resolver selects d1_native only when COMMUNITY_D1_SHARD is bound
+      // (per isD1NativeProvisioningSelected), so this is unreachable in
+      // practice. Fail loud rather than silently fall back.
+      throw internalError(
+        "d1_native provisioning: COMMUNITY_D1_SHARD service binding is not configured on this Worker",
+      )
+    }
+
+    // 1. Allocate a binding from the shard pool.
+    const bindResult = await shard.communityD1Bind({ communityId, now })
+    if (!bindResult.ok) {
+      if (bindResult.code === "shard_pool_exhausted") {
+        throw new HttpError(
+          503,
+          "d1_pool_exhausted",
+          `d1_native provisioning failed: shard pool exhausted (${bindResult.message})`,
+          true,
+        )
+      }
+      if (bindResult.code === "shard_pool_write_conflict") {
+        // The allocator's internal retries are exhausted. The
+        // resolveProvisioningRetryAction path will retry on a subsequent
+        // community_create for the same communityId; surface as a transient
+        // provisioning failure here.
+        throw new HttpError(
+          503,
+          "d1_pool_write_conflict",
+          `d1_native provisioning failed: shard pool allocator exhausted retries (${bindResult.message})`,
+          true,
+        )
+      }
+      throw internalError(
+        `d1_native provisioning failed: shard communityD1Bind returned ${bindResult.code}: ${bindResult.message}`,
+      )
+    }
+    const { bindingName, shardWorkerId, allocated } = bindResult.value
+    if (!allocated) {
+      // createNamespacelessCommunity always uses a fresh communityId, so
+      // the idempotency check on the shard always finds no row. If the shard
+      // ever returns allocated: false here, the create flow is being called
+      // twice for the same communityId without an intermediate
+      // markCommunityProvisioningSucceeded — that's an orchestrator bug.
+      throw internalError(
+        `d1_native provisioning: shard bind returned allocated=false for fresh communityId ${communityId}`,
+      )
+    }
+
+    // 2. Load the snapshot (DDL + INSERTs) into the allocated binding. v1
+    //    ships an empty statements list: the schema is in the binding's
+    //    pre-applied migrations (per D1-NATIVE-PROVISIONING-DESIGN.md §3.4);
+    //    the data conversion from LocalCommunitySnapshot to D1 SQL is a
+    //    follow-up slice. The empty path is a valid load — it marks the
+    //    binding loaded and lets the routing row flip to 'ready'.
+    const loadResult = await shard.communityD1LoadSnapshot({
+      communityId,
+      bindingName,
+      statements: [],
+    })
+    if (!loadResult.ok) {
+      if (loadResult.code === "shard_binding_not_allocated") {
+        // The binding was released between bind and load (a concurrent
+        // reconciler ran). The reconciler (§6) handles cleanup; the
+        // orchestrator surfaces this as a transient provisioning failure.
+        throw new HttpError(
+          503,
+          "d1_binding_not_allocated",
+          `d1_native provisioning failed: binding ${bindingName} was released during load (${loadResult.message})`,
+          true,
+        )
+      }
+      if (loadResult.code === "shard_write_not_allowed") {
+        // The orchestrator passes []; the bootstrap guard rejects everything
+        // else. If this fires with [], it's a bug in the guard or the
+        // orchestrator.
+        throw internalError(
+          `d1_native provisioning failed: bootstrap guard rejected load (${loadResult.message})`,
+        )
+      }
+      throw internalError(
+        `d1_native provisioning failed: shard communityD1LoadSnapshot returned ${loadResult.code}: ${loadResult.message}`,
+      )
+    }
+
+    // 3. Seed the routing row at 'ready' (the §8.1 acceptance criterion:
+    //    a community_database_routing row at backend='d1', state='ready').
+    //    Bumping the routing row happens BEFORE persistProvisionedD1Binding
+    //    so that any concurrent routed read sees a consistent
+    //    (binding-name, routing-state) pair.
+    await input.communityRepository.upsertD1CommunityRoutingRow({
+      communityId,
+      shardWorkerId,
+      bindingName,
+      region: initialBinding.location as string,
+      now,
+      provisioningState: "ready",
+    })
+
+    // 4. Persist the resolved d1:// URL on the binding row, replacing the
+    //    d1://pending-<communityId>.invalid sentinel written at create time
+    //    (gap 1 of the prior audit, fixed in PR #57 slice 3). The binding ID
+    //    is the one createCommunityProvisioningRequest generated; we look it
+    //    up rather than threading it through ProvisionInput.
+    const databaseUrl = `d1://shard/${bindingName}`
+    const bindingRow = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
+    if (!bindingRow) {
+      // createCommunityProvisioningRequest just inserted this row; if it's
+      // gone, something deleted it. Fail loud.
+      throw internalError(
+        `d1_native provisioning: binding row for communityId ${communityId} is missing after createCommunityProvisioningRequest`,
+      )
+    }
+    await input.communityRepository.persistProvisionedD1Binding({
+      communityDatabaseBindingId: bindingRow.community_database_binding_id,
+      bindingName,
+      databaseUrl,
+      region: initialBinding.location as string,
+      updatedAt: now,
+    })
+
+    return {
+      mode: "d1_native",
+      binding: {
+        organizationSlug: initialBinding.organizationSlug,
+        groupName: initialBinding.groupName,
+        groupId: initialBinding.groupId,
+        databaseName: bindingName,
+        databaseId: null,
+        databaseUrl,
+        location: initialBinding.location,
+        requiresCredentials: false,
+        provisioningMode: "d1_native",
+      },
+      credential: null,
+      localSnapshot: null,
+    }
   },
 }
 
