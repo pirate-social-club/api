@@ -31,7 +31,7 @@ is exhausted in PR #57.
 | 2.5 | ✅ Shipped (live on staging) | this PR | (contract fix, no §X) | All shard RPCs now return `ShardResult<T>` (typed errors as VALUES) instead of throwing. Custom error codes survive the WorkerEntrypoint RPC boundary — the API can now distinguish `shard_pool_write_conflict` (retry) from `shard_pool_exhausted` (fail to ops) from `shard_binding_not_allowed` (security deny). Live smoke verified: poisoned pair returns `code: "shard_binding_not_allowed"`, empty pool returns `code: "shard_pool_exhausted"` — no more "error:unknown". |
 | 3 | ✅ Shipped (live on staging) | this PR | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard (`isBootstrapAllowedStatement`, allows CREATE TABLE IF NOT EXISTS + INSERT) + pool-table re-validation (§4.2 invariant against release+reallocate) + last_loaded_at set on success + idempotent no-op on retry. 9 new runShardLoadSnapshot tests, total 44 pass including all §8.4 cases (load, idempotency, BINDING_NOT_ALLOCATED with stale cache, bootstrap guard rejects DROP/SELECT, BINDING_NOT_ALLOWED, empty statements still marks loaded). Shard deployed v `1a89838a-3f86-4277-9cc7-63965b650f4d`. |
 | 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
-| 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
+| 4 | ✅ Shipped (live on staging) | this PR | §8.1 | `d1_native.provision()` orchestrator: `communityD1Bind` → `communityD1LoadSnapshot` (empty statements; v1 ships an idempotent no-op load) → `upsertD1CommunityRoutingRow('ready')` → `persistProvisionedD1Binding`. Branches on raw `ShardResult` for control flow (not via throw+re-catch); each error code has a distinct recovery path: pool_exhausted → 503, write_conflict → 503, binding_not_allocated → 503, others → 500/403. Backend test covers the §8.1 call sequence + the pool_exhausted 503 mapping. Route test (community-provisioning-routes.test.ts) goes through the real handler with a fake `COMMUNITY_D1_SHARD` and queries the control plane to verify the routing row at `backend='d1', provisioning_state='ready'` and the binding row's URL updated to `d1://shard/<binding>`. This is the test slice 4 of PR #57 couldn't reach. API deployed v `108d9450-bb3b-4bf1-8100-ec24628d43da`. |
 | 5 | ⬜ Pending | — | §8.5 | Reconciliation sweep (cron Worker). |
 | 6 | ⬜ Pending | — | (operator runbook) | `allocate-d1-pool.ts` — can run in parallel with 1–5. |
 | 7 | ⬜ Pending | — | §8.6 | Staging drill (merge gate). |
@@ -429,7 +429,7 @@ implementations; they can be developed and reviewed in parallel PRs.
 
 ## Step 4 — API `d1_native.provision()` orchestration
 
-**Status:** Pending.
+**Status:** ✅ Shipped live on staging.
 
 **Scope:** Replace the `notImplementedError` in
 `d1NativeProvisioningBackend.provision` (backend.ts:211) with:
