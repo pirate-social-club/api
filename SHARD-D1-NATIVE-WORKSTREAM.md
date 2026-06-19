@@ -1,0 +1,497 @@
+# Shard D1-Native Workstream — Implementation Tracking
+
+PR-series tracking for the workstream after PR #57 lands. The design
+is in `D1-NATIVE-PROVISIONING-DESIGN.md` (10 sections, keystone +
+security + RPC contract + failure model + v1 scope + acceptance
+criteria + impl order). This file makes the PR-series order reviewable
+by attaching acceptance criteria to each step, marking dependencies
+explicitly, and listing the files each step touches.
+
+The workstream requires:
+- Shard Worker deploy access (`wrangler deploy` to
+  `community-d1-shard-staging`).
+- A real Cloudflare account to run `wrangler d1 create` for the
+  operator allocator script.
+- A staging API env to flip `COMMUNITY_PROVISION_BACKEND=d1_native`
+  for the drill.
+
+This environment has none of those. Steps 1–7 cannot be unit-tested
+with `bun test` against in-memory SQLite; the local-testable surface
+is exhausted in PR #57.
+
+---
+
+## Status
+
+| Step | Status | Commit | Acceptance criteria | Notes |
+|---|---|---|---|---|
+| 0 | ✅ Shipped (PR #57) | `1b86876` | §8.0 | Request-aware resolver; the load-bearing v1-scope fix. |
+| 1 | ⬜ Pending | — | §8.2 | Keystone: shard's `d1_pool` + de-staticized allowlist. |
+| 2 | ⬜ Pending | — | §8.3 | `communityD1Bind` RPC + concurrent-allocator catch. |
+| 3 | ⬜ Pending | — | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard. |
+| 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
+| 5 | ⬜ Pending | — | §8.5 | Reconciliation sweep (cron Worker). |
+| 6 | ⬜ Pending | — | (operator runbook) | `allocate-d1-pool.ts` — can run in parallel with 1–5. |
+| 7 | ⬜ Pending | — | §8.6 | Staging drill (merge gate). |
+
+PR #57 (4 inert code slices + design doc + design amendment + step 0
+code) is the foundation boundary and is the last thing this
+environment produces.
+
+---
+
+## Dependency graph
+
+```
+                            ┌──────────────┐
+                            │ ✅ Step 0    │
+                            │ (PR #57)     │
+                            └──────┬───────┘
+                                   │
+                                   ▼
+                            ┌──────────────┐
+                            │ ⬜ Step 1    │
+                            │ d1_pool +    │
+                            │ cache        │
+                            └──┬───────┬───┘
+                               │       │
+                  ┌────────────┘       └────────────┐
+                  ▼                                 ▼
+           ┌──────────────┐                  ┌──────────────┐
+           │ ⬜ Step 2    │                  │ ⬜ Step 3    │
+           │ communityD1  │                  │ communityD1  │
+           │ Bind         │                  │ LoadSnapshot │
+           └──────┬───────┘                  └──────┬───────┘
+                  │                                 │
+                  └────────────┬────────────────────┘
+                               ▼
+                        ┌──────────────┐
+                        │ ⬜ Step 4    │
+                        │ provision()  │
+                        │ orchestration│
+                        └──────┬───────┘
+                               │
+                               ▼
+                        ┌──────────────┐
+                        │ ⬜ Step 5    │
+                        │ reconciler   │
+                        └──────┬───────┘
+                               │
+        ┌──────────────┐       │       ┌──────────────┐
+        │ ⬜ Step 6    │       └──────▶│ ⬜ Step 7    │
+        │ allocator    │               │ staging drill│
+        │ (parallel)   │               │ (merge gate) │
+        └──────────────┘               └──────────────┘
+```
+
+Step 6 is parallelizable with 1–5 (the operator script is independent
+of the orchestrator code). Step 7 is the merge gate: it depends on
+4, 5, and 6.
+
+---
+
+## Step 0 — Request-aware backend resolver ✅ SHIPPED
+
+**Status:** Shipped in PR #57 (commit `1b86876`).
+
+**Scope:** `resolveCommunityProvisioningBackend` now takes a
+`ProvisioningRequestShape { hasNamespace: boolean }`. Namespaced
+requests always go to `tursoOperatorProvisioningBackend` regardless
+of the d1_native env flag; only namespaceless requests get
+`d1NativeProvisioningBackend` when the flag is set + shard is bound.
+
+**Why this is step 0:** Without request-aware resolution, flipping
+`COMMUNITY_PROVISION_BACKEND=d1_native` on any env would brick every
+namespaced community create (the env flag is global, but the
+namespace-attach path can't be routed to d1 today). The fix must
+ship before the keystone de-staticization, not after.
+
+**Files touched:**
+- `services/api/src/lib/communities/provisioning/backend.ts` (signature + body)
+- `services/api/src/lib/communities/provisioning/service.ts` (2 call sites)
+- `services/api/src/lib/communities/provisioning/backend.test.ts` (7 existing tests updated + 1 new test)
+
+**Acceptance criteria (§8.0):**
+- `resolveCommunityProvisioningBackend(env, { hasNamespace: true })`
+  with `COMMUNITY_PROVISION_BACKEND=d1_native` set and
+  `COMMUNITY_D1_SHARD` bound returns `tursoOperatorProvisioningBackend`
+  (NOT `d1NativeProvisioningBackend`).
+- Mirror case for `{ hasNamespace: false }` returns
+  `d1NativeProvisioningBackend`.
+
+**Verified:** 8/8 pass in `bun test backend.test.ts`; typecheck clean.
+
+---
+
+## Step 1 — Shard `d1_pool` migration + cache layer (the keystone)
+
+**Status:** Pending.
+
+**Scope:** The shard gains a separate internal D1 (a metadata D1,
+NOT one of the community pool D1s) with a `d1_pool` table tracking
+`(binding_name, community_id, allocated_at, last_loaded_at,
+released_at, last_error, version)`. The static
+`COMMUNITY_D1_BINDING_MAP_JSON` env var becomes the bootstrap seed
+(read once on cold start, inserted into `d1_pool` if not present,
+then read from `d1_pool` thereafter). An in-memory cache fronts
+`assertCommunityBinding` (60s TTL stable, 5s short for
+"degraded"/"last_error not null"). The `released_at` column + the
+quarantine-window filter (5 min) on `pickFreeBinding` ship here.
+
+**Why this is the keystone:** Until the shard has a runtime-sourced
+allowlist, every `communityD1Bind` allocation the API hands the
+shard is rejected with `BINDING_NOT_ALLOWED` — the shard's static
+map has never heard of the new community. Without the keystone,
+steps 2–7 are building against an integration that fails closed.
+
+**Security property at risk:** the two-gate authorization (control-
+plane row + shard allowlist). The "lazy fix" (have the shard read
+the same control-plane row the API trusts) collapses them into one
+source of truth and deletes the poisoned-routing-row protection.
+This step keeps the two stores independent: the API owns the
+control-plane row, the shard owns `d1_pool`, neither trusts the
+other's writer.
+
+**Files touched:**
+- `services/community-d1-shard/migrations/` (new migration for `d1_pool` + new metadata D1 binding in wrangler)
+- `services/community-d1-shard/wrangler.jsonc` (new metadata D1 + bootstrap-seed handling)
+- `services/community-d1-shard/src/shard-read.ts` (cache layer + quarantine filter on `pickFreeBinding`)
+- `services/community-d1-shard/src/env.ts` (drop `COMMUNITY_D1_BINDING_MAP_JSON` after seed)
+- `services/community-d1-shard/src/shard-read.test.ts` (allowlist-independence test)
+
+**Acceptance criteria (§8.2):**
+- Unit test that proves: writing a `community_database_routing` row
+  that points community A at community B's binding (via the API's
+  `upsertD1CommunityRoutingRow`) STILL fails `assertCommunityBinding`
+  on the shard, because the shard's `d1_pool` row has A → A's
+  binding, not A → B's. The poisoned-routing-row property survives
+  the de-staticization.
+
+**Risk:** Highest in the workstream. The static allowlist has
+served as a defense-in-depth backstop for every read since PR2. The
+keystone is replacing that backstop with a runtime-sourced table
+that's written by the new allocator RPC; security review is the
+gate.
+
+**Blocked by:** Step 0.
+**Blocks:** Steps 2, 3, 4, 5, 6.
+
+---
+
+## Step 2 — Shard `communityD1Bind` RPC + idempotency
+
+**Status:** Pending.
+
+**Scope:** New RPC on `CommunityD1Shard` (services/community-d1-shard/
+src/index.ts). Per §3.3, §4.1: get-or-allocate keyed on `community_id`,
+with the UNIQUE(community_id) catch-and-return-winner for concurrent
+allocators, the optimistic-lock `version` field, and the
+`released_at < now() - 5min` quarantine filter on `pickFreeBinding`.
+
+**Why this before snapshot-load:** `communityD1LoadSnapshot` re-
+validates the pool-row before any write; the pool row exists only
+after `communityD1Bind` claims it. Order: claim → load.
+
+**Files touched:**
+- `services/shared/src/shard-read-contract.ts` (add `ShardBindRequest`,
+  `ShardBindResponse`, extend `ShardPoolRpc`)
+- `services/community-d1-shard/src/shard-read.ts` (new
+  `runShardBind` function)
+- `services/community-d1-shard/src/index.ts` (wire `communityD1Bind`
+  to `runShardBind`)
+- `services/community-d1-shard/src/shard-read.test.ts` (idempotency
+  test, concurrent-allocator test)
+
+**Acceptance criteria (§8.3):**
+- `communityD1Bind(X)` called twice in a row returns the same
+  `bindingName` and reports `allocated: false` on the second call.
+  A second community's call does NOT receive the first community's
+  binding.
+- Concurrent `communityD1Bind(X)` + `communityD1Bind(X)` (two
+  simultaneous calls for the same community) both succeed with the
+  same `bindingName`, exactly one reports `allocated: true`, the
+  other reports `allocated: false` (the UNIQUE(community_id) catch
+  path).
+- `d1_pool_exhausted` returned when the pool is empty (after
+  exhausting the quarantine window).
+
+**Blocked by:** Step 1.
+**Blocks:** Step 4.
+
+---
+
+## Step 3 — Shard `communityD1LoadSnapshot` RPC + bootstrap guard
+
+**Status:** Pending.
+
+**Scope:** New RPC per §4.2. Atomic `batchWrite` of schema DDL +
+snapshot rows. Sets `d1_pool.last_loaded_at = now()` only on full
+success. Re-validates the pool-row before any write (the §4.2
+invariant against the release-and-reallocate window). New guard
+`isBootstrapAllowedStatement` allows `CREATE TABLE IF NOT EXISTS` +
+`INSERT` only (the existing `WRITE_NOT_ALLOWED` rejects DDL by
+design). The existing `assertCommunityBinding` is the per-request
+auth.
+
+**Why this is parallel to step 2:** the two new RPCs are independent
+implementations; they can be developed and reviewed in parallel PRs.
+
+**Files touched:**
+- `services/shared/src/shard-read-contract.ts` (add
+  `ShardLoadSnapshotRequest`, `ShardLoadSnapshotResponse`, extend
+  `ShardBootstrapRpc`)
+- `services/community-d1-shard/src/shard-read.ts` (new
+  `runShardLoadSnapshot`, the bootstrap guard, the pool-row re-
+  validation, the `last_loaded_at` write)
+- `services/community-d1-shard/src/index.ts` (wire
+  `communityD1LoadSnapshot`)
+- `services/community-d1-shard/src/shard-read.test.ts` (idempotency
+  test, `last_loaded_at` semantics test)
+
+**Acceptance criteria (§8.4):**
+- `communityD1LoadSnapshot` called twice with the same
+  `(communityId, bindingName)` does not duplicate rows. The second
+  call's `rowsAffected` is the actual changes from the re-run, not
+  the cumulative count.
+- `d1_pool.last_loaded_at` is set on the first call's success and
+  unchanged on the second (idempotent no-op).
+- A pool row whose `community_id` doesn't match the request's
+  `communityId` is rejected with `shard_binding_not_allocated`
+  (the re-validation invariant).
+
+**Blocked by:** Step 1.
+**Blocks:** Step 4.
+
+---
+
+## Step 4 — API `d1_native.provision()` orchestration
+
+**Status:** Pending.
+
+**Scope:** Replace the `notImplementedError` in
+`d1NativeProvisioningBackend.provision` (backend.ts:211) with:
+`communityD1Bind` → `upsertD1CommunityRoutingRow('provisioning')` →
+`communityD1LoadSnapshot` → `upsertD1CommunityRoutingRow('ready')` →
+`persistProvisionedD1Binding`. The local snapshot is built by the
+existing `bootstrapCommunityLocalSnapshot` (no change to that helper),
+then translated to a `ShardSqlStatement[]` and handed to the load
+RPC. The `d1_native.provision()` finally returns
+`{ mode: "d1_native", binding: <concrete>, credential: null, localSnapshot: null }`.
+
+**Why the §8.1 service test ships here:** the gap-5 defensive test
+in PR #57 covered the repo-level primitives (create + null-credential
+persist + succeed). It could not reach the service-level orchestration
+because `provision()` was a hard throw. Once `provision()` is wired
+with the four new RPCs, the service-level test (a single
+`createNamespacelessCommunity` call against a fake `ShardRpc` + a
+real control plane + the routed read/write clients) becomes writable.
+That's the §8.1 acceptance criterion.
+
+**Files touched:**
+- `services/api/src/lib/communities/provisioning/backend.ts`
+  (replace the throw with the orchestration)
+- `services/api/src/lib/communities/provisioning/service.ts` (no
+  change expected — the persist path is already tolerant of the
+  d1 shape from PR #57)
+- `services/api/src/lib/communities/provisioning/backend.test.ts`
+  (replace the "fails loud" test with an end-to-end fake-shard test)
+
+**Acceptance criteria (§8.1):**
+- `createNamespacelessCommunity` with
+  `COMMUNITY_PROVISION_BACKEND=d1_native` and a real (or fake)
+  `COMMUNITY_D1_SHARD` reaches `markCommunityProvisioningSucceeded`
+  and produces a `community_database_routing` row at
+  `backend='d1', provisioning_state='ready'`.
+
+**Risk:** The orchestration crosses three independent stores (shard
+`d1_pool`, community D1, control-plane Postgres) with no atomicity.
+The failure model is in §6; the partial-failure handling lives in
+step 5.
+
+**Blocked by:** Steps 2 and 3.
+**Blocks:** Steps 5, 7.
+
+---
+
+## Step 5 — Reconciliation sweep
+
+**Status:** Pending.
+
+**Scope:** New cron-triggered Worker (or addition to an existing
+cron Worker). Reads `community_database_routing` for
+`backend='d1', provisioning_state='provisioning', updated_at <
+now() - 15 minutes`; for each, calls
+`communityD1GetPoolRow(bindingName)` (new admin RPC); on
+`last_loaded_at IS NOT NULL` advances the routing row to `ready` and
+re-runs `persistProvisionedD1Binding`; on `last_loaded_at IS NULL`
+drops the community D1's user tables via `communityD1Reset` (new
+admin RPC) and calls `communityD1Release` (new admin RPC) to free
+the pool row (which sets `released_at = now()` so the §3.3
+quarantine applies).
+
+**Why this is its own step (not bundled with step 4):** the
+reconciler is admin-level, uses a separate service-level auth path
+(per §4.3), and has its own test surface. Bundling it with the
+orchestration would entangle two reviewers.
+
+**Files touched:**
+- `services/community-d1-shard/src/index.ts` (new admin RPCs:
+  `communityD1GetPoolRow`, `communityD1Reset`, `communityD1Release`)
+- `services/shared/src/shard-read-contract.ts` (add admin request/
+  response types, extend `ShardAdminRpc`)
+- `services/api/src/lib/communities/provisioning/reconciler.ts`
+  (new — the cron handler)
+- New cron Worker, or addition to an existing one
+- `services/api/tests/provisioning-reconciler.test.ts` (new)
+
+**Acceptance criteria (§8.5):**
+- Seeded "stuck provisioning" state (pool row claimed,
+  `last_loaded_at` NULL because the snapshot-load crashed mid-way,
+  routing row at `provisioning` for 16 minutes) runs through the
+  reconciler and lands in the correct terminal state: pool row
+  released, community D1 user tables dropped via
+  `communityD1Reset`, ready for a fresh `provision()`.
+- Second test: seeded "load completed but routing not flipped"
+  state (`last_loaded_at` set, routing row still at `provisioning`)
+  asserts the reconciler advances to `ready` and re-marks the
+  binding row.
+
+**Blocked by:** Step 4.
+**Blocks:** Step 7.
+
+---
+
+## Step 6 — Pool allocator operator script (parallelizable)
+
+**Status:** Pending. Can run in parallel with steps 2–5.
+
+**Scope:** New operator script `allocate-d1-pool.ts` (in
+services/community-provision-operator/scripts/). Runs
+`wrangler d1 create` N times, adds the new bindings to
+`services/community-d1-shard/wrangler.jsonc` `d1_databases`, INSERTs
+them into `d1_pool` with `community_id = NULL` and
+`released_at = NULL`. The script is idempotent (re-running it
+creates only the missing entries).
+
+**Why this is a separate step:** the script is purely operational —
+no new code in the API or shard, no new RPC, no new test surface. It
+is a `wrangler d1 create` wrapper + a few `INSERT`s.
+
+**Files touched:**
+- `services/community-provision-operator/scripts/allocate-d1-pool.ts` (new)
+- `services/community-d1-shard/wrangler.jsonc` (new entries, managed
+  by the script — not hand-edited)
+- `services/community-provision-operator/README.md` (operator
+  runbook entry)
+
+**Acceptance criteria:**
+- `bun run allocate-d1-pool.ts --count N` creates N D1 databases,
+  adds them to the shard's `d1_databases`, and inserts them into
+  `d1_pool` as free. Re-running with the same `--count` is a no-op.
+- Manual verify: `SELECT binding_name, community_id, released_at
+  FROM d1_pool` shows the new bindings at `community_id = NULL,
+  released_at = NULL`.
+
+**Blocked by:** Step 1 (the `d1_pool` table must exist).
+**Blocks:** Step 7.
+
+---
+
+## Step 7 — Staging drill (the merge gate)
+
+**Status:** Pending.
+
+**Scope:** End-to-end on staging:
+1. Pre-allocate 1–2 D1 dbs with the step 6 script.
+2. Set `COMMUNITY_PROVISION_BACKEND=d1_native` on the staging API
+   env; deploy.
+3. Create a namespaceless community via the staging API.
+4. Verify: shard `wrangler tail` shows
+   `rpcMethod: communityD1Bind` and `rpcMethod: communityD1LoadSnapshot`
+   succeeding.
+5. Read the community's preview / metadata via the API; confirm
+   the routed read hits the shard and returns the seeded community
+   metadata.
+6. Create a namespaced community on the same env; confirm the shard
+   `wrangler tail` shows NO D1 RPCs for the namespaced request
+   (verifying the v1 scope rule).
+7. Run the reconciliation sweep with a stuck-provisioning state;
+   confirm it advances to `ready` (or releases the pool row).
+8. Roll back the env flag.
+
+**Why this is the merge gate:** every other step is unit-tested with
+a fake `ShardRpc` and an in-memory SQLite. The first real signal
+that all the pieces fit together is a staging create + a shard tail.
+The namespaced-vs-namespaceless split is also the only place the
+v1 scope rule is exercised end-to-end.
+
+**Files touched:**
+- Operator runbook (not committed; lives in the ops doc repo).
+- `services/api/wrangler.jsonc` (staging env vars — the env flag
+  is reverted after the drill).
+
+**Acceptance criteria (§8.6):**
+- Namespaceless create: end-to-end success, shard tail shows the
+  two D1 RPCs, routed read returns the seeded metadata.
+- Namespaced create: zero D1 RPCs in the shard tail (the v1 scope
+  rule is in effect).
+- Reconciliation: a seeded stuck state is recovered correctly by
+  the sweep.
+
+**Blocked by:** Steps 4, 5, 6.
+**Blocks:** Merge of any of the above to `main` (the workstream
+isn't done until the staging drill passes).
+
+---
+
+## Operational prerequisites (set up before step 1)
+
+- Shard Worker deploy access: `wrangler deploy` to
+  `community-d1-shard-staging` from this workspace.
+- Cloudflare account with D1 create permission for the operator
+  allocator script.
+- A staging API env that can flip `COMMUNITY_PROVISION_BACKEND` and
+  bind the `COMMUNITY_D1_SHARD` service binding.
+- A staging control plane with the
+  `community_database_routing` 0117 migration applied (it is, as of
+  the prior slices).
+- `services/shared` published with the new RPC contract types (the
+  step 1/2/3 changes need to land in `services/shared` first or
+  alongside).
+
+---
+
+## Non-scope (deliberately deferred)
+
+Mirrors `D1-NATIVE-PROVISIONING-DESIGN.md §10`. Carried forward so
+the workstream doesn't drift into them:
+
+- Per-region D1 placement (one shard per region + `shard_worker_id`
+  picker). Out of scope; the spec's §7 already defers this.
+- D1-native migration of existing Turso communities. That's the
+  `flip-community-to-d1` flow, already built.
+- Cache invalidation broadcast across Worker isolates. The 60s TTL
+  + 5-min quarantine is acceptable for staging; a DO-based
+  invalidation channel is its own design.
+- D1-side rate limiting / quota.
+- The ~161 unrouted `openCommunityDb` call sites that are still on
+  the legacy factory. Independent workstream, tracked separately.
+- Decommission of a d1_native community. D1 deletion is CLI-only.
+  Mirror the existing Turso decommission flow once the basics land.
+
+---
+
+## How to use this file
+
+- **Reviewing the workstream:** start at the dependency graph; the
+  critical path is 0 → 1 → {2, 3} → 4 → 5 → 7. Step 6 is
+  parallelizable.
+- **Picking up a step:** each step has Files touched + Acceptance
+  criteria + Blocked by / Blocks. Open the design doc, jump to the
+  section references, and you have everything you need.
+- **Closing a step:** mark the Status column in the table at the
+  top; if the step landed in a PR, link the PR. If the step needs
+  a design change, write a new revision of the design doc and bump
+  the section references in this file.
+
+Last updated: alongside PR #57 (7 commits, foundation boundary).
