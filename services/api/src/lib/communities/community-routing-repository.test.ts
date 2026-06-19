@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
 import {
   getCommunityDatabaseRoutingRow,
+  upsertD1CommunityRoutingRow,
   upsertTursoCommunityRoutingRow,
 } from "./community-routing-repository"
 
@@ -23,7 +24,13 @@ beforeEach(async () => {
       last_error_at TEXT,
       last_error_message TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      CONSTRAINT chk_d1_fields CHECK (
+        (backend = 'd1' AND shard_worker_id IS NOT NULL AND binding_name IS NOT NULL
+            AND region IS NOT NULL AND turso_database_binding_id IS NULL)
+        OR (backend = 'turso' AND shard_worker_id IS NULL AND binding_name IS NULL
+            AND region IS NULL AND turso_database_binding_id IS NOT NULL)
+      )
     )
   `)
 })
@@ -92,4 +99,71 @@ test("does not regress a community already flipped to d1", async () => {
   const row = await getCommunityDatabaseRoutingRow(cp, "cmty_migrated")
   expect(row?.backend).toBe("d1")
   expect(row?.shard_worker_id).toBe("shard-1")
+})
+
+test("upsertD1: seeds a backend='d1' ready row with the allocated shard binding", async () => {
+  const result = await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1",
+    shardWorkerId: "community-d1-shard-staging",
+    bindingName: "DB_CMTY_0001",
+    region: "enam",
+    now: "2026-06-19T00:00:00Z",
+  })
+  expect(result.written).toBe(true)
+
+  const row = await getCommunityDatabaseRoutingRow(cp, "cmty_d1")
+  expect(row?.backend).toBe("d1")
+  expect(row?.provisioning_state).toBe("ready")
+  expect(row?.shard_worker_id).toBe("community-d1-shard-staging")
+  expect(row?.binding_name).toBe("DB_CMTY_0001")
+  expect(row?.region).toBe("enam")
+  expect(row?.turso_database_binding_id).toBeNull()
+})
+
+test("upsertD1: advances a 'provisioning' row to 'ready' (lifecycle transition)", async () => {
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_0002",
+    region: "weur",
+    now: "2026-06-19T00:00:00Z",
+    provisioningState: "provisioning",
+  })
+
+  const advanced = await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_0002",
+    region: "weur",
+    now: "2026-06-19T00:05:00Z",
+    provisioningState: "ready",
+  })
+  expect(advanced.written).toBe(true)
+
+  const row = await getCommunityDatabaseRoutingRow(cp, "cmty_d1")
+  expect(row?.provisioning_state).toBe("ready")
+  expect(row?.updated_at).toBe("2026-06-19T00:05:00Z")
+})
+
+test("upsertD1: never clobbers or downgrades an existing backend='turso' row", async () => {
+  await upsertTursoCommunityRoutingRow(cp, {
+    communityId: "cmty_turso",
+    tursoDatabaseBindingId: "cdb_live",
+    now: "2026-06-16T00:00:00Z",
+  })
+
+  const result = await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_turso",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_STEAL",
+    region: "enam",
+    now: "2026-06-19T00:00:00Z",
+  })
+  expect(result.written).toBe(false)
+
+  // The Turso row is untouched — a stale d1 provision cannot steal a live community.
+  const row = await getCommunityDatabaseRoutingRow(cp, "cmty_turso")
+  expect(row?.backend).toBe("turso")
+  expect(row?.turso_database_binding_id).toBe("cdb_live")
+  expect(row?.shard_worker_id).toBeNull()
 })

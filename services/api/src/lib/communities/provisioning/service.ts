@@ -14,6 +14,7 @@ import type {
   CommunityProvisioningRepository,
   CommunityReadRepository,
 } from "../db-community-repository"
+import type { CommunityProvisioningMode } from "../community-repository-types"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { VerificationRepository } from "../../verification/verification-repository"
@@ -79,7 +80,7 @@ function isSameNamespaceRoot(
 
 function communityProvisioningFailureDetails(
   error: unknown,
-  mode: "local_dev" | "turso_operator",
+  mode: CommunityProvisioningMode,
 ): Record<string, unknown> {
   const details: Record<string, unknown> = {
     mode,

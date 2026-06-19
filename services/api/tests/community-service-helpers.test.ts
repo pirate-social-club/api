@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   isExpired,
   isPendingCommunityDatabaseUrl,
+  buildPendingD1CommunityBindingUrl,
+  isPendingD1CommunityBindingUrl,
   assertCreateRequest,
 } from "../src/lib/communities/create/service"
 import { satisfiesBaselineJoinGate } from "../src/lib/communities/membership/eligibility-service"
@@ -121,6 +123,28 @@ describe("community helper functions", () => {
       expect(isPendingCommunityDatabaseUrl("")).toBe(false)
       expect(isPendingCommunityDatabaseUrl(null)).toBe(false)
       expect(isPendingCommunityDatabaseUrl(undefined)).toBe(false)
+    })
+  })
+
+  describe("pending D1 community binding URL", () => {
+    test("builds a d1://pending- sentinel that round-trips", () => {
+      const url = buildPendingD1CommunityBindingUrl("cmt_abc")
+      expect(url).toBe("d1://pending-cmt_abc.invalid")
+      expect(isPendingD1CommunityBindingUrl(url)).toBe(true)
+    })
+
+    test("does not treat a resolved d1://shard/<binding> URL as pending", () => {
+      expect(isPendingD1CommunityBindingUrl("d1://shard/DB_CMTY_0001")).toBe(false)
+    })
+
+    test("does not treat a Turso pending sentinel as a D1 pending URL", () => {
+      expect(isPendingD1CommunityBindingUrl("libsql://pending-cmt_abc.invalid")).toBe(false)
+    })
+
+    test("returns false for empty/null/undefined", () => {
+      expect(isPendingD1CommunityBindingUrl("")).toBe(false)
+      expect(isPendingD1CommunityBindingUrl(null)).toBe(false)
+      expect(isPendingD1CommunityBindingUrl(undefined)).toBe(false)
     })
   })
 

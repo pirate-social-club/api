@@ -95,6 +95,22 @@ export function buildPendingCommunityDatabaseUrl(communityId: string): string {
   return `libsql://pending-${communityId}.invalid`
 }
 
+/**
+ * Synthetic binding URL for a community that is being provisioned D1-native but
+ * has not yet had a binding allocated from the shard pool. Mirrors the Turso
+ * pending sentinel (`buildPendingCommunityDatabaseUrl`) so the provisioning
+ * request can be persisted before the shard hands back a concrete binding.
+ * Resolved to `d1://shard/<bindingName>` once allocation completes.
+ */
+export function buildPendingD1CommunityBindingUrl(communityId: string): string {
+  return `d1://pending-${communityId}.invalid`
+}
+
+export function isPendingD1CommunityBindingUrl(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  return normalized.startsWith("d1://pending-") && normalized.endsWith(".invalid")
+}
+
 export function isExpired(timestamp: string | number): boolean {
   const expiresAt = typeof timestamp === "number" ? timestamp * 1000 : Date.parse(timestamp)
   if (!Number.isFinite(expiresAt)) {
