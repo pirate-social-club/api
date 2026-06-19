@@ -256,7 +256,7 @@ async function createNamespacelessCommunity(input: {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
   const jobId = makeId("job")
-  const backend = resolveCommunityProvisioningBackend(input.env)
+  const backend = resolveCommunityProvisioningBackend(input.env, { hasNamespace: false })
   const initialBinding = backend.initialBinding({
     env: input.env,
     communityId,
@@ -419,7 +419,7 @@ async function provisionNamespacedCommunity(input: {
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
-  const backend = resolveCommunityProvisioningBackend(env)
+  const backend = resolveCommunityProvisioningBackend(env, { hasNamespace: true })
   const initialBinding = backend.initialBinding({
     env,
     communityId,
