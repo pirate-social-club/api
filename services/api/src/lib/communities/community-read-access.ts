@@ -80,13 +80,36 @@ function toShardStatement(statement: InStatement | string): ShardSqlStatement | 
  * Unwrap a `ShardResult<T>`: return the value on success, or throw an HttpError
  * with the original code on failure. The code is preserved across the
  * WorkerEntrypoint boundary because the shard returns errors as VALUES
- * (step 2.5), not thrown errors. Security denies (shard_binding_not_allowed)
- * are 403; everything else is 500. The retryable flag matches the shard's
- * "is this transient?" semantics where applicable.
+ * (step 2.5), not thrown errors.
+ *
+ * Status mapping (D1-NATIVE-PROVISIONING-DESIGN.md §4.1):
+ *   - `shard_binding_not_allowed` → 403, NOT retryable (security deny).
+ *     Retrying a security rejection is pointless.
+ *   - `shard_pool_exhausted` / `shard_pool_write_conflict` /
+ *     `shard_binding_not_allocated` → 503, retryable. These are transient:
+ *     ops allocates more, the optimistic-lock contention resolves, or the
+ *     reconciler re-allocates the released binding past the quarantine.
+ *   - Everything else → 500, retryable (defensive default).
  */
-function unwrap<T>(r: ShardResult<T>, retryable = true): T {
+function unwrap<T>(r: ShardResult<T>): T {
   if (r.ok) return r.value
-  const status = r.code === "shard_binding_not_allowed" ? 403 : 500
+  let status: number
+  let retryable: boolean
+  switch (r.code) {
+    case "shard_binding_not_allowed":
+      status = 403
+      retryable = false
+      break
+    case "shard_pool_exhausted":
+    case "shard_pool_write_conflict":
+    case "shard_binding_not_allocated":
+      status = 503
+      retryable = true
+      break
+    default:
+      status = 500
+      retryable = true
+  }
   throw new HttpError(status, r.code, r.message, retryable)
 }
 

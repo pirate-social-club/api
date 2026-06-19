@@ -179,13 +179,23 @@ test("makeShardReadClient preserves shard error codes across the boundary (step 
   // (retry) from shard_pool_exhausted (fail to ops) from shard_binding_not_allowed
   // (security deny). This test pins the code-preservation contract that the
   // WorkerEntrypoint boundary would otherwise strip.
-  const cases: Array<{ code: string; expectedStatus: number }> = [
-    { code: "shard_binding_not_allowed", expectedStatus: 403 },
-    { code: "shard_pool_write_conflict", expectedStatus: 500 },
-    { code: "shard_pool_exhausted", expectedStatus: 500 },
-    { code: "shard_unknown_binding", expectedStatus: 500 },
+  //
+  // Status mapping (D1-NATIVE-PROVISIONING-DESIGN.md §4.1):
+  //   - security deny → 403, NOT retryable
+  //   - pool transient (exhausted / write_conflict / not_allocated) → 503, retryable
+  //   - generic → 500, retryable
+  const cases: Array<{
+    code: string
+    expectedStatus: number
+    expectedRetryable: boolean
+  }> = [
+    { code: "shard_binding_not_allowed", expectedStatus: 403, expectedRetryable: false },
+    { code: "shard_pool_write_conflict", expectedStatus: 503, expectedRetryable: true },
+    { code: "shard_pool_exhausted", expectedStatus: 503, expectedRetryable: true },
+    { code: "shard_binding_not_allocated", expectedStatus: 503, expectedRetryable: true },
+    { code: "shard_unknown_binding", expectedStatus: 500, expectedRetryable: true },
   ]
-  for (const { code, expectedStatus } of cases) {
+  for (const { code, expectedStatus, expectedRetryable } of cases) {
     const shard = {
       execute: async () => ({ ok: false as const, code, message: `shard says ${code}` }),
       batch: async () => ({ ok: false as const, code, message: `shard says ${code}` }),
@@ -201,7 +211,11 @@ test("makeShardReadClient preserves shard error codes across the boundary (step 
       decommissionedAt: null,
     } as ResolvedCommunityBinding
     const client = makeShardReadClient(shard, binding)
-    await expect(client.execute("SELECT 1")).rejects.toMatchObject({ code, status: expectedStatus })
+    await expect(client.execute("SELECT 1")).rejects.toMatchObject({
+      code,
+      status: expectedStatus,
+      retryable: expectedRetryable,
+    })
   }
 })
 
