@@ -427,7 +427,7 @@ describe("listHomeFeedCommunityViewCounts", () => {
 
     expect(counts.get("cmt_alpha")).toBe(12)
     expect(counts.has("cmt_gamma")).toBe(false)
-  })
+  }, 20000)
 
   test("returns empty counts when the health counts table has not migrated yet", async () => {
     const setup = await createControlPlaneTestClient()

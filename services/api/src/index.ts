@@ -58,7 +58,13 @@ import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import type { Env } from "./env"
+import {
+  publicReadCacheFillRequests,
+  publicReadCacheRefreshRequests,
+  type PublicReadCacheFillResult,
+} from "./lib/public-read-cache-state"
 
+export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
 
@@ -69,21 +75,6 @@ declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
-const publicReadCacheFillRequests = new Map<string, Promise<PublicReadCacheFillResult>>()
-const publicReadCacheRefreshRequests = new Map<string, Promise<void>>()
-
-export function resetPublicReadCacheDedupeForTests(): void {
-  publicReadCacheFillRequests.clear()
-  publicReadCacheRefreshRequests.clear()
-}
-
-type PublicReadCacheFillResult = {
-  body: ArrayBuffer
-  cacheable: boolean
-  headers: [string, string][]
-  status: number
-  statusText: string
-}
 
 type BuildVersionMetadata = {
   git_ref: string | null
