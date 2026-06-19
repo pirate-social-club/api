@@ -109,7 +109,7 @@ function communityProvisioningFailureDetails(
   return details
 }
 
-async function persistProvisionedCommunityCredential(input: {
+export async function persistProvisionedCommunityCredential(input: {
   env: Env
   repo: CommunityProvisioningRepository
   communityId: string
