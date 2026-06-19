@@ -3,7 +3,7 @@ import { internalError, notFoundError } from "../../errors"
 import type { Env } from "../../../env"
 import type { Community, JoinEligibility, User } from "../../../types"
 import type { Client } from "../../sql-client"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import { isCommunityLive } from "../community-status"
 import {
   buildMembershipGateSummariesFromPolicy,
@@ -152,7 +152,7 @@ export async function getJoinEligibility(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const localResult = await db.client.execute({
       sql: `SELECT membership_mode FROM communities WHERE community_id = ?1 LIMIT 1`,
