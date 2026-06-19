@@ -10,7 +10,7 @@ import type {
   MembershipRequestListResponse,
   MembershipRequestSummary,
 } from "../../../types"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import { isCommunityLive } from "../community-status"
 import {
   canAccessCommunity,
@@ -81,7 +81,7 @@ export async function joinCommunity(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     if (canAccessCommunity(membership)) {
@@ -212,7 +212,7 @@ export async function listMembershipRequests(input: {
   profileRepository: ProfileRepository
 }): Promise<MembershipRequestListResponse> {
   await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await listPendingMembershipRequests({
       client: db.client,
@@ -239,7 +239,7 @@ export async function reviewMembershipRequest(input: {
   profileRepository: ProfileRepository
 }): Promise<MembershipRequestSummary> {
   const community = await requireOwnedCommunity(input.communityRepository, input.communityId, input.userId)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const now = nowIso()
     const request = await resolveMembershipRequest({
