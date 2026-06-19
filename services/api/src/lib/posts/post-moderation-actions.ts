@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -44,7 +44,7 @@ export async function deletePost(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
     const post = await getPostById(db.client, input.postId)
@@ -119,7 +119,7 @@ export async function removePostAsModerator(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
@@ -168,7 +168,7 @@ export async function setPostCommentLock(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {

@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -111,7 +111,7 @@ export async function reportPost(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityAccess({
       client: db.client,
@@ -197,7 +197,7 @@ export async function reportComment(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityAccess({
       client: db.client,
@@ -278,7 +278,7 @@ export async function listCommunityModerationCases(input: {
   communityRepository: ModerationCommunityRepository
   profileRepository?: ProfileRepository
 }): Promise<ModerationCaseListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
@@ -322,7 +322,7 @@ export async function getModerationCaseDetail(input: {
   moderationCaseId: string
   communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
@@ -457,7 +457,7 @@ export async function resolveModerationCaseWithAction(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
   assertCreateModerationActionRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
