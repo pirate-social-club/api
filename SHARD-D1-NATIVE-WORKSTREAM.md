@@ -127,16 +127,164 @@ ship before the keystone de-staticization, not after.
 
 **Status:** Pending.
 
-**Scope:** The shard gains a separate internal D1 (a metadata D1,
-NOT one of the community pool D1s) with a `d1_pool` table tracking
-`(binding_name, community_id, allocated_at, last_loaded_at,
-released_at, last_error, version)`. The static
-`COMMUNITY_D1_BINDING_MAP_JSON` env var becomes the bootstrap seed
-(read once on cold start, inserted into `d1_pool` if not present,
-then read from `d1_pool` thereafter). An in-memory cache fronts
-`assertCommunityBinding` (60s TTL stable, 5s short for
-"degraded"/"last_error not null"). The `released_at` column + the
-quarantine-window filter (5 min) on `pickFreeBinding` ship here.
+### Discipline — what step 1 is and isn't
+
+Step 1 is a **behavior-preserving refactor, not a feature**. Its
+entire job: change the source of `assertCommunityBinding`'s allowlist
+from the static env JSON to a shard-owned `d1_pool` table, seeded
+from that same JSON on cold start — so the existing 2 pilot
+communities keep working with **zero new capability and zero
+behavior change**. No allocation, no new RPC, no `communityD1Bind`
+surface area, no changes to the routed read/write code paths beyond
+making `assertCommunityBinding` async-aware. If step 1 changes any
+observable behavior for the 2 pilots, it's wrong.
+
+The failure mode for a keystone refactor is "step 1 + a bit of step
+2" — the allocator starts bleeding into the migration, scope creeps,
+the diff becomes unreviewable, and security review has to chase
+moving parts. The discipline is the line that keeps step 1
+shippable in isolation. Step 2 builds on a dynamic allowlist that
+actually exists.
+
+### Merge gate — when step 1 is done
+
+The §8.2 poisoned-routing-row test passes. The 2 pilots' routed
+reads/writes are **byte-identical** before and after (capture
+before/after at the wrangler tail level: same SQL, same results,
+same row counts, no new errors in the logs). No new RPC is exposed
+on the shard's `WorkerEntrypoint`. The cache layer is in place but
+cold — the 2 pilots' `assertCommunityBinding` calls all hit
+`d1_pool` directly on the first read, then warm the cache. The
+quarantine window constant is in the code with a comment pointing
+at the cache TTL (see the supporting detail below) so step 5's
+implementer cannot violate the relationship.
+
+### Supporting detail
+
+#### 1. Ops prerequisite first, before any code
+
+Before touching any TypeScript:
+
+1. `wrangler d1 create` a **separate metadata D1** — NOT a
+   community pool database, NOT an existing shard D1. This is the
+   shard's internal store for `d1_pool`. Bind it in
+   `services/community-d1-shard/wrangler.jsonc` as a new D1 entry
+   (e.g. `D1_POOL`). The shard must never write community data to
+   this database and must never run pool queries against a
+   community database. Get this binding live in staging (deploy the
+   shard with an empty `d1_databases` plus the new `D1_POOL` entry,
+   even before the code changes) so `wrangler dev` resolves it. If
+   you skip this, the rest of step 1 cannot be tested locally and
+   you're flying blind against production-shaped deployments.
+
+2. Confirm Cloudflare API access for D1 create in this environment
+   (per the operational prerequisites section). The
+   `allocate-d1-pool.ts` script in step 6 needs the same access; if
+   it's not here, step 1 still works (it doesn't create new
+   community pool DBs — only the metadata D1 above), but step 6
+   blocks.
+
+#### 2. Migration — full column set now, not later
+
+The `d1_pool` migration ships with the **complete** column set
+from design §3.1: `binding_name`, `community_id`, `allocated_at`,
+`last_loaded_at`, `released_at`, `last_error`, `version`. Even
+though step 5 is what exercises `released_at` and step 2 is what
+exercises `version` and the optimistic-lock UPDATE, landing the
+full set in step 1 means step 5 doesn't need a separate migration.
+The cost is one extra nullable column now; the cost of deferring is
+a second migration with concurrent ALTER-TABLE coordination
+across shard isolates.
+
+`released_at` and `version` are nullable / have defaults so the
+cold-start seed (§5 below) can INSERT with only the columns it
+knows about.
+
+#### 3. The async ripple is the bulk of the diff
+
+`assertCommunityBinding` (shard-read.ts:52) is currently
+**synchronous** — it reads the env JSON. Reading `d1_pool` makes it
+async. Every caller must be updated:
+
+- `runShardRead` (shard-read.ts:116): `await assertCommunityBinding(...)`
+- `runShardBatch` (shard-read.ts:123): same
+- `runShardWrite` (shard-read.ts:137): same
+
+That signature change rippling through the hot path is mechanical
+but must be complete — missing one caller is a silent auth bypass.
+The diff is small in lines but high in reviewer attention because
+it's the security-relevant change.
+
+#### 4. Cache with the quarantine constraint written down
+
+Per design §5: in-memory `Map<communityId, { bindingName, version,
+expiresAt }>`, 60s TTL for stable rows / 5s for
+`provisioning`/`last_error not null` rows. The quarantine window
+(step 5's `communityD1Release` sets `released_at = now()`, the
+allocator's `pickFreeBinding` filters `released_at < now() -
+quarantineWindow`) must exceed this TTL — write that constraint as
+a comment on BOTH the cache TTL constant AND the
+`quarantineWindowMs` constant, so step 5's implementer (working
+in a different PR, possibly a different week) cannot violate the
+relationship by adjusting one and not the other. Concrete values:
+60s stable TTL, 5s short TTL, 5-min quarantine — but the comment
+is the load-bearing artifact, not the values.
+
+#### 5. Cold-start seed, idempotent
+
+Read `COMMUNITY_D1_BINDING_MAP_JSON` once on cold start, INSERT ...
+ON CONFLICT (binding_name) DO NOTHING into `d1_pool` with
+`community_id` set (allocated) for the 2 pilots. This means the
+seed only fires the first time a binding is seen — re-deploys
+don't clobber the rows step 2's allocator later writes. The
+`ON CONFLICT` is on `binding_name` (the PRIMARY KEY), not
+`community_id` — the conflict is about the row existing at all,
+not about who's allocated. After seeding, drop the env var from
+`wrangler.jsonc` (the seed already ran, future isolates read from
+`d1_pool`).
+
+If the env var is present and the row is already in `d1_pool` with
+a different `community_id` (a real conflict, not a fresh seed),
+DO NOT overwrite. Log and move on. The seed is non-authoritative
+once step 2 lands.
+
+#### 6. The security regression net is non-negotiable
+
+The §8.2 poisoned-routing-row test is the **entire justification**
+for the keystone — the two-gate property must survive
+de-staticization. The test:
+
+- Seeds `d1_pool` with community A → A's binding and community B →
+  B's binding (the realistic post-step-2 state, but achievable in
+  step 1 by hand-inserting the rows).
+- Calls `upsertD1CommunityRoutingRow` (on the API's
+  `community-routing-repository.ts`) to write a control-plane row
+  that points community A at B's binding.
+- Calls `assertCommunityBinding` for A with B's bindingName on
+  the shard.
+- Asserts: rejected with `BINDING_NOT_ALLOWED`, because the
+  shard's `d1_pool` says A → A, not A → B.
+
+If this test doesn't pass, the design is wrong, not the test.
+That's the keystone's reason for existing — without
+shard-independent authorization, the control plane becomes a
+single point of compromise, and the static map's defense-in-depth
+property is gone.
+
+### Scope (one-paragraph reference)
+
+The shard gains a separate internal D1 (the metadata D1 from
+prerequisite 1) with a `d1_pool` table tracking `(binding_name,
+community_id, allocated_at, last_loaded_at, released_at,
+last_error, version)`. The static `COMMUNITY_D1_BINDING_MAP_JSON`
+env var becomes the cold-start bootstrap seed (read once,
+inserted idempotently, then read from `d1_pool` thereafter). An
+in-memory cache fronts `assertCommunityBinding` (60s TTL stable,
+5s short for degraded rows). `assertCommunityBinding` becomes
+async; all three callers (`runShardRead`, `runShardBatch`,
+`runShardWrite`) await it. The `released_at` column ships here
+even though step 5 is what writes it — the column is free now,
+expensive as a follow-up migration.
 
 **Why this is the keystone:** Until the shard has a runtime-sourced
 allowlist, every `communityD1Bind` allocation the API hands the
@@ -153,11 +301,19 @@ control-plane row, the shard owns `d1_pool`, neither trusts the
 other's writer.
 
 **Files touched:**
-- `services/community-d1-shard/migrations/` (new migration for `d1_pool` + new metadata D1 binding in wrangler)
-- `services/community-d1-shard/wrangler.jsonc` (new metadata D1 + bootstrap-seed handling)
-- `services/community-d1-shard/src/shard-read.ts` (cache layer + quarantine filter on `pickFreeBinding`)
-- `services/community-d1-shard/src/env.ts` (drop `COMMUNITY_D1_BINDING_MAP_JSON` after seed)
-- `services/community-d1-shard/src/shard-read.test.ts` (allowlist-independence test)
+- `services/community-d1-shard/wrangler.jsonc` (new `D1_POOL`
+  binding; seed the env var initially, drop after first deploy)
+- `services/community-d1-shard/migrations/` (new migration for
+  `d1_pool` with the full §3.1 column set)
+- `services/community-d1-shard/src/shard-read.ts` (`assertCommunityBinding`
+  becomes async; cache layer; cold-start seed)
+- `services/community-d1-shard/src/env.ts` (keep
+  `COMMUNITY_D1_BINDING_MAP_JSON` for the seed; the
+  `ShardEnv` type drops it after seeding lands — or keeps it as
+  an explicit "seed source" field, not a runtime auth source)
+- `services/community-d1-shard/src/shard-read.test.ts`
+  (allowlist-independence test per §6 below; the existing tests
+  are updated for the async signature)
 
 **Acceptance criteria (§8.2):**
 - Unit test that proves: writing a `community_database_routing` row
@@ -166,6 +322,11 @@ other's writer.
   on the shard, because the shard's `d1_pool` row has A → A's
   binding, not A → B's. The poisoned-routing-row property survives
   the de-staticization.
+- The 2 pilots' routed reads/writes are byte-identical before and
+  after the step 1 deploy (verified via `wrangler tail` capture
+  on a representative read for each pilot).
+- No new RPC is exposed on `CommunityD1Shard`'s
+  `WorkerEntrypoint`. The shard's public surface is unchanged.
 
 **Risk:** Highest in the workstream. The static allowlist has
 served as a defense-in-depth backstop for every read since PR2. The
