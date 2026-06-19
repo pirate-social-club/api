@@ -159,6 +159,39 @@ export type ShardError = {
 
 export type ShardResult<T> = { ok: true; value: T } | ShardError
 
+/**
+ * HTTP status + retryable mapping for each ShardErrorCode. Single source of
+ * truth (D1-NATIVE-PROVISIONING-DESIGN.md §4.1) — any consumer that needs to
+ * translate a `ShardError` to an HTTP-shaped decision imports this. The
+ * actual `throw new HttpError(...)` lives in each consumer (the shared
+ * package has no HTTP dependency; each side's `HttpError` type is its own).
+ *
+ *   - `shard_binding_not_allowed` → 403, NOT retryable (security deny;
+ *     retrying a rejection is pointless).
+ *   - `shard_pool_exhausted` / `shard_pool_write_conflict` /
+ *     `shard_binding_not_allocated` → 503, retryable. These are transient
+ *     (ops allocates more, optimistic-lock contention resolves, the
+ *     reconciler re-allocates past the quarantine).
+ *   - Everything else → 500, retryable (defensive default).
+ *
+ * SECURITY-RELEVANT: every API consumer that surfaces a shard error to the
+ * HTTP boundary must use this mapping. Do not duplicate the switch — drift
+ * between copies is a cross-tenant read or a silent retry of a security
+ * deny.
+ */
+export function mapShardErrorToHttp(code: ShardErrorCode): { status: number; retryable: boolean } {
+  switch (code) {
+    case "shard_binding_not_allowed":
+      return { status: 403, retryable: false }
+    case "shard_pool_exhausted":
+    case "shard_pool_write_conflict":
+    case "shard_binding_not_allocated":
+      return { status: 503, retryable: true }
+    default:
+      return { status: 500, retryable: true }
+  }
+}
+
 /** Error codes the shard RPC surface uses (string constants for the ShardErrorCode union). */
 export const SHARD_READ_ERROR = {
   /** bindingName is not in the shard's allowlist of bound D1 namespaces. */

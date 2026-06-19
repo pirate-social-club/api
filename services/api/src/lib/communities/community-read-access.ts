@@ -1,4 +1,4 @@
-import type { ShardReadRpc, ShardResult, ShardSqlStatement } from "@pirate/api-shared"
+import { mapShardErrorToHttp, type ShardReadRpc, type ShardResult, type ShardSqlStatement } from "@pirate/api-shared"
 import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
@@ -80,36 +80,19 @@ function toShardStatement(statement: InStatement | string): ShardSqlStatement | 
  * Unwrap a `ShardResult<T>`: return the value on success, or throw an HttpError
  * with the original code on failure. The code is preserved across the
  * WorkerEntrypoint boundary because the shard returns errors as VALUES
- * (step 2.5), not thrown errors.
+ * (step 2.5), not thrown errors. The status/retryable mapping is the
+ * single-sourced `mapShardErrorToHttp` in @pirate/api-shared — see §4.1.
  *
- * Status mapping (D1-NATIVE-PROVISIONING-DESIGN.md §4.1):
- *   - `shard_binding_not_allowed` → 403, NOT retryable (security deny).
- *     Retrying a security rejection is pointless.
- *   - `shard_pool_exhausted` / `shard_pool_write_conflict` /
- *     `shard_binding_not_allocated` → 503, retryable. These are transient:
- *     ops allocates more, the optimistic-lock contention resolves, or the
- *     reconciler re-allocates the released binding past the quarantine.
- *   - Everything else → 500, retryable (defensive default).
+ * Throwing is the right shape for the DML read/write path: the consumer
+ * just wants the value or a hard error. The provision() orchestrator
+ * (step 4 of the D1-native workstream) is the exception: it needs to
+ * BRANCH on the raw `ShardResult` (`.ok` / `.code`) to decide
+ * retry-vs-fail-loud for the allocator, not throw-and-re-catch. So it
+ * calls the shard's RPCs directly and inspects the discriminated union.
  */
 function unwrap<T>(r: ShardResult<T>): T {
   if (r.ok) return r.value
-  let status: number
-  let retryable: boolean
-  switch (r.code) {
-    case "shard_binding_not_allowed":
-      status = 403
-      retryable = false
-      break
-    case "shard_pool_exhausted":
-    case "shard_pool_write_conflict":
-    case "shard_binding_not_allocated":
-      status = 503
-      retryable = true
-      break
-    default:
-      status = 500
-      retryable = true
-  }
+  const { status, retryable } = mapShardErrorToHttp(r.code)
   throw new HttpError(status, r.code, r.message, retryable)
 }
 
