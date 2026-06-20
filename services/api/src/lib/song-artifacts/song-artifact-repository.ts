@@ -1,4 +1,5 @@
 import type { Client } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 import { executeFirst } from "../db-helpers"
 import { internalError, notFoundError } from "../errors"
 import type {
@@ -21,7 +22,7 @@ import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bund
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
 async function getSongArtifactUploadRow(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   songArtifactUploadId: string,
 ): Promise<SongArtifactUploadRow | null> {
@@ -112,7 +113,7 @@ export async function createSongArtifactUploadIntent(input: {
 }
 
 export async function getSongArtifactUpload(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   songArtifactUploadId: string,
 ): Promise<SongArtifactUpload | null> {
@@ -121,7 +122,7 @@ export async function getSongArtifactUpload(
 }
 
 export async function requireSongArtifactUpload(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   songArtifactUploadId: string,
 ): Promise<SongArtifactUpload> {

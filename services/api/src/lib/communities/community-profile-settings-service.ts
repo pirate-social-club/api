@@ -5,7 +5,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import { normalizeCommunityCountryCode } from "./country-code"
 import {
   assertUpdateCommunityRequest,
@@ -39,7 +39,7 @@ export async function updateCommunity(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.profile_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({

@@ -5,7 +5,7 @@ import type {
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
 import {
   communityMutationActorFromUserId,
   requireOwnedCommunity,
@@ -42,7 +42,7 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
   communityRepository: CommunityKaraokePolicyRepository
   communityId: string
 }): Promise<KaraokeScoringPolicy> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -136,7 +136,7 @@ async function readCommunityKaraokePolicy(input: {
   communityRepository: CommunityKaraokePolicyRepository
   communityId: string
 }): Promise<CommunityKaraokePolicy> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -225,7 +225,7 @@ export async function updateCommunityKaraokePolicy(input: {
   }
 
   const now = nowIso()
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await db.client.execute({
       sql: `

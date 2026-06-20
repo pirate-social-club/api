@@ -7,7 +7,7 @@ import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import type { Client } from "../sql-client"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import {
   assertPublicV0GateConfiguration,
   assertUpdateCommunityGatesRequest,
@@ -225,7 +225,7 @@ export async function updateCommunityGates(input: {
     ageOver18Verified: user.verification_capabilities.age_over_18.state === "verified",
   })
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const now = nowIso()

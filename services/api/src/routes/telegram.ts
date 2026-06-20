@@ -63,7 +63,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import { joinCommunity } from "../lib/communities/membership/request-service"
-import { openCommunityDb } from "../lib/communities/community-db-factory"
+import { openCommunityReadClient } from "../lib/communities/community-read-access"
 import {
   canAccessCommunity,
   getCommunityMembershipState,
@@ -1173,7 +1173,7 @@ async function telegramUserCanAccessCommunity(input: {
   userId: string
 }): Promise<boolean> {
   const communityRepository = getCommunityRepository(input.env)
-  const db = await openCommunityDb(input.env, communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, communityRepository, input.communityId)
   try {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     return canAccessCommunity(membership)

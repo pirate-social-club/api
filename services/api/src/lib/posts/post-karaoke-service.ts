@@ -11,7 +11,7 @@ import {
 } from "./post-access"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import { decodePublicSongArtifactBundleId, publicCommunityId, publicPostId } from "../public-ids"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import type {
@@ -581,7 +581,7 @@ async function canAccessKaraokeForPost(input: {
     return false
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const entitlement = await getActiveEntitlementForBuyer(db.client, input.communityId, actor.userId, assetId)
     return Boolean(entitlement)

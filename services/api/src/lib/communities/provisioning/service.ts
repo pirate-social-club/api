@@ -27,7 +27,7 @@ import type {
 } from "../../../types"
 import { serializeCommunity, serializeJob } from "../community-serialization"
 import { serializeCommunityCreateAcceptedResponse } from "../../../serializers/community"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import {
   isExpired,
   loadCommunityLocalSnapshot,
@@ -156,7 +156,7 @@ async function upsertLocalNamespaceAttachment(input: {
   namespaceLabel: string
   now: string
 }): Promise<void> {
-  const db = await openCommunityDb(input.env, input.repo, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.repo, input.communityId)
   const namespaceId = `ns_${input.communityId}`
   const namespaceHandlePolicyId = `nhp_${input.communityId}`
 

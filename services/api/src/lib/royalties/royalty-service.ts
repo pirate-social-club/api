@@ -1,7 +1,7 @@
 import { StoryClient, WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import { http } from "viem"
 import type { Env } from "../../env"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import { listCommunityMembershipProjectionRowsByUserId } from "../auth/auth-db-community-queries"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -55,9 +55,9 @@ export async function getClaimableRoyaltiesForUser(input: {
     const items: ClaimableRoyaltyItem[] = []
 
     for (const communityId of memberCommunityIds) {
-      let db: { client: import("../sql-client").Client; close: () => void } | null = null
+      let db: Awaited<ReturnType<typeof openCommunityReadClient>> | null = null
       try {
-        db = await openCommunityDb(input.env, input.communityRepository, communityId)
+        db = await openCommunityReadClient(input.env, input.communityRepository, communityId)
         const assets = await listUserStoryAssets(db.client, input.userId)
 
         for (const asset of assets) {
