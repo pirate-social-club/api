@@ -843,3 +843,34 @@ the workstream doesn't drift into them:
   the section references in this file.
 
 Last updated: alongside PR #57 (7 commits, foundation boundary).
+
+## Full migration roadmap (to "Turso removed in every way")
+
+The architecturally-uncertain part is DONE. What remains is sequenced execution with
+two irreversible gates near the end. All Phase 4 tools exist on disk
+(community-provision-operator/scripts/).
+
+- **Phase 1 — finish §8.8 call-site routing** (~77 sites left). Per-file, per-site care
+  (read→ReadClient + widen execute-only helpers to DbExecutor; write→WriteClient pure
+  swap; in-file helper cascades classified read/write per handle-claim's example). Gate
+  per file: 464 tests green, typecheck clean, zero existing tests changed. Done when no
+  consumer code calls openCommunityDb.
+- **Phase 2 — §8.9 live-semantics verification.** Unit tests prove the Turso path
+  unchanged, NOT that the d1 path works live per surface. Per surface class (real-time
+  live-rooms, money commerce/settlement, identity handles): one representative live proof
+  vs a d1_native community (the §8.7 preview-read model), then trust the class.
+- **Phase 3 — production readiness.** allocate-d1-pool --apply for 17 communities +
+  headroom; deploy converted API to prod; enable COMMUNITY_READ_ROUTING_ENABLED per env.
+  SAFE: no d1 routing rows yet → routed path always falls back to legacy Turso (the
+  "code ships without flipping" window).
+- **Phase 4 — production cutover ⚠️ (reversible per-community).** Per community, explicit
+  go: copy-community-turso-to-d1 → flip-community-to-d1 → verify live → soak.
+  **ROLLBACK: flip-community-to-turso.ts — <1 min/community, no data loss (Turso not yet
+  decommissioned).** Done when all 17 are backend='d1', soaked, error-free.
+- **Phase 5 — remove Turso ⚠️ (destructive, ORDERED SUB-GATES):**
+  1. Delete tursoOperatorProvisioningBackend + community-provision-operator worker.
+     **Sub-gate before (2): confirm no traffic hit the Turso path in N hours.**
+  2. Remove the read/write clients' Turso fallback + delete the legacy openCommunityDb
+     factory. **Sub-gate before (3): keep Turso DBs intact ≥7 days (cold-recovery).**
+  3. Delete the Turso databases (CLI). **Committed — data gone from Turso forever.**
+  4. Remove Turso credentials/env/code. This is "Turso removed in every way."
