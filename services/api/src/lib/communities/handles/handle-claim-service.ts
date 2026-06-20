@@ -20,7 +20,8 @@ import { makeId, nowIso } from "../../helpers"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import type { DbExecutor } from "../../db-helpers"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
@@ -421,7 +422,7 @@ async function expireStaleHandleQuotes(input: {
   })
 }
 
-async function getNamespacePolicy(executor: Client | Transaction, communityId: string): Promise<NamespacePolicyRow | null> {
+async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
   const result = await executor.execute({
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
@@ -454,7 +455,7 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
 }
 
 async function getBlockingHandleForLabel(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   namespaceId: string,
   labelNormalized: string,
 ): Promise<QueryResultRow | null> {
@@ -474,7 +475,7 @@ async function getBlockingHandleForLabel(
 }
 
 async function getActiveHandleForUser(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   namespaceId: string,
   userId: string,
 ): Promise<QueryResultRow | null> {
@@ -614,7 +615,7 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
 }
 
 async function requireClaimAccess(input: {
-  client: Client | Transaction
+  client: DbExecutor
   communityId: string
   userId: string
 }): Promise<{ isMember: boolean }> {
@@ -636,7 +637,7 @@ export async function getMyCommunityHandle(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -659,7 +660,7 @@ export async function getCommunityHandleStatus(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -718,7 +719,7 @@ export async function getCommunityHandlePolicy(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -742,7 +743,7 @@ export async function updateCommunityHandlePolicy(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const current = await getNamespacePolicy(db.client, input.communityId)
     if (!current) {
@@ -811,7 +812,7 @@ export async function listCommunityHandles(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -854,7 +855,7 @@ export async function reserveCommunityHandle(input: {
     communityRepository: input.communityRepository,
   })
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     return serializeHandle(await reserveCommunityHandleOnClient(db.client, {
       communityId: input.communityId,
@@ -962,7 +963,7 @@ export async function revokeCommunityHandle(input: {
   if (!rawHandleId) {
     throw badRequestError("handle id is required")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const now = nowIso()
     await db.client.execute({
@@ -1010,7 +1011,7 @@ export async function quoteCommunityHandle(input: {
     throw notFoundError("Community not found")
   }
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -1204,7 +1205,7 @@ async function verifyPaymentForPaidClaim(input: {
 }
 
 async function getExistingHandleForQuote(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   quoteId: string,
 ): Promise<QueryResultRow | null> {
   const existingForQuote = await executor.execute({
@@ -1284,7 +1285,7 @@ async function createProtocolIssuanceForHandle(input: {
 }
 
 async function getClaimQuote(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   input: {
     quoteId: string
     communityId: string
@@ -1421,7 +1422,7 @@ export async function claimCommunityHandle(input: {
     throw badRequestError("quote is required")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   let priceCents = 0
   let requiresProtocolIssuance = false
   let protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null = null
@@ -1469,7 +1470,7 @@ export async function claimCommunityHandle(input: {
   }
   const paymentVerified = priceCents > 0
 
-  const writeDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const writeDb = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     // Final, authoritative validation on the base client BEFORE the tx. A buffered
     // D1 write tx can't read the quote/handle back mid-flight, and
