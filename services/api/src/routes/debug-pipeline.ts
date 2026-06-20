@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { openCommunityDb } from "../lib/communities/community-db-factory"
+import { openCommunityReadClient } from "../lib/communities/community-read-access"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
@@ -36,7 +36,7 @@ debugPipeline.get("/post-pipeline", async (c) => {
   }
 
   const communityId = projection.community_id
-  const db = await openCommunityDb(c.env, communityRepository, communityId)
+  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
   try {
     const post = await getPostById(db.client, postId)
     if (!post) {
