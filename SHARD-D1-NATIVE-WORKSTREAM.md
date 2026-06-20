@@ -83,11 +83,35 @@ translator+wiring):** option 2 (final-schema dump) + option C (pure
 `buildCommunitySeedStatements` shared with the operator path, no drift). All
 CREATE/INSERT → no shard-guard widening.
 
-**⚠️ Pool now EXHAUSTED:** all 4 bindings allocated (2 pilots + 2 drill communities,
-0 FREE). The next d1_native create returns `shard_pool_exhausted` (503) until ops
-runs `allocate-d1-pool --apply` for more. The deployment guard (don't enable
-d1_native beyond pirate-api-d1-staging) still applies — though the schemaless
-caveat is now resolved.
+**CONSUMER-READ PROOF (the integration gate):** `GET /communities/cmt_99c7…/preview`
+on the live d1-staging worker → `getCommunityPreview` → `openCommunityReadClient` →
+shard RPC → `DB_CMTY_0002` → **HTTP 200** with `member_count: 1` (from
+`community_memberships`) + `owner.role: "owner"` + `viewer_community_role: "owner"`
+(from `community_roles`) — all read from the community's D1. Pre-§8.7 this read
+failed "no such table"; now it returns the seeded data. The d1_native community is
+genuinely USABLE through an already-routed surface.
+
+**⚠️ Pool now EXHAUSTED (a FEATURE, observed live):** all 4 bindings allocated (2
+pilots + 2 drill communities, 0 FREE). The next d1_native create now returns
+`shard_pool_exhausted` (503) — the §8.3 acceptance criterion exercised in production
+for the first time, not a regression. Path back to headroom: `allocate-d1-pool
+--apply`. Pool-sizing decision worth scheduling: pre-allocate 4–8 slots before the
+§8.8 factory migration creates demand (under-allocating forces a deploy+runbook step
+mid-migration). The deployment guard (d1_native only on pirate-api-d1-staging) still
+applies.
+
+## Step §8.8 — factory migration (the next workstream, NOT started)
+
+§8.7 made the destination *usable*; §8.8 makes existing code able to *reach* it.
+**~98 `openCommunityDb(` call sites** (measured: `rg "openCommunityDb\(" services/api/src
+| wc -l`) still go through the legacy factory and can't reach d1_native communities.
+The surfaces routed in PRs #53–56 (preview/membership/post/comment/vote/moderation)
+ALREADY reach D1 — the preview proof above rides one of them. §8.8 converts the
+remaining legacy sites. Recommended slice shape (mirrors the merge-gate discipline):
+pick one READ site → audit its legacy-factory contract → prove a single routed read
+against `DB_CMTY_0002` (the §8.7 artifact, already schema'd + seeded) → extract a
+factory-side adapter the other sites adopt incrementally. This is the workstream that
+actually moves the 17 live Turso communities toward D1.
 
 ---
 
