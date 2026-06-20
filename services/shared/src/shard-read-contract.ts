@@ -207,6 +207,7 @@ export type ShardErrorCode =
   | "shard_binding_not_initialized"
   | "shard_binding_not_allocated"
   | "shard_admin_unauthorized"
+  | "shard_binding_loaded"
 
 export type ShardError = {
   ok: false
@@ -242,6 +243,10 @@ export function mapShardErrorToHttp(code: ShardErrorCode): { status: number; ret
       return { status: 403, retryable: false }
     case "shard_admin_unauthorized":
       return { status: 403, retryable: false }
+    case "shard_binding_loaded":
+      // Precondition failed: the binding became loaded. Not retryable — the
+      // reconciler should re-evaluate (advance to ready), not retry the reset.
+      return { status: 409, retryable: false }
     case "shard_pool_exhausted":
     case "shard_pool_write_conflict":
     case "shard_binding_not_allocated":
@@ -295,4 +300,14 @@ export const SHARD_READ_ERROR = {
    * authorization; this is the service-level admin gate.
    */
   ADMIN_UNAUTHORIZED: "shard_admin_unauthorized",
+  /**
+   * communityD1Reset refused: the binding's `d1_pool` row has
+   * `last_loaded_at IS NOT NULL` (a fully-loaded, live community), or no pool
+   * row exists. Reset only operates on never-loaded bindings — this is the
+   * server-side guard that closes the reconciler's load-vs-reset race (a
+   * concurrent provision() retry can complete the load between the reconciler's
+   * GetPoolRow read and its Reset call). A loaded community is decommissioned
+   * via a separate deliberate path, never the reconciler's reset.
+   */
+  BINDING_LOADED: "shard_binding_loaded",
 } as const

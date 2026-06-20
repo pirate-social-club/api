@@ -666,13 +666,38 @@ export async function runShardGetPoolRow(
   }
 }
 
-/** Admin: drop all user tables in a community's D1 (a half-loaded community before release). */
+/**
+ * Admin: drop all user tables in a community's D1 (a half-loaded community
+ * before release).
+ *
+ * SERVER-SIDE SAFETY GATE: refuses unless the binding's `d1_pool` row exists AND
+ * `last_loaded_at IS NULL`. This makes the destructive drop safe-by-construction
+ * — it can never touch a fully-loaded (live) community even if a buggy reconciler
+ * calls it, AND it closes the reconciler's load-vs-reset race: a concurrent
+ * provision() retry can set `last_loaded_at` between the reconciler's GetPoolRow
+ * read and this call, so we re-check here at drop time. A loaded community is
+ * decommissioned via a separate deliberate path, never here.
+ */
 export async function runShardReset(
   env: ShardEnv,
   input: ShardAdminResetRequest,
 ): Promise<ShardResult<ShardAdminResetResponse>> {
   const authErr = requireAdminToken(env, input.adminToken)
   if (authErr) return authErr
+
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+  const poolRow = await pool
+    .prepare("SELECT last_loaded_at FROM d1_pool WHERE binding_name = ?1")
+    .bind(input.bindingName)
+    .first()
+  if (!poolRow || (poolRow as { last_loaded_at: unknown }).last_loaded_at != null) {
+    return err(
+      SHARD_READ_ERROR.BINDING_LOADED,
+      `refusing to reset ${input.bindingName}: binding is fully loaded or not tracked in d1_pool`,
+    )
+  }
+
   const db = resolveD1(env, input.bindingName)
   if ("ok" in db) return db
 

@@ -942,17 +942,63 @@ describe("communityD1GetPoolRow (step 5)", () => {
 })
 
 describe("communityD1Reset (step 5)", () => {
-  test("drops all user tables in the community D1", async () => {
+  // A never-loaded (stuck-provisioning) binding: pool row exists, last_loaded_at NULL.
+  function unloadedPool(): D1Database {
+    return adminPoolFake([
+      {
+        binding_name: "DB_CMTY_1",
+        community_id: "cmt_1",
+        allocated_at: "t0",
+        last_loaded_at: null,
+        last_error: null,
+        released_at: null,
+        version: 1,
+      },
+    ]) as unknown as D1Database
+  }
+
+  test("drops all user tables in a never-loaded community D1", async () => {
     const community = resetCommunityFake(["posts", "comments", "votes"])
-    const env = adminEnv({ DB_CMTY_1: community as unknown as D1Database })
+    const env = adminEnv({ DB_CMTY_1: community as unknown as D1Database, D1_POOL: unloadedPool() })
     const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
     expect(r).toEqual({ ok: true, value: { tablesDropped: 3 } })
   })
 
-  test("is a no-op (tablesDropped: 0) on an empty community D1", async () => {
-    const env = adminEnv({ DB_CMTY_1: resetCommunityFake([]) as unknown as D1Database })
+  test("is a no-op (tablesDropped: 0) on an empty never-loaded community D1", async () => {
+    const env = adminEnv({ DB_CMTY_1: resetCommunityFake([]) as unknown as D1Database, D1_POOL: unloadedPool() })
     const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
     expect(r).toEqual({ ok: true, value: { tablesDropped: 0 } })
+  })
+
+  test("REFUSES to drop a fully-loaded (live) binding — closes the load-vs-reset race", async () => {
+    const loadedPool = adminPoolFake([
+      {
+        binding_name: "DB_CMTY_1",
+        community_id: "cmt_1",
+        allocated_at: "t0",
+        last_loaded_at: "t1", // loaded → live → must not be dropped
+        last_error: null,
+        released_at: null,
+        version: 2,
+      },
+    ]) as unknown as D1Database
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({ DB_CMTY_1: community as unknown as D1Database, D1_POOL: loadedPool })
+    const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe("shard_binding_loaded")
+    // The community DB was never touched.
+    expect((community as any).dropped).toHaveLength(0)
+  })
+
+  test("REFUSES to drop a binding with no pool row (untracked)", async () => {
+    const env = adminEnv({
+      DB_CMTY_1: resetCommunityFake(["posts"]) as unknown as D1Database,
+      D1_POOL: adminPoolFake([]) as unknown as D1Database,
+    })
+    const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe("shard_binding_loaded")
   })
 })
 
