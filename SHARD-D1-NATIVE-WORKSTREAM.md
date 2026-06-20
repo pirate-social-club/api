@@ -68,7 +68,11 @@ is exhausted in PR #57.
 
 **Status:** Not started. Turns the merge-gate artifact into a *functional* D1 community.
 
-`localSnapshotToShardStatements(LocalCommunitySnapshot) -> ShardSqlStatement[]` — must emit the community-template **schema DDL** (the ~80 1xxx migrations' CREATE TABLEs) first, then the bootstrap rows. Replace `statements: []` at backend.ts:295 with it. Open question to settle first: apply schema via the snapshot statements (bootstrap guard already allows `CREATE TABLE IF NOT EXISTS`) vs a sibling `communityD1ApplyMigration` RPC + migration runner. Acceptance: `SELECT count(*) FROM sqlite_master WHERE type='table'` returns the expected community tables; a routed read against the binding returns 200 (no "no such table"); reconciler stays a no-op; a service test pins the translator's SQL output.
+`localSnapshotToShardStatements(LocalCommunitySnapshot) -> ShardSqlStatement[]` — must emit the community-template **schema DDL** (the ~80 `1xxx_*.sql` files in `core/db/community-template/migrations/`) first, then the bootstrap rows. Replace `statements: []` at backend.ts:295 with it.
+
+**Open question — RESOLVED (try statements-only first):** the existing `communityD1LoadSnapshot` bootstrap guard (`isBootstrapAllowedStatement`, step 3) already permits `CREATE TABLE IF NOT EXISTS` + `INSERT`, so a single `ShardSqlStatement[]` of template DDL + snapshot rows lands via the EXISTING RPC — **no new shard surface needed.** Escalate to a `communityD1ApplyMigration` RPC + migration-runner ONLY if the SQL is too large for one D1 batch or you need migration-checksum accounting. For reference: the operator/turso path applies the template via `community-bootstrap.ts:421 → applyMigrationTransaction` (community-local-db.ts:257); the d1_native path skips that entirely, which is exactly why the pool D1s are schemaless.
+
+Acceptance: `SELECT count(*) FROM sqlite_master WHERE type='table'` returns the expected community tables; a routed read against the binding returns 200 (no "no such table"); reconciler stays a no-op; a service test pins the translator's SQL output.
 
 PR #57 (4 inert code slices + design doc + design amendment + step 0
 code) is the foundation boundary and is the last thing this
