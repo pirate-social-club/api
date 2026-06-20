@@ -965,3 +965,28 @@ two irreversible gates near the end. All Phase 4 tools exist on disk
      factory. **Sub-gate before (3): keep Turso DBs intact ≥7 days (cold-recovery).**
   3. Delete the Turso databases (CLI). **Committed — data gone from Turso forever.**
   4. Remove Turso credentials/env/code. This is "Turso removed in every way."
+
+## Phase 2 — §8.9 live-semantics smoke verification (2026-06-20, pirate-api-d1-staging v49ea5b9d)
+
+Deployed the Phase-1-complete code to pirate-api-d1-staging (routing ON) and verified the
+converted surfaces END-TO-END against the §8.7 drill community cmt_99c7… (DB_CMTY_0002):
+
+- ✅ **Routed READ** — GET /communities/{drill}/preview → 200, member_count=1 + owner read
+  from the community's D1 via the shard read RPC.
+- ✅ **Routed WRITE (commits!)** — POST /communities/{drill}/rules (openCommunityWriteClient,
+  write-only transaction) → 200; verified by direct `wrangler d1 execute` that the row landed
+  in DB_CMTY_0002.community_rules (title "No spam"). The transaction("write") buffered-batch
+  path commits correctly on D1.
+- ✅ **(d) write-on-read** — preview with locale=es/fr/de → 200, NO read_only_violation (the
+  exact crash the (d) write-client fix targeted). community_jobs stayed empty = the translation
+  enqueue's OnReadIfNeeded condition wasn't met for the drill community (not a bug). The (d)
+  enqueue's standalone execute(SELECT)+execute(INSERT) commits via the D1 client's direct-to-shard
+  path (community-d1-client.ts:124), distinct from the buffered transaction path.
+
+**Residual §8.9 item:** exercise an ACTUAL firing translation/post enqueue-on-read live
+(needs a community with translatable text + a triggering locale) to confirm the standalone
+(d) commit path end-to-end — architecturally sound (direct-to-shard execute), not yet
+live-triggered. Plus full real-time-latency profiling on live-rooms write surfaces.
+
+Phase 2 core read/write semantics: VERIFIED on D1. Phase 3 (prod readiness: pool sizing +
+prod deploy + flag) is next; Phases 4-5 (cutover + Turso removal) are the irreversible ops.
