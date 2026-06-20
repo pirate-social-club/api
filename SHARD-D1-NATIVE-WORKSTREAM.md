@@ -197,7 +197,23 @@ calls `enqueuePostReadJobsForCommunity` which calls `enqueueCommunityJob`).
 - `home-feed-community-reader.ts:178, 204, 214` → calls (2) and (5) → (d)
 - `post-read-response.ts:104, 109` → calls (2) and (3) → (d)
 - `comment-read-service.ts:88, 258, 308` → calls (4) → (d) (already identified)
-- `comment-read-service.ts:140` → no OnReadIfNeeded call → TRUE READ (not d)
+- `comment-read-service.ts:140` (`listPublicPostComments`) → **CORRECTION: this IS (d).**
+  An independent call-graph audit verified `listPublicPostCommentsFromCommunityDb` calls
+  `localizeCommentItems` (comment-read-service.ts:177) → enqueue. The earlier "TRUE READ"
+  classification was WRONG — routing 140 to the read client ships read_only_violation.
+  ALL 4 comment-read sites (88/140/258/308) are (d).
+
+**⚠️ CORRECTION — 3 (d) sites are ALREADY mis-converted (active latent bugs), not unconverted:**
+`buildCommunityPreview` (community-preview-service.ts:412) calls the enqueue at line 576
+(`enqueueCommunityTextTranslationOnReadIfNeeded`, `executor: input.client`). Three sites
+reach it on a read path AND are already on `openCommunityReadClient`:
+- `community-preview-service.ts:303` (`buildPreviewForViewer`) — read client → buildCommunityPreview → enqueue
+- `profile-activity-read-service.ts:292` AND `:376` — read client → getPublicCommunityPreviewFromCommunityDb → buildCommunityPreview → enqueue
+These fire `read_only_violation` for D1 communities (incl. the §8.7 staging drills) when a
+locale with a pending community-text translation is requested. They are LATENT (no production
+D1 communities yet), so not an emergency — but they are REGRESSIONS in merged code, not new
+conversions, and must be the FIRST commit of the (d) session (read client → write client).
+The other ~9 (d) sites are still legacy `openCommunityDb` (Turso-only) — unconverted, not bugs.
 
 **Live-rooms verdict: NOT a (d) site.** `enqueueAnchorPostProjectionRetry` (`live-rooms/service.ts:151`)
 is called from `recordLiveRoomAnchorPostProjection` (line 348), which is a **write context** (projecting
