@@ -70,9 +70,20 @@ is exhausted in PR #57.
 
 `localSnapshotToShardStatements(LocalCommunitySnapshot) -> ShardSqlStatement[]` — must emit the community-template **schema DDL** (the ~80 `1xxx_*.sql` files in `core/db/community-template/migrations/`) first, then the bootstrap rows. Replace `statements: []` at backend.ts:295 with it.
 
-**Open question — RESOLVED (try statements-only first):** the existing `communityD1LoadSnapshot` bootstrap guard (`isBootstrapAllowedStatement`, step 3) already permits `CREATE TABLE IF NOT EXISTS` + `INSERT`, so a single `ShardSqlStatement[]` of template DDL + snapshot rows lands via the EXISTING RPC — **no new shard surface needed.** Escalate to a `communityD1ApplyMigration` RPC + migration-runner ONLY if the SQL is too large for one D1 batch or you need migration-checksum accounting. For reference: the operator/turso path applies the template via `community-bootstrap.ts:421 → applyMigrationTransaction` (community-local-db.ts:257); the d1_native path skips that entirely, which is exactly why the pool D1s are schemaless.
+**Design research done 2026-06-20 (read-only) — the "statements-only, no guard change" plan does NOT hold. Grounded findings:**
 
-Acceptance: `SELECT count(*) FROM sqlite_master WHERE type='table'` returns the expected community tables; a routed read against the binding returns 200 (no "no such table"); reconciler stays a no-op; a service test pins the translator's SQL output.
+- **Q1 (template SQL at runtime):** bundled as a generated TS module `COMMUNITY_MIGRATIONS` (`community-provision-operator/src/generated/community-migrations.ts`, produced by `scripts/generate-migration-manifest.ts`). The operator's `applyMigrationTransaction` (community-bootstrap.ts:386–416) already shapes it as `{ sql }` statements + a `schema_migrations` checksum INSERT per migration. **The API does not import this** — §8.7 must generate/bundle the manifest into the API (or @pirate/api-shared) to reach it at request time.
+- **Q2 (snapshot contents):** `LocalCommunitySnapshot` (community-local-db.ts:93) is a **DATA** object (metadata, settings_json, gate_policy, rules) — NOT schema, NOT SQL. So §8.7 needs BOTH: (1) replay the template schema, AND (2) seed the snapshot data. The operator does both; the d1_native path does neither.
+- **🔴 The blocker:** **70 of 104 template migrations use `ALTER TABLE`**, and the bootstrap guard (`isBootstrapAllowedStatement`) allows `CREATE`/`INSERT`/`UPDATE`/`DELETE`/`REPLACE` but **rejects `ALTER`**. So you cannot just replay `COMMUNITY_MIGRATIONS` through the existing RPC.
+
+**Three viable approaches (decide before code):**
+1. **Extend the bootstrap guard to allow `ALTER TABLE`** on the load path → replay `COMMUNITY_MIGRATIONS` via the existing `communityD1LoadSnapshot`. Smallest code; widens the shard's bootstrap write surface to ALTER (security review on a destructive-capable surface).
+2. **Final-schema-dump build artifact:** apply the 104 migrations at build time, dump the FINAL-form schema as `CREATE TABLE`/`CREATE INDEX` (no ALTERs, guard-compatible) + seed `schema_migrations` rows so schema-state checks pass. No guard change; needs a build step + checksum seeding.
+3. **New `communityD1ApplyMigration` RPC** with its own migration-apply guard. Cleanest separation; the new shard surface step 3 originally avoided.
+
+Recommendation: **option 1** (guard extension) is the smallest path to a functional community and the ALTER allowance is contained to the already-privileged bootstrap path — but it IS a security-surface change and wants a focused review. Then the data-seed translator (`LocalCommunitySnapshot` → table INSERTs) is the second half.
+
+Acceptance: `SELECT count(*) FROM sqlite_master WHERE type='table'` returns the expected community tables; a routed read against the binding returns 200 (no "no such table"); reconciler stays a no-op; a service test pins the translator output. **Verification:** a focused bun-test integration driving the load + one routed read against the same `COMMUNITY_D1_SHARD` stub (asserts both "schema loaded" AND "readable from the API path") — no temporary prod endpoint.
 
 PR #57 (4 inert code slices + design doc + design amendment + step 0
 code) is the foundation boundary and is the last thing this
