@@ -51,6 +51,7 @@ import { getCommunityProvisionOperatorHealth, getCommunityProvisionOperatorVersi
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
+import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -605,6 +606,7 @@ const handler: ExportedHandler<Env> = {
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
       { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
+      { name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) },
     ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
     // Rotate the start order each minute so a deadline-trimmed tail never starves
     // the same jobs run after run.
