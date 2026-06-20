@@ -293,6 +293,11 @@
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator"
+        },
+        {
+          "binding": "COMMUNITY_D1_SHARD",
+          "service": "community-d1-shard-prod",
+          "entrypoint": "CommunityD1Shard"
         }
       ],
       "vars": {
