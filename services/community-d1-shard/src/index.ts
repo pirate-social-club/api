@@ -1,5 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers"
 import type {
+  ShardAdminGetPoolRowRequest,
+  ShardAdminGetPoolRowResponse,
+  ShardAdminReleaseRequest,
+  ShardAdminReleaseResponse,
+  ShardAdminResetRequest,
+  ShardAdminResetResponse,
   ShardBatchReadRequest,
   ShardBindRequest,
   ShardBindResponse,
@@ -14,8 +20,11 @@ import type { Env } from "./env"
 import {
   runShardBatch,
   runShardBind,
+  runShardGetPoolRow,
   runShardLoadSnapshot,
   runShardRead,
+  runShardRelease,
+  runShardReset,
   runShardWrite,
 } from "./shard-read"
 
@@ -83,6 +92,29 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     input: ShardLoadSnapshotRequest,
   ): Promise<ShardResult<ShardLoadSnapshotResponse>> {
     return runShardLoadSnapshot(this.env, input)
+  }
+
+  /**
+   * Step 5 admin RPCs (reconciler). Service-level authenticated via
+   * SHARD_ADMIN_TOKEN — NOT the per-community auth the read/write RPCs use.
+   * `communityD1GetPoolRow` introspects a pool row (the reconciler keys off
+   * `lastLoadedAt`); `communityD1Reset` drops a half-loaded community's tables;
+   * `communityD1Release` frees a pool binding (starting the §5 quarantine).
+   */
+  communityD1GetPoolRow(
+    input: ShardAdminGetPoolRowRequest,
+  ): Promise<ShardResult<ShardAdminGetPoolRowResponse>> {
+    return runShardGetPoolRow(this.env, input)
+  }
+
+  communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>> {
+    return runShardReset(this.env, input)
+  }
+
+  communityD1Release(
+    input: ShardAdminReleaseRequest,
+  ): Promise<ShardResult<ShardAdminReleaseResponse>> {
+    return runShardRelease(this.env, input)
   }
 
   async fetch(): Promise<Response> {

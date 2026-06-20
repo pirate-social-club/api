@@ -15,6 +15,12 @@ import {
   type ShardResult,
   type ShardSqlStatement,
   type ShardWriteRequest,
+  type ShardAdminGetPoolRowRequest,
+  type ShardAdminGetPoolRowResponse,
+  type ShardAdminResetRequest,
+  type ShardAdminResetResponse,
+  type ShardAdminReleaseRequest,
+  type ShardAdminReleaseResponse,
 } from "@pirate/api-shared"
 
 /**
@@ -62,6 +68,13 @@ export type ShardEnv = {
   COMMUNITY_D1_SHARD_WORKER_ID?: string
   /** Shard-owned pool metadata D1. The runtime allowlist lives here. */
   D1_POOL?: D1Database
+  /**
+   * Service-level admin secret (a wrangler secret) gating the admin RPCs
+   * (communityD1GetPoolRow/Reset/Release) used by the step-5 reconciler. When
+   * unset, all admin RPCs fail closed (ADMIN_UNAUTHORIZED) — destructive ops
+   * must never be reachable on a misconfigured shard.
+   */
+  SHARD_ADMIN_TOKEN?: string
   [binding: string]: D1Database | string | undefined
 }
 
@@ -582,4 +595,117 @@ export async function runShardLoadSnapshot(
     .run()
 
   return { ok: true, value: { rowsAffected, loaded: true } }
+}
+
+// --- Admin RPCs (step 5 reconciler) -----------------------------------------
+// Service-level auth: gated by SHARD_ADMIN_TOKEN (a wrangler secret), NOT the
+// per-community (communityId, bindingName) authorization. Fail closed when no
+// token is configured so destructive ops can never run on a misconfigured shard.
+
+/** Constant-time-ish string compare to avoid leaking length/prefix via timing. */
+function tokensEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+/** Returns a ShardError if the admin token is missing/unconfigured/wrong, else null. */
+function requireAdminToken(env: ShardEnv, provided: string): ShardError | null {
+  const configured = typeof env.SHARD_ADMIN_TOKEN === "string" ? env.SHARD_ADMIN_TOKEN.trim() : ""
+  if (!configured) {
+    return err(SHARD_READ_ERROR.ADMIN_UNAUTHORIZED, "shard admin token is not configured")
+  }
+  if (!provided || !tokensEqual(provided, configured)) {
+    return err(SHARD_READ_ERROR.ADMIN_UNAUTHORIZED, "admin token rejected")
+  }
+  return null
+}
+
+function requirePoolDb(env: ShardEnv): D1Database | ShardError {
+  const pool = env.D1_POOL
+  if (!pool || typeof pool.prepare !== "function") {
+    return err(SHARD_READ_ERROR.BINDING_NOT_INITIALIZED, "D1_POOL binding is not configured on this shard")
+  }
+  return pool
+}
+
+/** Admin: read a single pool row (reconciler introspection — keys off last_loaded_at). */
+export async function runShardGetPoolRow(
+  env: ShardEnv,
+  input: ShardAdminGetPoolRowRequest,
+): Promise<ShardResult<ShardAdminGetPoolRowResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+
+  const row = await pool
+    .prepare(
+      "SELECT binding_name, community_id, allocated_at, last_loaded_at, last_error, released_at, version " +
+        "FROM d1_pool WHERE binding_name = ?1",
+    )
+    .bind(input.bindingName)
+    .first()
+
+  if (!row) return { ok: true, value: { row: null } }
+  const r = row as Record<string, unknown>
+  return {
+    ok: true,
+    value: {
+      row: {
+        bindingName: String(r["binding_name"]),
+        communityId: r["community_id"] == null ? null : String(r["community_id"]),
+        allocatedAt: r["allocated_at"] == null ? null : String(r["allocated_at"]),
+        lastLoadedAt: r["last_loaded_at"] == null ? null : String(r["last_loaded_at"]),
+        lastError: r["last_error"] == null ? null : String(r["last_error"]),
+        releasedAt: r["released_at"] == null ? null : String(r["released_at"]),
+        version: Number(r["version"] ?? 0),
+      },
+    },
+  }
+}
+
+/** Admin: drop all user tables in a community's D1 (a half-loaded community before release). */
+export async function runShardReset(
+  env: ShardEnv,
+  input: ShardAdminResetRequest,
+): Promise<ShardResult<ShardAdminResetResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  const db = resolveD1(env, input.bindingName)
+  if ("ok" in db) return db
+
+  const tables = await db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all()
+  const names = (tables.results ?? []).map((t) => String((t as { name: unknown }).name))
+  if (names.length === 0) return { ok: true, value: { tablesDropped: 0 } }
+
+  // DROP each table. D1 batch is atomic; identifiers can't be bound, but the
+  // names come from sqlite_master (not user input), so interpolation is safe here.
+  await db.batch(names.map((name) => db.prepare(`DROP TABLE IF EXISTS "${name}"`)))
+  return { ok: true, value: { tablesDropped: names.length } }
+}
+
+/** Admin: free a pool binding (sets community_id NULL + released_at for the §5 quarantine). */
+export async function runShardRelease(
+  env: ShardEnv,
+  input: ShardAdminReleaseRequest,
+): Promise<ShardResult<ShardAdminReleaseResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+
+  const result = await pool
+    .prepare(
+      "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
+        "last_error = NULL, released_at = ?2, version = version + 1 " +
+        "WHERE binding_name = ?1 AND community_id IS NOT NULL",
+    )
+    .bind(input.bindingName, input.now)
+    .run()
+
+  return { ok: true, value: { released: (result.meta?.changes ?? 0) > 0 } }
 }

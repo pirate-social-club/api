@@ -68,7 +68,7 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc {}
 
 /**
  * Step 2 of the D1-native workstream. Allocates a D1 binding from the shard's
@@ -131,6 +131,62 @@ export interface ShardBootstrapRpc {
 }
 
 /**
+ * Admin RPCs (step 5 reconciler). These are SERVICE-level authenticated — the
+ * caller proves it with a shared `adminToken` (a real wrangler secret), NOT the
+ * per-community `(communityId, bindingName)` authorization the read/write RPCs
+ * use. The reconciler is not impersonating a community: it inspects pool rows,
+ * drops a half-loaded community's tables, and frees pool bindings — operations
+ * no per-community caller may perform. `communityD1Reset` and
+ * `communityD1Release` are DESTRUCTIVE, which is exactly why they sit behind a
+ * secret rather than the identifier-based auth.
+ */
+export type ShardAdminGetPoolRowRequest = {
+  adminToken: string
+  bindingName: string
+}
+
+export type ShardAdminGetPoolRowResponse = {
+  /** Null if no pool row exists for this binding. */
+  row: {
+    bindingName: string
+    communityId: string | null
+    allocatedAt: string | null
+    lastLoadedAt: string | null
+    lastError: string | null
+    releasedAt: string | null
+    version: number
+  } | null
+}
+
+export type ShardAdminResetRequest = {
+  adminToken: string
+  bindingName: string
+}
+
+export type ShardAdminResetResponse = {
+  /** Number of user tables dropped from the community D1. */
+  tablesDropped: number
+}
+
+export type ShardAdminReleaseRequest = {
+  adminToken: string
+  bindingName: string
+  /** ISO timestamp recorded as `released_at` (starts the §5 quarantine window). */
+  now: string
+}
+
+export type ShardAdminReleaseResponse = {
+  /** True if a row was freed; false if the binding had no allocated row. */
+  released: boolean
+}
+
+export interface ShardAdminRpc {
+  communityD1GetPoolRow(input: ShardAdminGetPoolRowRequest): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
+  communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>>
+  communityD1Release(input: ShardAdminReleaseRequest): Promise<ShardResult<ShardAdminReleaseResponse>>
+}
+
+/**
  * Discriminated-union return type for all shard RPCs. The shard returns errors
  * as VALUES (not thrown) so they survive the WorkerEntrypoint boundary
  * losslessly. The Cloudflare Workers RPC layer strips custom properties from
@@ -150,6 +206,7 @@ export type ShardErrorCode =
   | "shard_pool_write_conflict"
   | "shard_binding_not_initialized"
   | "shard_binding_not_allocated"
+  | "shard_admin_unauthorized"
 
 export type ShardError = {
   ok: false
@@ -182,6 +239,8 @@ export type ShardResult<T> = { ok: true; value: T } | ShardError
 export function mapShardErrorToHttp(code: ShardErrorCode): { status: number; retryable: boolean } {
   switch (code) {
     case "shard_binding_not_allowed":
+      return { status: 403, retryable: false }
+    case "shard_admin_unauthorized":
       return { status: 403, retryable: false }
     case "shard_pool_exhausted":
     case "shard_pool_write_conflict":
@@ -229,4 +288,11 @@ export const SHARD_READ_ERROR = {
    * it.
    */
   BINDING_NOT_ALLOCATED: "shard_binding_not_allocated",
+  /**
+   * An admin RPC (communityD1GetPoolRow/Reset/Release) was called with a missing
+   * or incorrect `adminToken`, or the shard has no SHARD_ADMIN_TOKEN configured
+   * (fail-closed). Distinct from BINDING_NOT_ALLOWED — that is per-community
+   * authorization; this is the service-level admin gate.
+   */
+  ADMIN_UNAUTHORIZED: "shard_admin_unauthorized",
 } as const

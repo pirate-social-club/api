@@ -8,8 +8,11 @@ import {
   resolveD1,
   runShardBatch,
   runShardBind,
+  runShardGetPoolRow,
   runShardLoadSnapshot,
   runShardRead,
+  runShardRelease,
+  runShardReset,
   runShardWrite,
   type ShardEnv,
 } from "./shard-read"
@@ -821,5 +824,173 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
     expect(r).toEqual({ ok: true, value: { rowsAffected: 0, loaded: true } })
     const row = pool.rows.find((r) => r.binding_name === "DB_CMTY_NEW")
     expect(row?.last_loaded_at).not.toBeNull()
+  })
+})
+
+// --- Step 5 admin RPCs ------------------------------------------------------
+
+const ADMIN_TOKEN = "s3cret-admin-token"
+
+/** Minimal pool D1 fake for the admin RPCs (full-row SELECT + the release UPDATE). */
+function adminPoolFake(rows: FakePoolRow[]) {
+  function stmt(sql: string) {
+    const s: any = {
+      _args: [] as unknown[],
+      bind(...a: unknown[]) {
+        s._args = a
+        return s
+      },
+      async first() {
+        const binding = s._args[0] as string
+        return rows.find((r) => r.binding_name === binding) ?? null
+      },
+      async run() {
+        // release: free the row + stamp released_at, only if currently allocated
+        const [binding, now] = s._args as [string, string]
+        const row = rows.find((r) => r.binding_name === binding)
+        if (row && row.community_id !== null) {
+          row.community_id = null
+          row.allocated_at = null
+          row.last_loaded_at = null
+          row.last_error = null
+          row.released_at = now
+          row.version += 1
+          return { success: true, meta: { changes: 1 } }
+        }
+        return { success: true, meta: { changes: 0 } }
+      },
+    }
+    void sql
+    return s
+  }
+  return { rows, prepare: (sql: string) => stmt(sql) }
+}
+
+/** Community D1 fake for reset: lists user tables, records DROPs. */
+function resetCommunityFake(tableNames: string[]) {
+  const dropped: string[] = []
+  const db: any = {
+    dropped,
+    prepare(sql: string) {
+      const s: any = {
+        async all() {
+          if (/sqlite_master/.test(sql)) {
+            return { results: tableNames.map((name) => ({ name })), success: true }
+          }
+          return { results: [], success: true }
+        },
+        _sql: sql,
+      }
+      if (/DROP TABLE/.test(sql)) dropped.push(sql)
+      return s
+    },
+    async batch(stmts: any[]) {
+      return stmts.map(() => ({ success: true, meta: { changes: 0 } }))
+    },
+  }
+  return db
+}
+
+function adminEnv(over: Partial<ShardEnv> = {}): ShardEnv {
+  return { SHARD_ADMIN_TOKEN: ADMIN_TOKEN, ...over } as ShardEnv
+}
+
+describe("admin RPC auth (step 5)", () => {
+  test("rejects a wrong token with shard_admin_unauthorized", async () => {
+    const env = adminEnv({ D1_POOL: adminPoolFake([]) as unknown as D1Database })
+    const r = await runShardGetPoolRow(env, { adminToken: "wrong", bindingName: "DB_X" })
+    expect(r).toEqual({ ok: false, code: "shard_admin_unauthorized", message: expect.any(String) })
+  })
+
+  test("fails closed when the shard has no admin token configured", async () => {
+    const env = { D1_POOL: adminPoolFake([]) as unknown as D1Database } as ShardEnv
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_X", now: "t" })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe("shard_admin_unauthorized")
+  })
+})
+
+describe("communityD1GetPoolRow (step 5)", () => {
+  test("returns the mapped pool row for a binding", async () => {
+    const env = adminEnv({
+      D1_POOL: adminPoolFake([
+        {
+          binding_name: "DB_CMTY_1",
+          community_id: "cmt_1",
+          allocated_at: "t0",
+          last_loaded_at: "t1",
+          last_error: null,
+          released_at: null,
+          version: 2,
+        },
+      ]) as unknown as D1Database,
+    })
+    const r = await runShardGetPoolRow(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.value.row?.communityId).toBe("cmt_1")
+      expect(r.value.row?.lastLoadedAt).toBe("t1")
+      expect(r.value.row?.version).toBe(2)
+    }
+  })
+
+  test("returns row: null for an unknown binding", async () => {
+    const env = adminEnv({ D1_POOL: adminPoolFake([]) as unknown as D1Database })
+    const r = await runShardGetPoolRow(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_NONE" })
+    expect(r).toEqual({ ok: true, value: { row: null } })
+  })
+})
+
+describe("communityD1Reset (step 5)", () => {
+  test("drops all user tables in the community D1", async () => {
+    const community = resetCommunityFake(["posts", "comments", "votes"])
+    const env = adminEnv({ DB_CMTY_1: community as unknown as D1Database })
+    const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r).toEqual({ ok: true, value: { tablesDropped: 3 } })
+  })
+
+  test("is a no-op (tablesDropped: 0) on an empty community D1", async () => {
+    const env = adminEnv({ DB_CMTY_1: resetCommunityFake([]) as unknown as D1Database })
+    const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r).toEqual({ ok: true, value: { tablesDropped: 0 } })
+  })
+})
+
+describe("communityD1Release (step 5)", () => {
+  test("frees an allocated binding and stamps released_at (quarantine)", async () => {
+    const rows: FakePoolRow[] = [
+      {
+        binding_name: "DB_CMTY_1",
+        community_id: "cmt_1",
+        allocated_at: "t0",
+        last_loaded_at: null,
+        last_error: null,
+        released_at: null,
+        version: 1,
+      },
+    ]
+    const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", now: "t9" })
+    expect(r).toEqual({ ok: true, value: { released: true } })
+    expect(rows[0].community_id).toBeNull()
+    expect(rows[0].released_at).toBe("t9")
+    expect(rows[0].version).toBe(2)
+  })
+
+  test("returns released: false when the binding is already free", async () => {
+    const rows: FakePoolRow[] = [
+      {
+        binding_name: "DB_CMTY_1",
+        community_id: null,
+        allocated_at: null,
+        last_loaded_at: null,
+        last_error: null,
+        released_at: "t5",
+        version: 3,
+      },
+    ]
+    const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", now: "t9" })
+    expect(r).toEqual({ ok: true, value: { released: false } })
   })
 })

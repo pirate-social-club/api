@@ -23,6 +23,12 @@ export interface Env {
   COMMUNITY_D1_BINDING_MAP_JSON?: string
   /** Shard-owned pool metadata D1 — the runtime allowlist. */
   D1_POOL?: D1Database
+  /**
+   * Service-level admin secret (wrangler secret) gating the step-5 reconciler
+   * admin RPCs. Unset → admin RPCs fail closed. Set via
+   * `wrangler secret put SHARD_ADMIN_TOKEN --env staging`.
+   */
+  SHARD_ADMIN_TOKEN?: string
   /** PR2 pilot D1 (added to wrangler.jsonc at provisioning time). */
   DB_CMTY_PILOT?: D1Database
   /** PR2 pilot D1 (the second pilot community, "fixture"). */
