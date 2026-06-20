@@ -85,6 +85,12 @@ is exhausted in PR #57.
 
 Acceptance: `SELECT count(*) FROM sqlite_master WHERE type='table'` returns the expected community tables; a routed read against the binding returns 200 (no "no such table"); reconciler stays a no-op; a service test pins the translator output. **Verification:** a focused bun-test integration driving the load + one routed read against the same `COMMUNITY_D1_SHARD` stub (asserts both "schema loaded" AND "readable from the API path") — no temporary prod endpoint.
 
+### §8.7 progress + remaining (2026-06-20)
+
+**DONE — schema half (commit `383cfe8`):** `scripts/generate-community-schema-snapshot.ts` replays the 102 template migrations in-memory and emits `generated/community-schema-snapshot.ts`: `COMMUNITY_SCHEMA_STATEMENTS` (181 CREATE TABLE/INDEX, final-form, guard-compatible — 57 tables + 124 indexes) + `COMMUNITY_SCHEMA_MIGRATIONS` (102 name+checksum for seeding `schema_migrations`). Validated: re-applies cleanly to a fresh DB.
+
+**REMAINING — data half (the translator):** `localSnapshotToShardStatements(LocalCommunitySnapshot)` = `COMMUNITY_SCHEMA_STATEMENTS` + a `schema_migrations` seed INSERT per `COMMUNITY_SCHEMA_MIGRATIONS` entry + the snapshot DATA INSERTs. The data rows mirror `bootstrapLocalCommunityDb` (community-local-db.ts:437–594): `communities`, `community_memberships`, `community_roles`, `community_gate_policies`, `community_rules` (+ `namespace_bindings`/`namespace_handle_policies` — N/A for v1 namespaceless). **Constraint:** can't reuse `bootstrapLocalCommunityDb` directly — it reads migration files from disk (`applyMigrationFile`), which fails in a deployed Worker. Two options: (A) refactor `bootstrapLocalCommunityDb` to accept the bundled schema (no file reads) + run it in-memory + dump rows — no INSERT drift, bigger refactor of an operator-shared fn; (B) a standalone translator that emits the 6 INSERTs directly — self-contained, but duplicates the seeding logic (drift risk; a test pinning output vs `bootstrapLocalCommunityDb` mitigates). Then wire into backend.ts:295, add the integration test, re-drill on `DB_CMTY_0002`.
+
 PR #57 (4 inert code slices + design doc + design amendment + step 0
 code) is the foundation boundary and is the last thing this
 environment produces.
