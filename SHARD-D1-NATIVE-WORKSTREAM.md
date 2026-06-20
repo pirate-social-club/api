@@ -183,6 +183,19 @@ first); (d) read-with-side-effect-write (home-feed site 212). Order: finish (a),
 (b), then (c)/(d) with per-site care. (c) splits further into buffer-safe (mechanical)
 vs result-dependent-tx (refactor) per the write-client constraint.
 
+**(d) bucket is LARGER than first thought (2026-06-20, found via call-tree tracing):** the
+enqueue-on-read pattern is not unique to home-feed 212. enqueueCommunityJob INSERTs a job row
+into the COMMUNITY db via the passed client, and it is reached on READ paths through
+enqueueCommentTranslationOnReadIfNeeded / localizeCommentItems. So comment-read-service sites
+88 (listPostComments), 258 (listPublicCommentReplies), 308 (getCommentContext) are all
+write-on-read — only 140 (listPublicPostComments) is a true read. comment-read-service was
+DEFERRED whole (not converted) — routing those to the read client ships read_only_violation.
+The (d) bucket now: home-feed 212 + comment-read 88/258/308 + any other site that reaches
+enqueueCommunityJob on a read path (audit needed). Per-site handling: (i) use the write client
+(its full Client does the reads AND the enqueue — simplest, accepts write-path cost on a
+read-shaped call), or (ii) route the enqueue separately. The buffered-write-on-read semantics
+need verification — its own focused session.
+
 ---
 
 ### (historical) original §8.7 plan
