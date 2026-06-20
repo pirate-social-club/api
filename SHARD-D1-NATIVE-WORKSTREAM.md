@@ -175,13 +175,61 @@ worst-case framing — (c) is large in COUNT (~30-40 sites) but LOW in difficult
 conversion should still confirm each in-tx helper is write-only (the survey spot-checked, not
 exhaustively inspected every helper), but no result-dependent pattern was found anywhere.
 
-**Remaining: ~89 `openCommunityDb(` sites.** Buckets: (a) clean-read mechanical
-(remaining feed reads, mcp.ts, etc.); (b) deeper-read-cascade (public-posts — needs
-CommunityReadClient widening down a chain); (c) write/transaction (openCommunityWriteClient,
-gated on buffer-safe surfaces per the design — result-dependent txns need refactor
-first); (d) read-with-side-effect-write (home-feed site 212). Order: finish (a), then
-(b), then (c)/(d) with per-site care. (c) splits further into buffer-safe (mechanical)
-vs result-dependent-tx (refactor) per the write-client constraint.
+### §8.8 (d) cross-cutting audit (2026-06-20) — the (d) bucket is structural, not per-site
+
+The (d) bucket (read-with-side-effect-write) is now fully traced via the call graph from
+`enqueueCommunityJob` upward. The original framing ("home-feed site 212, one site") was
+incomplete; the (d) pattern is **cross-cutting** across the read paths that reach the four
+named `*OnReadIfNeeded` enqueue functions + one direct-enqueue site in home-feed.
+
+**The 4 named `*OnReadIfNeeded` functions (all result-dependent, all use `enqueueCommunityJob` internally):**
+1. `enqueueCommunityTextTranslationOnReadIfNeeded` (`community-localization-service.ts:294`) — gated on community locale read
+2. `enqueuePostTranslationOnReadIfNeeded` (`post-jobs.ts:59`) — gated on post source-language read
+3. `enqueueLinkSummaryRepairOnReadIfNeeded` (`post-jobs.ts:202`) — gated on link-summary cache staleness
+4. `enqueueEmbedHydrateOnReadIfNeeded` (`post-jobs.ts:228`) — gated on embed-cache missing
+
+**Direct enqueue site:** `home-feed-community-reader.ts:212` (inside `withRequestControlPlaneClients`,
+calls `enqueuePostReadJobsForCommunity` which calls `enqueueCommunityJob`).
+
+**Caller sites that inherit (d) classification:**
+- `community-preview-service.ts:576` → calls (1) → (d)
+- `community-read-service.ts:54` (membership) → calls (1) → (d)
+- `home-feed-community-reader.ts:178, 204, 214` → calls (2) and (5) → (d)
+- `post-read-response.ts:104, 109` → calls (2) and (3) → (d)
+- `comment-read-service.ts:88, 258, 308` → calls (4) → (d) (already identified)
+- `comment-read-service.ts:140` → no OnReadIfNeeded call → TRUE READ (not d)
+
+**Live-rooms verdict: NOT a (d) site.** `enqueueAnchorPostProjectionRetry` (`live-rooms/service.ts:151`)
+is called from `recordLiveRoomAnchorPostProjection` (line 348), which is a **write context** (projecting
+a live room creation). The enqueue is a retry-after-failure path inside a write flow, not a read
+with side-effect. So live-rooms's §8.9 gate is real-time latency only, no (d) component. This is a
+relief — the §8.9 verification scope is narrower than feared.
+
+**Handling decision: option 1 (write client) for all (d) sites.** Rationale:
+- All 4 Tier 1 functions are result-dependent (the "IfNeeded" suffix is the signal). The enqueue
+  payload depends on what the read returned.
+- Each OnReadIfNeeded wraps the enqueue in try/catch with log+continue — **fire-and-forget on failure**.
+  The read must not fail if the enqueue fails.
+- Option 2 (separate enqueue from read) would require 4-5 refactors (one per OnReadIfNeeded function)
+  to return the enqueue payload and let the caller fire it post-read.
+- Option 3 (async queue) is the architectural ideal but requires building a queue mechanism, its
+  own slice.
+- Option 1 preserves existing semantics: the enqueue happens during the read with the read's client.
+  The d1 path buffers the enqueue with the rest of the read's write batch. If the enqueue fails,
+  the existing try/catch logs and continues. The cost is write-path latency on a read-shaped call —
+  must be verified in §8.9.
+
+**Total (d) bucket size after this audit: ~10-12 sites across 6-7 files.** This replaces the
+"home-feed 212, one site" prior framing. All (d) sites use `openCommunityWriteClient` (not read) at
+the read site that contains the OnReadIfNeeded call.
+
+**Remaining: ~51 `openCommunityDb(` sites** (verified 2026-06-20: 51 actual invocations across
+~20 files). The (d) cluster (~10-12 sites) is its own focused conversion. Order:
+1. (d) cluster (use write client at the read site)
+2. live-rooms (15 sites, pure reads, §8.9-gated real-time)
+3. Remaining scattered (~12 sites across ~10 files: assistant-policy/service 2, community-karaoke-policy 3,
+   mcp.ts 2, song-artifacts/bundle 2, post-read-context 2, community-machine-access 2,
+   community-read-access 3, etc.) — mechanical, same pattern as prior slices.
 
 **(d) bucket is LARGER than first thought (2026-06-20, found via call-tree tracing):** the
 enqueue-on-read pattern is not unique to home-feed 212. enqueueCommunityJob INSERTs a job row
