@@ -113,6 +113,32 @@ against `DB_CMTY_0002` (the §8.7 artifact, already schema'd + seeded) → extra
 factory-side adapter the other sites adopt incrementally. This is the workstream that
 actually moves the 17 live Turso communities toward D1.
 
+### §8.8 established pattern (first slice done: commit `17cb439`)
+
+**Clean-read site (the template — profile-activity-read-service):**
+1. `openCommunityDb(env, repo, id)` → `openCommunityReadClient(env, repo, id)` (routes
+   `backend='d1'` to the shard read RPC, falls back to legacy Turso otherwise). Same
+   3 args, `.client` + `.close()` shape preserved.
+2. Widen any read helper typed `client: Client` → `client: DbExecutor` (the read
+   client has execute/batch but no `transaction`). The shared read stores
+   (`getPostById`/`getCommentById`/`getPostReadMetrics`) already take `DbExecutor`.
+3. Drop the now-unused `Client` import.
+
+**The per-site classification §8.8 requires (NOT a uniform sweep):**
+- **Pure read** → `openCommunityReadClient` (as above).
+- **Write / transaction** → `openCommunityWriteClient` (the read RPC's read-only guard
+  rejects writes, so a write site routed to the read client FAILS for d1 communities).
+- **⚠️ Read-with-side-effect-write** (e.g. `home-feed-community-reader` site 212 —
+  `enqueuePostReadJobsForCommunity` calls `enqueue…OnReadIfNeeded`, which write jobs
+  during a read). These need the write path (or to route the enqueue separately);
+  they are the trickiest and must be hand-classified, not bulk-converted.
+
+**Remaining: ~96 `openCommunityDb(` sites** across mcp/board-read-tools, song-artifacts,
+handles (write-heavy, 11+), assistant-policy, feed, telegram, royalties, etc. This is a
+multi-session grind — each file needs the read/write/mixed classification above before
+conversion. Recommended order: clean-read files first (lowest risk), write-heavy
+(handles/song-artifacts) last with per-site care.
+
 ---
 
 ### (historical) original §8.7 plan
