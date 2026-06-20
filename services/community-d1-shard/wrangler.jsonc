@@ -37,6 +37,16 @@
       "binding": "DB_CMTY_FIXTURE",
       "database_name": "cmty-d1-fixture-staging",
       "database_id": "0c155e97-cbcb-47f5-ac7c-3e5c0b88ab60"
+    },
+    {
+      "binding": "DB_CMTY_0001",
+      "database_name": "community-d1-pool-0001-staging",
+      "database_id": "82c46d7b-50ce-4984-9d77-9334d4463ddf"
+    },
+    {
+      "binding": "DB_CMTY_0002",
+      "database_name": "community-d1-pool-0002-staging",
+      "database_id": "c1ccf25f-0e13-4aad-9770-b7a46fa12a82"
     }
   ]
   // The RPC surface validates the requested bindingName against these bound
