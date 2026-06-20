@@ -133,11 +133,26 @@ actually moves the 17 live Turso communities toward D1.
   during a read). These need the write path (or to route the enqueue separately);
   they are the trickiest and must be hand-classified, not bulk-converted.
 
-**Remaining: ~96 `openCommunityDb(` sites** across mcp/board-read-tools, song-artifacts,
-handles (write-heavy, 11+), assistant-policy, feed, telegram, royalties, etc. This is a
-multi-session grind — each file needs the read/write/mixed classification above before
-conversion. Recommended order: clean-read files first (lowest risk), write-heavy
-(handles/song-artifacts) last with per-site care.
+**Progress (clean-read grind, 2026-06-20):** 3 slices, 7 read sites across 5 files —
+profile-activity (`17cb439`), mcp board-read-tools + board-read-service (`350c2c1`),
+debug-pipeline + safety-settings (`b00476d`). All behavior-preserving (464 unit pass,
+typecheck clean each).
+
+**Refinement found (public-posts, DEFERRED):** the widen-the-read-helper step has a
+type subtlety — `DbExecutor = Pick<Client, "execute">` (execute ONLY, no `batch`),
+while the routed read client has execute+batch. Helpers that only `execute` widen to
+`DbExecutor` (slices 1–3); helpers that `batch`, or pass `client` to sub-helpers that
+do, must widen to `CommunityReadClient` (execute+batch) instead — and that can cascade
+across a chain (public-posts → getPublicPostFromCommunityDb → sub-helpers). Those
+deeper chains are past "mechanical" and belong in focused work, not the clean grind.
+
+**Remaining: ~89 `openCommunityDb(` sites.** Buckets: (a) clean-read mechanical
+(remaining feed reads, mcp.ts, etc.); (b) deeper-read-cascade (public-posts — needs
+CommunityReadClient widening down a chain); (c) write/transaction (openCommunityWriteClient,
+gated on buffer-safe surfaces per the design — result-dependent txns need refactor
+first); (d) read-with-side-effect-write (home-feed site 212). Order: finish (a), then
+(b), then (c)/(d) with per-site care. (c) splits further into buffer-safe (mechanical)
+vs result-dependent-tx (refactor) per the write-client constraint.
 
 ---
 
