@@ -179,11 +179,14 @@ describe("d1NativeProvisioningBackend", () => {
     expect(bind.communityId).toBe(communityId)
     expect(typeof bind.now).toBe("string")
 
-    // The load call passed the binding name (from bind) + empty statements.
+    // The load call passed the binding name (from bind) + the §8.7 statements
+    // (the load array; CONTENT is asserted in d1-snapshot-statements.test.ts —
+    // here we pin the orchestrator's call SEQUENCE, robust to mock.module of
+    // create/repository in the shared test process).
     const load = calls[1]!.input as { communityId: string; bindingName: string; statements: unknown[] }
     expect(load.communityId).toBe(communityId)
     expect(load.bindingName).toBe("DB_CMTY_D1_TEST")
-    expect(load.statements).toEqual([])
+    expect(Array.isArray(load.statements)).toBe(true)
 
     // The routing row was upserted at 'ready' with the shard's worker id.
     const upsert = calls[2]!.input as {

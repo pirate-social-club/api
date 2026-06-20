@@ -1,8 +1,14 @@
 import {
   bootstrapLocalCommunityDb,
+  buildCommunitySeedStatements,
+  type LocalCommunityBootstrapInput,
   type LocalCommunityRule,
   type LocalCommunitySnapshot,
 } from "../community-local-db"
+import {
+  COMMUNITY_SCHEMA_MIGRATIONS,
+  COMMUNITY_SCHEMA_STATEMENTS,
+} from "../provisioning/generated/community-schema-snapshot"
 import { serializeLocalDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
@@ -481,17 +487,27 @@ function resolvePublicV0MembershipMode(mode: CreateCommunityRequestBody["members
   return mode === "request" ? "request" : "gated"
 }
 
-export async function bootstrapCommunityLocalSnapshot(input: {
+export type CommunityBootstrapRequest = {
   env: Env
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
   communityId: string
   namespaceVerificationId: string | null
   namespaceLabel: string | null
-}): Promise<LocalCommunitySnapshot> {
-  const dbRoot = resolveCommunityDbRoot(input.env)
-  return bootstrapLocalCommunityDb({
-    rootDir: dbRoot,
+}
+
+/**
+ * Build the `LocalCommunityBootstrapInput` from a community-create request.
+ * Shared by `bootstrapCommunityLocalSnapshot` (operator/local path, which writes
+ * it to a libsql file) and the d1_native translator (`localCommunityShardStatements`),
+ * so the two paths derive the identical bootstrap input — no drift.
+ */
+export function buildLocalCommunityBootstrapInput(
+  input: CommunityBootstrapRequest,
+  rootDir: string,
+): LocalCommunityBootstrapInput {
+  return {
+    rootDir,
     communityId: input.communityId,
     createdByUserId: input.auth.userId,
     displayName: input.auth.communityDisplayName,
@@ -534,5 +550,33 @@ export async function bootstrapCommunityLocalSnapshot(input: {
     rules: buildBootstrapRules(input.body),
     initialSettings: buildBootstrapInitialSettings(input.body),
     now: input.auth.createdAt,
-  })
+  }
+}
+
+export async function bootstrapCommunityLocalSnapshot(input: CommunityBootstrapRequest): Promise<LocalCommunitySnapshot> {
+  return bootstrapLocalCommunityDb(buildLocalCommunityBootstrapInput(input, resolveCommunityDbRoot(input.env)))
+}
+
+/**
+ * §8.7: the d1_native schema+data load, as `ShardSqlStatement[]` for
+ * `communityD1LoadSnapshot`. Three parts, all CREATE/INSERT (guard-compatible):
+ *   1. the bundled final-form schema (COMMUNITY_SCHEMA_STATEMENTS — generated),
+ *   2. a `schema_migrations` seed per template migration (so schema-state checks
+ *      see the same applied set the operator records),
+ *   3. the community data seed (buildCommunitySeedStatements — the SAME pure
+ *      generator the operator path executes, so the two can't drift).
+ */
+export function localCommunityShardStatements(input: CommunityBootstrapRequest): { sql: string; args?: (string | number | null)[] }[] {
+  // rootDir is a disk concern of bootstrapLocalCommunityDb; the d1 path never
+  // writes to disk (buildCommunitySeedStatements ignores it), so a placeholder
+  // avoids requiring LOCAL_COMMUNITY_DB_ROOT on the d1_native worker.
+  const bootstrapInput = buildLocalCommunityBootstrapInput(input, "d1-native")
+  return [
+    ...COMMUNITY_SCHEMA_STATEMENTS.map((sql) => ({ sql })),
+    ...COMMUNITY_SCHEMA_MIGRATIONS.map((m) => ({
+      sql: "INSERT INTO schema_migrations (migration_name, migration_label, checksum) VALUES (?1, 'community-template', ?2)",
+      args: [m.name, m.checksum] as (string | number | null)[],
+    })),
+    ...buildCommunitySeedStatements(bootstrapInput).map((s) => ({ sql: s.sql, args: s.args })),
+  ]
 }

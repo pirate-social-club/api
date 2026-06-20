@@ -10,6 +10,7 @@ import {
   buildPendingCommunityDatabaseUrl,
   buildPendingD1CommunityBindingUrl,
   buildProvisionOperatorBootstrapPayload,
+  localCommunityShardStatements,
   resolveCommunityDbRoot,
   resolveCommunityProvisionGroupLocation,
 } from "../create/repository"
@@ -286,16 +287,23 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       )
     }
 
-    // 2. Load the snapshot (DDL + INSERTs) into the allocated binding. v1
-    //    ships an empty statements list: the schema is in the binding's
-    //    pre-applied migrations (per D1-NATIVE-PROVISIONING-DESIGN.md §3.4);
-    //    the data conversion from LocalCommunitySnapshot to D1 SQL is a
-    //    follow-up slice. The empty path is a valid load — it marks the
-    //    binding loaded and lets the routing row flip to 'ready'.
+    // 2. Load the schema + data into the allocated binding (§8.7). The
+    //    statements are the bundled final-form community schema + a
+    //    schema_migrations seed + the community data seed (the SAME pure
+    //    generator the operator path uses — no drift). All CREATE/INSERT, so
+    //    guard-compatible. On success the binding is marked loaded and the
+    //    routing row flips to 'ready'.
     const loadResult = await shard.communityD1LoadSnapshot({
       communityId,
       bindingName,
-      statements: [],
+      statements: localCommunityShardStatements({
+        env: input.env,
+        body: input.body,
+        auth: input.auth,
+        communityId,
+        namespaceVerificationId: input.namespaceVerificationId,
+        namespaceLabel: input.routeSlug,
+      }),
     })
     if (!loadResult.ok) {
       if (loadResult.code === "shard_binding_not_allocated") {

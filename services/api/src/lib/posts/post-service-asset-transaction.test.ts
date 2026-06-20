@@ -78,6 +78,8 @@ const communityCreateRepositoryMock = () => ({
   assertUpdateCommunitySafetyRequest: () => {},
   assertUpdateCommunityVisualPolicyRequest: () => {},
   bootstrapCommunityLocalSnapshot: async () => {},
+  buildLocalCommunityBootstrapInput: () => ({}),
+  localCommunityShardStatements: () => [],
   buildBootstrapGatePolicy: () => null,
   buildBootstrapInitialSettings: () => ({}),
   buildBootstrapRules: () => [],
