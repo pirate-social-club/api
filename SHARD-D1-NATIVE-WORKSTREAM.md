@@ -6,6 +6,27 @@
 > workstreams do NOT clobber each other. All step 1-4 deploys below
 > target `pirate-api-d1-staging`.
 
+> **Shared resource — control plane (PlanetScale).** The control plane is
+> the one resource all workstreams contend on. It hosts global app-data
+> tables (`song_artifact_bundles`, `scrobble_*`, `community_database_routing`,
+> `community_database_bindings`, `jobs`, etc.) and is migrated via a
+> numbered sequence (`0116_…`, `0117_…`, `0118_…`, …). At the time of
+> this writing, `0119` is claimed by the TON/Omniston workstream
+> (`0119_control_plane_spend_intents.sql`, on disk in
+> core-ton-omniston-funding). Any future D1 step that introduces a
+> **new** control-plane table must:
+> 1. Check the live migration sequence across all worktrees (the
+>    PlanetScale migration dir is the canonical source).
+> 2. Number the new migration at the next free slot, NOT assume
+>    "different databases" implies an isolated sequence.
+> 3. Coordinate against any in-flight worktrees via the workstream
+>    memory.
+>
+> Steps 1-4 of this workstream DO NOT add new control-plane tables —
+> they write to existing tables (`community_database_routing` 0117,
+> `community_database_bindings` pre-existing). The above discipline
+> applies only when a future step introduces a new table.
+
 PR-series tracking for the workstream after PR #57 lands. The design
 is in `D1-NATIVE-PROVISIONING-DESIGN.md` (10 sections, keystone +
 security + RPC contract + failure model + v1 scope + acceptance
