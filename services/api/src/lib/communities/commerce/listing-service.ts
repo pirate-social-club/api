@@ -7,7 +7,7 @@ import {
   getCommunityMembershipState,
   hasCommunityRole,
 } from "../membership/membership-state-store"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -189,7 +189,7 @@ export async function listCommunityListings(input: {
   cursor?: string | null
   limit: number
 }): Promise<CommunityListingListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const rows = await listListingRows(db.client, input.communityId, {
@@ -320,7 +320,7 @@ export async function createCommunityListing(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
 }): Promise<CommunityListing> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     return await createCommunityListingInTransaction({
       ...input,
@@ -339,7 +339,7 @@ export async function updateCommunityListing(input: {
   body: UpdateCommunityListingRequest
   communityRepository: CommunityListingRepository
 }): Promise<CommunityListing> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const listing = await getListingRowById(db.client, input.communityId, input.listingId)
@@ -418,7 +418,7 @@ export async function getCommunityListing(input: {
   listingId: string
   communityRepository: CommunityListingRepository
 }): Promise<CommunityListing> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const listing = await getListingRowById(db.client, input.communityId, input.listingId)
