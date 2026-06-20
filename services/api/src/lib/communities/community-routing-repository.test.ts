@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
 import {
+  findStuckD1ProvisioningBindings,
   getCommunityDatabaseRoutingRow,
   upsertD1CommunityRoutingRow,
   upsertTursoCommunityRoutingRow,
@@ -166,4 +167,52 @@ test("upsertD1: never clobbers or downgrades an existing backend='turso' row", a
   expect(row?.backend).toBe("turso")
   expect(row?.turso_database_binding_id).toBe("cdb_live")
   expect(row?.shard_worker_id).toBeNull()
+})
+
+test("findStuckD1ProvisioningBindings returns only d1 provisioning rows past the cutoff", async () => {
+  // Stuck: d1, provisioning, old.
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_stuck",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_STUCK",
+    region: "weur",
+    now: "2026-06-20T00:00:00Z",
+    provisioningState: "provisioning",
+  })
+  // Not stuck: d1, provisioning, but recent (after cutoff).
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_recent",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_RECENT",
+    region: "weur",
+    now: "2026-06-20T00:30:00Z",
+    provisioningState: "provisioning",
+  })
+  // Not stuck: d1, ready.
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_ready",
+    shardWorkerId: "shard-1",
+    bindingName: "DB_CMTY_READY",
+    region: "weur",
+    now: "2026-06-20T00:00:00Z",
+    provisioningState: "ready",
+  })
+  // Not stuck: turso (different backend).
+  await upsertTursoCommunityRoutingRow(cp, {
+    communityId: "cmty_turso2",
+    tursoDatabaseBindingId: "cdb_t",
+    now: "2026-06-20T00:00:00Z",
+    provisioningState: "provisioning",
+  })
+
+  const cutoff = "2026-06-20T00:15:00Z" // 15-min grace boundary
+  const stuck = await findStuckD1ProvisioningBindings(cp, cutoff)
+
+  expect(stuck).toHaveLength(1)
+  expect(stuck[0]).toEqual({
+    communityId: "cmty_stuck",
+    bindingName: "DB_CMTY_STUCK",
+    shardWorkerId: "shard-1",
+    region: "weur",
+  })
 })

@@ -178,3 +178,43 @@ export async function upsertD1CommunityRoutingRow(
 
   return { written: (result.rowsAffected ?? 0) > 0 }
 }
+
+export type StuckD1ProvisioningBinding = {
+  communityId: string
+  bindingName: string
+  shardWorkerId: string
+  region: string
+}
+
+/**
+ * Find `backend='d1'` routing rows stranded at `provisioning_state='provisioning'`
+ * past a cutoff — the input to the step-5 reconciler sweep (§6.1). A row is stuck
+ * if a `provision()` run crashed after writing the 'provisioning' routing row but
+ * before flipping it to 'ready'. `chk_d1_fields` guarantees shard_worker_id /
+ * binding_name / region are NON-NULL for d1 rows, so the cast is safe.
+ *
+ * `cutoffIso` is `now - graceWindow` (e.g. 15 min); pass it in for determinism.
+ */
+export async function findStuckD1ProvisioningBindings(
+  executor: DbExecutor,
+  cutoffIso: string,
+): Promise<StuckD1ProvisioningBinding[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT community_id, binding_name, shard_worker_id, region
+      FROM community_database_routing
+      WHERE backend = 'd1'
+        AND provisioning_state = 'provisioning'
+        AND updated_at < ?1
+      ORDER BY updated_at ASC
+    `,
+    args: [cutoffIso],
+  })
+
+  return (result.rows ?? []).map((row) => ({
+    communityId: requiredString(row, "community_id"),
+    bindingName: requiredString(row, "binding_name"),
+    shardWorkerId: requiredString(row, "shard_worker_id"),
+    region: requiredString(row, "region"),
+  }))
+}
