@@ -5,7 +5,7 @@ import type { UserRepository } from "../../auth/repositories"
 import { executeFirst } from "../../db-helpers"
 import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import { enqueueCommunityJob } from "../jobs/store"
 import {
   OWNER_OR_ADMIN_ROLE,
@@ -397,7 +397,7 @@ export async function createLiveRoom(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const prepared = await createLiveRoomPreflight({
       client: db.client,
@@ -463,7 +463,7 @@ export async function publishLiveRoom(input: {
   if (listingBody.asset?.trim() || listingBody.live_room?.trim()) {
     throw badRequestError("publish listing target is assigned by the server")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const prepared = await createLiveRoomPreflight({
       client: db.client,
@@ -537,7 +537,7 @@ export async function getLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
@@ -569,7 +569,7 @@ export async function getLiveRoomAccess(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAccessResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -597,7 +597,7 @@ export async function viewerAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -659,7 +659,7 @@ export async function viewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -709,7 +709,7 @@ export async function getPublicLiveRoomAccess(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAccessResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -735,7 +735,7 @@ export async function publicViewerAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -795,7 +795,7 @@ export async function publicViewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -844,7 +844,7 @@ export async function hostAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId) {
@@ -889,7 +889,7 @@ export async function guestAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.guest_user !== input.userId) {
@@ -928,7 +928,7 @@ export async function cancelLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getLiveRoomRow(db.client, input.communityId, input.liveRoomId)
     if (room.host_user_id !== input.userId) {
@@ -979,7 +979,7 @@ export async function acceptLiveRoomGuestInvite(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getLiveRoomRow(db.client, input.communityId, input.liveRoomId)
     if (room.guest_user_id !== input.userId) {
@@ -1029,7 +1029,7 @@ export async function revokeLiveRoomGuestInvite(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId && room.guest_user !== input.userId) {
@@ -1074,7 +1074,7 @@ export async function endLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId) {
