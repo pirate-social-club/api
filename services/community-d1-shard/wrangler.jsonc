@@ -48,7 +48,27 @@
       "database_name": "community-d1-pool-0002-staging",
       "database_id": "c1ccf25f-0e13-4aad-9770-b7a46fa12a82"
     }
-  ]
+  ],
+  // Production env — a SEPARATE worker (community-d1-shard-prod) with its own pool
+  // metadata D1 + community pool D1s. No pilot seed (empty COMMUNITY_D1_BINDING_MAP_JSON)
+  // — prod communities are bound by the allocator + provisioning, not seeded. Inherits
+  // main/compatibility/observability from the top-level config.
+  "env": {
+    "production": {
+      "name": "community-d1-shard-prod",
+      "vars": {
+        "COMMUNITY_D1_BINDING_MAP_JSON": "{}",
+        "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-prod"
+      },
+      "d1_databases": [
+        { "binding": "D1_POOL", "database_name": "community-d1-shard-pool-prod", "database_id": "115ea5db-726a-4786-82c0-0824116bcb2d" },
+        { "binding": "DB_CMTY_0001", "database_name": "community-d1-pool-0001-prod", "database_id": "6c1a75c5-b1d2-4c65-835e-810c17c9d09e" },
+        { "binding": "DB_CMTY_0002", "database_name": "community-d1-pool-0002-prod", "database_id": "888bb45d-83f3-477c-afb9-9387895daaa1" },
+        { "binding": "DB_CMTY_0003", "database_name": "community-d1-pool-0003-prod", "database_id": "13eb0685-0dd2-423b-abe0-64709d9e621b" },
+        { "binding": "DB_CMTY_0004", "database_name": "community-d1-pool-0004-prod", "database_id": "e6359fdb-7636-474a-9c24-8d4f8c768324" }
+      ]
+    }
+  }
   // The RPC surface validates the requested bindingName against these bound
   // namespaces (resolveD1), so only declared D1s here are reachable.
   // Step 1 (D1-NATIVE-PROVISIONING-DESIGN.md §3, §5): the (communityId,
