@@ -1,5 +1,5 @@
 import { getPublicCommunityPreviewFromCommunityDb } from "../communities/community-preview-service"
-import { openCommunityReadClient } from "../communities/community-read-access"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import type {
   CommunityDatabaseBindingRepository,
@@ -289,7 +289,7 @@ async function hydratePostRows(input: {
       continue
     }
 
-    const db = await openCommunityReadClient(input.env, input.repository, communityId)
+    const db = await openCommunityWriteClient(input.env, input.repository, communityId)
     try {
       const preview = await getPublicCommunityPreviewFromCommunityDb({
         env: input.env,
@@ -373,7 +373,7 @@ async function hydrateCommentRows(input: {
       continue
     }
 
-    const db = await openCommunityReadClient(input.env, input.repository, communityId)
+    const db = await openCommunityWriteClient(input.env, input.repository, communityId)
     try {
       const preview = await getPublicCommunityPreviewFromCommunityDb({
         env: input.env,
