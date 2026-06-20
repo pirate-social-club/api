@@ -94,19 +94,18 @@ export async function reconcileScheduledD1Provisioning(env: Env): Promise<void> 
   const deps = buildReconcilerDeps(env, client, nowIso)
   const result = await runReconciliationSweep(deps)
 
+  // Always emit a one-line summary so the scheduled task is observable in tail
+  // (a silent success is indistinguishable from "never ran" / misconfigured).
+  console.log("[d1-reconciler] sweep", {
+    scanned: result.scanned,
+    advanced: result.advanced,
+    released: result.released,
+    errorCount: result.errors.length,
+  })
   if (result.errors.length > 0) {
     console.error("[d1-reconciler] sweep errors", {
-      scanned: result.scanned,
-      advanced: result.advanced,
-      released: result.released,
       errorCount: result.errors.length,
       sample: result.errors.slice(0, MAX_LOGGED_ERRORS),
-    })
-  } else if (result.scanned > 0) {
-    console.log("[d1-reconciler] sweep", {
-      scanned: result.scanned,
-      advanced: result.advanced,
-      released: result.released,
     })
   }
 }
