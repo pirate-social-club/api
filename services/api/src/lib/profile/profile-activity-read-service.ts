@@ -1,11 +1,11 @@
 import { getPublicCommunityPreviewFromCommunityDb } from "../communities/community-preview-service"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { executeFirst } from "../db-helpers"
+import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError } from "../errors"
 import { getCommentById } from "../comments/community-comment-store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
@@ -15,7 +15,6 @@ import { getPostById } from "../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../posts/post-access"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
-import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type {
   LocalizedPostResponse,
@@ -255,7 +254,7 @@ async function queryCommentDiscoveryRows(input: {
 }
 
 async function getViewerCommentVote(input: {
-  client: Client
+  client: DbExecutor
   commentId: string
   viewerUserId: string | null
 }): Promise<-1 | 1 | null> {
@@ -290,7 +289,7 @@ async function hydratePostRows(input: {
       continue
     }
 
-    const db = await openCommunityDb(input.env, input.repository, communityId)
+    const db = await openCommunityReadClient(input.env, input.repository, communityId)
     try {
       const preview = await getPublicCommunityPreviewFromCommunityDb({
         env: input.env,
@@ -334,7 +333,7 @@ async function hydratePostRows(input: {
 }
 
 async function buildThreadRootPost(input: {
-  client: Client
+  client: DbExecutor
   postId: string
   viewerUserId: string | null
   locale?: string | null
@@ -374,7 +373,7 @@ async function hydrateCommentRows(input: {
       continue
     }
 
-    const db = await openCommunityDb(input.env, input.repository, communityId)
+    const db = await openCommunityReadClient(input.env, input.repository, communityId)
     try {
       const preview = await getPublicCommunityPreviewFromCommunityDb({
         env: input.env,
