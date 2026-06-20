@@ -33,6 +33,18 @@ function fakeShard() {
       calls.push({ m: "communityD1LoadSnapshot", input })
       return { ok: true as const, value: { rowsAffected: input.statements.length, loaded: true } }
     },
+    communityD1GetPoolRow: async (input: any) => {
+      calls.push({ m: "communityD1GetPoolRow", input })
+      return { ok: true as const, value: { row: null } }
+    },
+    communityD1Reset: async (input: any) => {
+      calls.push({ m: "communityD1Reset", input })
+      return { ok: true as const, value: { tablesDropped: 0 } }
+    },
+    communityD1Release: async (input: any) => {
+      calls.push({ m: "communityD1Release", input })
+      return { ok: true as const, value: { released: true } }
+    },
   }
 }
 
