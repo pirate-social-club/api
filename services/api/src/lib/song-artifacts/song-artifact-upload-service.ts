@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -64,7 +64,7 @@ export async function createSongArtifactUpload(input: {
   assertUploadRequest(input.body)
   await requireActiveCommunity(input.communityRepository, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
 
@@ -95,7 +95,7 @@ export async function uploadSongArtifactContent(input: {
 }): Promise<SongArtifactUpload> {
   await requireActiveCommunity(input.communityRepository, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
 
@@ -173,7 +173,7 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
   origin: string
   rangeHeader?: string | null
 }): Promise<Response> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const publicStorageRef = buildPublicSongArtifactContentUrl(
       input.origin,

@@ -1,6 +1,6 @@
 import { executeFirst } from "../../db-helpers"
 import { rowValue } from "../../sql-row"
-import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 import {
   getThreadWithComments,
   listUserCommentsInCommunity,
@@ -126,7 +126,7 @@ function parseReferenceLinks(settingsJson: unknown): string[] {
   }
 }
 
-async function listRules(input: { client: Client; communityId: string }): Promise<string[]> {
+async function listRules(input: { client: DbExecutor; communityId: string }): Promise<string[]> {
   const result = await input.client.execute({
     sql: `
       SELECT title, body
@@ -153,7 +153,7 @@ function lookbackSince(policy: CommunityAssistantPolicy, now: Date): string | nu
 }
 
 async function buildProfileSections(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   policy: CommunityAssistantPolicy
 }): Promise<CommunityContextSection[]> {
@@ -192,7 +192,7 @@ async function buildProfileSections(input: {
 }
 
 async function buildRulesSection(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   policy: CommunityAssistantPolicy
 }): Promise<CommunityContextSection | null> {
@@ -208,7 +208,7 @@ async function buildRulesSection(input: {
 
 async function buildUserActivitySection(input: {
   audience: CommunityAssistantAudience
-  client: Client
+  client: DbExecutor
   communityId: string
   policy: CommunityAssistantPolicy
   userId: string | null
@@ -260,7 +260,7 @@ async function buildUserActivitySection(input: {
 }
 
 async function buildThreadsSection(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   message?: string | null
   policy: CommunityAssistantPolicy
@@ -317,7 +317,7 @@ async function buildThreadsSection(input: {
 
 export async function buildCommunityContext(input: {
   audience: CommunityAssistantAudience
-  client: Client
+  client: DbExecutor
   communityId: string
   message?: string | null
   policy: CommunityAssistantPolicy
