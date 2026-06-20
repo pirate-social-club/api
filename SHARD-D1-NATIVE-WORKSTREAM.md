@@ -133,7 +133,15 @@ actually moves the 17 live Turso communities toward D1.
   during a read). These need the write path (or to route the enqueue separately);
   they are the trickiest and must be hand-classified, not bulk-converted.
 
-**Progress (clean-read grind, 2026-06-20):** 3 slices, 7 read sites across 5 files —
+**Progress (2026-06-20):** ~40 sites across 10 files. Read pattern (profile-activity,
+board-read, debug-pipeline, safety-settings), write pattern (link-label-settings), the
+mixed/cascade case (handle-claim — 10 sites, identity-sensitive), and the COMMERCE CLUSTER
+(service 8r, settlement 4r/2w, listing 2r/2w, quote 1r/2w — money surface). Per-site
+diligence caught a real misroute: settlement-service reconcileStaleCommunityPurchaseSettlements
+LOOKS read-only but passes db.client to a WRITE helper — routing it to the read client would
+have failed live with read_only_violation. LESSON: a function''s read/write class is determined
+by the helpers it calls, not just its direct body — classify the whole call tree.
+Older note: 3 clean-read slices, 7 read sites —
 profile-activity (`17cb439`), mcp board-read-tools + board-read-service (`350c2c1`),
 debug-pipeline + safety-settings (`b00476d`). All behavior-preserving (464 unit pass,
 typecheck clean each).
