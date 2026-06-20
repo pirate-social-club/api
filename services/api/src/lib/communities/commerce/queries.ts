@@ -370,7 +370,7 @@ export async function getListingRowByLiveRoomId(
 }
 
 export async function listListingRows(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   input: {
     after?: { created_at: string; id: string } | null
@@ -457,7 +457,7 @@ export async function getActiveEntitlementForBuyerIdentity(
 }
 
 export async function getPurchaseQuoteRow(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   quoteId: string,
 ): Promise<PurchaseQuoteRow | null> {
@@ -529,7 +529,7 @@ export async function getPurchaseQuoteRow(
 }
 
 export async function listPurchaseAllocationLegRows(
-  client: Client,
+  client: CommerceExecutor,
   purchaseId: string,
 ): Promise<PurchaseAllocationLegRow[]> {
   const result = await client.execute({
@@ -548,7 +548,7 @@ export async function listPurchaseAllocationLegRows(
 }
 
 export async function listPurchaseAllocationLegRowsByPurchaseIds(
-  client: Client,
+  client: CommerceExecutor,
   purchaseIds: string[],
 ): Promise<Map<string, PurchaseAllocationLegRow[]>> {
   const inClause = buildInClause(purchaseIds)
@@ -580,7 +580,7 @@ export async function listPurchaseAllocationLegRowsByPurchaseIds(
 }
 
 export async function listPurchaseRows(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   userId: string,
   input: {
@@ -639,7 +639,7 @@ export async function listPurchaseRows(
 }
 
 export async function getPurchaseRow(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   purchaseId: string,
 ): Promise<PurchaseRow | null> {
@@ -686,7 +686,7 @@ export async function getPurchaseRow(
 }
 
 export async function getEntitlementRowByPurchase(
-  client: Client,
+  client: CommerceExecutor,
   purchaseId: string,
 ): Promise<PurchaseEntitlementRow | null> {
   const row = await executeFirst(client, {
@@ -707,7 +707,7 @@ export async function getEntitlementRowByPurchase(
 }
 
 export async function listLatestEntitlementRowsByPurchaseIds(
-  client: Client,
+  client: CommerceExecutor,
   purchaseIds: string[],
 ): Promise<Map<string, PurchaseEntitlementRow>> {
   const inClause = buildInClause(purchaseIds)

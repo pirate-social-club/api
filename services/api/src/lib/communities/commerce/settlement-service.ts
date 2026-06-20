@@ -1,7 +1,9 @@
 import { badRequestError, conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { decodePublicId } from "../../public-ids"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient, type CommunityWriteHandle } from "../community-read-access"
+import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -147,7 +149,7 @@ export function assertPurchaseQuoteConsumable(status: string | null | undefined)
 }
 
 async function finalizeLocalPurchaseSettlement(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: Client
   communityId: string
   buyer: BuyerIdentity
   quote: PurchaseQuoteRow
@@ -446,7 +448,7 @@ function hasConfirmedParentRoyaltyVaultTransfer(input: {
 }
 
 async function getExistingPurchaseSettlement(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: DbExecutor
   communityId: string
   purchaseId: string
   quote: PurchaseQuoteRow
@@ -463,7 +465,7 @@ async function getExistingPurchaseSettlement(input: {
 }
 
 async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: Client
   communityId: string
   attempt: PurchaseSettlementAttemptRow
   now: string
@@ -633,9 +635,9 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
 
   const communities = (await input.communityRepository.listActiveCommunities()).slice(0, maxCommunities)
   for (const community of communities) {
-    let db: Awaited<ReturnType<typeof openCommunityDb>> | null = null
+    let db: CommunityWriteHandle | null = null
     try {
-      db = await openCommunityDb(input.env, input.communityRepository, community.community_id)
+      db = await openCommunityWriteClient(input.env, input.communityRepository, community.community_id)
       const attempts = await listStalePurchaseSettlementAttempts({
         client: db.client,
         staleBefore,
@@ -682,7 +684,7 @@ async function settleCommunityPurchaseForBuyer(input: {
   settlementWalletAttachmentId: string
   resolveBuyerWalletAddress: () => Promise<string>
 }): Promise<SettleCommunityPurchaseResult> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const buyer = input.buyer
     const quoteId = decodePublicId(input.body.quote, "pq")
@@ -1031,7 +1033,7 @@ export async function settleCommunityPurchase(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<SettleCommunityPurchaseResult> {
-  const membershipDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const membershipDb = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(membershipDb.client, input.communityId, input.userId)
   } finally {
@@ -1059,7 +1061,7 @@ export async function settlePublicCommunityPurchase(input: {
   body: PublicCommunityPurchaseSettlementRequest
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<SettleCommunityPurchaseResult> {
-  const quoteDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const quoteDb = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const quoteId = decodePublicId(input.body.quote, "pq")
     const quote = await getPurchaseQuoteRow(quoteDb.client, input.communityId, quoteId)
@@ -1094,7 +1096,7 @@ export async function listCommunityPurchases(input: {
   cursor?: string | null
   limit: number
 }): Promise<CommunityPurchaseListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const rows = await listPurchaseRows(db.client, input.communityId, input.userId, {
@@ -1132,7 +1134,7 @@ export async function getCommunityPurchase(input: {
   purchaseId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityPurchase> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const purchase = await getPurchaseRow(db.client, input.communityId, input.purchaseId)
