@@ -1,0 +1,121 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pirate-song-preview-container",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SONG_PREVIEW_CONTAINER",
+        "class_name": "SongPreviewContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1_song_preview_container",
+      "new_sqlite_classes": ["SongPreviewContainer"]
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "SongPreviewContainer",
+      "image": "../api/Dockerfile.song-preview",
+      "image_build_context": "..",
+      "instance_type": "standard-1",
+      "max_instances": 2
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "SONG_PREVIEW_CONTAINER_INSTANCES": "1",
+    "SONG_PREVIEW_MAX_BODY_BYTES": "65536",
+    "SONG_PREVIEW_FFMPEG_BIN": "ffmpeg",
+    "PIRATE_API_PUBLIC_ORIGIN": "http://localhost:8787",
+    "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
+    "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+    "FILEBASE_S3_REGION": "us-east-1",
+    "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs"
+  },
+  "env": {
+    "staging": {
+      "name": "pirate-song-preview-container-staging",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "SONG_PREVIEW_CONTAINER",
+            "class_name": "SongPreviewContainer"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_song_preview_container",
+          "new_sqlite_classes": ["SongPreviewContainer"]
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "SongPreviewContainer",
+          "image": "../api/Dockerfile.song-preview",
+          "image_build_context": "..",
+          "instance_type": "standard-1",
+          "max_instances": 2
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "SONG_PREVIEW_CONTAINER_INSTANCES": "2",
+        "SONG_PREVIEW_MAX_BODY_BYTES": "65536",
+        "SONG_PREVIEW_FFMPEG_BIN": "ffmpeg",
+        "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
+        "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+        "FILEBASE_S3_REGION": "us-east-1",
+        "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs"
+      }
+    },
+    "production": {
+      "name": "song-preview-container",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "SONG_PREVIEW_CONTAINER",
+            "class_name": "SongPreviewContainer"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_song_preview_container",
+          "new_sqlite_classes": ["SongPreviewContainer"]
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "SongPreviewContainer",
+          "image": "../api/Dockerfile.song-preview",
+          "image_build_context": "..",
+          "instance_type": "standard-1",
+          "max_instances": 4
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "SONG_PREVIEW_CONTAINER_INSTANCES": "4",
+        "SONG_PREVIEW_MAX_BODY_BYTES": "65536",
+        "SONG_PREVIEW_FFMPEG_BIN": "ffmpeg",
+        "PIRATE_API_PUBLIC_ORIGIN": "https://api.pirate.sc",
+        "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+        "FILEBASE_S3_REGION": "us-east-1",
+        "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs"
+      }
+    }
+  }
+}

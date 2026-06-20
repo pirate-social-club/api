@@ -320,10 +320,18 @@ export async function resolveOpenAIModerationOutcome(input: {
       signal: controller.signal,
     })
     if (!response.ok) {
+      const responseText = await response.text().catch(() => "")
+      const responseBodySnippet = responseText ? responseText.slice(0, 500) : null
+      console.warn("[moderation] OpenAI moderation unavailable", {
+        model,
+        response_body_snippet: responseBodySnippet,
+        status: response.status,
+      })
       throw providerUnavailable("OpenAI moderation is unavailable", {
         provider: "openai",
         model,
         status: response.status,
+        response_body_snippet: responseBodySnippet,
       })
     }
 

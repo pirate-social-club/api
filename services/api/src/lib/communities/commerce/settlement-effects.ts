@@ -100,6 +100,27 @@ export async function listPurchaseSettlementEffectsByQuote(input: {
   return result.rows.map((row) => toSettlementEffectRow(row))
 }
 
+export async function listPurchaseSettlementEffectsByPurchase(input: {
+  client: DbExecutor
+  communityId: string
+  purchaseId: string
+}): Promise<PurchaseSettlementEffectRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+             effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
+             failed_at, created_at, updated_at
+      FROM purchase_settlement_effects
+      WHERE community_id = ?1
+        AND purchase_id = ?2
+      ORDER BY created_at ASC, effect_kind ASC, effect_key ASC
+    `,
+    args: [input.communityId, input.purchaseId],
+  })
+  return result.rows.map((row) => toSettlementEffectRow(row))
+}
+
 export async function beginPurchaseSettlementEffectAttempt(input: {
   client: DbExecutor
   communityId: string

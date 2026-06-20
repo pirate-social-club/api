@@ -7,6 +7,7 @@ import { setCommunityFollowInactive } from "./follow-store"
 import { openCommunityWriteClient } from "../community-read-access"
 import { conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
+import { publicCommunityId } from "../../public-ids"
 import type { Env } from "../../../env"
 import { activateCommunityFollow, syncCommunityFollowProjection } from "./projection-service"
 import type { CommunityFollowResult, CommunityMembershipRepository } from "./types"
@@ -71,7 +72,7 @@ export async function unfollowCommunity(input: {
     })
 
     return {
-      community_id: input.communityId,
+      community: publicCommunityId(input.communityId),
       following: false,
       follower_count: result.followerCount,
     }

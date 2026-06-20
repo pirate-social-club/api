@@ -17,6 +17,8 @@ export type CommunityJobType =
   | "link_summary_materialize"
   | "link_summary_translation_materialize"
   | "song_preview_generate"
+  | "locked_asset_delivery_prepare"
+  | "song_artifact_session_reaper"
   | "live_room_viewer_sessions_prune"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 
@@ -103,7 +105,10 @@ export async function findNextRunnableCommunityJob(input: {
   now: string
   communityId?: string | null
   maxAttempts?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
+  const skipJobTypes = [...new Set(input.skipJobTypes ?? [])]
+  const skipJobTypePlaceholders = skipJobTypes.map((_, index) => `?${index + 4}`).join(", ")
   const row = await executeFirst(input.client, {
     sql: `
       SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
@@ -112,13 +117,37 @@ export async function findNextRunnableCommunityJob(input: {
         AND (?1 IS NULL OR community_id = ?1)
         AND (available_at IS NULL OR available_at <= ?2)
         AND (?3 IS NULL OR attempt_count < ?3)
+        ${skipJobTypes.length > 0 ? `AND job_type NOT IN (${skipJobTypePlaceholders})` : ""}
       ORDER BY created_at ASC, job_id ASC
       LIMIT 1
     `,
-    args: [input.communityId ?? null, input.now, input.maxAttempts ?? null],
+    args: [input.communityId ?? null, input.now, input.maxAttempts ?? null, ...skipJobTypes],
   })
 
   return row ? toCommunityJobRow(row) : null
+}
+
+export async function resetStaleRunningCommunityJobs(input: {
+  client: DbExecutor
+  now: string
+  staleBefore: string
+  communityId?: string | null
+}): Promise<number> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET status = 'failed',
+          error_code = 'stale_running_timeout',
+          available_at = ?2,
+          updated_at = ?2
+      WHERE status = 'running'
+        AND updated_at <= ?1
+        AND (?3 IS NULL OR community_id = ?3)
+    `,
+    args: [input.staleBefore, input.now, input.communityId ?? null],
+  })
+
+  return result.rowsAffected ?? 0
 }
 
 export async function enqueueCommunityJob(input: {
@@ -198,7 +227,7 @@ export async function markCommunityJobRunning(input: {
   jobId: string
   now: string
 }): Promise<CommunityJobRow | null> {
-  await input.client.execute({
+  const row = await executeFirst(input.client, {
     sql: `
       UPDATE community_jobs
       SET status = 'running',
@@ -207,14 +236,12 @@ export async function markCommunityJobRunning(input: {
           updated_at = ?2
       WHERE job_id = ?1
         AND status IN ('queued', 'failed')
+      RETURNING ${COMMUNITY_JOB_SELECT_COLUMNS}
     `,
     args: [input.jobId, input.now],
   })
 
-  return getCommunityJobById({
-    client: input.client,
-    jobId: input.jobId,
-  })
+  return row ? toCommunityJobRow(row) : null
 }
 
 export async function markCommunityJobSucceeded(input: {

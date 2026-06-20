@@ -9,6 +9,7 @@ import {
   getCommunityPricingPolicy,
   getCommunityListing,
   getCommunityPurchase,
+  listCommunityPurchaseSettlementEffects,
   listDerivativeSources,
   listCommunityListings,
   listCommunityPurchases,
@@ -142,7 +143,6 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
   communities.get("/:communityId/derivative-sources", async (c) => {
     const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const scope = derivativeSourceScope(c.req.query("scope"))
-    // TODO: Replace global fan-out with a control-plane Story-registered asset projection.
     const result = await listDerivativeSources({
       env: c.env,
       userId: actor.userId,
@@ -263,6 +263,18 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
   communities.get("/:communityId/purchases/:purchaseId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await getCommunityPurchase({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      purchaseId: decodePublicPurchaseId(c.req.param("purchaseId")),
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/purchases/:purchaseId/settlement-effects", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listCommunityPurchaseSettlementEffects({
       env: c.env,
       userId: actor.userId,
       communityId,

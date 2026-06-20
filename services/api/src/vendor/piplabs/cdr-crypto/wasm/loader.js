@@ -8,6 +8,7 @@
  *   const raw = wasm.tdh2Encrypt(globalPubKey, plaintext, label);
  */
 import createCbMpcModule from "./cb-mpc-tdh2.js";
+import bundledWasmBinary from "./cb-mpc-tdh2.wasm";
 /** Ed25519 curve code in cb-mpc (NID_ED25519 = 0x043f = 1087) */
 export const CURVE_ED25519 = 1087;
 /**
@@ -295,14 +296,39 @@ export class CbMpcWasm {
     }
 }
 let wasmInstance = null;
+function isWasmModule(value) {
+    return typeof WebAssembly?.Module === "function" && value instanceof WebAssembly.Module;
+}
+async function normalizeWasmImport(wasmImport) {
+    if (isWasmModule(wasmImport))
+        return { wasmModule: wasmImport };
+    if (wasmImport instanceof ArrayBuffer)
+        return { wasmBinary: wasmImport };
+    if (ArrayBuffer.isView(wasmImport)) {
+        return {
+            wasmBinary: wasmImport.buffer.slice(wasmImport.byteOffset, wasmImport.byteOffset + wasmImport.byteLength),
+        };
+    }
+    if (typeof wasmImport === "string") {
+        if (typeof Bun !== "undefined" && typeof Bun.file === "function") {
+            return { wasmBinary: await Bun.file(wasmImport).arrayBuffer() };
+        }
+        throw new Error("CDR WASM import resolved to a path string; configure the worker bundler to import cb-mpc-tdh2.wasm as CompiledWasm");
+    }
+    throw new Error("CDR WASM import did not resolve to a compiled module or bytes");
+}
 /**
  * Initialize the WASM module. Must be called once before using tdh2Encrypt/tdh2Combine.
  * Subsequent calls are no-ops and return immediately.
  */
-export async function initWasm() {
+export async function initWasm(options = {}) {
     if (wasmInstance)
         return;
-    const Module = await createCbMpcModule();
+    const wasmImport = await normalizeWasmImport(options.wasmModule ?? options.wasmBinary ?? bundledWasmBinary);
+    const Module = await createCbMpcModule({
+        locateFile: (path) => path,
+        ...wasmImport,
+    });
     const ptrSize = Module._wasm_ptr_size();
     if (ptrSize !== 4) {
         console.warn(`Unexpected WASM pointer size: ${ptrSize} (expected 4)`);

@@ -172,6 +172,15 @@ function encodeStoryAccessAuxData(input: {
   ) as `0x${string}`
 }
 
+function formatCdrWriteFailure(error: unknown, env: Pick<Env, "ENVIRONMENT">): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (env.ENVIRONMENT === "production" || !(error instanceof Error) || !error.stack) {
+    return message
+  }
+  const stack = error.stack.split("\n").slice(0, 6).map((line) => line.trim()).join(" | ")
+  return `${message}; stack=${stack}`
+}
+
 function buildStoryAccessRef(input: {
   communityId: string
   assetId: string
@@ -396,7 +405,7 @@ export async function prepareLockedAssetDelivery(input: {
         accessAuxData: "0x",
       })
     } catch (error) {
-      throw new Error(`cdr_write_failed:${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(`cdr_write_failed:${formatCdrWriteFailure(error, input.env)}`)
     }
     let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
     try {

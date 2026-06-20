@@ -114,7 +114,8 @@ export async function uploadSongArtifactContent(input: {
     const bytes = normalizeUploadBytes(input.content)
     validateUploadMatch(upload, bytes)
     const expectedHash = upload.content_hash?.trim() || null
-    const actualHash = `0x${await sha256Hex(bytes)}`
+    const actualHashHex = await sha256Hex(bytes)
+    const actualHash = `0x${actualHashHex}`
     if (expectedHash && expectedHash !== actualHash) {
       throw badRequestError(`content_hash does not match uploaded bytes for ${upload.id}`)
     }
@@ -126,6 +127,7 @@ export async function uploadSongArtifactContent(input: {
       artifactKind: upload.artifact_kind as SongArtifactKind,
       mimeType: upload.mime_type,
       bytes,
+      payloadHashHex: actualHashHex,
       origin: input.origin,
     })
     return await markSongArtifactUploadUploaded({
@@ -140,6 +142,7 @@ export async function uploadSongArtifactContent(input: {
       storageObjectKey: storage.storageObjectKey,
       storageEndpoint: storage.storageEndpoint,
       gatewayUrl: storage.gatewayUrl,
+      ipfsCid: storage.ipfsCid,
       updatedAt: nowIso(),
     })
   } finally {

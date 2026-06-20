@@ -139,6 +139,39 @@ export type DerivativeSourceListResponse = {
   next_cursor: string | null
 }
 
+export type CommunityPurchaseSettlementEffectKind =
+  | "buyer_funding_receipt"
+  | "charity_payout"
+  | "story_royalty_payment"
+  | "story_parent_royalty_vault_transfer"
+  | "story_entitlement_mint"
+
+export type CommunityPurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
+
+export type CommunityPurchaseSettlementEffect = {
+  object: "purchase_settlement_effect"
+  community: string
+  quote: string
+  purchase: string
+  effect_kind: CommunityPurchaseSettlementEffectKind
+  effect_ref: string
+  status: CommunityPurchaseSettlementEffectStatus
+  settlement_ref: string | null
+  provider_receipt_ref: string | null
+  tax_receipt_ref: string | null
+  failure_reason: string | null
+  attempt_count: number
+  submitted: number | null
+  confirmed: number | null
+  failed: number | null
+  created: number
+}
+
+export type CommunityPurchaseSettlementEffectListResponse = {
+  items: CommunityPurchaseSettlementEffect[]
+  next_cursor: string | null
+}
+
 export type PostDerivativeSource = {
   source_ref: string
   title: string
@@ -326,6 +359,12 @@ export type SongPresentationDownloadableAudio = {
   size_bytes?: number | null
   duration_ms?: number | null
   filename?: string | null
+  decentralized_storage?: {
+    provider: "filebase_ipfs"
+    cid: string
+    gateway_url: string
+    encrypted?: boolean
+  } | null
 }
 
 export type SongPresentation = {

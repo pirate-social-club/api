@@ -4,6 +4,13 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-04-09",
   "compatibility_flags": ["nodejs_compat"],
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": ["**/*.wasm"],
+      "fallthrough": true
+    }
+  ],
   "triggers": {
     "crons": ["*/1 * * * *"]
   },
@@ -124,6 +131,10 @@
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
           "entrypoint": "CommunityD1Shard"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "pirate-song-preview-container-staging"
         }
       ],
       "vars": {
@@ -212,6 +223,10 @@
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
           "entrypoint": "CommunityD1Shard"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "pirate-song-preview-container-staging"
         }
       ],
       "vars": {
@@ -298,6 +313,10 @@
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-prod",
           "entrypoint": "CommunityD1Shard"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "song-preview-container"
         }
       ],
       "vars": {

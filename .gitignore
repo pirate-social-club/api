@@ -10,6 +10,8 @@ coverage/
 .env.*.local
 .dev.vars
 services/api/.local*/
+services/api/scripts/generated-fixtures/
+services/api/scripts/generated-timing-runs/
 .codex
 
 .DS_Store

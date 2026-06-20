@@ -74,7 +74,7 @@ describe("health route", () => {
       headers: {
         origin: "http://localhost:5173",
         "access-control-request-method": "PUT",
-        "access-control-request-headers": "content-type,authorization",
+        "access-control-request-headers": "content-type,authorization,x-pirate-submit-trace-id",
       },
     }, {
       CORS_ALLOWED_ORIGINS: "http://localhost:5173",
@@ -83,5 +83,6 @@ describe("health route", () => {
     expect(response.status).toBe(204)
     expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173")
     expect(response.headers.get("access-control-allow-methods")).toContain("PUT")
+    expect(response.headers.get("access-control-allow-headers")).toContain("X-Pirate-Submit-Trace-Id")
   })
 })

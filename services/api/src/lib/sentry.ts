@@ -17,6 +17,24 @@ export function captureScheduledError(env: Env, error: unknown, task: string): v
   captureException(error, { tags: { scheduled_task: task } })
 }
 
+export function captureScheduledWarning(
+  env: Env,
+  message: string,
+  task: string,
+  extra?: Record<string, unknown>,
+  tags?: Record<string, string>,
+): void {
+  if (!env.SENTRY_DSN) return
+  captureException(new Error(message), {
+    level: "warning",
+    tags: {
+      scheduled_task: task,
+      ...tags,
+    },
+    extra,
+  })
+}
+
 export function makeSentryOptions(env: Env): CloudflareOptions {
   return {
     dsn: env.SENTRY_DSN,

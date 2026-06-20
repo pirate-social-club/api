@@ -8,6 +8,8 @@ import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { logPipelineInfo } from "../observability/pipeline-log"
+import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
 import { getPostById } from "../posts/community-post-query-store"
 import { getCommentById } from "../comments/community-comment-store"
 import type { Env } from "../../env"
@@ -47,6 +49,32 @@ import {
 type ModerationCommunityRepository =
   & CommunityDatabaseBindingRepository
   & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionStatus">
+
+async function updateDerivativeSourceProjectionStatus(input: {
+  env: Env
+  communityId: string
+  postId: string
+  status: "published" | "hidden" | "removed" | "deleted" | "draft"
+  updatedAt: string
+}): Promise<void> {
+  try {
+    await updateStoryRegisteredAssetPostStatus({
+      env: input.env,
+      communityId: input.communityId,
+      sourcePostId: input.postId,
+      sourcePostStatus: input.status,
+      updatedAt: input.updatedAt,
+    })
+  } catch (error) {
+    logPipelineInfo("[moderation] Story registered asset projection status update failed", {
+      level: "warn",
+      community_id: input.communityId,
+      post_id: input.postId,
+      status: input.status,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
 function reportPriority(reasonCode: CreateUserReportRequest["reason_code"]): ModerationSignalSeverity {
   switch (reasonCode) {
@@ -519,10 +547,18 @@ export async function resolveModerationCaseWithAction(input: {
       tx.close()
     }
 
-    if (caseRow.post_id && mutation.nextStatus) {
+    if (caseRow.post_id && mutation?.nextStatus) {
+      const nextStatus = mutation.nextStatus as "draft" | "published" | "hidden" | "removed" | "deleted"
       await input.communityRepository.updateCommunityPostProjectionStatus({
         postId: caseRow.post_id,
-        status: mutation.nextStatus as "draft" | "published" | "hidden" | "removed" | "deleted",
+        status: nextStatus,
+        updatedAt: now,
+      })
+      await updateDerivativeSourceProjectionStatus({
+        env: input.env,
+        communityId: input.communityId,
+        postId: caseRow.post_id,
+        status: nextStatus,
         updatedAt: now,
       })
     }

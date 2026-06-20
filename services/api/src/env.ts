@@ -173,6 +173,12 @@ export type Env = {
   COMMUNITY_JOB_WORKER_INTERVAL_MS?: string
   COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY?: string
   COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
+  // Defaults to async outside local/test. Set false as a production kill switch; set true in tests to opt into the async path.
+  STORY_LOCKED_DELIVERY_ASYNC?: string
+  SONG_PREVIEW_SERVICE?: Fetcher
+  SONG_PREVIEW_SERVICE_URL?: string
+  SONG_PREVIEW_SHARED_SECRET?: string
+  SONG_PREVIEW_SERVICE_TIMEOUT_MS?: string
   SONG_PREVIEW_FFMPEG_BIN?: string
   SONG_PREVIEW_FFPROBE_BIN?: string
   AGORA_APP_ID?: string

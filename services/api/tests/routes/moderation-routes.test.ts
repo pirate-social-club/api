@@ -2,6 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { app } from "../../src/index"
 import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
+import {
+  listStoryRegisteredAssetProjectionRows,
+  upsertStoryRegisteredAssetProjection,
+} from "../../src/lib/communities/commerce/derivative-source-projection"
+import { decodePublicPostId } from "../../src/lib/public-ids"
 import type { Env } from "../../src/types"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 
@@ -307,6 +312,32 @@ describe("moderation routes", () => {
     expect(heldPostBody.analysis_state).toBe("review_required")
     expect(heldPostBody.content_safety_state).toBe("pending")
 
+    const now = new Date().toISOString()
+    await upsertStoryRegisteredAssetProjection({
+      env: ctx.env,
+      projection: {
+        communityId: community.communityId,
+        assetId: "ast_moderation_review_projection",
+        displayTitle: "Held Draft Projection",
+        creatorUserId: owner.userId,
+        assetKind: "song_audio",
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 15,
+        storyIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        storyLicenseTermsId: "17",
+        sourcePostId: decodePublicPostId(heldPostBody.id),
+        sourcePostStatus: "draft",
+        sourceUpdatedAt: now,
+        createdAt: now,
+      },
+    })
+    expect(await listStoryRegisteredAssetProjectionRows({
+      env: ctx.env,
+      kind: "song",
+      query: "Held Draft Projection",
+      limit: 25,
+    })).toHaveLength(0)
+
     const cases = await app.request(
       `http://pirate.test/communities/${community.communityId}/moderation/cases`,
       {
@@ -352,6 +383,12 @@ describe("moderation routes", () => {
     expect(approveBody.post?.analysis_state).toBe("allow")
     expect(approveBody.post?.content_safety_state).toBe("safe")
     expect(approveBody.actions[0]?.action_type).toBe("restore")
+    expect(await listStoryRegisteredAssetProjectionRows({
+      env: ctx.env,
+      kind: "song",
+      query: "Held Draft Projection",
+      limit: 25,
+    })).toHaveLength(1)
 
     const casesAfterApprove = await app.request(
       `http://pirate.test/communities/${community.communityId}/moderation/cases`,

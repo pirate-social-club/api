@@ -48,6 +48,12 @@ function requireEnv(name: string): string {
   return value
 }
 
+function readSmokeAccessMode(): "public" | "locked" {
+  const value = readEnv("PIRATE_SMOKE_ACCESS_MODE", "public").toLowerCase()
+  if (value === "public" || value === "locked") return value
+  throw new Error(`PIRATE_SMOKE_ACCESS_MODE must be public or locked, got ${value}`)
+}
+
 function normalizePrivateKey(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   if (!trimmed) return null
@@ -77,6 +83,37 @@ function toRequestArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength)
   copy.set(bytes)
   return copy.buffer
+}
+
+function makeSilentWavBytes(durationSeconds = 4): Uint8Array {
+  const sampleRate = 8000
+  const channelCount = 1
+  const bytesPerSample = 2
+  const sampleCount = sampleRate * durationSeconds
+  const dataSize = sampleCount * channelCount * bytesPerSample
+  const buffer = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(buffer)
+  const writeAscii = (offset: number, text: string) => {
+    for (let index = 0; index < text.length; index += 1) {
+      view.setUint8(offset + index, text.charCodeAt(index))
+    }
+  }
+
+  writeAscii(0, "RIFF")
+  view.setUint32(4, 36 + dataSize, true)
+  writeAscii(8, "WAVE")
+  writeAscii(12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, channelCount, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true)
+  view.setUint16(32, channelCount * bytesPerSample, true)
+  view.setUint16(34, bytesPerSample * 8, true)
+  writeAscii(36, "data")
+  view.setUint32(40, dataSize, true)
+
+  return new Uint8Array(buffer)
 }
 
 function ensureLocalMembership(input: {
@@ -376,25 +413,14 @@ async function uploadSong(input: {
   filename: string
   bytes: Uint8Array
 }): Promise<string> {
-  const upload = await api<{ id: string }>({
+  const upload = await uploadSongArtifact({
     apiBaseUrl: input.apiBaseUrl,
-    method: "POST",
-    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads`,
-    token: input.session.accessToken,
-    body: {
-      artifact_kind: "primary_audio",
-      mime_type: "audio/mpeg",
-      filename: input.filename,
-      size_bytes: input.bytes.byteLength,
-    },
-  })
-  await api({
-    apiBaseUrl: input.apiBaseUrl,
-    method: "POST",
-    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/content`,
-    token: input.session.accessToken,
+    communityId: input.communityId,
+    session: input.session,
+    artifactKind: "primary_audio",
+    mimeType: "audio/wav",
+    filename: input.filename,
     bytes: input.bytes,
-    contentType: "application/octet-stream",
   })
   const bundle = await api<{ id: string; status?: string }>({
     apiBaseUrl: input.apiBaseUrl,
@@ -421,15 +447,110 @@ async function uploadSong(input: {
   return bundle.id
 }
 
+type SmokeSongArtifactBundle = {
+  id: string
+  preview_audio?: { mime_type?: string | null; storage_ref?: string | null } | null
+  preview_error?: string | null
+  preview_status?: string | null
+  status?: string | null
+}
+
+async function readSongBundle(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: SmokeSession
+  bundle: string
+}): Promise<SmokeSongArtifactBundle> {
+  return await api<SmokeSongArtifactBundle>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "GET",
+    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifacts/${encodeURIComponent(input.bundle)}`,
+    token: input.session.accessToken,
+  })
+}
+
+async function waitForSongPreviewReady(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: SmokeSession
+  bundle: string
+  title: string
+}): Promise<SmokeSongArtifactBundle> {
+  const timeoutMs = Number(readEnv("PIRATE_SMOKE_PREVIEW_TIMEOUT_MS", "180000"))
+  const intervalMs = Number(readEnv("PIRATE_SMOKE_PREVIEW_INTERVAL_MS", "5000"))
+  const startedAt = Date.now()
+  let lastBundle: SmokeSongArtifactBundle | null = null
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const bundle = await readSongBundle(input)
+    lastBundle = bundle
+    console.log("[smoke] song preview", {
+      title: input.title,
+      bundle: input.bundle,
+      status: bundle.status ?? null,
+      preview_status: bundle.preview_status ?? null,
+      has_preview_audio: Boolean(bundle.preview_audio?.storage_ref),
+      elapsed_ms: Date.now() - startedAt,
+    })
+    if (bundle.preview_status === "completed" && bundle.preview_audio?.storage_ref && bundle.preview_audio.mime_type) {
+      return bundle
+    }
+    if (bundle.preview_status === "failed") {
+      throw new Error(`song preview generation failed: ${JSON.stringify(bundle)}`)
+    }
+    await sleep(intervalMs)
+  }
+
+  throw new Error(`song preview did not become ready within ${timeoutMs}ms: ${JSON.stringify(lastBundle)}`)
+}
+
+async function uploadSongArtifact(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: SmokeSession
+  artifactKind: "primary_audio" | "primary_video" | "preview_video"
+  mimeType: string
+  filename: string
+  bytes: Uint8Array
+}): Promise<{ id: string; storage_ref: string }> {
+  const upload = await api<{ id: string; storage_ref: string }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads`,
+    token: input.session.accessToken,
+    body: {
+      artifact_kind: input.artifactKind,
+      mime_type: input.mimeType,
+      filename: input.filename,
+      size_bytes: input.bytes.byteLength,
+    },
+  })
+  await api({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/content`,
+    token: input.session.accessToken,
+    bytes: input.bytes,
+    contentType: "application/octet-stream",
+  })
+  return upload
+}
+
 async function readAsset(input: {
   apiBaseUrl: string
   communityId: string
   session: SmokeSession
   asset: string
 }): Promise<{
+  access_mode?: string | null
+  locked_delivery_status?: string | null
+  locked_delivery_error?: string | null
+  story_error?: string | null
+  story_cdr_vault_uuid?: number | null
   story_ip?: string | null
   story_license_terms?: string | null
   story_royalty_registration_status?: string | null
+  story_status?: string | null
   story_derivative_parent_ip_ids?: string[] | null
   publication_status?: string | null
 }> {
@@ -439,6 +560,50 @@ async function readAsset(input: {
     path: `/communities/${encodeURIComponent(input.communityId)}/assets/${encodeURIComponent(input.asset)}`,
     token: input.session.accessToken,
   })
+}
+
+async function waitForAssetReady(input: {
+  accessMode: "public" | "locked"
+  apiBaseUrl: string
+  asset: string
+  communityId: string
+  label: string
+  session: SmokeSession
+}): ReturnType<typeof readAsset> {
+  const timeoutMs = Number(readEnv("PIRATE_SMOKE_ASSET_READY_TIMEOUT_MS", "420000"))
+  const intervalMs = Number(readEnv("PIRATE_SMOKE_ASSET_READY_INTERVAL_MS", "5000"))
+  const startedAt = Date.now()
+  let lastAsset: Awaited<ReturnType<typeof readAsset>> | null = null
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const asset = await readAsset(input)
+    lastAsset = asset
+    console.log("[smoke] asset status", {
+      label: input.label,
+      asset: input.asset,
+      access_mode: asset.access_mode ?? null,
+      locked_delivery_status: asset.locked_delivery_status ?? null,
+      story_status: asset.story_status ?? null,
+      story_royalty_registration_status: asset.story_royalty_registration_status ?? null,
+      story_ip: asset.story_ip ?? null,
+      elapsed_ms: Date.now() - startedAt,
+    })
+
+    if (asset.locked_delivery_status === "failed" || asset.locked_delivery_error) {
+      throw new Error(`${input.label} locked delivery failed: ${JSON.stringify(asset)}`)
+    }
+    if (asset.story_royalty_registration_status === "failed" || asset.story_error) {
+      throw new Error(`${input.label} Story registration failed: ${JSON.stringify(asset)}`)
+    }
+    const lockedReady = input.accessMode !== "locked" || asset.locked_delivery_status === "ready"
+    const storyReady = asset.story_royalty_registration_status === "registered" && Boolean(asset.story_ip)
+    if (lockedReady && storyReady) {
+      return asset
+    }
+    await sleep(intervalMs)
+  }
+
+  throw new Error(`${input.label} did not become ready within ${timeoutMs}ms: ${JSON.stringify(lastAsset)}`)
 }
 
 async function createSongPost(input: {
@@ -465,13 +630,58 @@ async function createSongPost(input: {
       access_mode: input.accessMode,
       song_mode: input.songMode,
       rights_basis: input.rightsBasis,
-      license_preset: input.rightsBasis === "original" ? "commercial-remix" : undefined,
-      commercial_rev_share_pct: input.rightsBasis === "original" ? 10 : undefined,
+      license_preset: "commercial-remix",
+      commercial_rev_share_pct: 10,
       upstream_asset_refs: input.upstreamAssetRefs ?? undefined,
       song_artifact_bundle: input.bundle,
     },
   })
   if (!body.asset) throw new Error(`post ${body.id} did not return an asset id`)
+  return {
+    post: body.id,
+    asset: body.asset,
+  }
+}
+
+async function createVideoPost(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: SmokeSession
+  title: string
+  videoStorageRef: string
+  videoSizeBytes: number
+  accessMode: "public" | "locked"
+  upstreamAssetRefs: string[]
+}): Promise<{ post: string; asset: string }> {
+  const body = await api<{ id: string; asset?: string | null }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/posts`,
+    token: input.session.accessToken,
+    body: {
+      idempotency_key: `story-video-derivative-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      post_type: "video",
+      identity_mode: "public",
+      title: input.title,
+      visibility: "members_only",
+      access_mode: input.accessMode,
+      license_preset: "non-commercial",
+      rights_basis: "derivative",
+      upstream_asset_refs: input.upstreamAssetRefs,
+      media_refs: [{
+        storage_ref: input.videoStorageRef,
+        mime_type: "video/mp4",
+        size_bytes: input.videoSizeBytes,
+        poster_ref: readEnv("PIRATE_SMOKE_VIDEO_POSTER_REF", "ipfs://story-video-derivative-smoke-poster"),
+        poster_mime_type: "image/jpeg",
+        poster_size_bytes: 1024,
+        poster_width: 1280,
+        poster_height: 720,
+        poster_frame_ms: 0,
+      }],
+    },
+  })
+  if (!body.asset) throw new Error(`video post ${body.id} did not return an asset id`)
   return {
     post: body.id,
     asset: body.asset,
@@ -673,15 +883,35 @@ async function main(): Promise<void> {
   } as Record<string, string | undefined>
   const apiBaseUrl = normalizeApiBaseUrl(readEnv("PIRATE_SMOKE_API_BASE_URL", "http://127.0.0.1:8787"))
   const communityId = requireEnv("PIRATE_SMOKE_COMMUNITY_ID").replace(/^com_/, "")
+  const accessMode = readSmokeAccessMode()
   const titlePrefix = readEnv("PIRATE_SMOKE_TITLE_PREFIX", "Palestine, Don't Cry")
   const skipVerification = hasFlag("--skip-verification")
   const useLocalSetup = shouldUseLocalMembershipSetup(apiBaseUrl)
   const settlePurchase = hasFlag("--settle-purchase")
+  const createDerivativeVideo = hasFlag("--create-derivative-video")
+  if (createDerivativeVideo && accessMode !== "locked") {
+    throw new Error("--create-derivative-video requires PIRATE_SMOKE_ACCESS_MODE=locked")
+  }
+  const runId = Date.now()
+  const authorSubject = readEnv("PIRATE_SMOKE_AUTHOR_SUBJECT", `story-remix-smoke-author-${runId}`)
+  const remixerSubject = readEnv("PIRATE_SMOKE_REMIXER_SUBJECT", `story-remix-smoke-remixer-${runId}`)
+  const buyerSubject = readEnv("PIRATE_SMOKE_BUYER_SUBJECT", `story-remix-smoke-buyer-${runId}`)
+  console.log("[smoke] config", {
+    apiBaseUrl,
+    communityId,
+    access_mode: accessMode,
+    skipVerification,
+    useLocalSetup,
+    settlePurchase,
+    createDerivativeVideo,
+    author_subject: authorSubject,
+    remixer_subject: remixerSubject,
+  })
 
   const author = await createSession({
     apiBaseUrl,
     env,
-    subject: `story-remix-smoke-author-${Date.now()}`,
+    subject: authorSubject,
   })
   console.log("[smoke] author", {
     user: author.userId,
@@ -709,9 +939,18 @@ async function main(): Promise<void> {
     communityId,
     session: author,
     title: originalTitle,
-    filename: "story-smoke-original.mp3",
-    bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    filename: "story-smoke-original.wav",
+    bytes: makeSilentWavBytes(),
   })
+  if (accessMode === "locked") {
+    await waitForSongPreviewReady({
+      apiBaseUrl,
+      communityId,
+      session: author,
+      bundle: originalBundle,
+      title: originalTitle,
+    })
+  }
   const originalPost = await createSongPost({
     apiBaseUrl,
     communityId,
@@ -719,28 +958,36 @@ async function main(): Promise<void> {
     title: originalTitle,
     bundle: originalBundle,
     songMode: "original",
-    accessMode: "public",
+    accessMode,
     rightsBasis: "original",
   })
-  const originalAsset = await readAsset({
+  const originalAsset = await waitForAssetReady({
+    accessMode,
     apiBaseUrl,
-    communityId,
-    session: author,
     asset: originalPost.asset,
+    communityId,
+    label: "original",
+    session: author,
   })
   console.log("[smoke] original asset", {
     post: originalPost.post,
     asset: originalPost.asset,
+    access_mode: originalAsset.access_mode ?? null,
+    locked_delivery_status: originalAsset.locked_delivery_status ?? null,
+    story_cdr_vault_uuid: originalAsset.story_cdr_vault_uuid ?? null,
     story_ip: originalAsset.story_ip ?? null,
     story_license_terms: originalAsset.story_license_terms ?? null,
     story_royalty_registration_status: originalAsset.story_royalty_registration_status ?? null,
   })
+  if (accessMode === "locked" && originalAsset.locked_delivery_status !== "ready") {
+    throw new Error(`original locked delivery was not ready: ${JSON.stringify(originalAsset)}`)
+  }
   if (originalAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`original asset was not Story registered: ${JSON.stringify(originalAsset)}`)
   }
 
   const catalog = await api<{
-    items: Array<{ asset: string; title: string; story_ip: string; story_license_terms: string }>
+    items: Array<{ asset: string; title: string; source_ref?: string | null; story_ip: string; story_license_terms: string }>
   }>({
     apiBaseUrl,
     method: "GET",
@@ -753,12 +1000,12 @@ async function main(): Promise<void> {
   })
   const source = catalog.items.find((item) => item.asset === originalPost.asset) ?? catalog.items[0]
   if (!source) throw new Error("original did not appear in derivative sources")
-  const upstreamAssetRefs = [`story:asset:${source.asset}`]
+  const upstreamAssetRefs = [source.source_ref?.trim() || `story:asset:${source.asset}`]
 
   const remixer = await createSession({
     apiBaseUrl,
     env,
-    subject: `story-remix-smoke-remixer-${Date.now()}`,
+    subject: remixerSubject,
   })
   console.log("[smoke] remixer", {
     user: remixer.userId,
@@ -785,9 +1032,18 @@ async function main(): Promise<void> {
     communityId,
     session: remixer,
     title: remixTitle,
-    filename: "story-smoke-remix.mp3",
-    bytes: new Uint8Array([8, 7, 6, 5, 4, 3, 2, 1]),
+    filename: "story-smoke-remix.wav",
+    bytes: makeSilentWavBytes(),
   })
+  if (accessMode === "locked") {
+    await waitForSongPreviewReady({
+      apiBaseUrl,
+      communityId,
+      session: remixer,
+      bundle: remixBundle,
+      title: remixTitle,
+    })
+  }
   const remixPost = await createSongPost({
     apiBaseUrl,
     communityId,
@@ -795,29 +1051,90 @@ async function main(): Promise<void> {
     title: remixTitle,
     bundle: remixBundle,
     songMode: "remix",
-    accessMode: "public",
+    accessMode,
     rightsBasis: "derivative",
     upstreamAssetRefs,
   })
-  const remixAsset = await readAsset({
+  const remixAsset = await waitForAssetReady({
+    accessMode,
     apiBaseUrl,
-    communityId,
-    session: author,
     asset: remixPost.asset,
+    communityId,
+    label: "remix",
+    session: author,
   })
   console.log("[smoke] remix asset", {
     post: remixPost.post,
     asset: remixPost.asset,
+    access_mode: remixAsset.access_mode ?? null,
+    locked_delivery_status: remixAsset.locked_delivery_status ?? null,
+    story_cdr_vault_uuid: remixAsset.story_cdr_vault_uuid ?? null,
     story_ip: remixAsset.story_ip ?? null,
     story_royalty_registration_status: remixAsset.story_royalty_registration_status ?? null,
     parents: remixAsset.story_derivative_parent_ip_ids ?? null,
   })
+  if (accessMode === "locked" && remixAsset.locked_delivery_status !== "ready") {
+    throw new Error(`remix locked delivery was not ready: ${JSON.stringify(remixAsset)}`)
+  }
   if (remixAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`remix asset was not Story registered: ${JSON.stringify(remixAsset)}`)
   }
   const parentIps = remixAsset.story_derivative_parent_ip_ids ?? []
   if (!parentIps.some((parentIp) => parentIp.toLowerCase() === originalAsset.story_ip?.toLowerCase())) {
     throw new Error(`remix asset missing original parent IP: ${JSON.stringify(remixAsset)}`)
+  }
+
+  if (createDerivativeVideo) {
+    const videoTitle = `${titlePrefix} Smoke Video Uses Song ${new Date().toISOString()}`
+    const videoBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50, 0, 0, 0, 0])
+    const videoUpload = await uploadSongArtifact({
+      apiBaseUrl,
+      communityId,
+      session: remixer,
+      artifactKind: "primary_video",
+      mimeType: "video/mp4",
+      filename: "story-smoke-video-uses-song.mp4",
+      bytes: videoBytes,
+    })
+    const videoPost = await createVideoPost({
+      apiBaseUrl,
+      communityId,
+      session: remixer,
+      title: videoTitle,
+      videoStorageRef: videoUpload.storage_ref,
+      videoSizeBytes: videoBytes.byteLength,
+      accessMode,
+      upstreamAssetRefs,
+    })
+    const videoAsset = await waitForAssetReady({
+      accessMode,
+      apiBaseUrl,
+      asset: videoPost.asset,
+      communityId,
+      label: "derivative video",
+      session: author,
+    })
+    console.log("[smoke] derivative video asset", {
+      post: videoPost.post,
+      asset: videoPost.asset,
+      access_mode: videoAsset.access_mode ?? null,
+      locked_delivery_status: videoAsset.locked_delivery_status ?? null,
+      story_cdr_vault_uuid: videoAsset.story_cdr_vault_uuid ?? null,
+      story_ip: videoAsset.story_ip ?? null,
+      story_royalty_registration_status: videoAsset.story_royalty_registration_status ?? null,
+      parents: videoAsset.story_derivative_parent_ip_ids ?? null,
+      upstream_asset_refs: upstreamAssetRefs,
+    })
+    if (accessMode === "locked" && videoAsset.locked_delivery_status !== "ready") {
+      throw new Error(`derivative video locked delivery was not ready: ${JSON.stringify(videoAsset)}`)
+    }
+    if (videoAsset.story_royalty_registration_status !== "registered") {
+      throw new Error(`derivative video asset was not Story registered: ${JSON.stringify(videoAsset)}`)
+    }
+    const videoParentIps = videoAsset.story_derivative_parent_ip_ids ?? []
+    if (!videoParentIps.some((parentIp) => parentIp.toLowerCase() === originalAsset.story_ip?.toLowerCase())) {
+      throw new Error(`derivative video asset missing original parent IP: ${JSON.stringify(videoAsset)}`)
+    }
   }
 
   if (hasFlag("--create-listing") || settlePurchase) {
@@ -838,7 +1155,7 @@ async function main(): Promise<void> {
       const buyer = await createSession({
         apiBaseUrl,
         env,
-        subject: `story-remix-smoke-buyer-${Date.now()}`,
+        subject: buyerSubject,
         privateKey: readEnv("PIRATE_SMOKE_BUYER_PRIVATE_KEY") || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY,
       })
       console.log("[smoke] buyer", {

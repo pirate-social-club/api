@@ -21,6 +21,7 @@ export type SongArtifactUploadRow = {
   storage_object_key: string | null
   storage_endpoint: string | null
   gateway_url: string | null
+  ipfs_cid: string | null
   created_at: string
   updated_at: string
 }
@@ -87,6 +88,7 @@ export function toSongArtifactUploadRow(row: unknown): SongArtifactUploadRow {
     storage_object_key: stringOrNull(rowValue(row, "storage_object_key")),
     storage_endpoint: stringOrNull(rowValue(row, "storage_endpoint")),
     gateway_url: stringOrNull(rowValue(row, "gateway_url")),
+    ipfs_cid: stringOrNull(rowValue(row, "ipfs_cid")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -110,6 +112,7 @@ export function serializeSongArtifactUpload(row: SongArtifactUploadRow): SongArt
     storage_object_key: row.storage_object_key,
     storage_endpoint: row.storage_endpoint,
     gateway_url: row.gateway_url,
+    ipfs_cid: row.ipfs_cid,
     upload_url: row.storage_ref,
     created: unixSeconds(row.created_at),
   }
@@ -171,6 +174,7 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
           size_bytes: primaryAudio.size_bytes ?? null,
           content_hash: primaryAudio.content_hash ?? null,
           duration_ms: primaryAudio.duration_ms ?? null,
+          decentralized_storage: primaryAudio.decentralized_storage ?? null,
         }]
       : [],
     lyrics: row.lyrics_text,

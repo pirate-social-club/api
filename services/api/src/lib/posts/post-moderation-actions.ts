@@ -7,8 +7,10 @@ import type {
 import { safeRollback } from "../transactions"
 import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { logPipelineInfo } from "../observability/pipeline-log"
 import type { Env } from "../../env"
 import type { Post } from "../../types"
+import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
 import {
   markPostDeleted,
   setPostCommentsLocked,
@@ -25,6 +27,32 @@ type PostModerationActionCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
   & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId" | "updateCommunityPostProjectionStatus">
+
+async function updateDerivativeSourceProjectionStatus(input: {
+  env: Env
+  communityId: string
+  postId: string
+  status: Post["status"]
+  updatedAt: string
+}): Promise<void> {
+  try {
+    await updateStoryRegisteredAssetPostStatus({
+      env: input.env,
+      communityId: input.communityId,
+      sourcePostId: input.postId,
+      sourcePostStatus: input.status,
+      updatedAt: input.updatedAt,
+    })
+  } catch (error) {
+    logPipelineInfo("[posts] Story registered asset projection status update failed", {
+      level: "warn",
+      community_id: input.communityId,
+      post_id: input.postId,
+      status: input.status,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
 export type DeletePostResult = {
   post: Pick<Post, "post_id" | "status" | "updated_at">
@@ -80,6 +108,13 @@ export async function deletePost(input: {
       await tx.commit()
 
       await input.communityRepository.updateCommunityPostProjectionStatus({
+        postId: input.postId,
+        status: "deleted",
+        updatedAt: deletedAt,
+      })
+      await updateDerivativeSourceProjectionStatus({
+        env: input.env,
+        communityId: input.communityId,
         postId: input.postId,
         status: "deleted",
         updatedAt: deletedAt,
@@ -144,6 +179,13 @@ export async function removePostAsModerator(input: {
       now: updatedAt,
     })
     await input.communityRepository.updateCommunityPostProjectionStatus({
+      postId: input.postId,
+      status: "removed",
+      updatedAt,
+    })
+    await updateDerivativeSourceProjectionStatus({
+      env: input.env,
+      communityId: input.communityId,
       postId: input.postId,
       status: "removed",
       updatedAt,

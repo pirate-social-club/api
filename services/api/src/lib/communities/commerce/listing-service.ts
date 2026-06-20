@@ -233,7 +233,9 @@ export async function createCommunityListingInTransaction(input: {
       throw notFoundError("Asset not found")
     }
     assetKind = asset.asset_kind
-    assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+    if (asset.access_mode !== "locked") {
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+    }
     if (asset.creator_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
       throw notFoundError("Asset not found")
     }
@@ -357,7 +359,9 @@ export async function updateCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      if (asset.access_mode !== "locked") {
+        assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      }
     }
     const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled

@@ -7,6 +7,8 @@ import {
   getCommunityJobById,
   markCommunityJobRunning,
   markCommunityJobSucceeded,
+  resetStaleRunningCommunityJobs,
+  type CommunityJobType,
   type CommunityJobRow,
 } from "./store"
 import { runCommunityJob } from "./handlers"
@@ -20,6 +22,8 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+const STALE_RUNNING_JOB_TIMEOUT_MS = 15 * 60 * 1000
+
 type CommunityJobCommunityProcessingSummary = {
   community_id: string
   processed_jobs: number
@@ -29,6 +33,44 @@ type CommunityJobCommunityProcessingSummary = {
 type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
+}
+
+function createdAtMs(community: { created_at?: string | null }): number {
+  const parsed = Date.parse(community.created_at ?? "")
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function selectScheduledCommunityJobPollIds(
+  communities: Array<{ community_id: string; created_at?: string | null }>,
+  maxCommunities: number,
+): string[] {
+  if (communities.length <= maxCommunities) {
+    return communities.map((community) => community.community_id)
+  }
+
+  const recentCount = Math.max(1, Math.min(maxCommunities, Math.ceil(maxCommunities / 4)))
+  const newest = communities
+    .slice()
+    .sort((left, right) => {
+      const createdDiff = createdAtMs(right) - createdAtMs(left)
+      return createdDiff !== 0 ? createdDiff : right.community_id.localeCompare(left.community_id)
+    })
+    .slice(0, recentCount)
+
+  const selected = new Set(newest.map((community) => community.community_id))
+  const remaining = communities.filter((community) => !selected.has(community.community_id))
+  const rotatingCount = maxCommunities - selected.size
+  if (rotatingCount <= 0 || remaining.length === 0) {
+    return Array.from(selected)
+  }
+
+  const minuteBucket = Math.floor(Date.now() / 60_000)
+  const start = remaining.length === 0 ? 0 : (minuteBucket * rotatingCount) % remaining.length
+  for (let index = 0; index < rotatingCount && index < remaining.length; index += 1) {
+    selected.add(remaining[(start + index) % remaining.length]!.community_id)
+  }
+
+  return Array.from(selected)
 }
 
 export async function processCommunityJobById(input: {
@@ -107,6 +149,7 @@ export async function processNextCommunityJob(input: {
   env: Env
   communityId: string
   communityRepository: CommunityJobRepository
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
@@ -115,6 +158,7 @@ export async function processNextCommunityJob(input: {
       communityId: input.communityId,
       now: nowIso(),
       maxAttempts: COMMUNITY_JOB_MAX_ATTEMPTS,
+      skipJobTypes: input.skipJobTypes,
     })
     if (!next) {
       return null
@@ -135,15 +179,29 @@ export async function processCommunityJobsForCommunity(input: {
   communityId: string
   communityRepository: CommunityJobRepository
   maxJobs?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const now = nowIso()
+    await resetStaleRunningCommunityJobs({
+      client: db.client,
+      communityId: input.communityId,
+      now,
+      staleBefore: new Date(Date.parse(now) - STALE_RUNNING_JOB_TIMEOUT_MS).toISOString(),
+    })
+  } finally {
+    db.close()
+  }
 
   while (jobs.length < maxJobs) {
     const processed = await processNextCommunityJob({
       env: input.env,
       communityId: input.communityId,
       communityRepository: input.communityRepository,
+      skipJobTypes: input.skipJobTypes,
     })
     if (!processed) {
       break
@@ -164,11 +222,15 @@ export async function processAvailableCommunityJobs(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxJobsPerCommunity?: number
+  skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobProcessingSummary> {
-  const communityIds = (input.communityIds?.length
-    ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
-    .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
+  const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const communityIds = input.communityIds?.length
+    ? input.communityIds.slice(0, maxCommunities)
+    : selectScheduledCommunityJobPollIds(
+      await input.communityRepository.listActiveCommunities(),
+      maxCommunities,
+    )
 
   const communities: CommunityJobCommunityProcessingSummary[] = []
 
@@ -178,6 +240,7 @@ export async function processAvailableCommunityJobs(input: {
       communityId,
       communityRepository: input.communityRepository,
       maxJobs: input.maxJobsPerCommunity ?? 25,
+      skipJobTypes: input.skipJobTypes,
     })
     if (processed.processed_jobs > 0) {
       communities.push(processed)
@@ -196,6 +259,7 @@ export async function runCommunityJobWorkerLoop(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxJobsPerCommunity?: number
+  skipJobTypes?: CommunityJobType[] | null
   pollIntervalMs?: number
   stopWhenIdle?: boolean
   signal?: AbortSignal
@@ -210,6 +274,7 @@ export async function runCommunityJobWorkerLoop(input: {
       communityIds: input.communityIds ?? null,
       maxCommunities: input.maxCommunities ?? 100,
       maxJobsPerCommunity: input.maxJobsPerCommunity ?? 25,
+      skipJobTypes: input.skipJobTypes,
     })
 
     await input.onTick?.(summary)

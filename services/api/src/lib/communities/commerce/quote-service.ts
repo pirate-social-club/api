@@ -184,7 +184,6 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       if (input.publicBuyer) {
         if (asset.access_mode !== "locked" || asset.locked_delivery_status !== "ready") {
           throw notFoundError("Listing not found")
@@ -194,6 +193,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
           throw notFoundError("Listing not found")
         }
       }
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       settlementMode = resolvePurchaseSettlementMode({
         storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
         storyIpId: asset.story_ip_id,

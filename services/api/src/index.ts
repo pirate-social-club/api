@@ -45,7 +45,9 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
+import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { getCommunityProvisionOperatorHealth, getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
@@ -55,7 +57,7 @@ import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
-import { makeSentryOptions, captureScheduledError } from "./lib/sentry"
+import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import type { Env } from "./env"
@@ -168,6 +170,7 @@ app.use(
       "X-Pirate-Altcha",
       "X-Pirate-Anonymous-Id",
       "X-Pirate-Session-Id",
+      "X-Pirate-Submit-Trace-Id",
     ],
   }),
 )
@@ -487,12 +490,52 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
+  const canProcessSongPreviewJobs = Boolean(
+    env.SONG_PREVIEW_SHARED_SECRET?.trim()
+      && (env.SONG_PREVIEW_SERVICE_URL?.trim() || env.SONG_PREVIEW_SERVICE),
+  )
   try {
+    const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxAssetsPerCommunity: 25,
+    })
+    if (reconciledLockedDelivery.enqueued_jobs > 0) {
+      console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
+      captureScheduledWarning(
+        env,
+        "Locked delivery reconciliation enqueued orphaned jobs",
+        "community_jobs_locked_delivery_reconciliation",
+        reconciledLockedDelivery,
+        {
+          urgency: reconciledLockedDelivery.enqueued_jobs > 5 ? "high" : "low",
+        },
+      )
+    }
+    const reconciledUploadSessions = await reconcileStaleSongArtifactUploadSessionJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+    })
+    if (reconciledUploadSessions.enqueued_jobs > 0) {
+      console.info("[community-jobs] reconciled stale song artifact upload sessions", JSON.stringify(reconciledUploadSessions))
+      captureScheduledWarning(
+        env,
+        "Song artifact upload session reaper jobs enqueued",
+        "community_jobs_song_artifact_session_reaper",
+        reconciledUploadSessions,
+        {
+          urgency: reconciledUploadSessions.enqueued_jobs > 5 ? "high" : "low",
+        },
+      )
+    }
     const summary = await processAvailableCommunityJobs({
       env,
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
+      skipJobTypes: canProcessSongPreviewJobs ? [] : ["song_preview_generate"],
     })
     if (summary.processed_jobs > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({

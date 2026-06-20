@@ -1274,6 +1274,7 @@ export type CreateSongArtifactUploadRequest = {
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
+  upload_mode?: "proxy" | "direct_multipart";
 };
 
 export type CreateSongArtifactBundleRequest = {
@@ -1441,8 +1442,9 @@ export type AssetAccessResponse = {
   source_post_status: "draft" | "published" | "hidden";
   story_status: "none" | "requested" | "published" | "failed";
   locked_delivery_status: "none" | "requested" | "ready" | "failed";
+  bundle_preview_status?: "pending" | "processing" | "completed" | "failed" | null;
   access_granted: boolean;
-  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending";
+  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending" | "preview_pending";
   delivery_kind: "primary_content_ref" | "locked_delivery_ref" | "story_cdr_ref" | null;
   delivery_ref: string | null;
   story_cdr_access?: ({
@@ -1469,7 +1471,7 @@ export type SongArtifactUpload = {
   community: string;
   uploader_user: string;
   artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "preview_video" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
-  status: "pending_upload" | "uploaded" | "failed";
+  status: "pending_upload" | "uploaded" | "failed" | "cancelled";
   storage_ref: string;
   mime_type: string;
   filename?: string | null;
@@ -1480,7 +1482,20 @@ export type SongArtifactUpload = {
   storage_object_key?: string | null;
   storage_endpoint?: string | null;
   gateway_url?: string | null;
+  ipfs_cid?: string | null;
   upload_url: string;
+  upload_session?: ({
+    id: string;
+    status: "created" | "parts_uploading" | "completing" | "head_verifying" | "uploaded" | "aborting" | "aborted";
+    object_key: string;
+    upload_id: string;
+    part_size_bytes: number;
+    total_parts: number;
+    expires_at: string;
+    sign_part_url: string;
+    complete: string;
+    abort: string;
+  }) | null;
   created: number;
 };
 
@@ -1800,6 +1815,7 @@ export type SongPresentationDownloadableAudio = {
   size_bytes?: number | null;
   duration_ms?: number | null;
   filename?: string | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 export type SongPresentation = {
@@ -2243,6 +2259,7 @@ type AudioMediaDescriptor = {
   size_bytes?: number | null;
   content_hash?: string | null;
   duration_ms?: number | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type CentralizedGovernanceBackend = {
@@ -3019,6 +3036,7 @@ type MediaDescriptor = {
   poster_height?: number | null;
   poster_frame_ms?: number | null;
   preview_video?: SongVideoArtifactDescriptor | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
@@ -3205,6 +3223,13 @@ type SongArtifactUploadRef = {
   song_artifact_upload: string;
 };
 
+type DecentralizedStorageProof = {
+  provider: "filebase_ipfs";
+  cid: string;
+  gateway_url: string;
+  encrypted?: boolean;
+};
+
 type SongAudioArtifactDescriptor = {
   storage_ref: string;
   mime_type: string;
@@ -3213,6 +3238,7 @@ type SongAudioArtifactDescriptor = {
   duration_ms?: number | null;
   clip_start_ms?: number | null;
   clip_duration_ms?: number | null;
+  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type SongImageArtifactDescriptor = {

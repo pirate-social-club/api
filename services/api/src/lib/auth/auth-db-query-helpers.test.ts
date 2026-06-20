@@ -54,6 +54,12 @@ describe("normalizeControlPlaneDbUrl", () => {
     expect(normalizeControlPlaneDbUrl(url)).toBe(url)
   })
 
+  test("strips file-based Postgres SSL parameters that Workers cannot read", () => {
+    expect(normalizeControlPlaneDbUrl(
+      "postgresql://control_plane_api_rw:secret@example.pg.psdb.cloud/pirate?sslmode=require&sslrootcert=/etc/ssl/certs/ca.pem&foo=bar",
+    )).toBe("postgresql://control_plane_api_rw:secret@example.pg.psdb.cloud/pirate?sslmode=require&foo=bar")
+  })
+
   test("strips libsql-unsupported TLS parameters from non-Postgres URLs", () => {
     expect(normalizeControlPlaneDbUrl("libsql://example.turso.io?sslmode=require&channel_binding=require&foo=bar"))
       .toBe("libsql://example.turso.io?foo=bar")

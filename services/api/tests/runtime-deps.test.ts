@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { neonConfig } from "@neondatabase/serverless"
 import { postgresifySql } from "../src/lib/runtime-deps"
 
 describe("postgresifySql", () => {
@@ -53,5 +54,24 @@ describe("postgresifySql", () => {
       INSERT OR REPLACE INTO unknown_table (id, updated_at)
       VALUES (?1, ?2)
     `)).toThrow("Unsupported INSERT OR REPLACE table for PostgreSQL translation: unknown_table")
+  })
+})
+
+describe("neonConfig.fetchEndpoint", () => {
+  test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
+    const fetchEndpoint = neonConfig.fetchEndpoint
+    expect(typeof fetchEndpoint).toBe("function")
+    expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("https://us-east-3.pg.psdb.cloud/sql")
+  })
+})
+
+describe("neonConfig WebSocket settings", () => {
+  test("uses PlanetScale's WebSocket proxy for interactive transactions", () => {
+    const wsProxy = neonConfig.wsProxy
+    expect(neonConfig.pipelineConnect).toBe(false)
+    expect(typeof wsProxy).toBe("function")
+    expect(typeof wsProxy === "function" ? wsProxy("us-east-3.pg.psdb.cloud", 5432) : null)
+      .toBe("us-east-3.pg.psdb.cloud/v2?address=us-east-3.pg.psdb.cloud:5432")
   })
 })

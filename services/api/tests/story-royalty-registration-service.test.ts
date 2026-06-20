@@ -8,6 +8,8 @@ import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/commerce/asset-delivery"
 import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
 import { insertPostForTest as insertPost } from "./community-test-helpers"
+import { listStoryRegisteredAssetProjectionRows } from "../src/lib/communities/commerce/derivative-source-projection"
+import { createControlPlaneTestClient } from "./helpers"
 import {
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
@@ -156,6 +158,46 @@ async function seedStoryCommunity(input: {
   } finally {
     db.close()
   }
+}
+
+async function seedControlPlaneCommunityForProjection(input: {
+  client: Awaited<ReturnType<typeof createControlPlaneTestClient>>["client"]
+  communityId: string
+  userId: string
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      INSERT INTO users (
+        user_id, primary_wallet_attachment_id, verification_state, capability_provider,
+        verification_capabilities_json, verified_at, current_verification_session_id,
+        created_at, updated_at
+      ) VALUES (
+        ?1, NULL, 'verified', 'self',
+        '{}', ?2, NULL,
+        ?2, ?2
+      )
+      ON CONFLICT(user_id) DO NOTHING
+    `,
+    args: [input.userId, input.now],
+  })
+  await input.client.execute({
+    sql: `
+      INSERT INTO communities (
+        community_id, creator_user_id, display_name, description, avatar_ref, banner_ref,
+        membership_mode, status, provisioning_state, transfer_state,
+        route_slug, namespace_verification_id, pending_namespace_verification_session_id,
+        primary_database_binding_id, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, 'Story Royalty Test Community', NULL, NULL, NULL,
+        'request', 'active', 'active', 'none',
+        NULL, NULL, NULL,
+        NULL, ?3, ?3
+      )
+      ON CONFLICT(community_id) DO NOTHING
+    `,
+    args: [input.communityId, input.userId, input.now],
+  })
 }
 
 describe("story royalty registration service", () => {
@@ -993,116 +1035,149 @@ describe("story royalty registration service", () => {
   test("registered original song assets become derivative sources", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-registered-"))
     cleanupPaths.push(rootDir)
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
 
-    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    } as Env
     const repo = buildRepository()
     const communityId = "cmt_story_royalty_registered"
     const userId = "usr_author_story_registered"
     const now = "2026-04-21T00:00:00.000Z"
-    await seedStoryCommunity({ env, repo, communityId, userId })
-
-    setStoryRoyaltyRegistrarForTests(async (input) => ({
-      storyIpId: "0x9999999999999999999999999999999999999999",
-      storyIpNftContract: "0x8888888888888888888888888888888888888888",
-      storyIpNftTokenId: "123",
-      storyLicenseTermsId: "17",
-      storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
-      storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
-      storyDerivativeParentIpIds: null,
-      storyRevenueToken: "0x1514000000000000000000000000000000000000",
-      storyRoyaltyRegistrationStatus: "registered",
-      storyDerivativeRegisteredAt: input.rightsBasis === "derivative" ? now : null,
-    }))
-
-    const db = await openCommunityDb(env, repo, communityId)
-    let publicAssetId: string
     try {
-      const post = await insertPost({
-        client: db.client,
+      await seedControlPlaneCommunityForProjection({
+        client: controlPlane.client,
         communityId,
-        authorUserId: userId,
-        body: {
-          post_type: "song",
-          identity_mode: "public",
-          title: "Registered source song",
-          idempotency_key: "story-registered-post",
-          song_mode: "original",
-          rights_basis: "original",
-          access_mode: "public",
-        },
-        createdAt: now,
+        userId,
+        now,
       })
-      const assetPost = {
-        ...post,
-        asset_id: "ast_registered_source_song",
+      await seedStoryCommunity({ env, repo, communityId, userId })
+
+      setStoryRoyaltyRegistrarForTests(async (input) => ({
+        storyIpId: "0x9999999999999999999999999999999999999999",
+        storyIpNftContract: "0x8888888888888888888888888888888888888888",
+        storyIpNftTokenId: "123",
+        storyLicenseTermsId: "17",
+        storyLicenseTemplate: "0x7777777777777777777777777777777777777777",
+        storyRoyaltyPolicy: "0x6666666666666666666666666666666666666666",
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: "0x1514000000000000000000000000000000000000",
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: input.rightsBasis === "derivative" ? now : null,
+      }))
+
+      const db = await openCommunityDb(env, repo, communityId)
+      let publicAssetId: string
+      try {
+        const post = await insertPost({
+          client: db.client,
+          communityId,
+          authorUserId: userId,
+          body: {
+            post_type: "song",
+            identity_mode: "public",
+            title: "Registered source song",
+            idempotency_key: "story-registered-post",
+            song_mode: "original",
+            rights_basis: "original",
+            access_mode: "public",
+          },
+          createdAt: now,
+        })
+        const assetPost = {
+          ...post,
+          asset_id: "ast_registered_source_song",
+        }
+
+        const asset = await createSongAssetForPost({
+          env,
+          client: db.client,
+          communityId,
+          post: assetPost,
+          bundle: buildBundle({ id: "sab_registered", title: "Registered source song" }),
+          licensePreset: "commercial-remix",
+          commercialRevSharePct: 15,
+          userRepository: {
+            async getUserById(requestedUserId) {
+              return requestedUserId === userId ? buildUser(userId) : null
+            },
+            async getWalletAttachmentsByUserId() {
+              return [buildWalletAttachment()]
+            },
+            async getWalletAttachmentById() {
+              return null
+            },
+          },
+        })
+
+        publicAssetId = asset.id
+        expect(asset.publication_status).toBe("story_published")
+        expect(asset.story_status).toBe("published")
+        expect(asset.story_royalty_registration_status).toBe("registered")
+        expect(asset.story_ip).toBe("0x9999999999999999999999999999999999999999")
+        expect(asset.story_license_terms).toBe("17")
+      } finally {
+        db.close()
       }
 
-      const asset = await createSongAssetForPost({
+      const profile: Profile = {
+        user_id: userId,
+        display_name: "Registered Artist",
+        handle: "registeredartist",
+        global_handle: { label: "registeredartist.pirate" },
+        avatar_url: null,
+        bio: null,
+        location: null,
+        website_url: null,
+        social_links: null,
+        created_at: now,
+        updated_at: now,
+      } as unknown as Profile
+
+      const sources = await listCommunityDerivativeSources({
         env,
-        client: db.client,
+        userId,
         communityId,
-        post: assetPost,
-        bundle: buildBundle({ id: "sab_registered", title: "Registered source song" }),
-        licensePreset: "commercial-remix",
-        commercialRevSharePct: 15,
-        userRepository: {
-          async getUserById(requestedUserId) {
-            return requestedUserId === userId ? buildUser(userId) : null
-          },
-          async getWalletAttachmentsByUserId() {
-            return [buildWalletAttachment()]
-          },
-          async getWalletAttachmentById() {
-            return null
-          },
-        },
+        kind: "song",
+        query: "Registered",
+        limit: 25,
+        communityRepository: repo,
+        profileRepository: buildProfileRepository(profile, userId),
       })
 
-      publicAssetId = asset.id
-      expect(asset.publication_status).toBe("story_published")
-      expect(asset.story_status).toBe("published")
-      expect(asset.story_royalty_registration_status).toBe("registered")
-      expect(asset.story_ip).toBe("0x9999999999999999999999999999999999999999")
-      expect(asset.story_license_terms).toBe("17")
+      expect(sources.items).toHaveLength(1)
+      expect(sources.items[0]).toMatchObject({
+        id: publicAssetId,
+        asset: publicAssetId,
+        title: "Registered source song",
+        kind: "song",
+        story_ip: "0x9999999999999999999999999999999999999999",
+        story_license_terms: "17",
+        creator_display_name: "Registered Artist",
+      })
+
+      const projectedSources = await listStoryRegisteredAssetProjectionRows({
+        env,
+        kind: "song",
+        query: "Registered",
+        limit: 25,
+      })
+      expect(projectedSources).toHaveLength(1)
+      expect(projectedSources[0]).toMatchObject({
+        asset_id: "ast_registered_source_song",
+        community_id: communityId,
+        display_title: "Registered source song",
+        creator_user_id: userId,
+        asset_kind: "song_audio",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 15,
+        story_ip_id: "0x9999999999999999999999999999999999999999",
+        story_license_terms_id: "17",
+      })
     } finally {
-      db.close()
+      await controlPlane.cleanup()
     }
-
-    const profile: Profile = {
-      user_id: userId,
-      display_name: "Registered Artist",
-      handle: "registeredartist",
-      global_handle: { label: "registeredartist.pirate" },
-      avatar_url: null,
-      bio: null,
-      location: null,
-      website_url: null,
-      social_links: null,
-      created_at: now,
-      updated_at: now,
-    } as unknown as Profile
-
-    const sources = await listCommunityDerivativeSources({
-      env,
-      userId,
-      communityId,
-      kind: "song",
-      query: "Registered",
-      limit: 25,
-      communityRepository: repo,
-      profileRepository: buildProfileRepository(profile, userId),
-    })
-
-    expect(sources.items).toHaveLength(1)
-    expect(sources.items[0]).toMatchObject({
-      id: publicAssetId,
-      asset: publicAssetId,
-      title: "Registered source song",
-      kind: "song",
-      story_ip: "0x9999999999999999999999999999999999999999",
-      story_license_terms: "17",
-      creator_display_name: "Registered Artist",
-    })
   })
 
   test("uses derivative source asset refs to register remix parents without listing unattached derivatives as sources", async () => {
