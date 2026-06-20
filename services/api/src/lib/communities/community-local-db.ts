@@ -412,6 +412,203 @@ export function buildLocalCommunityDbUrl(rootDir: string, communityId: string): 
   return pathToFileURL(buildLocalCommunityDbPath(rootDir, communityId)).toString()
 }
 
+export type CommunitySeedStatement = { sql: string; args: (string | number | null)[] }
+
+/**
+ * The community-local DATA seed for a freshly-provisioned community, as a pure
+ * list of `{ sql, args }` statements — single source of truth shared by the
+ * operator path (`bootstrapLocalCommunityDb`, which executes these in its write
+ * tx) and the d1_native path (§8.7, which converts them to `ShardSqlStatement[]`
+ * for `communityD1LoadSnapshot`). Keeping it pure prevents the two paths from
+ * drifting. Mandatory: communities, community_memberships, community_roles.
+ * Conditional: namespace_bindings + namespace_handle_policies (namespaced only),
+ * community_gate_policies (if a gate policy), one community_rules per rule.
+ */
+export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput): CommunitySeedStatement[] {
+  const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`
+  const roleAssignmentId = `role_${input.communityId}_${input.createdByUserId}_owner`
+  const now = input.now
+  const initialSettingsJson = input.initialSettings && Object.keys(input.initialSettings).length > 0
+    ? JSON.stringify(input.initialSettings)
+    : null
+
+  const statements: CommunitySeedStatement[] = [
+    {
+      sql: `
+        INSERT INTO communities (
+          community_id, display_name, description, avatar_ref, banner_ref, status, artist_identity_id, artist_governance_state,
+          membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
+          donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
+          settings_json, created_by_user_id, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, 'active', NULL, 'fan_run', ?6, ?7, ?8, ?9,
+          NULL, 'none', 'unconfigured', ?10, ?11, ?12, ?13, ?13
+        )
+        ON CONFLICT(community_id) DO UPDATE SET
+          display_name = excluded.display_name,
+          description = excluded.description,
+          avatar_ref = excluded.avatar_ref,
+          banner_ref = excluded.banner_ref,
+          status = excluded.status,
+          membership_mode = excluded.membership_mode,
+          default_age_gate_policy = excluded.default_age_gate_policy,
+          allow_anonymous_identity = excluded.allow_anonymous_identity,
+          anonymous_identity_scope = excluded.anonymous_identity_scope,
+          donation_policy_mode = excluded.donation_policy_mode,
+          donation_partner_status = excluded.donation_partner_status,
+          governance_mode = excluded.governance_mode,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        input.communityId,
+        input.displayName,
+        input.description,
+        input.avatarRef,
+        input.bannerRef,
+        input.membershipMode,
+        input.defaultAgeGatePolicy,
+        boolToSqlite(input.allowAnonymousIdentity),
+        input.anonymousIdentityScope,
+        input.governanceMode,
+        initialSettingsJson,
+        input.createdByUserId,
+        now,
+      ],
+    },
+    {
+      sql: `
+        INSERT INTO community_memberships (
+          membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
+        )
+        ON CONFLICT(membership_id) DO UPDATE SET
+          status = excluded.status,
+          joined_at = excluded.joined_at,
+          left_at = excluded.left_at,
+          banned_at = excluded.banned_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [membershipId, input.communityId, input.createdByUserId, now],
+    },
+    {
+      sql: `
+        INSERT INTO community_roles (
+          role_assignment_id, community_id, user_id, role, status, granted_by_user_id, granted_at, revoked_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, 'owner', 'active', ?3, ?4, NULL, ?4, ?4
+        )
+        ON CONFLICT(role_assignment_id) DO UPDATE SET
+          status = excluded.status,
+          granted_at = excluded.granted_at,
+          revoked_at = excluded.revoked_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [roleAssignmentId, input.communityId, input.createdByUserId, now],
+    },
+  ]
+
+  if (input.namespaceVerificationId && input.namespaceLabel) {
+    const namespaceId = `ns_${input.communityId}`
+    const namespaceHandlePolicyId = `nhp_${input.communityId}`
+    const handlePolicySettings = input.handlePolicySettings && Object.keys(input.handlePolicySettings).length > 0
+      ? input.handlePolicySettings
+      : input.pricingModel === "free"
+        ? null
+        : DEFAULT_HANDLE_POLICY_SETTINGS
+
+    statements.push({
+      sql: `
+        INSERT INTO namespace_bindings (
+          namespace_id, community_id, namespace_verification_id, display_label, normalized_label,
+          resolver_label, route_family, status, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6
+        )
+        ON CONFLICT(namespace_id) DO UPDATE SET
+          namespace_verification_id = excluded.namespace_verification_id,
+          display_label = excluded.display_label,
+          normalized_label = excluded.normalized_label,
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        namespaceId,
+        input.communityId,
+        input.namespaceVerificationId,
+        input.namespaceLabel,
+        input.namespaceLabel.toLowerCase(),
+        now,
+      ],
+    })
+
+    statements.push({
+      sql: `
+        INSERT INTO namespace_handle_policies (
+          namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
+          membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, 1, 1, ?6, ?7, ?7
+        )
+        ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
+          policy_template = excluded.policy_template,
+          pricing_model = excluded.pricing_model,
+          membership_required_for_claim = excluded.membership_required_for_claim,
+          claims_enabled = excluded.claims_enabled,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        namespaceHandlePolicyId,
+        input.communityId,
+        namespaceId,
+        input.handlePolicyTemplate,
+        input.pricingModel,
+        handlePolicySettings ? JSON.stringify(handlePolicySettings) : null,
+        now,
+      ],
+    })
+  }
+
+  if (input.gatePolicy) {
+    statements.push({
+      sql: `
+        INSERT INTO community_gate_policies (
+          community_id, scope, version, expression_json, created_at, updated_at
+        ) VALUES (?1, 'membership', 1, ?2, ?3, ?3)
+        ON CONFLICT(community_id, scope) DO UPDATE SET
+          version = excluded.version,
+          expression_json = excluded.expression_json,
+          updated_at = excluded.updated_at
+      `,
+      args: [input.communityId, JSON.stringify(input.gatePolicy), now],
+    })
+  }
+
+  for (const rule of input.rules) {
+    statements.push({
+      sql: `
+        INSERT INTO community_rules (
+          rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+        )
+      `,
+      args: [
+        rule.rule_id,
+        input.communityId,
+        rule.title,
+        rule.body,
+        rule.report_reason,
+        rule.position,
+        rule.status,
+        now,
+      ],
+    })
+  }
+
+  return statements
+}
+
 export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapInput): Promise<LocalCommunitySnapshot> {
   const dbPath = buildLocalCommunityDbPath(input.rootDir, input.communityId)
   await mkdir(dirname(dbPath), { recursive: true })
@@ -423,8 +620,6 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
     await configureLocalCommunityDbClient(client)
     await ensureCommunityDbSchema(client)
 
-    const membershipId = `mbr_${input.communityId}_${input.createdByUserId}`
-    const roleAssignmentId = `role_${input.communityId}_${input.createdByUserId}_owner`
     const now = input.now
     const initialSettingsJson = input.initialSettings && Object.keys(input.initialSettings).length > 0
       ? JSON.stringify(input.initialSettings)
@@ -432,182 +627,8 @@ export async function bootstrapLocalCommunityDb(input: LocalCommunityBootstrapIn
 
     const tx = await client.transaction("write")
     try {
-      await tx.execute({
-        sql: `
-          INSERT INTO communities (
-            community_id, display_name, description, avatar_ref, banner_ref, status, artist_identity_id, artist_governance_state,
-            membership_mode, default_age_gate_policy, allow_anonymous_identity, anonymous_identity_scope,
-            donation_partner_id, donation_policy_mode, donation_partner_status, governance_mode,
-            settings_json, created_by_user_id, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 'active', NULL, 'fan_run', ?6, ?7, ?8, ?9,
-            NULL, 'none', 'unconfigured', ?10, ?11, ?12, ?13, ?13
-          )
-          ON CONFLICT(community_id) DO UPDATE SET
-            display_name = excluded.display_name,
-            description = excluded.description,
-            avatar_ref = excluded.avatar_ref,
-            banner_ref = excluded.banner_ref,
-            status = excluded.status,
-            membership_mode = excluded.membership_mode,
-            default_age_gate_policy = excluded.default_age_gate_policy,
-            allow_anonymous_identity = excluded.allow_anonymous_identity,
-            anonymous_identity_scope = excluded.anonymous_identity_scope,
-            donation_policy_mode = excluded.donation_policy_mode,
-            donation_partner_status = excluded.donation_partner_status,
-            governance_mode = excluded.governance_mode,
-            updated_at = excluded.updated_at
-        `,
-        args: [
-          input.communityId,
-          input.displayName,
-          input.description,
-          input.avatarRef,
-          input.bannerRef,
-          input.membershipMode,
-          input.defaultAgeGatePolicy,
-          boolToSqlite(input.allowAnonymousIdentity),
-          input.anonymousIdentityScope,
-          input.governanceMode,
-          initialSettingsJson,
-          input.createdByUserId,
-          now,
-        ],
-      })
-
-      await tx.execute({
-        sql: `
-          INSERT INTO community_memberships (
-            membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
-          )
-          ON CONFLICT(membership_id) DO UPDATE SET
-            status = excluded.status,
-            joined_at = excluded.joined_at,
-            left_at = excluded.left_at,
-            banned_at = excluded.banned_at,
-            updated_at = excluded.updated_at
-        `,
-        args: [membershipId, input.communityId, input.createdByUserId, now],
-      })
-
-      await tx.execute({
-        sql: `
-          INSERT INTO community_roles (
-            role_assignment_id, community_id, user_id, role, status, granted_by_user_id, granted_at, revoked_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, 'owner', 'active', ?3, ?4, NULL, ?4, ?4
-          )
-          ON CONFLICT(role_assignment_id) DO UPDATE SET
-            status = excluded.status,
-            granted_at = excluded.granted_at,
-            revoked_at = excluded.revoked_at,
-            updated_at = excluded.updated_at
-        `,
-        args: [roleAssignmentId, input.communityId, input.createdByUserId, now],
-      })
-
-      if (input.namespaceVerificationId && input.namespaceLabel) {
-        const namespaceId = `ns_${input.communityId}`
-        const namespaceHandlePolicyId = `nhp_${input.communityId}`
-        const handlePolicySettings = input.handlePolicySettings && Object.keys(input.handlePolicySettings).length > 0
-          ? input.handlePolicySettings
-          : input.pricingModel === "free"
-            ? null
-            : DEFAULT_HANDLE_POLICY_SETTINGS
-
-        await tx.execute({
-          sql: `
-            INSERT INTO namespace_bindings (
-              namespace_id, community_id, namespace_verification_id, display_label, normalized_label,
-              resolver_label, route_family, status, created_at, updated_at
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6
-            )
-            ON CONFLICT(namespace_id) DO UPDATE SET
-              namespace_verification_id = excluded.namespace_verification_id,
-              display_label = excluded.display_label,
-              normalized_label = excluded.normalized_label,
-              status = excluded.status,
-              updated_at = excluded.updated_at
-          `,
-          args: [
-            namespaceId,
-            input.communityId,
-            input.namespaceVerificationId,
-            input.namespaceLabel,
-            input.namespaceLabel.toLowerCase(),
-            now,
-          ],
-        })
-
-        await tx.execute({
-          sql: `
-            INSERT INTO namespace_handle_policies (
-              namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-              membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, 1, 1, ?6, ?7, ?7
-            )
-            ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
-              policy_template = excluded.policy_template,
-              pricing_model = excluded.pricing_model,
-              membership_required_for_claim = excluded.membership_required_for_claim,
-              claims_enabled = excluded.claims_enabled,
-              updated_at = excluded.updated_at
-          `,
-          args: [
-            namespaceHandlePolicyId,
-            input.communityId,
-            namespaceId,
-            input.handlePolicyTemplate,
-            input.pricingModel,
-            handlePolicySettings ? JSON.stringify(handlePolicySettings) : null,
-            now,
-          ],
-        })
-      }
-
-      if (input.gatePolicy) {
-        await tx.execute({
-          sql: `
-            INSERT INTO community_gate_policies (
-              community_id, scope, version, expression_json, created_at, updated_at
-            ) VALUES (?1, 'membership', 1, ?2, ?3, ?3)
-            ON CONFLICT(community_id, scope) DO UPDATE SET
-              version = excluded.version,
-              expression_json = excluded.expression_json,
-              updated_at = excluded.updated_at
-          `,
-          args: [
-            input.communityId,
-            JSON.stringify(input.gatePolicy),
-            now,
-          ],
-        })
-      }
-
-      for (const rule of input.rules) {
-        await tx.execute({
-          sql: `
-            INSERT INTO community_rules (
-              rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
-            )
-          `,
-          args: [
-            rule.rule_id,
-            input.communityId,
-            rule.title,
-            rule.body,
-            rule.report_reason,
-            rule.position,
-            rule.status,
-            now,
-          ],
-        })
+      for (const statement of buildCommunitySeedStatements(input)) {
+        await tx.execute(statement)
       }
 
       await tx.commit()
