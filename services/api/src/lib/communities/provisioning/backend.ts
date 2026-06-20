@@ -318,9 +318,10 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
         )
       }
       if (loadResult.code === "shard_write_not_allowed") {
-        // The orchestrator passes []; the bootstrap guard rejects everything
-        // else. If this fires with [], it's a bug in the guard or the
-        // orchestrator.
+        // The bootstrap guard allows only CREATE/INSERT; the §8.7 translator
+        // (localCommunityShardStatements) emits only those, so this firing means
+        // a guard or translator bug (e.g. a template migration introduced a verb
+        // the final-schema dump didn't reduce to CREATE).
         throw internalError(
           `d1_native provisioning failed: bootstrap guard rejected load (${loadResult.message})`,
         )
