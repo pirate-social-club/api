@@ -5,7 +5,7 @@ import type {
 import { notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { decodePublicId } from "../public-ids"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import { listCommunityLabels, syncCommunityLabels } from "./community-label-store"
 import {
   assertUpdateCommunityLabelPolicyRequest,
@@ -41,7 +41,7 @@ export async function updateCommunityReferenceLinks(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.reference_links_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({
@@ -136,7 +136,7 @@ export async function updateCommunityLabelPolicy(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.labels_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({

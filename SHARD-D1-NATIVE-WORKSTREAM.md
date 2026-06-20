@@ -163,7 +163,7 @@ does not exist in the community-DB write surfaces.** Evidence:
 
 **Implication:** bucket (c) is **mechanical** (import swap `openCommunityDb` → `openCommunityWriteClient`
 at write sites), NOT a per-site refactor. The migration is much lower-risk and faster than the
-worst-case framing — (c) is large in COUNT (~30-40 sites) but LOW in difficulty. **Caveat:** per-site
+worst-case framing — (c) is large in COUNT (~30-40 sites) but LOW in difficulty. **Coverage:** the 0-SELECTs finding is EXHAUSTIVE (12 of 12 community-DB tx blocks scanned, not a sample); "spot-checked" referred only to the in-tx HELPERS. Per-site
 conversion should still confirm each in-tx helper is write-only (the survey spot-checked, not
 exhaustively inspected every helper), but no result-dependent pattern was found anywhere.
 
