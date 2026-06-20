@@ -57,9 +57,8 @@ is exhausted in PR #57.
 | 2 | ✅ Shipped (live on staging) | this PR | §8.3 | `communityD1Bind` RPC + concurrent-allocator catch + quarantine-window-respecting free-pool scan. 9 new runShardBind tests, total 35 pass including all §8.3 cases (idempotency, concurrent UNIQUE catch, pool exhausted, quarantine, BINDING_NOT_INITIALIZED, missing D1_POOL). Shard deployed v `2523116f-2d3d-4144-8150-5ad86178d60e`. |
 | 2.5 | ✅ Shipped (live on staging) | this PR | (contract fix, no §X) | All shard RPCs now return `ShardResult<T>` (typed errors as VALUES) instead of throwing. Custom error codes survive the WorkerEntrypoint RPC boundary — the API can now distinguish `shard_pool_write_conflict` (retry) from `shard_pool_exhausted` (fail to ops) from `shard_binding_not_allowed` (security deny). Live smoke verified: poisoned pair returns `code: "shard_binding_not_allowed"`, empty pool returns `code: "shard_pool_exhausted"` — no more "error:unknown". |
 | 3 | ✅ Shipped (live on staging) | this PR | §8.4 | `communityD1LoadSnapshot` RPC + bootstrap guard (`isBootstrapAllowedStatement`, allows CREATE TABLE IF NOT EXISTS + INSERT) + pool-table re-validation (§4.2 invariant against release+reallocate) + last_loaded_at set on success + idempotent no-op on retry. 9 new runShardLoadSnapshot tests, total 44 pass including all §8.4 cases (load, idempotency, BINDING_NOT_ALLOCATED with stale cache, bootstrap guard rejects DROP/SELECT, BINDING_NOT_ALLOWED, empty statements still marks loaded). Shard deployed v `1a89838a-3f86-4277-9cc7-63965b650f4d`. |
-| 4 | ⬜ Pending | — | §8.1 | `d1_native.provision()` orchestration (gap-5 service test). |
-| 4 | ✅ Shipped (live on staging) | this PR | §8.1 | `d1_native.provision()` orchestrator: `communityD1Bind` → `communityD1LoadSnapshot` (empty statements; v1 ships an idempotent no-op load) → `upsertD1CommunityRoutingRow('ready')` → `persistProvisionedD1Binding`. Branches on raw `ShardResult` for control flow (not via throw+re-catch); each error code has a distinct recovery path: pool_exhausted → 503, write_conflict → 503, binding_not_allocated → 503, others → 500/403. Backend test covers the §8.1 call sequence + the pool_exhausted 503 mapping. Route test (community-provisioning-routes.test.ts) goes through the real handler with a fake `COMMUNITY_D1_SHARD` and queries the control plane to verify the routing row at `backend='d1', provisioning_state='ready'` and the binding row's URL updated to `d1://shard/<binding>`. This is the test slice 4 of PR #57 couldn't reach. API deployed v `108d9450-bb3b-4bf1-8100-ec24628d43da`. |
-| 5 | ⬜ Pending | — | §8.5 | Reconciliation sweep (cron Worker). |
+| 4 | ⚠️ Code-complete; control-plane path NOT live | this PR | §8.1 | `d1_native.provision()` orchestrator: `communityD1Bind` → `communityD1LoadSnapshot` → `upsertD1CommunityRoutingRow('ready')` → `persistProvisionedD1Binding`. Branches on raw `ShardResult`; each error code has a distinct recovery (pool_exhausted/write_conflict/binding_not_allocated → 503, others → 500/403). Unit + route test (fake `COMMUNITY_D1_SHARD` + control-plane assertions) pass. **The orchestrator's live control-plane writes have NEVER run** — `pirate-api-d1-staging` is a code-only deploy with NO `CONTROL_PLANE_DATABASE_URL` (and ~no secrets). Code deployed v `108d9450`, but the routing/binding writes are inert there. Live integration deferred to the step-7 drill on a properly-configured worker. |
+| 5 | ⚠️ Code-complete; control-plane path NOT live | this PR | §8.5 | Reconciliation sweep. Admin RPCs (GetPoolRow/Reset/Release, service-authed, fail-closed) `ed4c495` + reset server-side load-guard `f7042d3` (closes the load-vs-reset TOCTOU) + pure sweep orchestrator `c185847` (advance / reset+release / race→advance / error paths — 7/7 tests) + stuck-row query `f1ba37f` + host glue `36e40ad` (mounted in the scheduled batch under the existing DO lease → single-flight free; advance path does both routing flip AND binding-URL persist; errors capped). Live smoke confirmed the cron fires + DO lease + gate all work, but the sweep itself fails on the same missing `CONTROL_PLANE_DATABASE_URL`. Reconciler is unit-verified end-to-end; live exercise pending step 7. |
 | 6 | ⬜ Pending | — | (operator runbook) | `allocate-d1-pool.ts` — can run in parallel with 1–5. |
 | 7 | ⬜ Pending | — | §8.6 | Staging drill (merge gate). |
 
@@ -590,6 +589,21 @@ is a `wrangler d1 create` wrapper + a few `INSERT`s.
 ## Step 7 — Staging drill (the merge gate)
 
 **Status:** Pending.
+
+**PREREQUISITE (discovered during step 5's live smoke — do this FIRST):**
+`pirate-api-d1-staging` is a **code-only deploy** — its only secret is
+`SHARD_ADMIN_TOKEN`. It has **no `CONTROL_PLANE_DATABASE_URL`** (and ~none of the
+other secrets the working `pirate-api-staging` worker has). So every
+control-plane operation on it is inert — the step-4 orchestrator's routing/binding
+writes AND the step-5 reconciler sweep have NEVER run live (both verified only
+against fake control planes in unit tests). The drill's worker must be **fully
+secret-configured first**: source `CONTROL_PLANE_DATABASE_URL` (the staging
+control-plane connection string — from Infisical / the secret store, NOT a guess)
++ the rest of the staging secret set. NOTE: this points the worker at the SHARED
+staging control plane (same one main staging uses) — the reconciler will then
+read/write real `community_database_routing` rows (currently just the 2 pilots,
+both `ready` → no-op, but it is shared data). Requires explicit go for shared-data
+writes. Until this is done, "live on d1-staging" is true for the shard side only.
 
 **Scope:** End-to-end on staging:
 1. Pre-allocate 1–2 D1 dbs with the step 6 script.
