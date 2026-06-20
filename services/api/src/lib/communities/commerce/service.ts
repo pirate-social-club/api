@@ -1,4 +1,5 @@
 import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import {
@@ -6,7 +7,7 @@ import {
   getCommunityMembershipState,
   hasCommunityRole,
 } from "../membership/membership-state-store"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import { getPostById } from "../../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../../posts/post-access"
@@ -119,7 +120,7 @@ async function requireDerivativeSourceComposerCommunity(input: {
   communityId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<void> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
   } finally {
@@ -135,7 +136,7 @@ async function listCommunityDerivativeSourceRows(input: {
   limit: number
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<DerivativeSourceRow[]> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     return await listDerivativeSourceRows({
       client: db.client,
@@ -280,7 +281,7 @@ type AuthorizedAssetAccess = {
 }
 
 async function authorizeAssetAccess(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   userId: string
   assetId: string
@@ -673,7 +674,7 @@ export async function getCommunityAsset(input: {
   assetId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<Asset> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const { asset, isPrivilegedViewer } = await authorizeAssetAccess({
@@ -733,7 +734,7 @@ export async function listDerivativeSources(input: {
       communityRepository: input.communityRepository,
     })
   } else {
-    const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+    const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
     try {
       await requireCommunityMember(db.client, input.communityId, input.userId)
       rows = await listDerivativeSourceRows({
@@ -762,7 +763,7 @@ export async function resolveCommunityAssetAccess(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<AssetAccessResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const { asset, post, isPrivilegedViewer, privilegedReason } = await authorizeAssetAccess({
@@ -879,7 +880,7 @@ export async function resolvePublicCommunityAssetAccess(input: {
   if (input.buyer.kind !== "wallet") {
     throw badRequestError("Wallet buyer is required")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const asset = await getAssetRow(db.client, input.communityId, input.assetId)
     if (!asset) {
@@ -962,7 +963,7 @@ export async function fetchPublicCommunityAssetContent(input: {
   assetId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<Response> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const asset = await getAssetRow(db.client, input.communityId, input.assetId)
     if (!asset) {
@@ -996,7 +997,7 @@ export async function fetchCommunityAssetContent(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<Response> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const { asset } = await authorizeAssetAccess({
       client: db.client,

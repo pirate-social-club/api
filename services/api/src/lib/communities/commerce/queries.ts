@@ -239,7 +239,7 @@ function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | un
 }
 
 export async function listDerivativeSourceRows(input: {
-  client: Client
+  client: CommerceExecutor
   communityId: string
   kind?: DerivativeSourceKind | null
   query?: string | null
@@ -426,7 +426,7 @@ export async function getActiveEntitlementForBuyer(
 }
 
 export async function getActiveEntitlementForBuyerIdentity(
-  client: Client,
+  client: CommerceExecutor,
   communityId: string,
   buyer: BuyerIdentity,
   targetRef: string,
