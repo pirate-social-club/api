@@ -64,9 +64,34 @@ is exhausted in PR #57.
 
 **⚠️ DEPLOYMENT GUARD until §8.7 ships:** do NOT set `COMMUNITY_PROVISION_BACKEND=d1_native` on any env other than `pirate-api-d1-staging`. Every d1_native create today yields a schemaless, non-functional community; cleanup is `communityD1Reset` + `communityD1Release` + delete the control-plane rows. Production + main staging keep the operator/turso path (default); the flag is opt-in per env.
 
-## Step 8 — real snapshot/schema load (§8.7, the next slice)
+## Step 8 — real snapshot/schema load (§8.7)
 
-**Status:** Not started. Turns the merge-gate artifact into a *functional* D1 community.
+**Status:** ✅ DONE + PROVEN LIVE (2026-06-20). A community is now born on D1
+**functional** — full schema + seed data, end-to-end on live staging.
+
+**Drill v2 artifact:** community `cmt_99c7a4e145e446a8820e0e46717829a2`
+("D1 Native Drill v2 (schema)") on `DB_CMTY_0002`. Verified: the community's D1
+(`community-d1-pool-0002-staging`) has **57 tables + 102 schema_migrations + the
+seeded community row + owner role** (vs 0 tables for the v1 empty-load artifact on
+DB_CMTY_0001). Control plane: routing `backend='d1'/ready`, binding
+`d1://shard/DB_CMTY_0002`, pool allocated. The 287-statement load (181 schema + 102
+migration seeds + ~4 data) went through `communityD1LoadSnapshot` in one batch —
+no D1 batch-size error, no bootstrap-guard rejection.
+
+**Implementation (commits `383cfe8` schema gen, `d6169a5` seed extraction, `ef9acfe`
+translator+wiring):** option 2 (final-schema dump) + option C (pure
+`buildCommunitySeedStatements` shared with the operator path, no drift). All
+CREATE/INSERT → no shard-guard widening.
+
+**⚠️ Pool now EXHAUSTED:** all 4 bindings allocated (2 pilots + 2 drill communities,
+0 FREE). The next d1_native create returns `shard_pool_exhausted` (503) until ops
+runs `allocate-d1-pool --apply` for more. The deployment guard (don't enable
+d1_native beyond pirate-api-d1-staging) still applies — though the schemaless
+caveat is now resolved.
+
+---
+
+### (historical) original §8.7 plan
 
 `localSnapshotToShardStatements(LocalCommunitySnapshot) -> ShardSqlStatement[]` — must emit the community-template **schema DDL** (the 102 `1xxx_*.sql` files in `core/db/community-template/migrations/`) first, then the bootstrap rows. Replace `statements: []` at backend.ts:295 with it.
 
