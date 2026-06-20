@@ -935,11 +935,17 @@ The architecturally-uncertain part is DONE. What remains is sequenced execution 
 two irreversible gates near the end. All Phase 4 tools exist on disk
 (community-provision-operator/scripts/).
 
-- **Phase 1 — finish §8.8 call-site routing** (~77 sites left). Per-file, per-site care
-  (read→ReadClient + widen execute-only helpers to DbExecutor; write→WriteClient pure
-  swap; in-file helper cascades classified read/write per handle-claim's example). Gate
-  per file: 464 tests green, typecheck clean, zero existing tests changed. Done when no
-  consumer code calls openCommunityDb.
+- **Phase 1 — §8.8 call-site routing — ✅ COMPLETE (2026-06-20).** ALL consumer call sites
+  routed: 0 `openCommunityDb(` calls remain outside the factory definition + the read/write
+  clients' internal Turso fallback (`openLegacy`). Final-day batches: 3 latent-bug fixes
+  (profile-activity/community-preview, commit `2a050dc`), (d) cluster→write client (`55e8924`),
+  live-rooms 15 sites (`d1b6d6e`), scattered tail 16 files (`56de020`). Patterns proven: read
+  (swap + widen execute-only helpers to DbExecutor), write (pure swap, full Client), mixed +
+  in-file cascade (handle-claim), money-surface call-tree tracing (commerce/settlement), (d)
+  write-on-read (write client, uniform). 464 unit pass, typecheck clean, zero existing tests
+  changed throughout. The 3 false-classifications the call-tree discipline caught (settlement
+  reconcile read→write, comment-read (d)-heavy, profile-activity/preview active bugs) are why
+  this was per-site work, not a sed pass.
 - **Phase 2 — §8.9 live-semantics verification.** Unit tests prove the Turso path
   unchanged, NOT that the d1 path works live per surface. Per surface class (real-time
   live-rooms, money commerce/settlement, identity handles): one representative live proof

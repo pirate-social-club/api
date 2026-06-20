@@ -35,9 +35,10 @@ export async function updateCommunityRules(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.rules_updated",
   })
-  // PR3 pilot: this write surface is buffer-safe (write-only tx body), so it may
-  // route to D1 for backend='d1' communities. Other (result-dependent) write
-  // surfaces stay on openCommunityDb until refactored.
+  // Routed write surface (buffer-safe, write-only tx body): D1 for backend='d1'
+  // communities, legacy Turso otherwise. As of §8.8 all consumer surfaces are
+  // routed through the read/write clients; the only remaining openCommunityDb is
+  // the read/write clients' internal Turso fallback (removed in Phase 5).
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
