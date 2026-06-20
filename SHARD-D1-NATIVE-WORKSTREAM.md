@@ -146,6 +146,27 @@ do, must widen to `CommunityReadClient` (execute+batch) instead — and that can
 across a chain (public-posts → getPublicPostFromCommunityDb → sub-helpers). Those
 deeper chains are past "mechanical" and belong in focused work, not the clean grind.
 
+### §8.8 bucket (c) write-site SURVEY (2026-06-20) — the result-dependent-tx risk is ABSENT
+
+The feared blocker was "result-dependent transactions" (`BEGIN; SELECT; if(...) UPDATE; COMMIT`)
+that can't adopt `openCommunityWriteClient` until refactored. **Survey result: that pattern
+does not exist in the community-DB write surfaces.** Evidence:
+- 8 files contain `tx.transaction("write")` (live-rooms ×4 blocks, handle-claim ×2, settlement,
+  link-label-settings, assistant-policy, gate-settings, post-event-actions, provisioning) —
+  **12 transaction blocks total, ZERO `SELECT` inside any of them.** The txs are write-only
+  (INSERT/UPDATE/DELETE); branching is on INPUT (validated pre-tx), not intermediate reads.
+- The in-tx write helpers (`createLiveRoomInTransaction`, `syncCommunityLabels`, `deleteLiveRoomViewerSessions`,
+  `createProtocolIssuanceForHandle`, `setPostEventStatus`, …) are write-only — spot-checked
+  `syncCommunityLabels` = `INSERT … ON CONFLICT DO UPDATE` loop over input, no read-branch.
+- 0-tx "write" files (commerce, song-artifacts) write single statements via `execute` —
+  inherently buffer-safe (no tx, no branching).
+
+**Implication:** bucket (c) is **mechanical** (import swap `openCommunityDb` → `openCommunityWriteClient`
+at write sites), NOT a per-site refactor. The migration is much lower-risk and faster than the
+worst-case framing — (c) is large in COUNT (~30-40 sites) but LOW in difficulty. **Caveat:** per-site
+conversion should still confirm each in-tx helper is write-only (the survey spot-checked, not
+exhaustively inspected every helper), but no result-dependent pattern was found anywhere.
+
 **Remaining: ~89 `openCommunityDb(` sites.** Buckets: (a) clean-read mechanical
 (remaining feed reads, mcp.ts, etc.); (b) deeper-read-cascade (public-posts — needs
 CommunityReadClient widening down a chain); (c) write/transaction (openCommunityWriteClient,
