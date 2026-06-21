@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import { badRequestError, conflictError, HttpError, notFoundError } from "../errors"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import {
@@ -149,7 +149,7 @@ async function requireOwnedSession(input: {
   communityRepository: SongArtifactCommunityRepository
 }): Promise<SongArtifactUploadSessionRow> {
   await requireActiveCommunity(input.communityRepository, input.communityId)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
   } finally {
@@ -235,7 +235,7 @@ export async function createMultipartSongArtifactUpload(input: {
   assertDirectMultipartRequest(input.body)
   await requireActiveCommunity(input.communityRepository, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
   } finally {

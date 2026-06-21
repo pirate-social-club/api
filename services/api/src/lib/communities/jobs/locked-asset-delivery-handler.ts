@@ -2,7 +2,7 @@ import { getUserRepository } from "../../auth/repositories"
 import { nowIso } from "../../helpers"
 import { requiredString } from "../../sql-row"
 import { prepareRequestedLockedAssetDelivery } from "../commerce/service"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
@@ -19,7 +19,7 @@ type LockedAssetDeliveryReconcileSummary = {
 }
 
 export async function runLockedAssetDeliveryPrepare(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const assetId = input.job.subject_id
     await prepareRequestedLockedAssetDelivery({
@@ -51,7 +51,7 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
   const communities: LockedAssetDeliveryReconcileCommunitySummary[] = []
 
   for (const communityId of communityIds) {
-    const db = await openCommunityDb(input.env, input.communityRepository, communityId)
+    const db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
     try {
       const missingJobs = await db.client.execute({
         sql: `
