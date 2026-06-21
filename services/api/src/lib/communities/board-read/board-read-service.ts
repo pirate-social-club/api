@@ -1,6 +1,6 @@
 import { executeFirst } from "../../db-helpers"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
-import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
@@ -222,7 +222,7 @@ function commentFromRow(row: unknown, excerptChars: number): BoardReadComment {
 }
 
 export async function searchPublishedPosts(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   options: PublishedPostSearchOptions = {},
 ): Promise<BoardReadPostSearchResult[]> {
@@ -287,7 +287,7 @@ export async function searchPublishedPosts(
 }
 
 export async function listUserPostsInCommunity(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   userId: string,
   options: UserActivityOptions = {},
@@ -317,7 +317,7 @@ export async function listUserPostsInCommunity(
 }
 
 export async function listUserCommentsInCommunity(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   userId: string,
   options: UserActivityOptions = {},
@@ -347,7 +347,7 @@ export async function listUserCommentsInCommunity(
 }
 
 export async function getThreadWithComments(
-  client: Client,
+  client: DbExecutor,
   postId: string,
   options: ThreadReadOptions = {},
 ): Promise<BoardReadThread | null> {

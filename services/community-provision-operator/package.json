@@ -9,8 +9,10 @@
     "generate:migrations": "bun run scripts/generate-migration-manifest.ts",
     "check:migrations": "bun run scripts/check-migration-manifest.ts",
     "backfill:migrations": "bun run scripts/backfill-community-migrations.ts",
+    "backfill:routing": "bun run scripts/backfill-community-routing.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "smoke:provision": "bun run scripts/smoke-provision.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.2",
@@ -26,6 +28,7 @@
   },
   "overrides": {
     "esbuild": "^0.28.1",
+    "undici": "^7.28.0",
     "ws": "^8.21.0"
   }
 }

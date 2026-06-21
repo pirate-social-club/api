@@ -1,7 +1,9 @@
 import { badRequestError, conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { decodePublicId } from "../../public-ids"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient, type CommunityWriteHandle } from "../community-read-access"
+import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -136,6 +138,20 @@ export type PurchaseSettlementReconciliationSummary = {
   errors: number
 }
 
+/**
+ * Quote-consumption eligibility, evaluated on the base client BEFORE the settlement
+ * write tx. Replaces the former in-tx `rowsAffected === 0` branch (a buffered D1 write
+ * tx can't surface rowsAffected mid-flight). 'active' is consumed by the conditional
+ * UPDATE; 'consumed' is an idempotent re-settlement (deterministic purchaseId + the
+ * purchases PK de-dupe the writes); any terminal state (expired/failed) or a missing
+ * quote is not consumable.
+ */
+export function assertPurchaseQuoteConsumable(status: string | null | undefined): void {
+  if (status !== "active" && status !== "consumed") {
+    throw conflictError("Purchase quote could not be consumed")
+  }
+}
+
 function serializePurchaseSettlementEffect(row: PurchaseSettlementEffectRow): CommunityPurchaseSettlementEffect {
   return {
     object: "purchase_settlement_effect",
@@ -158,7 +174,7 @@ function serializePurchaseSettlementEffect(row: PurchaseSettlementEffectRow): Co
 }
 
 async function finalizeLocalPurchaseSettlement(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: Client
   communityId: string
   buyer: BuyerIdentity
   quote: PurchaseQuoteRow
@@ -210,6 +226,15 @@ async function finalizeLocalPurchaseSettlement(input: {
   if (!listing) {
     throw notFoundError("Listing not found")
   }
+
+  // Quote-consumption eligibility BEFORE the tx — a buffered D1 write tx can't read
+  // the quote's UPDATE rowsAffected back mid-flight. Re-read the authoritative status:
+  // 'active' will be consumed by the conditional UPDATE below; 'consumed' is an
+  // idempotent re-settlement (purchaseId is deterministic + purchases.purchase_id is
+  // the PK, so the writes below de-dupe via ON CONFLICT); any terminal state
+  // (expired/failed) is not consumable.
+  const liveQuote = await getPurchaseQuoteRow(input.client, input.communityId, input.quote.quote_id)
+  assertPurchaseQuoteConsumable(liveQuote?.status ?? null)
 
   const tx = await input.client.transaction("write")
   try {
@@ -346,7 +371,10 @@ async function finalizeLocalPurchaseSettlement(input: {
       ],
     })
 
-    const quoteUpdate = await tx.execute({
+    // Conditional + idempotent: consumes the quote only if still 'active'. Eligibility
+    // was already enforced pre-tx, so we no longer branch on rowsAffected here (a
+    // buffered D1 write tx can't surface it mid-flight).
+    await tx.execute({
       sql: `
         UPDATE purchase_quotes
         SET status = 'consumed',
@@ -358,9 +386,6 @@ async function finalizeLocalPurchaseSettlement(input: {
       `,
       args: [input.communityId, input.quote.quote_id, input.createdAt],
     })
-    if ((quoteUpdate.rowsAffected ?? 0) === 0 && input.quote.status !== "consumed") {
-      throw conflictError("Purchase quote could not be consumed")
-    }
 
     await tx.execute({
       sql: `
@@ -448,7 +473,7 @@ function hasConfirmedParentRoyaltyVaultTransfer(input: {
 }
 
 async function getExistingPurchaseSettlement(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: DbExecutor
   communityId: string
   purchaseId: string
   quote: PurchaseQuoteRow
@@ -465,7 +490,7 @@ async function getExistingPurchaseSettlement(input: {
 }
 
 async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: Client
   communityId: string
   attempt: PurchaseSettlementAttemptRow
   now: string
@@ -635,9 +660,9 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
 
   const communities = (await input.communityRepository.listActiveCommunities()).slice(0, maxCommunities)
   for (const community of communities) {
-    let db: Awaited<ReturnType<typeof openCommunityDb>> | null = null
+    let db: CommunityWriteHandle | null = null
     try {
-      db = await openCommunityDb(input.env, input.communityRepository, community.community_id)
+      db = await openCommunityWriteClient(input.env, input.communityRepository, community.community_id)
       const attempts = await listStalePurchaseSettlementAttempts({
         client: db.client,
         staleBefore,
@@ -684,7 +709,7 @@ async function settleCommunityPurchaseForBuyer(input: {
   settlementWalletAttachmentId: string
   resolveBuyerWalletAddress: () => Promise<string>
 }): Promise<SettleCommunityPurchaseResult> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const buyer = input.buyer
     const quoteId = decodePublicId(input.body.quote, "pq")
@@ -1033,7 +1058,7 @@ export async function settleCommunityPurchase(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<SettleCommunityPurchaseResult> {
-  const membershipDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const membershipDb = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(membershipDb.client, input.communityId, input.userId)
   } finally {
@@ -1061,7 +1086,7 @@ export async function settlePublicCommunityPurchase(input: {
   body: PublicCommunityPurchaseSettlementRequest
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<SettleCommunityPurchaseResult> {
-  const quoteDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const quoteDb = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const quoteId = decodePublicId(input.body.quote, "pq")
     const quote = await getPurchaseQuoteRow(quoteDb.client, input.communityId, quoteId)
@@ -1096,7 +1121,7 @@ export async function listCommunityPurchases(input: {
   cursor?: string | null
   limit: number
 }): Promise<CommunityPurchaseListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const rows = await listPurchaseRows(db.client, input.communityId, input.userId, {
@@ -1134,7 +1159,7 @@ export async function getCommunityPurchase(input: {
   purchaseId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityPurchase> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const purchase = await getPurchaseRow(db.client, input.communityId, input.purchaseId)
@@ -1159,7 +1184,7 @@ export async function listCommunityPurchaseSettlementEffects(input: {
   purchaseId: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityPurchaseSettlementEffectListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const purchase = await getPurchaseRow(db.client, input.communityId, input.purchaseId)

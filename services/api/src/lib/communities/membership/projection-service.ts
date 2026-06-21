@@ -6,7 +6,7 @@ import {
   listCommunityFollowProjectionSources,
   listCommunityMembershipProjectionSources,
 } from "./projection-source-store"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import { nowIso } from "../../helpers"
 import { publicCommunityId } from "../../public-ids"
 import type { Env } from "../../../env"
@@ -16,7 +16,7 @@ import type {
   CommunityMembershipRepository,
 } from "./types"
 
-type CommunityDb = Awaited<ReturnType<typeof openCommunityDb>>
+type CommunityDb = Awaited<ReturnType<typeof openCommunityReadClient>>
 
 export async function syncCommunityFollowProjection(input: {
   communityRepository: CommunityMembershipRepository
@@ -115,7 +115,7 @@ export async function reconcileCommunityMembershipAndFollowProjections(input: {
   for (const community of communities) {
     let db: CommunityDb | null = null
     try {
-      db = await openCommunityDb(input.env, input.communityRepository, community.community_id)
+      db = await openCommunityReadClient(input.env, input.communityRepository, community.community_id)
       summary.checked_communities += 1
 
       const membershipRows = await listCommunityMembershipProjectionSources({

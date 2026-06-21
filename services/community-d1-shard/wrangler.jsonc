@@ -1,0 +1,78 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "community-d1-shard-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // (communityId → bindingName) seed for the d1_pool table. The runtime
+    // source of truth is the D1_POOL D1 (the shard's own pool metadata
+    // database); this env JSON is read only on the first cache miss per
+    // isolate, INSERT OR IGNORE'd into d1_pool, and not consulted again
+    // until the pool cache expires. Stays here as a deploy-time seed so a
+    // fresh pool (or a wiped one) is repopulated from the same source of
+    // truth the static map previously was.
+    //
+    // PR2 pilot: cmt_a43c... ("Georgia Place Smoke") → DB_CMTY_PILOT.
+    "COMMUNITY_D1_BINDING_MAP_JSON": "{\"cmt_a43c487541154b358837c726b98aea2e\":\"DB_CMTY_PILOT\",\"cmt_541911f4cd9145398b7fa79ddc0542fe\":\"DB_CMTY_FIXTURE\"}",
+    // This shard's own worker id. Returned in communityD1Bind responses so the
+    // API can populate community_database_routing.shard_worker_id.
+    "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-staging"
+  },
+  "d1_databases": [
+    {
+      "binding": "D1_POOL",
+      "database_name": "community-d1-shard-pool-staging",
+      "database_id": "d7d47bef-ffcd-4744-842d-c11b60c52dd8"
+    },
+    {
+      "binding": "DB_CMTY_PILOT",
+      "database_name": "cmty-pilot-staging",
+      "database_id": "81369dab-8d38-4a7f-842f-dd3bb5c2fd30"
+    },
+    {
+      "binding": "DB_CMTY_FIXTURE",
+      "database_name": "cmty-d1-fixture-staging",
+      "database_id": "0c155e97-cbcb-47f5-ac7c-3e5c0b88ab60"
+    },
+    {
+      "binding": "DB_CMTY_0001",
+      "database_name": "community-d1-pool-0001-staging",
+      "database_id": "82c46d7b-50ce-4984-9d77-9334d4463ddf"
+    },
+    {
+      "binding": "DB_CMTY_0002",
+      "database_name": "community-d1-pool-0002-staging",
+      "database_id": "c1ccf25f-0e13-4aad-9770-b7a46fa12a82"
+    }
+  ],
+  // Production env — a SEPARATE worker (community-d1-shard-prod) with its own pool
+  // metadata D1 + community pool D1s. No pilot seed (empty COMMUNITY_D1_BINDING_MAP_JSON)
+  // — prod communities are bound by the allocator + provisioning, not seeded. Inherits
+  // main/compatibility/observability from the top-level config.
+  "env": {
+    "production": {
+      "name": "community-d1-shard-prod",
+      "vars": {
+        "COMMUNITY_D1_BINDING_MAP_JSON": "{}",
+        "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-prod"
+      },
+      "d1_databases": [
+        { "binding": "D1_POOL", "database_name": "community-d1-shard-pool-prod", "database_id": "115ea5db-726a-4786-82c0-0824116bcb2d" },
+        { "binding": "DB_CMTY_0001", "database_name": "community-d1-pool-0001-prod", "database_id": "6c1a75c5-b1d2-4c65-835e-810c17c9d09e" },
+        { "binding": "DB_CMTY_0002", "database_name": "community-d1-pool-0002-prod", "database_id": "888bb45d-83f3-477c-afb9-9387895daaa1" },
+        { "binding": "DB_CMTY_0003", "database_name": "community-d1-pool-0003-prod", "database_id": "13eb0685-0dd2-423b-abe0-64709d9e621b" },
+        { "binding": "DB_CMTY_0004", "database_name": "community-d1-pool-0004-prod", "database_id": "e6359fdb-7636-474a-9c24-8d4f8c768324" }
+      ]
+    }
+  }
+  // The RPC surface validates the requested bindingName against these bound
+  // namespaces (resolveD1), so only declared D1s here are reachable.
+  // Step 1 (D1-NATIVE-PROVISIONING-DESIGN.md §3, §5): the (communityId,
+  // bindingName) allowlist is also re-validated against d1_pool via
+  // assertCommunityBinding — the control-plane routing row is never trusted
+  // on its own.
+}

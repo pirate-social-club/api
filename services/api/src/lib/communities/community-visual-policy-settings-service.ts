@@ -4,7 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import {
   assertUpdateCommunityVisualPolicyRequest,
   communityMutationActorFromUserId,
@@ -37,7 +37,7 @@ export async function updateCommunityVisualPolicy(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.visual_policy_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const result = await db.client.execute({

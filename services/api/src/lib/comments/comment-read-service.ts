@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import type { Client } from "../sql-client"
 import type {
@@ -84,7 +84,7 @@ export async function listPostComments(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireReadableMember(db.client, input.communityId, input.userId)
     const post = await getPostById(db.client, input.threadRootPostId)
@@ -136,7 +136,7 @@ export async function listPublicPostComments(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const post = await getPostById(db.client, input.threadRootPostId)
     if (!post || post.community_id !== projection.community_id || !isPubliclyReadableThreadRoot(post)) {
@@ -202,7 +202,7 @@ export async function listCommentReplies(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     await requireReadableMember(db.client, projection.community_id, input.userId)
     const comment = await getCommentById(db.client, input.commentId)
@@ -254,7 +254,7 @@ export async function listPublicCommentReplies(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const comment = await getCommentById(db.client, input.commentId)
     if (!comment) {
@@ -304,7 +304,7 @@ export async function getCommentContext(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     await requireReadableMember(db.client, projection.community_id, input.userId)
     const context = await getCommentContextRow({

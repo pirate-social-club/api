@@ -7,7 +7,7 @@ import {
   requestOpenRouterChatCompletion,
 } from "../../openrouter-client"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import { requireAssistantCommunityAccess, type CommunityAssistantRepository } from "./access"
 import {
   canAccessCommunity,
@@ -729,7 +729,7 @@ async function sendCommunityAssistantUserMessage(input: {
   const nowDate = new Date()
   const now = nowIso()
   const persist = shouldPersistChats(policy)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     if (input.accessMode === "member_required") {
       const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
@@ -977,7 +977,7 @@ export async function sendCommunityAssistantGroupMessage(input: {
     env: input.env,
     communityId: input.communityId,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const context = await buildCommunityContext({
       client: db.client,
@@ -1029,7 +1029,7 @@ export async function listCommunityAssistantChats(input: {
   actor: ActorContext | AdminActorContext
 }): Promise<CommunityAssistantChatListResponse> {
   await requireAssistantCommunityAccess(input)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -1067,7 +1067,7 @@ export async function getCommunityAssistantChat(input: {
   if (!chatId) {
     throw notFoundError("Assistant chat not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const chat = chatRow(await executeFirst(db.client, {
       sql: `

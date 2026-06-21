@@ -20,7 +20,8 @@ import { makeId, nowIso } from "../../helpers"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import type { DbExecutor } from "../../db-helpers"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
@@ -421,7 +422,7 @@ async function expireStaleHandleQuotes(input: {
   })
 }
 
-async function getNamespacePolicy(executor: Client | Transaction, communityId: string): Promise<NamespacePolicyRow | null> {
+async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
   const result = await executor.execute({
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
@@ -454,7 +455,7 @@ async function getNamespacePolicy(executor: Client | Transaction, communityId: s
 }
 
 async function getBlockingHandleForLabel(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   namespaceId: string,
   labelNormalized: string,
 ): Promise<QueryResultRow | null> {
@@ -474,7 +475,7 @@ async function getBlockingHandleForLabel(
 }
 
 async function getActiveHandleForUser(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   namespaceId: string,
   userId: string,
 ): Promise<QueryResultRow | null> {
@@ -614,7 +615,7 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
 }
 
 async function requireClaimAccess(input: {
-  client: Client | Transaction
+  client: DbExecutor
   communityId: string
   userId: string
 }): Promise<{ isMember: boolean }> {
@@ -636,7 +637,7 @@ export async function getMyCommunityHandle(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -659,7 +660,7 @@ export async function getCommunityHandleStatus(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -718,7 +719,7 @@ export async function getCommunityHandlePolicy(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -742,7 +743,7 @@ export async function updateCommunityHandlePolicy(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const current = await getNamespacePolicy(db.client, input.communityId)
     if (!current) {
@@ -811,7 +812,7 @@ export async function listCommunityHandles(input: {
     userId: input.userId,
     communityRepository: input.communityRepository,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -854,73 +855,94 @@ export async function reserveCommunityHandle(input: {
     communityRepository: input.communityRepository,
   })
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
-    const tx = await db.client.transaction("write")
-    try {
-      const policy = await getNamespacePolicy(tx, input.communityId)
-      if (!policy) {
-        throw eligibilityFailed("Community names are not available for this community")
-      }
-      const settings = parseSettings(policy.settings_json)
-      assertLabelLength(desired.labelNormalized, settings)
-      if (isReservedLabel(desired.labelNormalized, settings)) {
-        const reason = "Desired label is already reserved"
-        throw conflictError(reason, availabilityDetails("reserved", reason))
-      }
-      const blockingHandle = await getBlockingHandleForLabel(tx, policy.namespace_id, desired.labelNormalized)
-      if (blockingHandle) {
-        const status = requiredString(blockingHandle, "status")
-        const reason = status === "reserved"
-          ? "Desired label is already reserved"
-          : "Desired label is unavailable"
-        throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
-      }
-      const now = nowIso()
-      const handleId = makeId("ch")
-      await tx.execute({
-        sql: `
-          INSERT INTO community_handles (
-            community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-            label_normalized, label_display, status, issuance_source, price_cents, currency,
-            pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
-            lease_started_at, lease_expires_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, NULL,
-            ?5, ?6, 'reserved', 'admin_grant', 0, 'USD',
-            NULL, 'reserved', NULL, NULL, NULL,
-            NULL, NULL, ?7, ?7
-          )
-        `,
-        args: [
-          handleId,
-          input.communityId,
-          input.userId,
-          policy.namespace_id,
-          desired.labelNormalized,
-          desired.labelDisplay,
-          now,
-        ],
-      })
-      const result = await tx.execute({
-        sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
-        args: [handleId],
-      })
-      const handle = result.rows[0]
-      if (!handle) {
-        throw internalError("Created reserved community handle row is missing")
-      }
-      await tx.commit()
-      return serializeHandle(handle)
-    } catch (error) {
-      await tx.rollback().catch(() => undefined)
-      throw error
-    } finally {
-      tx.close()
-    }
+    return serializeHandle(await reserveCommunityHandleOnClient(db.client, {
+      communityId: input.communityId,
+      userId: input.userId,
+      desired,
+    }))
   } finally {
     db.close()
   }
+}
+
+/**
+ * Buffer-safe reservation. The namespace policy + blocking-handle reads and all
+ * validation run on the base client BEFORE the write tx (a buffered D1 write tx
+ * can't read them back mid-flight); the tx body is a single INSERT guarded by the
+ * namespace/label unique constraint (the real concurrency protection); the created
+ * row is read back AFTER commit. Returns the raw handle row. Exported for buffer tests.
+ */
+export async function reserveCommunityHandleOnClient(
+  client: Client,
+  input: { communityId: string; userId: string; desired: { labelNormalized: string; labelDisplay: string } },
+): Promise<QueryResultRow> {
+  const policy = await getNamespacePolicy(client, input.communityId)
+  if (!policy) {
+    throw eligibilityFailed("Community names are not available for this community")
+  }
+  const settings = parseSettings(policy.settings_json)
+  assertLabelLength(input.desired.labelNormalized, settings)
+  if (isReservedLabel(input.desired.labelNormalized, settings)) {
+    const reason = "Desired label is already reserved"
+    throw conflictError(reason, availabilityDetails("reserved", reason))
+  }
+  const blockingHandle = await getBlockingHandleForLabel(client, policy.namespace_id, input.desired.labelNormalized)
+  if (blockingHandle) {
+    const status = requiredString(blockingHandle, "status")
+    const reason = status === "reserved"
+      ? "Desired label is already reserved"
+      : "Desired label is unavailable"
+    throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+  }
+
+  const now = nowIso()
+  const handleId = makeId("ch")
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        INSERT INTO community_handles (
+          community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
+          label_normalized, label_display, status, issuance_source, price_cents, currency,
+          pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+          lease_started_at, lease_expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, NULL,
+          ?5, ?6, 'reserved', 'admin_grant', 0, 'USD',
+          NULL, 'reserved', NULL, NULL, NULL,
+          NULL, NULL, ?7, ?7
+        )
+      `,
+      args: [
+        handleId,
+        input.communityId,
+        input.userId,
+        policy.namespace_id,
+        input.desired.labelNormalized,
+        input.desired.labelDisplay,
+        now,
+      ],
+    })
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  // Readback AFTER commit — the buffered tx can't read the inserted row.
+  const result = await client.execute({
+    sql: `SELECT * FROM community_handles WHERE community_handle_id = ?1 LIMIT 1`,
+    args: [handleId],
+  })
+  const handle = result.rows[0]
+  if (!handle) {
+    throw internalError("Created reserved community handle row is missing")
+  }
+  return handle
 }
 
 export async function revokeCommunityHandle(input: {
@@ -941,7 +963,7 @@ export async function revokeCommunityHandle(input: {
   if (!rawHandleId) {
     throw badRequestError("handle id is required")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const now = nowIso()
     await db.client.execute({
@@ -989,7 +1011,7 @@ export async function quoteCommunityHandle(input: {
     throw notFoundError("Community not found")
   }
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const policy = await getNamespacePolicy(db.client, input.communityId)
     if (!policy) {
@@ -1183,7 +1205,7 @@ async function verifyPaymentForPaidClaim(input: {
 }
 
 async function getExistingHandleForQuote(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   quoteId: string,
 ): Promise<QueryResultRow | null> {
   const existingForQuote = await executor.execute({
@@ -1263,7 +1285,7 @@ async function createProtocolIssuanceForHandle(input: {
 }
 
 async function getClaimQuote(
-  executor: Client | Transaction,
+  executor: DbExecutor,
   input: {
     quoteId: string
     communityId: string
@@ -1400,7 +1422,7 @@ export async function claimCommunityHandle(input: {
     throw badRequestError("quote is required")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   let priceCents = 0
   let requiresProtocolIssuance = false
   let protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null = null
@@ -1448,125 +1470,196 @@ export async function claimCommunityHandle(input: {
   }
   const paymentVerified = priceCents > 0
 
-  const writeDb = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const writeDb = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
-    const tx = await writeDb.client.transaction("write")
-    try {
-      const quote = await getClaimQuote(tx, {
-        quoteId,
-        communityId: input.communityId,
-        userId: input.userId,
-      })
+    // Final, authoritative validation on the base client BEFORE the tx. A buffered
+    // D1 write tx can't read the quote/handle back mid-flight, and
+    // assertClaimQuoteStillClaimable both reads (policy, active handle, blocking
+    // handle, membership) and writes (expireStaleHandleQuotes) — none of which would
+    // observe correct state inside the buffered batch. The (namespace, label) partial
+    // unique index is the real concurrency gate for the write below.
+    const quote = await getClaimQuote(writeDb.client, {
+      quoteId,
+      communityId: input.communityId,
+      userId: input.userId,
+    })
 
-      const existingForQuote = await getExistingHandleForQuote(tx, quoteId)
-      if (existingForQuote) {
-        await tx.commit()
-        return serializeHandle(existingForQuote)
-      }
-
-      const now = nowIso()
-      const checked = await assertClaimQuoteStillClaimable({
-        executor: tx,
-        communityId: input.communityId,
-        userId: input.userId,
-        quoteId,
-        quote,
-        now,
-        paymentVerified,
-      })
-      if (checked.protocolIssuanceRequired && !protocolOwner) {
-        throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
-          protocol_owner_wallet_attachment: "missing",
-        })
-      }
-      const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
-        ? protocolOwner?.walletAttachmentId ?? null
-        : null
-
-      const handleId = makeId("ch")
-      await tx.execute({
-        sql: `
-          INSERT INTO community_handles (
-            community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-            label_normalized, label_display, status, issuance_source, price_cents, currency,
-            pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
-            lease_started_at, lease_expires_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5,
-            ?6, ?7, 'active', 'claim', ?8, 'USD',
-            ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, NULL, ?15, ?15
-          )
-        `,
-        args: [
-          handleId,
-          input.communityId,
-          input.userId,
-          checked.policy.namespace_id,
-          quoteId,
-          checked.labelNormalized,
-          checked.labelDisplay,
-          checked.priceCents,
-          stringOrNull(rowValue(quote, "pricing_model")),
-          stringOrNull(rowValue(quote, "pricing_tier")),
-          input.body.settlement_wallet_attachment?.trim() || null,
-          persistedProtocolOwnerWalletAttachmentId,
-          input.body.funding_tx_ref?.trim() || null,
-          input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
-          now,
-        ],
-      })
-
-      if (checked.protocolIssuanceRequired) {
-        if (!protocolOwner) {
-          throw internalError("Protocol owner wallet validation result is missing")
-        }
-        await createProtocolIssuanceForHandle({
-          executor: tx,
-          communityId: input.communityId,
-          namespaceId: checked.policy.namespace_id,
-          namespaceNormalizedLabel: checked.policy.normalized_label,
-          communityHandleId: handleId,
-          labelNormalized: checked.labelNormalized,
-          scriptPubkeyHex: protocolOwner.scriptPubkeyHex,
-          now,
-        })
-      }
-
-      await tx.execute({
-        sql: `
-          UPDATE community_handle_claim_quotes
-          SET status = 'claimed',
-              claimed_at = ?2,
-              updated_at = ?2
-          WHERE handle_claim_quote_id = ?1
-        `,
-        args: [quoteId, now],
-      })
-
-      const handleResult = await tx.execute({
-        sql: `
-          SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
-          FROM community_handles ch
-          ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
-          WHERE ch.community_handle_id = ?1
-          LIMIT 1
-        `,
-        args: [handleId],
-      })
-      const handle = handleResult.rows[0]
-      if (!handle) {
-        throw internalError("Created community handle row is missing")
-      }
-      await tx.commit()
-      return serializeHandle(handle)
-    } catch (error) {
-      await tx.rollback().catch(() => undefined)
-      throw error
-    } finally {
-      tx.close()
+    const existingForQuote = await getExistingHandleForQuote(writeDb.client, quoteId)
+    if (existingForQuote) {
+      return serializeHandle(existingForQuote)
     }
+
+    const now = nowIso()
+    const checked = await assertClaimQuoteStillClaimable({
+      executor: writeDb.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      quoteId,
+      quote,
+      now,
+      paymentVerified,
+    })
+    if (checked.protocolIssuanceRequired && !protocolOwner) {
+      throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
+        protocol_owner_wallet_attachment: "missing",
+      })
+    }
+    const persistedProtocolOwnerWalletAttachmentId = checked.protocolIssuanceRequired
+      ? protocolOwner?.walletAttachmentId ?? null
+      : null
+
+    return serializeHandle(await applyHandleClaimWrites(writeDb.client, {
+      communityId: input.communityId,
+      userId: input.userId,
+      quoteId,
+      namespaceId: checked.policy.namespace_id,
+      namespaceNormalizedLabel: checked.policy.normalized_label,
+      labelNormalized: checked.labelNormalized,
+      labelDisplay: checked.labelDisplay,
+      priceCents: checked.priceCents,
+      pricingModel: stringOrNull(rowValue(quote, "pricing_model")),
+      pricingTier: stringOrNull(rowValue(quote, "pricing_tier")),
+      settlementWalletAttachmentId: input.body.settlement_wallet_attachment?.trim() || null,
+      protocolOwnerWalletAttachmentId: persistedProtocolOwnerWalletAttachmentId,
+      fundingTxRef: input.body.funding_tx_ref?.trim() || null,
+      settlementTxRef: input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
+      protocolIssuanceRequired: checked.protocolIssuanceRequired,
+      protocolOwner,
+      now,
+    }))
   } finally {
     writeDb.close()
   }
+}
+
+/**
+ * Buffer-safe write phase of a handle claim. All validation/reads happen in the
+ * caller on the base client BEFORE this runs; here the tx body is write-only (handle
+ * INSERT + optional protocol issuance + quote transition, atomic via db.batch). The
+ * (namespace, label) partial unique index rejects a concurrent winner at commit(); we
+ * then resolve idempotently. The created row is read back AFTER commit. Exported for
+ * buffer-safety regression tests.
+ */
+export async function applyHandleClaimWrites(
+  client: Client,
+  input: {
+    communityId: string
+    userId: string
+    quoteId: string
+    namespaceId: string
+    namespaceNormalizedLabel: string
+    labelNormalized: string
+    labelDisplay: string
+    priceCents: number
+    pricingModel: string | null
+    pricingTier: string | null
+    settlementWalletAttachmentId: string | null
+    protocolOwnerWalletAttachmentId: string | null
+    fundingTxRef: string | null
+    settlementTxRef: string | null
+    protocolIssuanceRequired: boolean
+    protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null
+    now: string
+  },
+): Promise<QueryResultRow> {
+  const handleId = makeId("ch")
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        INSERT INTO community_handles (
+          community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
+          label_normalized, label_display, status, issuance_source, price_cents, currency,
+          pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
+          lease_started_at, lease_expires_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5,
+          ?6, ?7, 'active', 'claim', ?8, 'USD',
+          ?9, ?10, ?11, ?12, ?13, ?14,
+          ?15, NULL, ?15, ?15
+        )
+      `,
+      args: [
+        handleId,
+        input.communityId,
+        input.userId,
+        input.namespaceId,
+        input.quoteId,
+        input.labelNormalized,
+        input.labelDisplay,
+        input.priceCents,
+        input.pricingModel,
+        input.pricingTier,
+        input.settlementWalletAttachmentId,
+        input.protocolOwnerWalletAttachmentId,
+        input.fundingTxRef,
+        input.settlementTxRef,
+        input.now,
+      ],
+    })
+
+    if (input.protocolIssuanceRequired) {
+      if (!input.protocolOwner) {
+        throw internalError("Protocol owner wallet validation result is missing")
+      }
+      await createProtocolIssuanceForHandle({
+        executor: tx,
+        communityId: input.communityId,
+        namespaceId: input.namespaceId,
+        namespaceNormalizedLabel: input.namespaceNormalizedLabel,
+        communityHandleId: handleId,
+        labelNormalized: input.labelNormalized,
+        scriptPubkeyHex: input.protocolOwner.scriptPubkeyHex,
+        now: input.now,
+      })
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE community_handle_claim_quotes
+        SET status = 'claimed',
+            claimed_at = ?2,
+            updated_at = ?2
+        WHERE handle_claim_quote_id = ?1
+          AND status = 'quoted'
+      `,
+      args: [input.quoteId, input.now],
+    })
+
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    // The (namespace, label) partial unique index may have rejected the INSERT at
+    // commit because a concurrent claim won the label. Resolve idempotently:
+    const racedForQuote = await getExistingHandleForQuote(client, input.quoteId)
+    if (racedForQuote) {
+      return racedForQuote
+    }
+    const blocking = await getBlockingHandleForLabel(client, input.namespaceId, input.labelNormalized)
+    if (blocking) {
+      const blockingStatus = requiredString(blocking, "status")
+      const reason = "Payment was verified, but this name became unavailable before the claim completed"
+      throw conflictError(reason, availabilityDetails(blockingStatus === "reserved" ? "reserved" : "taken", reason))
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  // Readback AFTER commit — the buffered tx can't read the inserted row.
+  const handleResult = await client.execute({
+    sql: `
+      SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
+      FROM community_handles ch
+      ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
+      WHERE ch.community_handle_id = ?1
+      LIMIT 1
+    `,
+    args: [handleId],
+  })
+  const handle = handleResult.rows[0]
+  if (!handle) {
+    throw internalError("Created community handle row is missing")
+  }
+  return handle
 }

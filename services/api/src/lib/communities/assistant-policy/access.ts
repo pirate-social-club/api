@@ -5,7 +5,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "../db-community-repository"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import { isCommunityLive } from "../community-status"
 import {
   ANY_COMMUNITY_ROLE,
@@ -42,7 +42,7 @@ async function readMembership(input: {
   communityId: string
   userId: string
 }): Promise<CommunityMembershipRow> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     return await getCommunityMembershipState(db.client, input.communityId, input.userId)
   } finally {

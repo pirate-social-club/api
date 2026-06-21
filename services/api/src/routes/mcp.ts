@@ -8,7 +8,7 @@ import {
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { openCommunityDb } from "../lib/communities/community-db-factory"
+import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { loadCommunityProjection } from "../lib/communities/create/repository"
 import { getPublicCommunityPreview } from "../lib/communities/community-preview-service"
@@ -563,7 +563,7 @@ async function callPrepareGuestCommentTool(c: McpContext, rawArgs: unknown) {
     communityRepository,
   })
   await ensureGuestMayComment(c, target.communityId)
-  const db = await openCommunityDb(c.env, communityRepository, target.communityId)
+  const db = await openCommunityWriteClient(c.env, communityRepository, target.communityId)
   let guest: { userId: string }
   try {
     await assertCommentTargetExists({
@@ -629,7 +629,7 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
       communityId: target.communityId,
       stableGuestId: guestId,
     })
-    const db = await openCommunityDb(c.env, communityRepository, target.communityId)
+    const db = await openCommunityWriteClient(c.env, communityRepository, target.communityId)
     try {
       await upsertCommunityMembership({
         client: db.client,

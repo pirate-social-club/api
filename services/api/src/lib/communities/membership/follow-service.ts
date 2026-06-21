@@ -4,7 +4,7 @@ import {
 } from "./membership-state-store"
 import { isCommunityLive } from "../community-status"
 import { setCommunityFollowInactive } from "./follow-store"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import { conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { publicCommunityId } from "../../public-ids"
@@ -23,7 +23,7 @@ export async function followCommunity(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     return await activateCommunityFollow({
       db,
@@ -48,7 +48,7 @@ export async function unfollowCommunity(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     if (canAccessCommunity(membership)) {

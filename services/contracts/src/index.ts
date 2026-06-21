@@ -710,6 +710,7 @@ export type Community = {
   artist_identity?: string | null;
   community_agent_user?: string | null;
   membership_mode: "open" | "request" | "gated";
+  karaoke_enabled: boolean;
   allow_anonymous_identity: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   human_verification_lane: HumanVerificationLane;
@@ -1841,6 +1842,54 @@ export type PostDerivativeSource = {
   creator_display_name?: string | null;
 };
 
+export type SongKaraokePayload = {
+  id: string;
+  object: "song_karaoke_payload";
+  song?: string | null;
+  post?: string | null;
+  community?: string | null;
+  title?: string | null;
+  artist_name?: string | null;
+  artwork_src?: string | null;
+  instrumental_audio_url?: string | null;
+  karaoke_lines?: Array<{
+    id: string;
+    index: number;
+    kind: "lyric" | "section";
+    text: string;
+    start_ms: number;
+    end_ms: number;
+    words: Array<{
+      text: string;
+      start_ms: number;
+      end_ms: number;
+      confidence?: number | null;
+    }>;
+  }> | null;
+  raw_lines?: Array<Record<string, unknown>> | null;
+};
+
+export type KaraokeScoringPolicy = ({
+  kind: "disabled";
+} | {
+  kind: "enabled";
+  provider: "assistant" | "elevenlabs" | "mistral" | "openai";
+  model: string;
+  retention: "not_stored";
+  voice_coach_enabled?: boolean;
+});
+
+export type KaraokeSession = {
+  id: string;
+  object: "karaoke_session";
+  attempt: string;
+  protocol_version: 1;
+  websocket_url: string;
+  token_expires_at: number;
+  session_expires_at: number;
+  scoring_policy: KaraokeScoringPolicy;
+};
+
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
@@ -1924,6 +1973,7 @@ export type CommunityPreview = {
   store_label?: string | null;
   country_code?: string | null;
   membership_mode: "open" | "request" | "gated";
+  karaoke_enabled: boolean;
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   allowed_disclosed_qualifiers?: Array<string> | null;
@@ -3409,4 +3459,6 @@ export const apiRoutes = {
   notificationsFeed: "/notifications/feed",
   notificationsMarkRead: "/notifications/mark-read",
   notificationsDismissTask: "/notifications/dismiss-task",
+  communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
+  karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
 } as const

@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import { resolveCommunityIdentifier } from "../communities/community-identifier"
 import type {
@@ -46,7 +46,7 @@ export async function resolveCrosspostSource(input: {
     throw notFoundError("Source post not found")
   }
 
-  const sourceDb = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const sourceDb = await openCommunityReadClient(input.env, input.communityRepository, projection.community_id)
   try {
     const sourcePost = await getPostById(sourceDb.client, sourcePostId)
     if (!sourcePost || sourcePost.community_id !== projection.community_id) {

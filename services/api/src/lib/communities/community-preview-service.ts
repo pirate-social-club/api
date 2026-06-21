@@ -12,7 +12,10 @@ import {
   getCommunityFollowStatus,
   getCommunityFollowerCount,
 } from "./membership/follow-store"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
+import type { ReadClient } from "../sql-client"
+
+type CommunityReadClient = ReadClient
 import {
   buildLocalizedCommunityPreview,
   enqueueCommunityTextTranslationOnReadIfNeeded,
@@ -238,7 +241,7 @@ async function getCommunityRoleSummary(input: {
 }
 
 async function getCommunityOwnerUserId(
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  client: CommunityReadClient,
   communityId: string,
 ): Promise<string | null> {
   const result = await client.execute({
@@ -261,7 +264,7 @@ async function getCommunityOwnerUserId(
 }
 
 async function listCommunityModeratorRoleAssignments(
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  client: CommunityReadClient,
   communityId: string,
 ): Promise<Array<{ userId: string; role: "admin" | "moderator" }>> {
   const result = await client.execute({
@@ -297,7 +300,7 @@ async function buildPreviewForViewer(input: {
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const gatePolicy = await getMembershipGatePolicy(db.client, input.communityId)
     const membership = input.viewer
@@ -354,7 +357,7 @@ export async function getPublicCommunityPreview(input: {
 
 export async function getPublicCommunityPreviewFromCommunityDb(input: {
   env: Env
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
   locale?: string | null
   communityRepository: CommunityPreviewRepository
@@ -378,7 +381,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
 }
 
 async function listPublicCommunityRules(input: {
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
 }): Promise<CommunityPreviewRule[]> {
   const result = await input.client.execute({
@@ -408,7 +411,7 @@ async function listPublicCommunityRules(input: {
 
 async function buildCommunityPreview(input: {
   env: Env
-  client: Awaited<ReturnType<typeof openCommunityDb>>["client"]
+  client: CommunityReadClient
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
@@ -529,6 +532,7 @@ async function buildCommunityPreview(input: {
     }),
     country_code: countryCode,
     membership_mode: membershipMode,
+    karaoke_enabled: Number(localRow?.karaoke_enabled ?? 0) === 1,
     allow_anonymous_identity: Number(localRow?.allow_anonymous_identity ?? 0) === 1,
     anonymous_identity_scope: anonymousIdentityScope,
     guest_comment_policy: parsePreviewGuestCommentPolicy(settings),

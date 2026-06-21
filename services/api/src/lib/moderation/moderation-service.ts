@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -139,7 +139,7 @@ export async function reportPost(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityAccess({
       client: db.client,
@@ -161,13 +161,17 @@ export async function reportPost(input: {
       return existingReport
     }
     const now = nowIso()
+    // Read the open case BEFORE the tx — a buffered D1 write tx can't read it back
+    // mid-flight. createModerationCase/createUserReport are deterministic (no
+    // readback), so the tx body below is write-only.
+    const existingCase = await getOpenModerationCaseForTarget({
+      executor: db.client,
+      communityId: input.communityId,
+      target: { postId: input.postId },
+    })
     const tx = await db.client.transaction("write")
     try {
-      let moderationCase = await getOpenModerationCaseForTarget({
-        executor: tx,
-        communityId: input.communityId,
-        target: { postId: input.postId },
-      })
+      let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
           executor: tx,
@@ -221,7 +225,7 @@ export async function reportComment(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<UserReport> {
   assertCreateUserReportRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityAccess({
       client: db.client,
@@ -243,13 +247,15 @@ export async function reportComment(input: {
       return existingReport
     }
     const now = nowIso()
+    // Read the open case BEFORE the tx (see reportPost) — the tx body stays write-only.
+    const existingCase = await getOpenModerationCaseForTarget({
+      executor: db.client,
+      communityId: input.communityId,
+      target: { commentId: input.commentId },
+    })
     const tx = await db.client.transaction("write")
     try {
-      let moderationCase = await getOpenModerationCaseForTarget({
-        executor: tx,
-        communityId: input.communityId,
-        target: { commentId: input.commentId },
-      })
+      let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
           executor: tx,
@@ -300,7 +306,7 @@ export async function listCommunityModerationCases(input: {
   communityRepository: ModerationCommunityRepository
   profileRepository?: ProfileRepository
 }): Promise<ModerationCaseListResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
@@ -344,7 +350,7 @@ export async function getModerationCaseDetail(input: {
   moderationCaseId: string
   communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
@@ -367,70 +373,67 @@ export async function getModerationCaseDetail(input: {
   }
 }
 
-async function applyModerationAction(input: {
-  caseRow: ModerationCase
-  dbClient: DbExecutor
-  body: CreateModerationActionRequest
-  now: string
-}): Promise<{
+type ModerationActionMutation = {
   previousStatus?: string | null
   nextStatus?: string | null
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
-}> {
+}
+
+type ModerationActionPlan = {
+  mutation: ModerationActionMutation
+  /** Write-only — safe to run inside a buffered D1 write tx. */
+  applyWrites: (executor: DbExecutor) => Promise<void>
+}
+
+/**
+ * Reads the target post/comment and validates/decides the action on the BASE client
+ * BEFORE any write tx (a buffered D1 write tx can't read the target back or branch on
+ * it mid-flight). Returns the audit mutation snapshot plus a write-only closure that
+ * the caller runs inside the tx. All status-write helpers it calls are write-only.
+ */
+async function planModerationAction(input: {
+  caseRow: ModerationCase
+  dbClient: DbExecutor
+  body: CreateModerationActionRequest
+  now: string
+}): Promise<ModerationActionPlan> {
+  const noWrites = async () => {}
   if (input.caseRow.post_id) {
     const post = await getPostById(input.dbClient, input.caseRow.post_id)
     if (!post) {
       throw notFoundError("Post not found")
     }
+    const postId = post.post_id
     switch (input.body.action_type) {
       case "dismiss":
         if (post.status === "draft") {
           throw badRequestError("Held draft posts must be approved, hidden, or removed")
         }
-        return {}
+        return { mutation: {}, applyWrites: noWrites }
       case "hide":
-        await setPostModerationStatus({
-          executor: input.dbClient,
-          postId: post.post_id,
-          status: "hidden",
-          now: input.now,
-        })
-        return { previousStatus: post.status, nextStatus: "hidden" }
-      case "remove":
-        await setPostModerationStatus({
-          executor: input.dbClient,
-          postId: post.post_id,
-          status: "removed",
-          now: input.now,
-        })
-        return { previousStatus: post.status, nextStatus: "removed" }
-      case "restore":
-        if (post.status === "draft" && post.analysis_state === "review_required") {
-          await approveReviewHeldPost({
-            executor: input.dbClient,
-            postId: post.post_id,
-            now: input.now,
-          })
-        } else {
-          await setPostModerationStatus({
-            executor: input.dbClient,
-            postId: post.post_id,
-            status: "published",
-            now: input.now,
-          })
-        }
-        return { previousStatus: post.status, nextStatus: "published" }
-      case "age_gate":
-        await setPostAgeGatePolicy({
-          executor: input.dbClient,
-          postId: post.post_id,
-          ageGatePolicy: "18_plus",
-          now: input.now,
-        })
         return {
-          previousAgeGatePolicy: post.age_gate_policy,
-          nextAgeGatePolicy: "18_plus",
+          mutation: { previousStatus: post.status, nextStatus: "hidden" },
+          applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "hidden", now: input.now }),
+        }
+      case "remove":
+        return {
+          mutation: { previousStatus: post.status, nextStatus: "removed" },
+          applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "removed", now: input.now }),
+        }
+      case "restore": {
+        const useApprove = post.status === "draft" && post.analysis_state === "review_required"
+        return {
+          mutation: { previousStatus: post.status, nextStatus: "published" },
+          applyWrites: (executor) => useApprove
+            ? approveReviewHeldPost({ executor, postId, now: input.now })
+            : setPostModerationStatus({ executor, postId, status: "published", now: input.now }),
+        }
+      }
+      case "age_gate":
+        return {
+          mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus" },
+          applyWrites: (executor) => setPostAgeGatePolicy({ executor, postId, ageGatePolicy: "18_plus", now: input.now }),
         }
       default:
         throw badRequestError("Unsupported moderation action")
@@ -445,34 +448,26 @@ async function applyModerationAction(input: {
   if (!comment) {
     throw notFoundError("Comment not found")
   }
+  const commentId = comment.comment_id
 
   switch (input.body.action_type) {
     case "dismiss":
-      return {}
+      return { mutation: {}, applyWrites: noWrites }
     case "hide":
-      await setCommentModerationStatus({
-        executor: input.dbClient,
-        commentId: comment.comment_id,
-        status: "hidden",
-        now: input.now,
-      })
-      return { previousStatus: comment.status, nextStatus: "hidden" }
+      return {
+        mutation: { previousStatus: comment.status, nextStatus: "hidden" },
+        applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "hidden", now: input.now }),
+      }
     case "remove":
-      await setCommentModerationStatus({
-        executor: input.dbClient,
-        commentId: comment.comment_id,
-        status: "removed",
-        now: input.now,
-      })
-      return { previousStatus: comment.status, nextStatus: "removed" }
+      return {
+        mutation: { previousStatus: comment.status, nextStatus: "removed" },
+        applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "removed", now: input.now }),
+      }
     case "restore":
-      await setCommentModerationStatus({
-        executor: input.dbClient,
-        commentId: comment.comment_id,
-        status: "published",
-        now: input.now,
-      })
-      return { previousStatus: comment.status, nextStatus: "published" }
+      return {
+        mutation: { previousStatus: comment.status, nextStatus: "published" },
+        applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "published", now: input.now }),
+      }
     case "age_gate":
       throw badRequestError("age_gate is only supported for posts")
     default:
@@ -490,7 +485,7 @@ export async function resolveModerationCaseWithAction(input: {
   communityRepository: ModerationCommunityRepository
 }): Promise<ModerationCaseDetail> {
   assertCreateModerationActionRequest(input.body)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireAnyCommunityRole({
       client: db.client,
@@ -510,15 +505,20 @@ export async function resolveModerationCaseWithAction(input: {
     }
 
     const now = nowIso()
+    // Read the target + decide the action on the base client BEFORE the tx — a
+    // buffered D1 write tx can't read post/comment back or branch on it mid-flight.
+    // The plan's applyWrites + createModerationAction + resolveModerationCase are all
+    // write-only, so the tx body below is buffer-safe.
+    const plan = await planModerationAction({
+      caseRow,
+      dbClient: db.client,
+      body: input.body,
+      now,
+    })
+    const mutation = plan.mutation
     const tx = await db.client.transaction("write")
-    let mutation: Awaited<ReturnType<typeof applyModerationAction>> | null = null
     try {
-      mutation = await applyModerationAction({
-        caseRow,
-        dbClient: tx,
-        body: input.body,
-        now,
-      })
+      await plan.applyWrites(tx)
       await createModerationAction({
         executor: tx,
         moderationCase: caseRow,

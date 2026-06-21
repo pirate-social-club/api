@@ -25,7 +25,7 @@ import {
   type BoardReadPost,
   type BoardReadPostSearchResult,
 } from "../communities/board-read/board-read-service"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient } from "../communities/community-read-access"
 import { resolveCommunityIdentifier } from "../communities/community-identifier"
 import { getPublicCommunityPreview } from "../communities/community-preview-service"
 import { getCommunityRepository } from "../communities/db-community-repository"
@@ -248,7 +248,7 @@ export async function callSearchBoardTool(c: McpReadContext, rawArgs: unknown) {
     locale: null,
     communityRepository,
   })
-  const db = await openCommunityDb(c.env, communityRepository, communityId)
+  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
   try {
     const posts = await searchPublishedPosts(db.client, communityId, {
       excerptChars: 320,
@@ -287,7 +287,7 @@ export async function callGetThreadTool(c: McpReadContext, rawArgs: unknown) {
     locale: null,
     communityRepository,
   })
-  const db = await openCommunityDb(c.env, communityRepository, communityId)
+  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
   try {
     const thread = await getThreadWithComments(db.client, postId, {
       commentLimit,
@@ -330,7 +330,7 @@ export async function callGetMyActivityTool(c: McpReadContext, rawArgs: unknown)
     locale: null,
     communityRepository,
   })
-  const db = await openCommunityDb(c.env, communityRepository, communityId)
+  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
   try {
     const [posts, comments] = await Promise.all([
       listUserPostsInCommunity(db.client, communityId, actor.userId, {

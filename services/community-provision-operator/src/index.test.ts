@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { neonConfig } from "@neondatabase/serverless";
 import { createHandler, type Env } from "./index";
+import { configureLocalNeonForUrl } from "./lib/control-plane-db";
 
 const baseEnv: Env = {
   CONTROL_PLANE_DATABASE_URL: "libsql://control.test.turso.io",
@@ -15,6 +16,10 @@ const baseEnv: Env = {
 
 describe("control-plane Postgres driver configuration", () => {
   test("uses PlanetScale endpoints for fetch and interactive transactions", () => {
+    // The local neonConfig singleton is configured per control-plane URL (just
+    // before each connection opens), not globally at module load — so drive it
+    // with a PlanetScale Postgres URL the way the open path does.
+    configureLocalNeonForUrl("postgres://user:pass@us-east-3.pg.psdb.cloud/control");
     const fetchEndpoint = neonConfig.fetchEndpoint;
     const wsProxy = neonConfig.wsProxy;
 
@@ -81,6 +86,87 @@ describe("community provision operator handler", () => {
     expect(body.build_timestamp).toBe(null);
     expect(body.runtime).toBe("cloudflare-worker");
     expect(body.requires_bearer_auth).toBe(true);
+  });
+
+  test("deep health requires bearer auth", async () => {
+    const handler = createHandler();
+    const response = await handlerRequest(handler, "/health/deep", {
+      method: "GET",
+      authToken: null,
+    });
+    expect(response.status).toBe(401);
+  });
+
+  test("deep health returns ok when the control plane answers SELECT 1", async () => {
+    const handler = createHandler({
+      openControlPlaneDbFn: () => ({
+        sql: async () => [] as unknown as never,
+        begin: async (cb) => cb({ sql: async () => [] as unknown as never }),
+        close: async () => {},
+      }),
+    });
+    const response = await handlerRequest(handler, "/health/deep", { method: "GET" });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { ok: boolean; control_plane_ok: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.control_plane_ok).toBe(true);
+  });
+
+  test("deep health returns 503 when the control plane url is file: in production", async () => {
+    // openControlPlaneDbFn must never be reached: the URL guard rejects first.
+    const handler = createHandler({
+      openControlPlaneDbFn: () => {
+        throw new Error("must not open a file: control plane");
+      },
+    });
+    const response = await handlerRequest(handler, "/health/deep", {
+      method: "GET",
+      env: { ENVIRONMENT: "production", CONTROL_PLANE_DATABASE_URL: "file:./control.db" },
+    });
+    expect(response.status).toBe(503);
+    const body = await response.json() as { ok: boolean; control_plane_ok: boolean; error_code: string; message: string };
+    expect(body.ok).toBe(false);
+    expect(body.control_plane_ok).toBe(false);
+    expect(body.error_code).toBe("control_plane_url_invalid");
+    expect(body.message).toContain('"file:"');
+  });
+
+  test("deep health returns 503 when the control plane query fails", async () => {
+    const handler = createHandler({
+      openControlPlaneDbFn: () => ({
+        sql: async () => {
+          throw new Error("connection refused");
+        },
+        begin: async (cb) => cb({ sql: async () => [] as unknown as never }),
+        close: async () => {},
+      }),
+    });
+    const response = await handlerRequest(handler, "/health/deep", { method: "GET" });
+    expect(response.status).toBe(503);
+    const body = await response.json() as { ok: boolean; error_code: string; message: string };
+    expect(body.ok).toBe(false);
+    expect(body.error_code).toBe("control_plane_unreachable");
+    expect(body.message).toContain("connection refused");
+  });
+
+  test("provision rejects a file: control plane url in production before doing work", async () => {
+    const handler = createHandler({
+      provisionFn: async () => {
+        throw new Error("must not provision with a file: control plane");
+      },
+    });
+    const response = await handlerRequest(handler, "/internal/v0/community-provisioning/provision", {
+      env: { ENVIRONMENT: "production", CONTROL_PLANE_DATABASE_URL: "file:./control.db" },
+      body: {
+        community_id: "cmt_01",
+        creator_user_id: "usr_01",
+        display_name: "Test",
+        group_location: "aws-us-east-1",
+      },
+    });
+    expect(response.status).toBe(500);
+    const body = await response.json() as { error_code: string; message: string };
+    expect(body.message).toContain('"file:"');
   });
 
   test("private routes require bearer auth", async () => {

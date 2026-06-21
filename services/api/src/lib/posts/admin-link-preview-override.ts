@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
@@ -91,7 +91,7 @@ export async function applyAdminLinkPreviewOverride(input: {
   const updatedAt = nowIso()
   const sourceLanguage = detectSourceLanguageFromText([title])
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const post = await getPostById(db.client, input.postId)
     if (!post || post.community_id !== input.communityId) {

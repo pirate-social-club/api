@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
@@ -72,7 +72,7 @@ export async function deletePost(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
     const post = await getPostById(db.client, input.postId)
@@ -100,7 +100,7 @@ export async function deletePost(input: {
     const deletedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const deleted = await markPostDeleted({
+      await markPostDeleted({
         executor: tx,
         postId: input.postId,
         now: deletedAt,
@@ -120,11 +120,13 @@ export async function deletePost(input: {
         updatedAt: deletedAt,
       })
 
+      // Response is deterministic from the write (status/updated_at are exactly
+      // what markPostDeleted set) — no in-tx readback needed.
       return {
         post: {
-          post_id: deleted.post_id,
-          status: deleted.status,
-          updated_at: deleted.updated_at,
+          post_id: input.postId,
+          status: "deleted",
+          updated_at: deletedAt,
         },
         deletedAt,
         alreadyDeleted: false,
@@ -152,7 +154,7 @@ export async function removePostAsModerator(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
@@ -208,7 +210,7 @@ export async function setPostCommentLock(input: {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const membership = await requireMemberAccess(db.client, input.communityId, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {

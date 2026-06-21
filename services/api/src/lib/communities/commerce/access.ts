@@ -1,4 +1,4 @@
-import type { Client } from "../../sql-client"
+import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, notFoundError, verificationRequired } from "../../errors"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
 import type { CommunityReadRepository } from "../db-community-repository"
@@ -11,7 +11,7 @@ import {
 import type { Env } from "../../../env"
 
 export async function requireCommunityMember(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   userId: string,
 ): Promise<void> {

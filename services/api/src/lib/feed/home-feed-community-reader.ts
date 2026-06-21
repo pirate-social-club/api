@@ -1,5 +1,5 @@
 import type { DbExecutor } from "../db-helpers"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import type { Client } from "../sql-client"
 import {
   buildMembershipGateSummariesFromPolicy,
@@ -209,7 +209,7 @@ function enqueuePostReadJobs(input: {
   }
 
   input.waitUntil(withRequestControlPlaneClients(async () => {
-    const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+    const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
     try {
       await enqueuePostReadJobsForCommunity({
         client: db.client,
@@ -243,7 +243,7 @@ export function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommu
 }
 
 export async function getHomeFeedCommunityIdentity(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
 ): Promise<HomeFeedCommunityIdentity | null> {
   const result = await client.execute({
@@ -324,7 +324,7 @@ export async function resolveTopCommunitiesIdentity(input: {
         input.cachedIdentityByCommunityId.get(summary.community_id) ?? null,
       )
     }
-    const db = await openCommunityDb(input.env, input.communityRepository, summary.community_id).catch(() => null)
+    const db = await openCommunityReadClient(input.env, input.communityRepository, summary.community_id).catch(() => null)
     if (!db) {
       return withHomeFeedCommunityIdentity(summary, null)
     }
@@ -352,7 +352,7 @@ export async function readHomeFeedCommunityItems(input: {
 }): Promise<HomeFeedCommunityReadResult> {
   const communityStartedAt = performance.now()
   const openStartedAt = performance.now()
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   const openMs = elapsedMs(openStartedAt)
   try {
     const identityStartedAt = performance.now()

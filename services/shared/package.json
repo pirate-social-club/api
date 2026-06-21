@@ -10,6 +10,9 @@
   "scripts": {
     "check": "tsgo --noEmit"
   },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0"
+  },
   "devDependencies": {
     "@types/node": "^24.5.2",
     "@typescript/native-preview": "^7.0.0-dev.20260421.2",

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { neonConfig } from "@neondatabase/serverless"
-import { postgresifySql } from "../src/lib/runtime-deps"
+import { configureLocalNeonForUrl, postgresifySql } from "../src/lib/runtime-deps"
+
+// The local neonConfig singleton is configured per control-plane URL (just before
+// each connection opens), not globally at module load — so drive it with a
+// PlanetScale Postgres URL the way the open path does before asserting.
+const PLANETSCALE_URL = "postgres://user:pass@us-east-3.pg.psdb.cloud/control"
 
 describe("postgresifySql", () => {
   test("translates namespace verification upserts to PostgreSQL syntax", () => {
@@ -59,6 +64,7 @@ describe("postgresifySql", () => {
 
 describe("neonConfig.fetchEndpoint", () => {
   test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
+    configureLocalNeonForUrl(PLANETSCALE_URL)
     const fetchEndpoint = neonConfig.fetchEndpoint
     expect(typeof fetchEndpoint).toBe("function")
     expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
@@ -68,6 +74,7 @@ describe("neonConfig.fetchEndpoint", () => {
 
 describe("neonConfig WebSocket settings", () => {
   test("uses PlanetScale's WebSocket proxy for interactive transactions", () => {
+    configureLocalNeonForUrl(PLANETSCALE_URL)
     const wsProxy = neonConfig.wsProxy
     expect(neonConfig.pipelineConnect).toBe(false)
     expect(typeof wsProxy).toBe("function")

@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import { safeRollback } from "../transactions"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
@@ -13,7 +13,10 @@ import { resolvePostAnalysisProvider } from "./post-analysis"
 import {
   findPostByIdempotencyKey,
   insertPost,
+  type PostWriteDraft,
 } from "./community-post-create-store"
+import { getPostById } from "./community-post-query-store"
+import { resolvePostProjectionSchema } from "./community-post-projection"
 import { consumeSongPostBundle } from "../song-artifacts/song-artifact-post-resolution-service"
 import {
   createAssetForPost,
@@ -31,7 +34,7 @@ import {
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
-import { eligibilityFailed } from "../errors"
+import { eligibilityFailed, internalError } from "../errors"
 import { nowIso } from "../helpers"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
@@ -147,7 +150,7 @@ export async function createPost(input: {
 
   assertPostCreateRequest(input.body, input.communityId)
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {
@@ -204,17 +207,20 @@ export async function createPost(input: {
       postAnalysisProvider,
     })
     const createdAt = nowIso()
+    // Resolve the projection schema BEFORE the write tx — a buffered D1 write tx
+    // can't see schema reads (or any read) until commit; threaded into insertPost.
+    const projectionSchema = await resolvePostProjectionSchema(db.client)
     const tx = await db.client.transaction("write")
-    let post: Post
-    const postCommitAssetTasks: Array<() => Promise<void>> = []
+    let draft: PostWriteDraft
     const requireStoryRoyaltyRegistration = true
     try {
-      post = await insertPost({
+      draft = await insertPost({
         client: tx,
         communityId: input.communityId,
         authorUserId: input.userId,
         body: writeBody,
         createdAt,
+        projectionSchema,
         analysisOverride,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
@@ -222,7 +228,7 @@ export async function createPost(input: {
       await enqueuePostTranslationPrewarmJobs({
         client: tx,
         communityId: input.communityId,
-        post,
+        post: draft,
         createdAt,
       })
 
@@ -230,14 +236,14 @@ export async function createPost(input: {
         client: tx,
         community,
         communityId: input.communityId,
-        post,
+        post: draft,
         createdAt,
       })
 
       await enqueueEmbedHydrateIfNeeded({
         client: tx,
         communityId: input.communityId,
-        post,
+        post: draft,
         createdAt,
       })
 
@@ -245,65 +251,9 @@ export async function createPost(input: {
         await recordReviewRequiredPostModeration({
           executor: tx,
           communityId: input.communityId,
-          postId: post.post_id,
+          postId: draft.post_id,
           providerResult: analysisProviderResult,
           now: createdAt,
-        })
-      }
-
-      if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
-        postCommitAssetTasks.push(async () => {
-          const asset = await songPostAssetCreatorForRuntime({
-            env: input.env,
-            client: db.client,
-            communityId: input.communityId,
-            post,
-            bundle: resolvedSongBundleForAsset.bundle,
-            licensePreset: input.body.license_preset ?? null,
-            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-            requireStoryRoyaltyRegistration,
-            userRepository: input.userRepository,
-          })
-          await enqueueLockedAssetDeliveryJobIfRequested({
-            env: input.env,
-            client: db.client,
-            communityId: input.communityId,
-            post,
-            asset,
-            createdAt,
-            communityRepository: input.communityRepository,
-            waitUntil: input.waitUntil,
-          })
-        })
-      }
-      if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
-        postCommitAssetTasks.push(async () => {
-          const asset = await postAssetCreatorForRuntime({
-            env: input.env,
-            client: db.client,
-            communityId: input.communityId,
-            post,
-            assetKind: "video_file",
-            storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
-            mimeType: resolvedVideoAsset.upload.mime_type,
-            contentHash: resolvedVideoAsset.upload.content_hash ?? null,
-            artifactKind: "primary_video",
-            bundleId: null,
-            licensePreset: input.body.license_preset ?? null,
-            commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
-            requireStoryRoyaltyRegistration,
-            userRepository: input.userRepository,
-          })
-          await enqueueLockedAssetDeliveryJobIfRequested({
-            env: input.env,
-            client: db.client,
-            communityId: input.communityId,
-            post,
-            asset,
-            createdAt,
-            communityRepository: input.communityRepository,
-            waitUntil: input.waitUntil,
-          })
         })
       }
 
@@ -315,6 +265,70 @@ export async function createPost(input: {
       tx.close()
     }
 
+    // Canonical hydrated row, read AFTER commit (buffer-safe). Hard failure: a
+    // committed insert whose row can't be read back is an internal consistency error.
+    const post = await getPostById(db.client, draft.post_id)
+    if (!post) {
+      throw internalError("Post row is missing after insert")
+    }
+
+    // Asset-creation side effects run post-commit and capture the CANONICAL post.
+    const postCommitAssetTasks: Array<() => Promise<void>> = []
+    if (post.post_type === "song" && post.song_artifact_bundle_id && resolvedSongBundleForAsset) {
+      postCommitAssetTasks.push(async () => {
+        const asset = await songPostAssetCreatorForRuntime({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          post,
+          bundle: resolvedSongBundleForAsset.bundle,
+          licensePreset: input.body.license_preset ?? null,
+          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          requireStoryRoyaltyRegistration,
+          userRepository: input.userRepository,
+        })
+        await enqueueLockedAssetDeliveryJobIfRequested({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          post,
+          asset,
+          createdAt,
+          communityRepository: input.communityRepository,
+          waitUntil: input.waitUntil,
+        })
+      })
+    }
+    if (post.post_type === "video" && post.access_mode && resolvedVideoAsset) {
+      postCommitAssetTasks.push(async () => {
+        const asset = await postAssetCreatorForRuntime({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          post,
+          assetKind: "video_file",
+          storageRef: resolvedVideoAsset.upload.gateway_url || resolvedVideoAsset.upload.storage_ref,
+          mimeType: resolvedVideoAsset.upload.mime_type,
+          contentHash: resolvedVideoAsset.upload.content_hash ?? null,
+          artifactKind: "primary_video",
+          bundleId: null,
+          licensePreset: input.body.license_preset ?? null,
+          commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          requireStoryRoyaltyRegistration,
+          userRepository: input.userRepository,
+        })
+        await enqueueLockedAssetDeliveryJobIfRequested({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          post,
+          asset,
+          createdAt,
+          communityRepository: input.communityRepository,
+          waitUntil: input.waitUntil,
+        })
+      })
+    }
     for (const runPostCommitAssetTask of postCommitAssetTasks) {
       await runPostCommitAssetTask()
     }

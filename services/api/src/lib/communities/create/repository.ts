@@ -1,8 +1,14 @@
 import {
   bootstrapLocalCommunityDb,
+  buildCommunitySeedStatements,
+  type LocalCommunityBootstrapInput,
   type LocalCommunityRule,
   type LocalCommunitySnapshot,
 } from "../community-local-db"
+import {
+  COMMUNITY_SCHEMA_MIGRATIONS,
+  COMMUNITY_SCHEMA_STATEMENTS,
+} from "../provisioning/generated/community-schema-snapshot"
 import { serializeLocalDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
@@ -17,7 +23,7 @@ import type { ActorContext, AdminActorContext } from "../../auth-middleware"
 import type { Env } from "../../../env"
 import type { Community } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient } from "../community-read-access"
 import { normalizeCommunityCountryCode } from "../country-code"
 import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
 import type {
@@ -95,6 +101,22 @@ export function buildPendingCommunityDatabaseUrl(communityId: string): string {
   return `libsql://pending-${communityId}.invalid`
 }
 
+/**
+ * Synthetic binding URL for a community that is being provisioned D1-native but
+ * has not yet had a binding allocated from the shard pool. Mirrors the Turso
+ * pending sentinel (`buildPendingCommunityDatabaseUrl`) so the provisioning
+ * request can be persisted before the shard hands back a concrete binding.
+ * Resolved to `d1://shard/<bindingName>` once allocation completes.
+ */
+export function buildPendingD1CommunityBindingUrl(communityId: string): string {
+  return `d1://pending-${communityId}.invalid`
+}
+
+export function isPendingD1CommunityBindingUrl(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  return normalized.startsWith("d1://pending-") && normalized.endsWith(".invalid")
+}
+
 export function isExpired(timestamp: string | number): boolean {
   const expiresAt = typeof timestamp === "number" ? timestamp * 1000 : Date.parse(timestamp)
   if (!Number.isFinite(expiresAt)) {
@@ -156,7 +178,11 @@ export async function loadCommunityLocalSnapshot(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
-  const db = await openCommunityDb(env, repo, communityId).catch(() => null)
+  // Routed read: follows the community's backend (D1 via shard read RPC when flipped,
+  // else legacy Turso). Read-only (SELECTs only), so a flipped community's snapshot
+  // reads reflect D1 instead of stale Turso. Closes #48 for donation/rules/gate
+  // snapshot reads. Falls back to null on any open failure, as before.
+  const db = await openCommunityReadClient(env, repo, communityId).catch(() => null)
   if (!db) {
     return null
   }
@@ -240,6 +266,7 @@ export async function loadCommunityLocalSnapshot(
       banner_ref: row.banner_ref == null ? null : String(row.banner_ref),
       status: String(row.status) as LocalCommunitySnapshot["status"],
       membership_mode: String(row.membership_mode) as LocalCommunitySnapshot["membership_mode"],
+      karaoke_enabled: Boolean(Number(row.karaoke_enabled ?? 0)),
       default_age_gate_policy: String(row.default_age_gate_policy) as LocalCommunitySnapshot["default_age_gate_policy"],
       allow_anonymous_identity: Boolean(Number(row.allow_anonymous_identity ?? 0)),
       anonymous_identity_scope: row.anonymous_identity_scope == null
@@ -460,17 +487,27 @@ function resolvePublicV0MembershipMode(mode: CreateCommunityRequestBody["members
   return mode === "request" ? "request" : "gated"
 }
 
-export async function bootstrapCommunityLocalSnapshot(input: {
+export type CommunityBootstrapRequest = {
   env: Env
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
   communityId: string
   namespaceVerificationId: string | null
   namespaceLabel: string | null
-}): Promise<LocalCommunitySnapshot> {
-  const dbRoot = resolveCommunityDbRoot(input.env)
-  return bootstrapLocalCommunityDb({
-    rootDir: dbRoot,
+}
+
+/**
+ * Build the `LocalCommunityBootstrapInput` from a community-create request.
+ * Shared by `bootstrapCommunityLocalSnapshot` (operator/local path, which writes
+ * it to a libsql file) and the d1_native translator (`localCommunityShardStatements`),
+ * so the two paths derive the identical bootstrap input — no drift.
+ */
+export function buildLocalCommunityBootstrapInput(
+  input: CommunityBootstrapRequest,
+  rootDir: string,
+): LocalCommunityBootstrapInput {
+  return {
+    rootDir,
     communityId: input.communityId,
     createdByUserId: input.auth.userId,
     displayName: input.auth.communityDisplayName,
@@ -513,5 +550,33 @@ export async function bootstrapCommunityLocalSnapshot(input: {
     rules: buildBootstrapRules(input.body),
     initialSettings: buildBootstrapInitialSettings(input.body),
     now: input.auth.createdAt,
-  })
+  }
+}
+
+export async function bootstrapCommunityLocalSnapshot(input: CommunityBootstrapRequest): Promise<LocalCommunitySnapshot> {
+  return bootstrapLocalCommunityDb(buildLocalCommunityBootstrapInput(input, resolveCommunityDbRoot(input.env)))
+}
+
+/**
+ * §8.7: the d1_native schema+data load, as `ShardSqlStatement[]` for
+ * `communityD1LoadSnapshot`. Three parts, all CREATE/INSERT (guard-compatible):
+ *   1. the bundled final-form schema (COMMUNITY_SCHEMA_STATEMENTS — generated),
+ *   2. a `schema_migrations` seed per template migration (so schema-state checks
+ *      see the same applied set the operator records),
+ *   3. the community data seed (buildCommunitySeedStatements — the SAME pure
+ *      generator the operator path executes, so the two can't drift).
+ */
+export function localCommunityShardStatements(input: CommunityBootstrapRequest): { sql: string; args?: (string | number | null)[] }[] {
+  // rootDir is a disk concern of bootstrapLocalCommunityDb; the d1 path never
+  // writes to disk (buildCommunitySeedStatements ignores it), so a placeholder
+  // avoids requiring LOCAL_COMMUNITY_DB_ROOT on the d1_native worker.
+  const bootstrapInput = buildLocalCommunityBootstrapInput(input, "d1-native")
+  return [
+    ...COMMUNITY_SCHEMA_STATEMENTS.map((sql) => ({ sql })),
+    ...COMMUNITY_SCHEMA_MIGRATIONS.map((m) => ({
+      sql: "INSERT INTO schema_migrations (migration_name, migration_label, checksum) VALUES (?1, 'community-template', ?2)",
+      args: [m.name, m.checksum] as (string | number | null)[],
+    })),
+    ...buildCommunitySeedStatements(bootstrapInput).map((s) => ({ sql: s.sql, args: s.args })),
+  ]
 }

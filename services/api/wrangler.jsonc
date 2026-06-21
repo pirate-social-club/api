@@ -22,6 +22,14 @@
       {
         "name": "LIVE_ROOM_RUNTIME",
         "class_name": "LiveRoomRuntimeDO"
+      },
+      {
+        "name": "SCHEDULED_CRON_LOCK",
+        "class_name": "ScheduledCronLockDO"
+      },
+      {
+        "name": "KARAOKE_SESSION_RUNTIME",
+        "class_name": "KaraokeSessionRuntimeDO"
       }
     ]
   },
@@ -29,6 +37,14 @@
     {
       "tag": "v1_live_room_runtime",
       "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+    },
+    {
+      "tag": "v2_scheduled_cron_lock",
+      "new_sqlite_classes": ["ScheduledCronLockDO"]
+    },
+    {
+      "tag": "v1_karaoke_session_runtime",
+      "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
     }
   ],
   "vars": {
@@ -58,6 +74,7 @@
     "AGORA_APP_ID": "d902e3752b4a4e638a31c4510d34d8a4",
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
     "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
+    "COMMUNITY_READ_ROUTING_ENABLED": "false",
     "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-dev",
     "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
     "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
@@ -65,13 +82,29 @@
     "PASSPORT_SCORER_ID": "12028"
   },
   "env": {
-    "staging": {
-      "name": "pirate-api-staging",
+    "d1-staging": {
+      // Dedicated worker for the D1-native workstream. Cloned from staging
+      // with a different worker name so the D1 workstream and the karaoke
+      // workstream don't clobber each other on a shared staging worker. The
+      // shard's pilot bindings + the d1_pool D1 are shared (read-only by
+      // the API; the shard owns them). The control plane D1 is shared too —
+      // both workers read/write the same routing table. No production traffic
+      // hits this worker; it's a deploy-and-verify surface for step 1-7 of
+      // the D1-native workstream.
+      "name": "pirate-api-d1-staging",
       "durable_objects": {
         "bindings": [
           {
             "name": "LIVE_ROOM_RUNTIME",
             "class_name": "LiveRoomRuntimeDO"
+          },
+          {
+            "name": "SCHEDULED_CRON_LOCK",
+            "class_name": "ScheduledCronLockDO"
+          },
+          {
+            "name": "KARAOKE_SESSION_RUNTIME",
+            "class_name": "KaraokeSessionRuntimeDO"
           }
         ]
       },
@@ -79,12 +112,117 @@
         {
           "tag": "v1_live_room_runtime",
           "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        },
+        {
+          "tag": "v2_scheduled_cron_lock",
+          "new_sqlite_classes": ["ScheduledCronLockDO"]
+        },
+        {
+          "tag": "v1_karaoke_session_runtime",
+          "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
         }
       ],
       "services": [
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator-staging"
+        },
+        {
+          "binding": "COMMUNITY_D1_SHARD",
+          "service": "community-d1-shard-staging",
+          "entrypoint": "CommunityD1Shard"
+        },
+        {
+          "binding": "SONG_PREVIEW_SERVICE",
+          "service": "pirate-song-preview-container-staging"
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
+        "DEV_MEMORY_STORE_ENABLED": "false",
+        "JWT_BASED_AUTH_ENABLED": "true",
+        "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
+        "JWT_BASED_AUTH_AUDIENCE": "pirate-api-staging",
+        "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
+        "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
+        "PIRATE_APP_JWT_ISSUER": "pirate-api-d1-staging",
+        "COMMUNITY_PROVISION_BACKEND": "d1_native",
+        "COMMUNITY_D1_SHARD_REGION": "eeur",
+        "STAGING_TEST_AUTH_ENABLED": "true",
+        "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
+        "PIRATE_APP_JWT_TTL_SECONDS": "3600",
+        "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
+        "PIRATE_WEB_PUBLIC_ORIGIN": "https://staging.pirate.sc",
+        "CORS_ALLOWED_ORIGINS": "https://staging.pirate.sc",
+        "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
+        "FILEBASE_S3_REGION": "us-east-1",
+        "IPFS_GATEWAY_URL": "https://psc.myfilebase.com/ipfs",
+        "STORY_RPC_URL": "https://aeneid.storyrpc.io",
+        "STORY_RPC_FALLBACK_URLS": "https://rpc.ankr.com/story_aeneid_testnet",
+        "STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI": "100000000000000000",
+        "STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI": "250000000000000000",
+        "ACRCLOUD_BUCKET_ID": "30358",
+        "ACRCLOUD_CONSOLE_BASE_URL": "https://api-v2.acrcloud.com/api",
+        "ACRCLOUD_HOST": "identify-ap-southeast-1.acrcloud.com",
+        "ACRCLOUD_IDENTIFY_PATH": "/v1/identify",
+        "AGORA_APP_ID": "d902e3752b4a4e638a31c4510d34d8a4",
+        "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
+        "SPACES_VERIFIER_BASE_URL": "https://verifier.pirate.sc/spaces",
+        "SPACES_VERIFIER_CHALLENGE_DOMAIN": "pirate.sc",
+        "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
+        "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
+        "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
+        "COMMUNITY_READ_ROUTING_ENABLED": "true",
+        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
+        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
+        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
+        "PASSPORT_API_URL": "https://api.passport.xyz",
+        "PASSPORT_SCORER_ID": "12028"
+      }
+    },
+    "staging": {
+      "name": "pirate-api-staging",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "LIVE_ROOM_RUNTIME",
+            "class_name": "LiveRoomRuntimeDO"
+          },
+          {
+            "name": "SCHEDULED_CRON_LOCK",
+            "class_name": "ScheduledCronLockDO"
+          },
+          {
+            "name": "KARAOKE_SESSION_RUNTIME",
+            "class_name": "KaraokeSessionRuntimeDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_live_room_runtime",
+          "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        },
+        {
+          "tag": "v2_scheduled_cron_lock",
+          "new_sqlite_classes": ["ScheduledCronLockDO"]
+        },
+        {
+          "tag": "v1_karaoke_session_runtime",
+          "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+        }
+      ],
+      "services": [
+        {
+          "binding": "COMMUNITY_PROVISION_OPERATOR",
+          "service": "community-provision-operator-staging"
+        },
+        {
+          "binding": "COMMUNITY_D1_SHARD",
+          "service": "community-d1-shard-staging",
+          "entrypoint": "CommunityD1Shard"
         },
         {
           "binding": "SONG_PREVIEW_SERVICE",
@@ -125,6 +263,8 @@
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
+	        "COMMUNITY_READ_ROUTING_ENABLED": "true",
+	        "STAGING_TEST_AUTH_ENABLED": "true",
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
@@ -134,10 +274,45 @@
     },
     "production": {
       "name": "api-core",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "LIVE_ROOM_RUNTIME",
+            "class_name": "LiveRoomRuntimeDO"
+          },
+          {
+            "name": "SCHEDULED_CRON_LOCK",
+            "class_name": "ScheduledCronLockDO"
+          },
+          {
+            "name": "KARAOKE_SESSION_RUNTIME",
+            "class_name": "KaraokeSessionRuntimeDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1_live_room_runtime",
+          "new_sqlite_classes": ["LiveRoomRuntimeDO"]
+        },
+        {
+          "tag": "v2_scheduled_cron_lock",
+          "new_sqlite_classes": ["ScheduledCronLockDO"]
+        },
+        {
+          "tag": "v1_karaoke_session_runtime",
+          "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+        }
+      ],
       "services": [
         {
           "binding": "COMMUNITY_PROVISION_OPERATOR",
           "service": "community-provision-operator"
+        },
+        {
+          "binding": "COMMUNITY_D1_SHARD",
+          "service": "community-d1-shard-prod",
+          "entrypoint": "CommunityD1Shard"
         },
         {
           "binding": "SONG_PREVIEW_SERVICE",
@@ -182,6 +357,7 @@
         "SPACES_VERIFIER_CHALLENGE_DOMAIN": "pirate.sc",
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
+	        "COMMUNITY_READ_ROUTING_ENABLED": "false",
 	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-prod",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",

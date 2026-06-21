@@ -4,7 +4,8 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
-import type { Comment, CommentListResponse } from "./comment-types"
+import type { CommentListResponse } from "./comment-types"
+import type { CommentWriteDraft } from "./community-comment-store"
 
 async function enqueueCommentTranslationJob(input: {
   client: DbExecutor
@@ -12,6 +13,7 @@ async function enqueueCommentTranslationJob(input: {
   commentId: string
   locale: string
   createdAt: string
+  dedupe?: boolean
 }): Promise<void> {
   await enqueueCommunityJob({
     client: input.client,
@@ -24,14 +26,16 @@ async function enqueueCommentTranslationJob(input: {
       locale: input.locale,
     }),
     createdAt: input.createdAt,
+    dedupe: input.dedupe,
   })
 }
 
 export async function enqueueCommentTranslationPrewarmJobs(input: {
   client: DbExecutor
   communityId: string
-  comment: Comment
+  comment: CommentWriteDraft
   createdAt: string
+  dedupe?: boolean
 }): Promise<void> {
   if (input.comment.status !== "published" || !String(input.comment.body ?? "").trim()) {
     return
@@ -47,6 +51,7 @@ export async function enqueueCommentTranslationPrewarmJobs(input: {
       commentId: input.comment.comment_id,
       locale,
       createdAt: input.createdAt,
+      dedupe: input.dedupe,
     })
   }
 }

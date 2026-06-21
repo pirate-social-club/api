@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { analysisBlocked, badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
@@ -136,7 +136,7 @@ export async function createSongArtifactBundle(input: {
 
   const db = await withSongBundleStep("open community db", {
     community_id: input.communityId,
-  }, () => openCommunityDb(input.env, input.communityRepository, input.communityId))
+  }, () => openCommunityWriteClient(input.env, input.communityRepository, input.communityId))
   try {
     await withSongBundleStep("require member access", {
       community_id: input.communityId,
@@ -356,7 +356,7 @@ export async function listSongArtifactBundlesForCreator(input: {
   communityRepository: SongArtifactCommunityRepository
 }): Promise<SongArtifactBundleListResponse> {
   await requireActiveCommunity(input.communityRepository, input.communityId)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
   } finally {

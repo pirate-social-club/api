@@ -118,6 +118,7 @@ function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
     membership_mode: "gated",
+    karaoke_enabled: false,
     allow_anonymous_identity: false,
     anonymous_identity_scope: null,
     guest_comment_policy: "disallow",

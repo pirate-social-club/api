@@ -3,7 +3,7 @@ import type { CommunityRow } from "../../auth/auth-db-rows"
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { boolOrNull, numberOrNull, stringOrNull } from "../../sql-row"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import {
   canManageAssistantPolicy,
   requireAssistantCommunityAccess,
@@ -487,7 +487,7 @@ async function readStoredPolicy(input: {
     env: input.env,
     communityId: input.community.community_id,
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.community.community_id)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.community.community_id)
   try {
     const result = await db.client.execute({
       sql: `
@@ -635,7 +635,7 @@ async function persistPolicy(input: {
   nextPolicy: CommunityAssistantPolicy
   now: string
 }): Promise<void> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const tx = await db.client.transaction("write")
     try {

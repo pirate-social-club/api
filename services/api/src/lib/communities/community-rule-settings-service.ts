@@ -4,7 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityWriteClient } from "./community-read-access"
 import {
   loadCommunityProjection,
   communityMutationActorFromUserId,
@@ -35,7 +35,11 @@ export async function updateCommunityRules(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.rules_updated",
   })
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  // Routed write surface (buffer-safe, write-only tx body): D1 for backend='d1'
+  // communities, legacy Turso otherwise. As of §8.8 all consumer surfaces are
+  // routed through the read/write clients; the only remaining openCommunityDb is
+  // the read/write clients' internal Turso fallback (removed in Phase 5).
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
     const rules = normalizeInputRules(input.body.rules)

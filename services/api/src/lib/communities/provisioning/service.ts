@@ -14,6 +14,7 @@ import type {
   CommunityProvisioningRepository,
   CommunityReadRepository,
 } from "../db-community-repository"
+import type { CommunityProvisioningMode } from "../community-repository-types"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { VerificationRepository } from "../../verification/verification-repository"
@@ -26,7 +27,7 @@ import type {
 } from "../../../types"
 import { serializeCommunity, serializeJob } from "../community-serialization"
 import { serializeCommunityCreateAcceptedResponse } from "../../../serializers/community"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import {
   isExpired,
   loadCommunityLocalSnapshot,
@@ -77,9 +78,20 @@ function isSameNamespaceRoot(
   return left.family === right.family && left.normalized_root_label === right.normalized_root_label
 }
 
+function provisioningFailureErrorCode(mode: CommunityProvisioningMode): string {
+  switch (mode) {
+    case "turso_operator":
+      return "turso_operator_provision_failed"
+    case "d1_native":
+      return "d1_native_provision_failed"
+    default:
+      return "local_dev_bootstrap_failed"
+  }
+}
+
 function communityProvisioningFailureDetails(
   error: unknown,
-  mode: "local_dev" | "turso_operator",
+  mode: CommunityProvisioningMode,
 ): Record<string, unknown> {
   const details: Record<string, unknown> = {
     mode,
@@ -97,7 +109,7 @@ function communityProvisioningFailureDetails(
   return details
 }
 
-async function persistProvisionedCommunityCredential(input: {
+export async function persistProvisionedCommunityCredential(input: {
   env: Env
   repo: CommunityProvisioningRepository
   communityId: string
@@ -144,7 +156,7 @@ async function upsertLocalNamespaceAttachment(input: {
   namespaceLabel: string
   now: string
 }): Promise<void> {
-  const db = await openCommunityDb(input.env, input.repo, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.repo, input.communityId)
   const namespaceId = `ns_${input.communityId}`
   const namespaceHandlePolicyId = `nhp_${input.communityId}`
 
@@ -244,7 +256,7 @@ async function createNamespacelessCommunity(input: {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
   const jobId = makeId("job")
-  const backend = resolveCommunityProvisioningBackend(input.env)
+  const backend = resolveCommunityProvisioningBackend(input.env, { hasNamespace: false })
   const initialBinding = backend.initialBinding({
     env: input.env,
     communityId,
@@ -274,6 +286,7 @@ async function createNamespacelessCommunity(input: {
       communityId,
       namespaceVerificationId: null,
       routeSlug: null,
+      communityRepository: input.communityRepository,
     })
     await persistProvisionedCommunityCredential({
       env: input.env,
@@ -336,7 +349,7 @@ async function createNamespacelessCommunity(input: {
       communityId,
       jobId: prepared.job.job_id,
       actorUserId: input.auth.userId,
-      errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
+      errorCode: provisioningFailureErrorCode(backend.mode),
       createdAt: nowIso(),
       metadata: {
         binding_id: prepared.binding.community_database_binding_id,
@@ -407,7 +420,7 @@ async function provisionNamespacedCommunity(input: {
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
   const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
   const jobId = makeId("job")
-  const backend = resolveCommunityProvisioningBackend(env)
+  const backend = resolveCommunityProvisioningBackend(env, { hasNamespace: true })
   const initialBinding = backend.initialBinding({
     env,
     communityId,
@@ -454,6 +467,7 @@ async function provisionNamespacedCommunity(input: {
       communityId,
       namespaceVerificationId,
       routeSlug,
+      communityRepository: repo,
     })
     await persistProvisionedCommunityCredential({
       env,
@@ -497,7 +511,7 @@ async function provisionNamespacedCommunity(input: {
         communityId,
         jobId: prepared.job.job_id,
         actorUserId: auth.userId,
-        errorCode: backend.mode === "turso_operator" ? "turso_operator_provision_failed" : "local_dev_bootstrap_failed",
+        errorCode: provisioningFailureErrorCode(backend.mode),
         createdAt: failedAt,
         metadata: {
           binding_id: prepared.binding.community_database_binding_id,

@@ -1,4 +1,4 @@
-import type { Client } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
 import { isCommunityLive } from "../communities/community-status"
 import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
@@ -9,7 +9,7 @@ import type { SongArtifactUpload } from "../../types"
 type CommunityMembershipRow = Awaited<ReturnType<typeof getCommunityMembershipState>>
 
 export async function requireMemberAccess(
-  client: Client,
+  client: DbExecutor,
   communityId: string,
   userId: string,
 ): Promise<CommunityMembershipRow> {
@@ -31,7 +31,7 @@ export async function requireActiveCommunity(
 }
 
 export async function requireResolvedUpload(input: {
-  client: Client
+  client: DbExecutor
   communityId: string
   userId: string
   ref: { song_artifact_upload: string }

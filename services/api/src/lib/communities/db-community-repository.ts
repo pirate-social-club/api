@@ -87,6 +87,8 @@ import {
   getJobById,
   getLatestCommunityProvisioningJob,
 } from "./community-read-repository"
+import { upsertD1CommunityRoutingRow as upsertD1CommunityRoutingRowRaw } from "./community-routing-repository"
+import { persistProvisionedD1Binding as persistProvisionedD1BindingRaw } from "./provisioning/repository"
 import {
   createCommunityProvisioningRequest,
   retryCommunityProvisioningRequest,
@@ -424,6 +426,30 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     updatedAt: string
   }): Promise<void> {
     return setPendingNamespaceVerificationSession(this.client, input)
+  }
+
+  // d1_native provisioning orchestrator helpers (step 4 of the D1-native
+  // workstream). See D1-NATIVE-PROVISIONING-DESIGN.md §3, §4.
+
+  async upsertD1CommunityRoutingRow(input: {
+    communityId: string
+    shardWorkerId: string
+    bindingName: string
+    region: string
+    now: string
+    provisioningState?: "provisioning" | "ready" | "degraded" | "decommissioned"
+  }): Promise<{ written: boolean }> {
+    return upsertD1CommunityRoutingRowRaw(this.client, input)
+  }
+
+  async persistProvisionedD1Binding(input: {
+    communityDatabaseBindingId: string
+    bindingName: string
+    databaseUrl: string
+    region: string
+    updatedAt: string
+  }): Promise<void> {
+    return persistProvisionedD1BindingRaw(this.client, input)
   }
 }
 

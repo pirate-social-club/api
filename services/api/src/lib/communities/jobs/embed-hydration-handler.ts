@@ -5,7 +5,7 @@ import { getPostById } from "../../posts/community-post-query-store"
 import { hydrateLinkPostEmbed } from "../../posts/embed-hydrator"
 import { detectSupportedEmbedTarget } from "../../posts/embed-url-detection"
 import { getControlPlaneClient } from "../../runtime-deps"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
 
@@ -15,7 +15,7 @@ type EmbedHydratePayload = {
 }
 
 export async function runEmbedHydrate(input: CommunityJobHandlerInput): Promise<string | null> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.job.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const payload = parseJobPayload<EmbedHydratePayload>(input.job.payload_json)
     const postId = payload?.post_id ?? input.job.subject_id

@@ -1,4 +1,4 @@
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import type {
   CommunityDatabaseBindingRepository,
@@ -38,7 +38,7 @@ export async function openProjectedPostCommunityDb(input: {
     }
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   return {
     client: db.client,
     communityId: projection.community_id,
@@ -56,7 +56,7 @@ export async function openLiveCommunityDbForPostRead(input: {
     throw notFoundError("Community not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   return {
     client: db.client,
     communityId: input.communityId,

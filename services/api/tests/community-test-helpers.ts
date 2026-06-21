@@ -9,6 +9,9 @@ import type {
   CommunityReadRepository,
 } from "../src/lib/communities/db-community-repository"
 import { insertPost } from "../src/lib/posts/community-post-create-store"
+import { getPostById } from "../src/lib/posts/community-post-query-store"
+import { resolvePostProjectionSchema } from "../src/lib/posts/community-post-projection"
+import type { Post } from "../src/types"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type {
   CommunityCommentProjectionRow,
@@ -18,6 +21,24 @@ import type {
 } from "../src/lib/auth/auth-db-rows"
 import type { UserRepository } from "../src/lib/auth/repositories"
 import type { Env, User } from "../src/types"
+
+/**
+ * Test-only convenience: `insertPost` is now write-only (returns a draft, requires
+ * a pre-resolved projection schema) so it is D1-buffer-safe in production. Tests
+ * run on libSQL (in-tx reads work), so this wrapper resolves the schema, inserts,
+ * and reads back the full hydrated Post — preserving the old `insertPost` ergonomics.
+ */
+export async function insertPostForTest(
+  input: Omit<Parameters<typeof insertPost>[0], "projectionSchema">,
+): Promise<Post> {
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
+  const draft = await insertPost({ ...input, projectionSchema })
+  const post = await getPostById(input.client, draft.post_id)
+  if (!post) {
+    throw new Error("insertPostForTest: post row missing after insert")
+  }
+  return post
+}
 
 export async function cleanupCommunityTestArtifacts(cleanupPaths: string[]): Promise<void> {
   await Promise.all(cleanupPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
@@ -318,7 +339,7 @@ export async function seedTestCommunityState(input: {
       })
     }
 
-    const post = await insertPost({
+    const post = await insertPostForTest({
       client: db.client,
       communityId: input.communityId,
       authorUserId: "usr_owner",

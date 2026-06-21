@@ -1,11 +1,11 @@
-import type { Client } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 import type { AssetRow } from "../communities/commerce/row-types"
 import { stringOrNull, requiredString } from "../communities/commerce/row-types"
 
 export type UserStoryAssetRow = Pick<AssetRow, "asset_id" | "community_id" | "display_title" | "story_ip_id" | "story_royalty_policy" | "story_derivative_parent_ip_ids_json">
 
 export async function listUserStoryAssets(
-  client: Client,
+  client: DbExecutor,
   userId: string,
 ): Promise<UserStoryAssetRow[]> {
   const result = await client.execute({

@@ -5,7 +5,7 @@ import type {
 import { badRequestError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
-import { openCommunityDb } from "./community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
 import { isCommunityLive } from "./community-status"
 import { requireOwnedCommunity } from "./create/repository"
 import { parseCommunitySettingsJson } from "./create/validation"
@@ -136,7 +136,7 @@ async function readStoredMachineAccessPolicy(input: {
   updatedAt: string
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityMachineAccessPolicy> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -420,7 +420,7 @@ export async function updateCommunityMachineAccessPolicy(input: {
     },
     updated_at: now,
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `

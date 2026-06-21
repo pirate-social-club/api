@@ -1,3 +1,5 @@
+import type { ShardRpc } from "@pirate/api-shared"
+
 export type Env = {
   // Runtime
   BUILD_GIT_REF?: string
@@ -23,6 +25,29 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
+  /** Phase-0 flag: route community reads through the routing directory. "true" enables; default off. */
+  COMMUNITY_READ_ROUTING_ENABLED?: string
+  /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
+  COMMUNITY_D1_SHARD?: ShardRpc
+  /**
+   * Step 5: shared secret for the shard's admin RPCs, consulted ONLY by the
+   * D1-native reconciler scheduled task (reconciler-host.ts). Present only on a
+   * reconciler host (the d1-staging worker); absent elsewhere, where the sweep
+   * is a no-op. Must equal the shard's own SHARD_ADMIN_TOKEN secret.
+   */
+  SHARD_ADMIN_TOKEN?: string
+  /**
+   * Opt-in selector for D1-native provisioning (new communities born on D1).
+   * "d1_native" selects the D1-native backend; any other value (or absent) keeps
+   * the existing turso_operator / local_dev selection. Requires COMMUNITY_D1_SHARD.
+   */
+  COMMUNITY_PROVISION_BACKEND?: string
+  /**
+   * Region label recorded on D1-native routing rows (satisfies the 0117
+   * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set
+   * out-of-band by the shard's static `wrangler d1_databases` bindings.
+   */
+  COMMUNITY_D1_SHARD_REGION?: string
   COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
   COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
@@ -36,6 +61,10 @@ export type Env = {
   AUTH_UPSTREAM_JWT_ISSUER?: string
   AUTH_UPSTREAM_JWT_AUDIENCE?: string
   AUTH_UPSTREAM_JWT_SHARED_SECRET?: string
+  // Staging-only test issuer (see lib/auth/staging-test-auth.ts). Fails closed unless
+  // ENVIRONMENT=staging AND STAGING_TEST_AUTH_ENABLED opted in AND the secret is set.
+  STAGING_TEST_AUTH_ENABLED?: string
+  STAGING_TEST_JWT_SHARED_SECRET?: string
   PIRATE_APP_JWT_PRIVATE_KEY?: string
   PIRATE_APP_JWT_PUBLIC_KEY?: string
   PIRATE_APP_JWT_ISSUER?: string
@@ -163,6 +192,12 @@ export type Env = {
   LIVE_ROOM_JACKTRIP_BUFFER_STRATEGY?: string
   LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
   LIVE_ROOM_RUNTIME?: DurableObjectNamespace
+  KARAOKE_SESSION_RUNTIME?: DurableObjectNamespace
+  KARAOKE_GATEWAY_SIGNING_KEY?: string
+  ELEVENLABS_STT_MODEL?: string
+  ELEVENLABS_STT_WEBSOCKET_URL?: string
+  // Singleton lease arbiter ensuring only one scheduled (cron) batch runs at a time.
+  SCHEDULED_CRON_LOCK?: DurableObjectNamespace
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string

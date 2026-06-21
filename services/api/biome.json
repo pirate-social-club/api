@@ -14,7 +14,8 @@
   },
   "javascript": {
     "globals": [
-      "HTMLRewriter"
+      "HTMLRewriter",
+      "WebSocketPair"
     ]
   },
   "assist": {

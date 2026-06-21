@@ -2,6 +2,30 @@ import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
+import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
+
+// Use the LOCAL neonConfig singleton (same instance as Pool imported above).
+// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
+// configuring from there has no effect on Pool here.
+// poolQueryViaFetch is safe for all Postgres providers: routes pool.query() through HTTP
+// instead of persistent WebSocket connections, preventing slot exhaustion.
+neonConfig.poolQueryViaFetch = true
+
+const _defaultFetchEndpoint = neonConfig.fetchEndpoint
+const _defaultWsProxy = neonConfig.wsProxy
+const _defaultPipelineConnect = neonConfig.pipelineConnect
+
+export function configureLocalNeonForUrl(url: string): void {
+  if (!isPlanetScalePostgresUrl(url)) {
+    neonConfig.fetchEndpoint = _defaultFetchEndpoint
+    neonConfig.wsProxy = _defaultWsProxy
+    neonConfig.pipelineConnect = _defaultPipelineConnect
+    return
+  }
+  neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`
+  neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`
+  neonConfig.pipelineConnect = false
+}
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -9,32 +33,6 @@ import type { Env } from "../env"
 
 type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
-}
-
-const defaultNeonFetchEndpoint = neonConfig.fetchEndpoint
-const defaultNeonWsProxy = neonConfig.wsProxy
-
-function isPlanetScalePostgresHost(host: string): boolean {
-  return host.toLowerCase().endsWith(".pg.psdb.cloud")
-}
-
-neonConfig.poolQueryViaFetch = true
-neonConfig.fetchEndpoint = (host, port, options) => {
-  if (isPlanetScalePostgresHost(host)) {
-    return `https://${host}/sql`
-  }
-  return typeof defaultNeonFetchEndpoint === "function"
-    ? defaultNeonFetchEndpoint(host, port, options)
-    : defaultNeonFetchEndpoint
-}
-neonConfig.pipelineConnect = false
-neonConfig.wsProxy = (host, port) => {
-  if (isPlanetScalePostgresHost(host)) {
-    return `${host}/v2?address=${host}:${port}`
-  }
-  return typeof defaultNeonWsProxy === "function"
-    ? defaultNeonWsProxy(host, port)
-    : defaultNeonWsProxy
 }
 
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
@@ -382,10 +380,19 @@ function getRequestScopedPostgresClient(url: string): Client | null {
     return null
   }
 
+  configureLocalNeonForUrl(url)
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
-    client = new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    // max: 1 — one connection per request is sufficient.
+    // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
+    // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
+    client = new PostgresClientAdapter(new Pool({
+      connectionString: normalizePostgresConnectionStringForDriver(url),
+      max: 1,
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+    }))
     store.clients.set(cacheKey, client)
   }
   return new RequestScopedClientAdapter(client)
@@ -404,7 +411,11 @@ function getControlPlaneClient(env: Env): Client {
     if (requestScopedClient) {
       return requestScopedClient
     }
-    return new PostgresClientAdapter(new Pool({ connectionString: url, max: 4 }))
+    throw new Error(
+      "getControlPlaneClient called outside withRequestControlPlaneClients — " +
+      "Postgres control-plane I/O must be request-scoped to avoid exhausting PlanetScale connection slots. " +
+      "Wrap the call site in withRequestControlPlaneClients().",
+    )
   }
 
   const cacheKey = `cp:${getControlPlaneCacheKey(env)}`

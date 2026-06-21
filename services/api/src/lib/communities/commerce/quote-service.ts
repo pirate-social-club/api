@@ -2,7 +2,7 @@ import { eligibilityFailed, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { decodePublicId } from "../../public-ids"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { getPostById } from "../../posts/community-post-query-store"
@@ -71,7 +71,7 @@ export async function preflightCommunityPurchaseQuote(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<CommunityPurchaseQuotePreflight> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const moneyPolicy = await getCommunityMoneyPolicy({ env: input.env, communityId: input.communityId })
@@ -168,7 +168,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
   communityRepository: CommunityDatabaseBindingRepository
   userRepository: UserRepository
 }): Promise<PurchaseQuoteRow> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     if (input.userId) {
       await requireCommunityMember(db.client, input.communityId, input.userId)
@@ -454,7 +454,7 @@ export async function failCommunityPurchase(input: {
   body: CommunityPurchaseSettlementFailureRequest
   communityRepository: CommunityDatabaseBindingRepository
 }): Promise<CommunityPurchaseSettlementFailure> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
     const quoteId = decodePublicId(input.body.quote, "pq")

@@ -1,7 +1,7 @@
 import type { Client } from "../sql-client"
 import type { DbExecutor } from "../db-helpers"
 import { sha256Hex } from "../crypto"
-import { openCommunityDb } from "../communities/community-db-factory"
+import { openCommunityWriteClient } from "../communities/community-read-access"
 import { isCommunityLive } from "../communities/community-status"
 import { safeRollback } from "../transactions"
 import { enqueueCommunityJob } from "../communities/jobs/store"
@@ -22,7 +22,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { badRequestError, commentMediaRejected, eligibilityFailed, notFoundError } from "../errors"
+import { badRequestError, commentMediaRejected, eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
@@ -31,10 +31,12 @@ import { getPostById } from "../posts/community-post-query-store"
 import { resolveOpenAIModerationOutcome } from "../posts/openai-moderation"
 import {
   assertCreateCommentRequest,
+  type CommentWriteDraft,
   findCommentByIdempotencyKey,
   getCommentById,
   getCommunityCommentPolicy,
   insertComment,
+  getExistingCommentVoteValue,
   markCommentDeleted,
   setCommentRepliesLocked,
   setCommentStatus,
@@ -234,7 +236,7 @@ export async function createComment(input: {
     }
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
@@ -340,10 +342,10 @@ export async function createComment(input: {
     const createdAt = nowIso()
     const depth = parentComment ? parentComment.depth + 1 : 0
     const tx = await db.client.transaction("write")
-    let createdComment: Comment
+    let draft: CommentWriteDraft
 
     try {
-      createdComment = await insertComment({
+      draft = await insertComment({
         executor: tx,
         communityId: input.communityId,
         threadRootPostId: input.threadRootPostId,
@@ -362,21 +364,21 @@ export async function createComment(input: {
 
       await insertCommentClosureRows({
         executor: tx,
-        commentId: createdComment.comment_id,
+        commentId: draft.comment_id,
         parentCommentId: input.parentCommentId ?? null,
       })
 
       await incrementAncestorCommentCounters({
         executor: tx,
         parentCommentId: input.parentCommentId ?? null,
-        repliedAt: createdComment.created_at,
+        repliedAt: draft.created_at,
       })
 
       await incrementThreadPostCommentCounters({
         executor: tx,
         threadRootPostId: input.threadRootPostId,
         isTopLevel: !input.parentCommentId,
-        commentedAt: createdComment.created_at,
+        commentedAt: draft.created_at,
       })
 
       await enqueueCommunityJob({
@@ -384,12 +386,13 @@ export async function createComment(input: {
         communityId: input.communityId,
         jobType: "comment_body_mirror",
         subjectType: "comment",
-        subjectId: createdComment.comment_id,
+        subjectId: draft.comment_id,
         payloadJson: JSON.stringify({
-          comment_id: createdComment.comment_id,
-          thread_root_post_id: createdComment.thread_root_post_id,
+          comment_id: draft.comment_id,
+          thread_root_post_id: draft.thread_root_post_id,
         }),
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only (fresh comment, no dedup SELECT)
       })
 
       await enqueueCommunityJob({
@@ -402,16 +405,26 @@ export async function createComment(input: {
           thread_root_post_id: input.threadRootPostId,
         }),
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent thread snapshot republish)
       })
 
       await enqueueCommentTranslationPrewarmJobs({
         client: tx,
         communityId: input.communityId,
-        comment: createdComment,
+        comment: draft,
         createdAt,
+        dedupe: false, // inside write tx: INSERT-only prewarm jobs (fresh comment)
       })
 
       await tx.commit()
+
+      // Hydrate the full Comment AFTER commit — the buffered write tx can't read the
+      // inserted row back. Keep this failure hard: a missing row means the write was
+      // not durable.
+      const createdComment = await getCommentById(db.client, draft.comment_id)
+      if (!createdComment) {
+        throw internalError("Comment row is missing after insert")
+      }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -510,7 +523,7 @@ export async function castCommentVote(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     if (!input.bypassVoterAccessChecks) {
       await requireMemberAccess(db.client, projection.community_id, input.userId)
@@ -529,6 +542,9 @@ export async function castCommentVote(input: {
       throw notFoundError("Comment not found")
     }
 
+    // Read the prior vote BEFORE the tx — buffer-safe (a write tx can't read it
+    // back), so the count deltas computed in upsertCommentVote stay correct.
+    const previousValue = await getExistingCommentVoteValue(db.client, input.commentId, input.userId)
     const tx = await db.client.transaction("write")
     try {
       const result = await upsertCommentVote({
@@ -536,6 +552,7 @@ export async function castCommentVote(input: {
         commentId: input.commentId,
         userId: input.userId,
         value: input.value,
+        previousValue,
         now: nowIso(),
       })
       await tx.commit()
@@ -563,7 +580,7 @@ export async function deleteComment(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     await requireMemberAccess(db.client, projection.community_id, input.userId)
 
@@ -581,12 +598,16 @@ export async function deleteComment(input: {
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const deleted = await markCommentDeleted({
+      await markCommentDeleted({
         executor: tx,
         commentId: input.commentId,
         now: updatedAt,
       })
       await tx.commit()
+
+      // Reconstruct deterministically from the pre-tx row: the write tx can't read
+      // the updated row back, and markCommentDeleted sets exactly these fields.
+      const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -639,7 +660,7 @@ export async function removeCommentAsModerator(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
@@ -660,13 +681,17 @@ export async function removeCommentAsModerator(input: {
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
-      const removed = await setCommentStatus({
+      await setCommentStatus({
         executor: tx,
         commentId: input.commentId,
         status: "removed",
         now: updatedAt,
       })
       await tx.commit()
+
+      // Reconstruct deterministically from the pre-tx row (buffered write tx can't
+      // read it back); setCommentStatus only changes status + updated_at.
+      const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -721,7 +746,7 @@ export async function setCommentReplyLock(input: {
     throw notFoundError("Comment not found")
   }
 
-  const db = await openCommunityDb(input.env, input.communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     const membership = await requireMemberAccess(db.client, projection.community_id, input.userId)
     if (!hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {

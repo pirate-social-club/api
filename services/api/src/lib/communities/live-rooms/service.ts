@@ -5,7 +5,7 @@ import type { UserRepository } from "../../auth/repositories"
 import { executeFirst } from "../../db-helpers"
 import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import { enqueueCommunityJob } from "../jobs/store"
 import {
   OWNER_OR_ADMIN_ROLE,
@@ -190,13 +190,13 @@ async function createLiveRoomPreflight(input: {
   return prepared
 }
 
-async function createLiveRoomInTransaction(input: {
+// Exported for buffer-safety regression tests (asserts the tx body is write-only).
+export async function createLiveRoomInTransaction(input: {
   tx: LiveRoomExecutor
   userId: string
   communityId: string
   prepared: PreparedLiveRoomCreate
 }): Promise<{
-  room: LiveRoom
   anchorPost: LiveRoomAnchorPost
   liveRoomId: string
   createdAt: string
@@ -319,7 +319,8 @@ async function createLiveRoomInTransaction(input: {
   }
 
   return {
-    room: await getHydratedLiveRoom(input.tx, input.communityId, liveRoomId),
+    // No in-tx readback: a buffered D1 write tx can't hydrate the room back. Callers
+    // read it via getHydratedLiveRoom(db.client, ...) AFTER commit.
     anchorPost: {
       post_id: anchorPostId,
       community_id: input.communityId,
@@ -396,7 +397,7 @@ export async function createLiveRoom(input: {
   if (!community) {
     throw notFoundError("Community not found")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const prepared = await createLiveRoomPreflight({
       client: db.client,
@@ -437,7 +438,7 @@ export async function createLiveRoom(input: {
       anchorPost: created.anchorPost,
       createdAt: created.createdAt,
     })
-    return serializeLiveRoom(created.room)
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, created.liveRoomId))
   } finally {
     db.close()
   }
@@ -462,7 +463,7 @@ export async function publishLiveRoom(input: {
   if (listingBody.asset?.trim() || listingBody.live_room?.trim()) {
     throw badRequestError("publish listing target is assigned by the server")
   }
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const prepared = await createLiveRoomPreflight({
       client: db.client,
@@ -521,7 +522,7 @@ export async function publishLiveRoom(input: {
       createdAt: created.createdAt,
     })
     return {
-      room: serializeLiveRoom(created.room),
+      room: serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, created.liveRoomId)),
       listing,
     }
   } finally {
@@ -536,7 +537,7 @@ export async function getLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
@@ -568,7 +569,7 @@ export async function getLiveRoomAccess(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAccessResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -596,7 +597,7 @@ export async function viewerAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -658,7 +659,7 @@ export async function viewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -708,7 +709,7 @@ export async function getPublicLiveRoomAccess(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAccessResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -734,7 +735,7 @@ export async function publicViewerAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -794,7 +795,7 @@ export async function publicViewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
@@ -843,7 +844,7 @@ export async function hostAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId) {
@@ -888,7 +889,7 @@ export async function guestAttachLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomAttachResponse> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.guest_user !== input.userId) {
@@ -927,7 +928,7 @@ export async function cancelLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getLiveRoomRow(db.client, input.communityId, input.liveRoomId)
     if (room.host_user_id !== input.userId) {
@@ -953,9 +954,7 @@ export async function cancelLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      const canceledRoom = await getHydratedLiveRoom(tx, input.communityId, input.liveRoomId)
       await tx.commit()
-      return serializeLiveRoom(canceledRoom)
     } catch (error) {
       try {
         await tx.rollback()
@@ -966,6 +965,8 @@ export async function cancelLiveRoom(input: {
     } finally {
       tx.close()
     }
+    // Hydrate AFTER commit — the buffered write tx can't read the room back.
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {
     db.close()
   }
@@ -978,7 +979,7 @@ export async function acceptLiveRoomGuestInvite(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getLiveRoomRow(db.client, input.communityId, input.liveRoomId)
     if (room.guest_user_id !== input.userId) {
@@ -1028,7 +1029,7 @@ export async function revokeLiveRoomGuestInvite(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId && room.guest_user !== input.userId) {
@@ -1073,7 +1074,7 @@ export async function endLiveRoom(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoom> {
-  const db = await openCommunityDb(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const room = await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId)
     if (room.host_user !== input.userId) {
@@ -1115,9 +1116,7 @@ export async function endLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      const endedRoom = await getHydratedLiveRoom(tx, input.communityId, input.liveRoomId)
       await tx.commit()
-      return serializeLiveRoom(endedRoom)
     } catch (error) {
       try {
         await tx.rollback()
@@ -1128,6 +1127,8 @@ export async function endLiveRoom(input: {
     } finally {
       tx.close()
     }
+    // Hydrate AFTER commit — the buffered write tx can't read the room back.
+    return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {
     db.close()
   }

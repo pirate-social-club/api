@@ -4,7 +4,8 @@ import { provisionCommunityRuntime } from "./lib/provision-runtime";
 import { rotateCommunityToken } from "./lib/rotate-token";
 import { doctorControlPlane } from "./lib/doctor";
 import { migrateCommunityDatabase } from "./lib/community-bootstrap";
-import { requireText, trim } from "./lib/helpers";
+import { assertRemoteControlPlaneUrl, isPostgresControlPlaneUrl, openControlPlaneDatabase, pingPostgresControlPlane } from "./lib/control-plane-db";
+import { errorMessage, requireText, trim } from "./lib/helpers";
 import { reapStaleCommunityProvisioningJobs } from "./lib/reap-stale";
 
 export type Env = {
@@ -29,6 +30,7 @@ export type OperatorDeps = {
   doctorFn?: typeof doctorControlPlane;
   migrateFn?: typeof migrateCommunityDatabase;
   reapStaleFn?: typeof reapStaleCommunityProvisioningJobs;
+  openControlPlaneDbFn?: typeof openControlPlaneDatabase;
 };
 
 type ProvisionRouteBody = {
@@ -113,6 +115,15 @@ function requireOrgGuard(env: Env): void {
   }
 }
 
+// Single chokepoint: every route reads the control-plane URL through here so a
+// non-remote (e.g. `file:`) URL is rejected at the boundary instead of failing
+// deep inside provisioning once irreversible Turso resources already exist.
+function requireControlPlaneUrl(env: Env): string {
+  const url = requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL");
+  assertRemoteControlPlaneUrl(url, { environment: env.ENVIRONMENT });
+  return url;
+}
+
 function errorExtra(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
     return { error: String(error) };
@@ -158,6 +169,7 @@ export function createHandler(deps: OperatorDeps = {}) {
   const doctorFn = deps.doctorFn ?? doctorControlPlane;
   const migrateFn = deps.migrateFn ?? migrateCommunityDatabase;
   const reapStaleFn = deps.reapStaleFn ?? reapStaleCommunityProvisioningJobs;
+  const openControlPlaneDbFn = deps.openControlPlaneDbFn ?? openControlPlaneDatabase;
 
   return async function handle(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -181,6 +193,81 @@ export function createHandler(deps: OperatorDeps = {}) {
       return authResponse;
     }
 
+    // Deep health: unlike `/health`, this actually opens the control plane and
+    // runs `SELECT 1`, so a misconfigured CONTROL_PLANE_DATABASE_URL (e.g. a
+    // `file:` URL the Workers runtime cannot read) is caught immediately after
+    // deploy instead of at the first provisioning request.
+    if (url.pathname === "/health/deep") {
+      const base = {
+        service: "community-provision-operator",
+        environment: trim(env.ENVIRONMENT) || null,
+      };
+      let controlPlaneUrl: string;
+      try {
+        controlPlaneUrl = requireControlPlaneUrl(env);
+      } catch (error) {
+        return json(
+          {
+            ...base,
+            ok: false,
+            control_plane_ok: false,
+            check: "control_plane_url",
+            error_code: "control_plane_url_invalid",
+            message: errorMessage(error).slice(0, 300),
+          },
+          { status: 503 },
+        );
+      }
+
+      if (isPostgresControlPlaneUrl(controlPlaneUrl)) {
+        // Use the stateless neon() HTTP client with AbortController so the fetch
+        // is cancelled at the network level on timeout. Pool-based SELECT 1
+        // abandoned by Promise.race would still queue at PlanetScale and grab a
+        // slot once one frees — leaking connections with every failed health check.
+        try {
+          await pingPostgresControlPlane(controlPlaneUrl, 5_000);
+          return json({ ...base, ok: true, control_plane_ok: true });
+        } catch (error) {
+          console.error("[health/deep] postgres ping failed:", errorMessage(error));
+          return json(
+            {
+              ...base,
+              ok: false,
+              control_plane_ok: false,
+              check: "control_plane_query",
+              error_code: "control_plane_unreachable",
+              message: errorMessage(error).slice(0, 300),
+            },
+            { status: 503 },
+          );
+        }
+      }
+
+      const db = openControlPlaneDbFn({
+        url: controlPlaneUrl,
+        authToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
+      });
+      try {
+        await db.sql`SELECT 1`;
+        return json({ ...base, ok: true, control_plane_ok: true });
+      } catch (error) {
+        console.error("[health/deep] control plane query failed:", errorMessage(error));
+        return json(
+          {
+            ...base,
+            ok: false,
+            control_plane_ok: false,
+            check: "control_plane_query",
+            error_code: "control_plane_unreachable",
+            message: errorMessage(error).slice(0, 300),
+          },
+          { status: 503 },
+        );
+      } finally {
+        await db.close().catch((e) => console.error("[health/deep] pool close failed", e));
+      }
+    }
+
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
@@ -191,7 +278,7 @@ export function createHandler(deps: OperatorDeps = {}) {
         const requestId = trim(request.headers.get("x-request-id")) || null;
         requireOrgGuard(env);
         const result = await provisionFn({
-          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneDatabaseUrl: requireControlPlaneUrl(env),
           controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
           tursoPlatformApiToken: requireText(env.TURSO_PLATFORM_API_TOKEN, "TURSO_PLATFORM_API_TOKEN"),
           tursoOrganizationSlug: requireText(env.TURSO_ORGANIZATION_SLUG, "TURSO_ORGANIZATION_SLUG"),
@@ -236,7 +323,7 @@ export function createHandler(deps: OperatorDeps = {}) {
         const body = await request.json() as RotateRouteBody;
         requireOrgGuard(env);
         const result = await rotateFn({
-          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneDatabaseUrl: requireControlPlaneUrl(env),
           controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
           tursoPlatformApiToken: requireText(env.TURSO_PLATFORM_API_TOKEN, "TURSO_PLATFORM_API_TOKEN"),
           tursoCommunityDbWrapKey: requireText(env.TURSO_COMMUNITY_DB_WRAP_KEY, "TURSO_COMMUNITY_DB_WRAP_KEY"),
@@ -259,7 +346,7 @@ export function createHandler(deps: OperatorDeps = {}) {
       if (url.pathname === "/internal/v0/community-provisioning/doctor") {
         const body = await request.json() as DoctorRouteBody;
         const result = await doctorFn({
-          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneDatabaseUrl: requireControlPlaneUrl(env),
           controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
           communityId: trim(body.community_id ?? "") || null,
           tursoCommunityDbWrapKey: trim(env.TURSO_COMMUNITY_DB_WRAP_KEY) || null,
@@ -276,7 +363,7 @@ export function createHandler(deps: OperatorDeps = {}) {
       if (url.pathname === "/internal/v0/community-provisioning/reap-stale") {
         const body = await request.json() as ReapStaleRouteBody;
         const result = await reapStaleFn({
-          controlPlaneDatabaseUrl: requireText(env.CONTROL_PLANE_DATABASE_URL, "CONTROL_PLANE_DATABASE_URL"),
+          controlPlaneDatabaseUrl: requireControlPlaneUrl(env),
           controlPlaneAuthToken: trim(env.TURSO_CONTROL_PLANE_AUTH_TOKEN) || null,
           staleAfterMs: optionalPositiveInt(body.stale_after_ms, "stale_after_ms") ?? undefined,
         });

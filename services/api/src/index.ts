@@ -10,6 +10,7 @@ import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
 import discovery from "./routes/discovery"
+import karaokeSessions from "./routes/karaoke-sessions"
 import feed from "./routes/feed"
 import geo from "./routes/geo"
 import jobs from "./routes/jobs"
@@ -48,16 +49,27 @@ import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/j
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
-import { getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
+import { getCommunityProvisionOperatorHealth, getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
+import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
+import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
+import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
+import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import type { Env } from "./env"
+import {
+  publicReadCacheFillRequests,
+  publicReadCacheRefreshRequests,
+  type PublicReadCacheFillResult,
+} from "./lib/public-read-cache-state"
 
-export { LiveRoomRuntimeDO }
+export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
+export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
+export { ScheduledCronLockDO }
 
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
@@ -66,21 +78,6 @@ declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
-const publicReadCacheFillRequests = new Map<string, Promise<PublicReadCacheFillResult>>()
-const publicReadCacheRefreshRequests = new Map<string, Promise<void>>()
-
-export function resetPublicReadCacheDedupeForTests(): void {
-  publicReadCacheFillRequests.clear()
-  publicReadCacheRefreshRequests.clear()
-}
-
-type PublicReadCacheFillResult = {
-  body: ArrayBuffer
-  cacheable: boolean
-  headers: [string, string][]
-  status: number
-  statusText: string
-}
 
 type BuildVersionMetadata = {
   git_ref: string | null
@@ -183,6 +180,23 @@ app.use("*", async (_c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
+// Deep provisioning health: fans out to the operator's `/health/deep`, which
+// opens the control plane. Returns booleans only (no connection strings or
+// secrets) so a post-deploy smoke check can curl it without credentials.
+app.get("/health/provisioning", async (c) => {
+  const health = await getCommunityProvisionOperatorHealth(c.env)
+  return c.json(
+    {
+      ok: health.ok,
+      configured: health.configured,
+      control_plane_ok: health.control_plane_ok,
+      environment: health.environment,
+      ...(health.ok ? {} : { error_code: health.error_code }),
+    },
+    health.ok ? 200 : 503,
+    { "cache-control": "no-store" },
+  )
+})
 app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
   "cache-control": "no-store",
 }))
@@ -198,6 +212,7 @@ app.route("/communities", communities)
 app.route("/feed", feed)
 app.route("/geo", geo)
 app.route("/jobs", jobs)
+app.route("/karaoke/sessions", karaokeSessions)
 app.route("/mcp", mcp)
 app.route("/notifications", notifications)
 app.route("/oauth", oauth)
@@ -596,17 +611,90 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
   }
 }
 
+// The cron fires every minute. Each scheduled job opens its OWN control-plane
+// connection (via withRequestControlPlaneClients) — one connection, opened and
+// closed independently, to respect Workers' 15-min waitUntil limit. Running all
+// jobs at once opened N connections simultaneously and, coinciding with request
+// traffic, burst the control-plane Postgres primary's small max_connections
+// (observed: intermittent `remaining connection slots are reserved for SUPERUSER`).
+// Cap concurrency so the cron contributes at most SCHEDULED_JOB_CONCURRENCY
+// connections at a time; jobs are short so total runtime stays well under 15 min.
+// At most this many scheduled jobs run concurrently → the cron contributes
+// ≤ SCHEDULED_JOB_CONCURRENCY control-plane connections per invocation.
+const SCHEDULED_JOB_CONCURRENCY = 2
+// Stop STARTING new jobs after this elapsed wall-time; in-flight jobs (≤ the
+// concurrency cap, each internally bounded) finish. Keeps a batch comfortably
+// under the 60s cron interval (no overlapping invocations stacking connections)
+// and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
+const SCHEDULED_BATCH_DEADLINE_MS = 30_000
+// Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
+// never expire mid-batch, but bounded so a crashed batch self-heals. Released
+// promptly on normal completion.
+const SCHEDULED_LEASE_TTL_MS = 120_000
+
 const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
-  scheduled: async (_controller, env, ctx) => {
-    ctx.waitUntil(withRequestControlPlaneClients(() => flushScheduledAnalytics(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => syncScheduledCommunityHealthCounts(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => processScheduledCommunityJobs(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledCommunityMembershipProjections(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => refreshScheduledMaterializedPublicHomeFeeds(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledRoyaltyClaims(env)))
-    ctx.waitUntil(withRequestControlPlaneClients(() => reconcileScheduledPurchaseSettlements(env)))
+  scheduled: (controller, env, ctx) => {
+    // Each job opens its OWN control-plane connection (its own
+    // withRequestControlPlaneClients — one connection, opened and closed
+    // independently). Bounded concurrency caps peak connections; the deadline
+    // bounds when new connections stop opening (it does NOT cancel in-flight
+    // jobs — see runner docs / overlap caveat).
+    // A D1 reconciler host (has SHARD_ADMIN_TOKEN + the shard binding) runs ONLY
+    // the reconciler — it is a DEDICATED reconciler worker, NOT a second full API.
+    // Its SCHEDULED_CRON_LOCK DO is its own (not shared with the main API worker),
+    // so running the general batch here would DOUBLE-PROCESS the shared control
+    // plane (settlements, community jobs, projections). The main API worker has no
+    // SHARD_ADMIN_TOKEN, so it runs the general batch and skips the reconciler.
+    const isD1ReconcilerHost = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
+    const jobs: NamedTask[] = (
+      isD1ReconcilerHost
+        ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }]
+        : [
+            { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
+            { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
+            { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
+            { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
+            { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
+            { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
+            { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
+          ]
+    ).map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
+    // Rotate the start order each minute so a deadline-trimmed tail never starves
+    // the same jobs run after run.
+    const minute = Math.floor((controller.scheduledTime || Date.now()) / 60_000)
+    const offset = ((minute % jobs.length) + jobs.length) % jobs.length
+    const ordered = [...jobs.slice(offset), ...jobs.slice(0, offset)]
+
+    // The DO lease is REQUIRED. Rather than silently run without overlap
+    // protection (which could re-trigger control-plane connection exhaustion), a
+    // missing binding fails loudly and starts zero jobs — a deploy misconfig to
+    // fix immediately, not mask.
+    if (!env.SCHEDULED_CRON_LOCK) {
+      const error = new Error("SCHEDULED_CRON_LOCK durable object binding is missing; refusing to run the scheduled batch without overlap protection")
+      console.error("[scheduled]", error.message)
+      captureScheduledError(env, error, "scheduled_cron_lock_binding_missing")
+      return
+    }
+    // A DO lease guarantees only ONE batch runs cluster-wide: if a prior
+    // invocation is still in flight, this one acquires nothing and starts zero
+    // jobs (so overlapping invocations can't stack control-plane connections).
+    const lock = createDurableObjectCronLock(env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO>)
+    const owner = crypto.randomUUID()
+    ctx.waitUntil(
+      runScheduledBatch({
+        deadlineMs: SCHEDULED_BATCH_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
+        limit: SCHEDULED_JOB_CONCURRENCY,
+        lock,
+        onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
+        onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
+        onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),
+        owner,
+        tasks: ordered,
+      }),
+    )
   },
 }
 

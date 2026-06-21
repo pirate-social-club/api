@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import { getProfileRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { openCommunityDb } from "../lib/communities/community-db-factory"
+import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { isCommunityLive } from "../lib/communities/community-status"
 import {
   getPublicCommunityPreview,
@@ -232,7 +232,7 @@ publicPosts.get("/:postId/thread", async (c) => {
     })
   }
 
-  const db = await openCommunityDb(c.env, communityRepository, projection.community_id)
+  const db = await openCommunityWriteClient(c.env, communityRepository, projection.community_id)
   try {
     const locale = c.req.query("locale") ?? null
     const post = await getPublicPostFromCommunityDb({

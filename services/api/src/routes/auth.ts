@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { authError } from "../lib/errors"
 import { verifyJwtBasedAuth } from "../lib/auth/jwt-based-auth"
+import { verifyStagingTestJwt } from "../lib/auth/staging-test-auth"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
 import { getProfileRepository, getSessionRepository } from "../lib/auth/repositories"
@@ -16,18 +17,25 @@ auth.post("/session/exchange", async (c) => {
     throw authError("Invalid auth proof payload")
   }
 
+  // Staging-only test issuer (not part of the public SessionExchangeRequest contract).
+  // verifyStagingTestJwt fails closed outside ENVIRONMENT=staging, so sending this proof
+  // type to prod/dev is rejected even if a secret were present.
+  const proof = body.proof as { type?: string; jwt?: string }
+
   const upstreamIdentity =
-    body.proof.type === "jwt_based_auth"
-      ? await verifyJwtBasedAuth({ env: c.env, jwt: body.proof.jwt })
-      : body.proof.type === "privy_access_token"
-        ? await verifyPrivyAccessProof({
-            env: c.env,
-            accessToken: body.proof.privy_access_token,
-            walletAddress: body.proof.wallet_address ?? null,
-          })
-        : (() => {
-            throw authError("Unsupported auth proof type")
-          })()
+    proof.type === "staging_test_jwt"
+      ? await verifyStagingTestJwt({ env: c.env, jwt: String(proof.jwt ?? "") })
+      : body.proof.type === "jwt_based_auth"
+        ? await verifyJwtBasedAuth({ env: c.env, jwt: body.proof.jwt })
+        : body.proof.type === "privy_access_token"
+          ? await verifyPrivyAccessProof({
+              env: c.env,
+              accessToken: body.proof.privy_access_token,
+              walletAddress: body.proof.wallet_address ?? null,
+            })
+          : (() => {
+              throw authError("Unsupported auth proof type")
+            })()
 
   const repository = getSessionRepository(c.env)
   const session = await repository.exchangeIdentity(upstreamIdentity)
