@@ -15,7 +15,7 @@ const _defaultFetchEndpoint = neonConfig.fetchEndpoint
 const _defaultWsProxy = neonConfig.wsProxy
 const _defaultPipelineConnect = neonConfig.pipelineConnect
 
-function configureLocalNeonForUrl(url: string): void {
+export function configureLocalNeonForUrl(url: string): void {
   if (!isPlanetScalePostgresUrl(url)) {
     neonConfig.fetchEndpoint = _defaultFetchEndpoint
     neonConfig.wsProxy = _defaultWsProxy
