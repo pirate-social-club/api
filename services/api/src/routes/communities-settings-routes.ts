@@ -21,6 +21,11 @@ import {
   type CommunityMachineAccessPolicyPatch,
 } from "../lib/communities/community-machine-access-service"
 import {
+  getCommunityKaraokePolicy,
+  updateCommunityKaraokePolicy,
+  type CommunityKaraokePolicyPatch,
+} from "../lib/communities/community-karaoke-policy-service"
+import {
   getCommunityAssistantPolicy,
   listCommunityAssistantModels,
   updateCommunityAssistantPolicy,
@@ -56,6 +61,30 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       communityRepository,
       communityId,
       userId: actor.userId,
+      body,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/karaoke-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityKaraokePolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/karaoke-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityKaraokePolicyPatch>(c, "Invalid community karaoke policy payload")
+    const result = await updateCommunityKaraokePolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
       body,
     })
     return c.json(result, 200)
