@@ -2,7 +2,7 @@ import { nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { requiredString } from "../../sql-row"
 import { reapStaleMultipartSongArtifactUploads } from "../../song-artifacts/song-artifact-upload-session-service"
-import { openCommunityDb } from "../community-db-factory"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import type { CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
@@ -50,7 +50,7 @@ export async function reconcileStaleSongArtifactUploadSessionJobs(input: {
       const staleSessions = Number(row.stale_sessions ?? 0)
       // Sessions live in the control plane, but execution stays on the per-community
       // job queue so retries and scheduling match the rest of the community jobs.
-      const db = await openCommunityDb(input.env, input.communityRepository, communityId)
+      const db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
       try {
         await enqueueCommunityJob({
           client: db.client,
