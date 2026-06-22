@@ -3,6 +3,7 @@ import type { CommunityRow } from "../../auth/auth-db-rows"
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { boolOrNull, numberOrNull, stringOrNull } from "../../sql-row"
+import { withTransaction } from "../../transactions"
 import type { Client } from "../../sql-client"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import {
@@ -645,8 +646,7 @@ export async function persistAssistantPolicyOnClient(
     now: string
   },
 ): Promise<void> {
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
         sql: `
           INSERT INTO community_assistant_policy (
@@ -754,15 +754,7 @@ export async function persistAssistantPolicyOnClient(
         })
       }
 
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch((rollbackError) => {
-      console.error("[community-assistant-policy] rollback failed while updating policy", rollbackError)
-    })
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 async function persistPolicy(input: {

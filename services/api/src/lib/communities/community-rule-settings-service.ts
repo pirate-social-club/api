@@ -4,6 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { openCommunityWriteClient } from "./community-read-access"
 import {
   loadCommunityProjection,
@@ -37,8 +38,7 @@ export async function updateCommunityRulesOnClient(
     now: string
   },
 ): Promise<void> {
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         DELETE FROM community_rules
@@ -78,17 +78,7 @@ export async function updateCommunityRulesOnClient(
       args: [input.communityId, input.now],
     })
 
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-rule-settings] rollback failed while updating rule settings", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function updateCommunityRules(input: {

@@ -5,6 +5,7 @@ import type {
 } from "./db-community-repository"
 import { eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { writeAuditEventForEnv } from "../audit"
 import type { Client } from "../sql-client"
 import { openCommunityWriteClient } from "./community-read-access"
@@ -138,8 +139,7 @@ export async function applyCommunityGateUpdateOnClient(
     ? gatePolicySnapshotFromRow(currentGatePolicyRows.rows[0] as Record<string, unknown>)
     : null
 
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         UPDATE communities
@@ -182,17 +182,7 @@ export async function applyCommunityGateUpdateOnClient(
       })
     }
 
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-gate-settings] rollback failed while updating gate settings", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 
   return { previousAccess, previousGatePolicy }
 }

@@ -1,5 +1,6 @@
 import { badRequestError, conflictError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
+import { withTransaction } from "../../transactions"
 import { decodePublicId } from "../../public-ids"
 import { openCommunityReadClient, openCommunityWriteClient, type CommunityWriteHandle } from "../community-read-access"
 import type { Client } from "../../sql-client"
@@ -236,8 +237,7 @@ async function finalizeLocalPurchaseSettlement(input: {
   const liveQuote = await getPurchaseQuoteRow(input.client, input.communityId, input.quote.quote_id)
   assertPurchaseQuoteConsumable(liveQuote?.status ?? null)
 
-  const tx = await input.client.transaction("write")
-  try {
+  await withTransaction(input.client, "write", async (tx) => {
     await tx.execute({
       sql: `
         INSERT INTO purchases (
@@ -398,18 +398,7 @@ async function finalizeLocalPurchaseSettlement(input: {
       `,
       args: [input.communityId, input.quote.quote_id, input.createdAt],
     })
-
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[purchase-settlements] rollback failed while recording settlement attempt", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 
   const purchase = await getPurchaseRow(input.client, input.communityId, input.purchaseId)
   if (!purchase) {

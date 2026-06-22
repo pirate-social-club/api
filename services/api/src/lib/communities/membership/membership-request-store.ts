@@ -2,6 +2,7 @@ import type { Client } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { makeId } from "../../helpers"
 import { requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { withTransaction } from "../../transactions"
 import { upsertCommunityMembership } from "./membership-state-store"
 
 type MembershipExecutor = Pick<Client, "execute">
@@ -184,8 +185,7 @@ export async function resolveMembershipRequest(input: {
   const request = toMembershipRequestRow(existing as Record<string, unknown>)
   const nextStatus = input.decision === "approved" ? "approved" : "rejected"
 
-  const tx = await input.client.transaction("write")
-  try {
+  await withTransaction(input.client, "write", async (tx) => {
     await tx.execute({
       sql: `
         UPDATE membership_requests
@@ -209,15 +209,7 @@ export async function resolveMembershipRequest(input: {
       })
     }
 
-    await tx.commit()
-    tx.close()
-    // Deterministic projection of the resolved row — the tx can't read it back.
-    return { ...request, status: nextStatus, updated_at: input.now }
-  } catch (error) {
-    await tx.rollback().catch((rollbackError) => {
-      console.error("[membership-requests] rollback failed while reviewing membership request", rollbackError)
-    })
-    tx.close()
-    throw error
-  }
+  })
+  // Deterministic projection of the resolved row — the tx can't read it back.
+  return { ...request, status: nextStatus, updated_at: input.now }
 }
