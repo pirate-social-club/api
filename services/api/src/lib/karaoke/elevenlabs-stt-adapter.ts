@@ -332,7 +332,19 @@ export class ElevenLabsKaraokeSttAdapter {
       const commit = inFlight && this.streamGeneration
         ? { commitId: inFlight.commitId, coverageMs: inFlight.frontierMs, streamGeneration: this.streamGeneration }
         : undefined
-      await emitter.emitFinal(text, this.mapWords(message.words), commit)
+      const mappedWords = this.mapWords(message.words)
+      // Diagnostic: what ElevenLabs actually transcribed + the song-time range of
+      // the words. Empty/garbage text => audio/mic problem; correct text at an
+      // offset song-time => timing/bucketizer problem. Captured via wrangler tail.
+      console.log("[karaoke-stt] committed_final", JSON.stringify({
+        text,
+        wordCount: mappedWords.length,
+        firstWordMs: mappedWords[0]?.startMs ?? null,
+        lastWordMs: mappedWords[mappedWords.length - 1]?.endMs ?? null,
+        commitId: commit?.commitId ?? null,
+        coverageMs: commit?.coverageMs ?? null,
+      }))
+      await emitter.emitFinal(text, mappedWords, commit)
       // Release a close() drain waiting on this commit's final.
       this.drainWaiter?.()
       this.drainWaiter = null
