@@ -13,7 +13,7 @@
         "@noble/hashes": "^1.8.0",
         "@pirate/api-contracts": "file:../contracts",
         "@pirate/api-shared": "file:../shared",
-        "@pirate/karaoke-runtime": "file:../../../web/packages/karaoke-runtime",
+        "@pirate/karaoke-runtime": "file:../../../web-karaoke-rel/packages/karaoke-runtime",
         "@privy-io/node": "^0.11.0",
         "@selfxyz/core": "^1.2.0-beta.1",
         "@sentry/cloudflare": "^10.51.0",
@@ -466,7 +466,7 @@
 
     "@pirate/api-shared": ["@pirate/api-shared@file:../shared", { "devDependencies": { "@types/node": "^24.5.2", "@typescript/native-preview": "^7.0.0-dev.20260421.2", "typescript": "^5.8.3" } }],
 
-    "@pirate/karaoke-runtime": ["@pirate/karaoke-runtime@file:../../../web/packages/karaoke-runtime", { "devDependencies": { "@types/bun": "latest" } }],
+    "@pirate/karaoke-runtime": ["@pirate/karaoke-runtime@file:../../../web-karaoke-rel/packages/karaoke-runtime", { "devDependencies": { "@types/bun": "latest" } }],
 
     "@poppinss/colors": ["@poppinss/colors@4.1.6", "", { "dependencies": { "kleur": "^4.1.5" } }, "sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg=="],
 
