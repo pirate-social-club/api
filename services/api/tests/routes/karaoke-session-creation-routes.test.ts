@@ -53,7 +53,7 @@ function buildApp(actor: ActorContext | AdminActorContext): Hono<AuthenticatedEn
   return app
 }
 
-const VALID_IDEMPOTENCY_KEY = "5a59af75-bf63-41d7-b181-fc3620d2c7c7"
+const VALID_IDEMPOTENCY_KEY = "5a59af75-bf63-41d7-b181-fc3620d2c7c7" // gitleaks:allow — test idempotency UUID, not a secret
 const POST_ID = "post_00000000-0000-4000-8000-000000000001"
 const COMMUNITY_ID = "com_00000000-0000-4000-8000-000000000001"
 const PATH = `http://pirate.test/${COMMUNITY_ID}/posts/${POST_ID}/karaoke/sessions`

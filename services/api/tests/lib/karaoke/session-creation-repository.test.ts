@@ -46,7 +46,7 @@ async function setup(): Promise<Client> {
 
 const key = {
   communityId: "community-1",
-  idempotencyKey: "5a59af75-bf63-41d7-b181-fc3620d2c7c7",
+  idempotencyKey: "5a59af75-bf63-41d7-b181-fc3620d2c7c7", // gitleaks:allow — test idempotency UUID, not a secret
   postId: "post-1",
   subjectUserId: "user-1",
 }
