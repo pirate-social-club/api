@@ -365,17 +365,21 @@ describe("STT lifecycle: unexpected close", () => {
   function setup() {
     const socket = new FakeSttSocket()
     let unexpected = 0
+    const terminal: string[] = []
     const adapter = new ElevenLabsKaraokeSttAdapter({ apiKey: "k", connect: async () => socket })
     const start = () =>
       adapter.start({
         attemptId: "a",
         onMessage: async () => {},
+        onTerminalError: (code) => {
+          terminal.push(code)
+        },
         onUnexpectedClose: () => {
           unexpected += 1
         },
         sessionId: "s",
       })
-    return { adapter, socket, start, unexpected: () => unexpected }
+    return { adapter, socket, start, unexpected: () => unexpected, terminal: () => terminal }
   }
 
   test("an unexpected socket close fires onUnexpectedClose", async () => {
@@ -428,17 +432,19 @@ describe("STT lifecycle: unexpected close", () => {
     expect(h.unexpected()).toBe(0)
   })
 
-  test("a transient provider error (rate_limited) routes to the reconnect path", async () => {
+  test("a transient provider error (rate_limited) reconnects, does not fire onTerminalError", async () => {
     const h = setup()
     await h.start()
     await h.socket.deliver({ message_type: "rate_limited", error: "slow down" })
     expect(h.unexpected()).toBe(1)
+    expect(h.terminal()).toEqual([])
   })
 
-  test("a terminal provider error (auth_error) does NOT reconnect", async () => {
+  test("a terminal provider error (auth_error) fires onTerminalError and does NOT reconnect", async () => {
     const h = setup()
     await h.start()
     await h.socket.deliver({ message_type: "auth_error", error: "nope" })
     expect(h.unexpected()).toBe(0)
+    expect(h.terminal()).toEqual(["auth_error"])
   })
 })

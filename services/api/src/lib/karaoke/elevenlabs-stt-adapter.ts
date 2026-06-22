@@ -186,6 +186,10 @@ export class ElevenLabsKaraokeSttAdapter {
   // close/error) so the host can reconnect — never on intentional close() or a
   // terminal provider protocol error (those set closing/closed first).
   private onUnexpectedClose: (() => void) | null = null
+  // Host-supplied. Fired on a TERMINAL provider error (auth/quota/input/
+  // time-limit) so the host aborts the session visibly instead of stopping
+  // silently. Never for transient errors (those route through onUnexpectedClose).
+  private onTerminalError: ((code: string) => void) | null = null
   private sampleRate = 16_000
   private streamCursorMs = 0
   private segments: StreamSegment[] = []
@@ -215,10 +219,12 @@ export class ElevenLabsKaraokeSttAdapter {
     sessionId: string
     onMessage: (message: KaraokeSttAdapterMessage) => Promise<void>
     onUnexpectedClose?: () => void
+    onTerminalError?: (code: string) => void
   }): Promise<void> {
     this.closed = false
     this.closing = false
     this.onUnexpectedClose = input.onUnexpectedClose ?? null
+    this.onTerminalError = input.onTerminalError ?? null
     this.streamCursorMs = 0
     this.segments = []
     this.uncommittedBytes = 0
@@ -395,10 +401,11 @@ export class ElevenLabsKaraokeSttAdapter {
         // stopping scoring for the rest of the song.
         this.handleSocketDrop()
       } else {
-        // Terminal (auth/quota/input/time-limit) — a reconnect would just loop;
-        // stop forwarding. (Surfacing these to the client as a visible/uncertain
-        // result rather than a silent stop is the remaining follow-up.)
+        // Terminal (auth/quota/input/time-limit) — a reconnect would just loop.
+        // Stop forwarding and notify the host so it aborts the session visibly,
+        // instead of leaving the rest of the song silently un-scored.
         this.closed = true
+        this.onTerminalError?.(type)
       }
       return
     }
