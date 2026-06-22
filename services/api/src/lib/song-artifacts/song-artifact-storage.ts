@@ -321,49 +321,93 @@ export async function uploadSongArtifactBytes(input: {
   }
 }
 
+// Filebase serves objects from IPFS. A cold object (not yet warm at the
+// gateway) can fail a GET — especially a range request, which players always
+// issue — with a transient 5xx or a network error until it is fetched in. The
+// next request then succeeds, which is why the player shows "could not be
+// loaded" only on first load. Retry a few times with short backoff so a
+// cold-fetch hiccup is absorbed server-side; the success is cached (immutable)
+// by Cloudflare so later range requests are fast.
+const SONG_ARTIFACT_FETCH_MAX_ATTEMPTS = 3
+const SONG_ARTIFACT_FETCH_BACKOFF_MS = [300, 800]
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export async function fetchSongArtifactBytes(input: {
   env: Env
   objectKey: string
   rangeHeader?: string | null
 }): Promise<Response> {
   const rangeHeader = input.rangeHeader?.trim()
-  const request = await buildS3SignedRequest({
-    method: "GET",
-    config: resolveFilebaseConfig(input.env),
-    objectKey: input.objectKey,
-    payloadHash: EMPTY_SHA256_HEX,
-    headers: rangeHeader ? { range: rangeHeader } : undefined,
-  })
-  const upstream = await fetch(request)
-  if (upstream.status === 404) {
-    throw notFoundError("Song artifact content not found")
-  }
-  if (!upstream.ok) {
-    const responseText = await upstream.text().catch(() => "")
-    throw providerUnavailable(
-      `Filebase artifact fetch failed with status ${upstream.status}${responseText ? `: ${responseText}` : ""}`,
-    )
+  const config = resolveFilebaseConfig(input.env)
+  let lastStatus = 0
+  let lastDetail = ""
+
+  for (let attempt = 1; attempt <= SONG_ARTIFACT_FETCH_MAX_ATTEMPTS; attempt += 1) {
+    const request = await buildS3SignedRequest({
+      method: "GET",
+      config,
+      objectKey: input.objectKey,
+      payloadHash: EMPTY_SHA256_HEX,
+      headers: rangeHeader ? { range: rangeHeader } : undefined,
+    })
+
+    let upstream: Response
+    try {
+      upstream = await fetch(request)
+    } catch (error) {
+      lastStatus = 0
+      lastDetail = error instanceof Error ? error.message : String(error)
+      if (attempt < SONG_ARTIFACT_FETCH_MAX_ATTEMPTS) {
+        await delay(SONG_ARTIFACT_FETCH_BACKOFF_MS[attempt - 1] ?? 800)
+        continue
+      }
+      throw providerUnavailable(`Filebase artifact fetch failed: ${lastDetail}`)
+    }
+
+    if (upstream.status === 404) {
+      throw notFoundError("Song artifact content not found")
+    }
+    if (!upstream.ok) {
+      lastStatus = upstream.status
+      lastDetail = await upstream.text().catch(() => "")
+      // 5xx is typically a transient cold-fetch from IPFS; retry. Other
+      // statuses (e.g. 403, 416) are not transient, so surface them.
+      if (upstream.status >= 500 && attempt < SONG_ARTIFACT_FETCH_MAX_ATTEMPTS) {
+        await delay(SONG_ARTIFACT_FETCH_BACKOFF_MS[attempt - 1] ?? 800)
+        continue
+      }
+      throw providerUnavailable(
+        `Filebase artifact fetch failed with status ${upstream.status}${lastDetail ? `: ${lastDetail}` : ""}`,
+      )
+    }
+
+    const headers = new Headers()
+    const contentType = upstream.headers.get("content-type")
+    if (contentType) {
+      headers.set("content-type", contentType)
+    }
+    const contentLength = upstream.headers.get("content-length")
+    if (contentLength) {
+      headers.set("content-length", contentLength)
+    }
+    const contentRange = upstream.headers.get("content-range")
+    if (contentRange) {
+      headers.set("content-range", contentRange)
+    }
+    const acceptRanges = upstream.headers.get("accept-ranges")
+    headers.set("accept-ranges", acceptRanges || "bytes")
+    headers.set("cache-control", "public, max-age=31536000, immutable")
+
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers,
+    })
   }
 
-  const headers = new Headers()
-  const contentType = upstream.headers.get("content-type")
-  if (contentType) {
-    headers.set("content-type", contentType)
-  }
-  const contentLength = upstream.headers.get("content-length")
-  if (contentLength) {
-    headers.set("content-length", contentLength)
-  }
-  const contentRange = upstream.headers.get("content-range")
-  if (contentRange) {
-    headers.set("content-range", contentRange)
-  }
-  const acceptRanges = upstream.headers.get("accept-ranges")
-  headers.set("accept-ranges", acceptRanges || "bytes")
-  headers.set("cache-control", "public, max-age=31536000, immutable")
-
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers,
-  })
+  throw providerUnavailable(
+    `Filebase artifact fetch failed with status ${lastStatus}${lastDetail ? `: ${lastDetail}` : ""}`,
+  )
 }
