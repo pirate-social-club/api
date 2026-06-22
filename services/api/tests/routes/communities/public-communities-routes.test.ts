@@ -185,4 +185,38 @@ describe("public community routes", () => {
       agent_posting_scope: "top_level_and_replies",
     })
   })
+
+  test("archived community is hidden from the public single-community preview, restored on unarchive", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "public-community-archive-user")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Archive Preview Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const communityId = ((await json(create)) as { community: { id: string } }).community.id
+
+    // Visible while active.
+    const activePreview = await app.request(`http://pirate.test/public-communities/${communityId}`, {}, ctx.env)
+    expect(activePreview.status).toBe(200)
+
+    // Archive flips control-plane status; preview must 404 (resolveCommunityRow rejects non-active).
+    const archive = await requestJson(`http://pirate.test/communities/${communityId}/archive`, {}, ctx.env, session.accessToken)
+    expect(archive.status).toBe(200)
+    expect((await json(archive) as { status: string }).status).toBe("archived")
+
+    const archivedPreview = await app.request(`http://pirate.test/public-communities/${communityId}`, {}, ctx.env)
+    expect(archivedPreview.status).toBe(404)
+
+    // Unarchive restores visibility.
+    const unarchive = await requestJson(`http://pirate.test/communities/${communityId}/unarchive`, {}, ctx.env, session.accessToken)
+    expect(unarchive.status).toBe(200)
+    expect((await json(unarchive) as { status: string }).status).toBe("active")
+
+    const restoredPreview = await app.request(`http://pirate.test/public-communities/${communityId}`, {}, ctx.env)
+    expect(restoredPreview.status).toBe(200)
+  })
 })
