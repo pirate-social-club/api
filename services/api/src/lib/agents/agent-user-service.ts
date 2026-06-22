@@ -3,6 +3,8 @@ import { getGlobalHandleRow, getProfileRow, listLinkedHandleRows } from "../auth
 import { assembleProfile } from "../auth/auth-serializers"
 import { badRequestError, conflictError, eligibilityFailed, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { packCursor, unpackCursor } from "../cursor-codec"
+import { withTransaction } from "../transactions"
 import { unixSeconds } from "../../serializers/time"
 import type {
   AgentHandle,
@@ -87,10 +89,10 @@ export async function listUserAgents(
 }
 
 function encodeAgentListCursor(row: Pick<UserAgent, "agent_id" | "created_at">): string {
-  return Buffer.from(JSON.stringify({
+  return packCursor({
     agent_id: row.agent_id,
     created_at: row.created_at,
-  }), "utf8").toString("base64url")
+  })
 }
 
 function decodeAgentListCursor(cursor: string | null | undefined): { agent_id: string; created_at: string } | null {
@@ -98,10 +100,10 @@ function decodeAgentListCursor(cursor: string | null | undefined): { agent_id: s
     return null
   }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+    const parsed = unpackCursor<{
       agent_id?: unknown
       created_at?: unknown
-    }
+    }>(cursor)
     if (typeof parsed.agent_id !== "string" || !parsed.agent_id.trim()) {
       throw new Error("invalid cursor")
     }
@@ -263,55 +265,47 @@ export async function claimUserAgentHandle(
     throw conflictError("Desired agent handle is unavailable")
   }
 
-  const tx = await client.transaction()
   try {
-    const now = nowIso()
-    const nextHandleId = makeId("agh")
+    await withTransaction(client, "write", async (tx) => {
+      const now = nowIso()
+      const nextHandleId = makeId("agh")
 
-    if (activeRow) {
+      if (activeRow) {
+        await tx.execute({
+          sql: `
+            UPDATE agent_handles
+            SET status = 'redirect',
+                replaced_at = ?2,
+                updated_at = ?2
+            WHERE agent_handle_id = ?1
+          `,
+          args: [activeRow.agent_handle_id, now],
+        })
+      }
+
       await tx.execute({
         sql: `
-          UPDATE agent_handles
-          SET status = 'redirect',
-              replaced_at = ?2,
-              updated_at = ?2
-          WHERE agent_handle_id = ?1
+          INSERT INTO agent_handles (
+            agent_handle_id, agent_id, label_normalized, label_display, status,
+            redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, 'active', NULL, ?5, NULL, ?5, ?5)
         `,
-        args: [activeRow.agent_handle_id, now],
+        args: [nextHandleId, input.agentId, desired.labelNormalized, desired.labelDisplay, now],
       })
-    }
 
-    await tx.execute({
-      sql: `
-        INSERT INTO agent_handles (
-          agent_handle_id, agent_id, label_normalized, label_display, status,
-          redirect_target_agent_handle_id, issued_at, replaced_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 'active', NULL, ?5, NULL, ?5, ?5)
-      `,
-      args: [nextHandleId, input.agentId, desired.labelNormalized, desired.labelDisplay, now],
+      if (activeRow) {
+        await tx.execute({
+          sql: `
+            UPDATE agent_handles
+            SET redirect_target_agent_handle_id = ?2,
+                updated_at = ?3
+            WHERE agent_handle_id = ?1
+          `,
+          args: [activeRow.agent_handle_id, nextHandleId, now],
+        })
+      }
     })
-
-    if (activeRow) {
-      await tx.execute({
-        sql: `
-          UPDATE agent_handles
-          SET redirect_target_agent_handle_id = ?2,
-              updated_at = ?3
-          WHERE agent_handle_id = ?1
-        `,
-        args: [activeRow.agent_handle_id, nextHandleId, now],
-      })
-    }
-
-    await tx.commit()
-    tx.close()
   } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[agents] rollback failed while updating agent handle", rollbackError)
-    }
-    tx.close()
     if (isAgentHandleLabelUniqueError(error) || isAgentHandleAgentUniqueError(error)) {
       throw conflictError("Desired agent handle is unavailable")
     }

@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
+import { withTransaction } from "../transactions"
 import { auditEventInsert } from "../audit"
 import {
   getCommunityPostProjectionRowByPostId,
@@ -27,9 +28,8 @@ export async function recordCommunityPostProjection(
   },
 ): Promise<CommunityPostProjectionRow> {
   const projectionId = makeId("cpp")
-  const tx = await client.transaction("write")
 
-  try {
+  return await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -76,18 +76,8 @@ export async function recordCommunityPostProjection(
       throw internalError("Community post projection is missing after insert")
     }
 
-    await tx.commit()
     return projection
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-post-projection] rollback failed while recording post projection", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function updateCommunityPostProjectionStatus(

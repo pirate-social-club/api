@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import { conflictError, verificationRequired, internalError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import {
   getLatestExternalReputationSnapshotRow,
   getLatestRedditVerificationSessionRowForUsername,
@@ -236,8 +237,7 @@ export class DatabaseRedditOnboardingRepository {
       const snapshotId = makeId("ers")
       const completedAt = nowIso()
 
-      const tx = await this.client.transaction("write")
-      try {
+      await withTransaction(this.client, "write", async (tx) => {
         await tx.execute({
           sql: `
             INSERT INTO external_reputation_snapshots (
@@ -267,17 +267,7 @@ export class DatabaseRedditOnboardingRepository {
           `,
           args: [jobId, snapshotId, completedAt],
         })
-        await tx.commit()
-      } catch (error) {
-        try {
-          await tx.rollback()
-        } catch (rollbackError) {
-          console.error("[reddit-onboarding] rollback failed while starting snapshot import", rollbackError)
-        }
-        throw error
-      } finally {
-        tx.close()
-      }
+      })
     } catch (error) {
       const errorCode = error instanceof Error && error.message === "rate_limited"
         ? "rate_limited"

@@ -1,4 +1,5 @@
 import { badRequestError } from "../../errors"
+import { packCursor, unpackCursor } from "../../cursor-codec"
 
 type CommerceListCursor = {
   created_at: string
@@ -6,7 +7,7 @@ type CommerceListCursor = {
 }
 
 export function encodeCommerceListCursor(cursor: CommerceListCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")
+  return packCursor(cursor)
 }
 
 export function decodeCommerceListCursor(cursor: string | null | undefined): CommerceListCursor | null {
@@ -14,10 +15,10 @@ export function decodeCommerceListCursor(cursor: string | null | undefined): Com
     return null
   }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+    const parsed = unpackCursor<{
       created_at?: unknown
       id?: unknown
-    }
+    }>(cursor)
     if (typeof parsed.created_at !== "string" || !parsed.created_at.trim()) {
       throw new Error("invalid cursor")
     }

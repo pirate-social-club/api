@@ -2,6 +2,7 @@ import type { Client, Transaction } from "../sql-client"
 import { authError, badRequestError, conflictError, eligibilityFailed, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { sha256Hex } from "../crypto"
+import { withTransaction } from "../transactions"
 import type { AgentDelegatedCredential } from "./types"
 import type { AgentDelegatedCredentialRow, AgentOwnershipRecordRow, UserAgentRow } from "./agent-db-rows"
 import {
@@ -253,8 +254,7 @@ export async function refreshAgentDelegatedCredential(
     throw eligibilityFailed("Delegated credential ownership interval is no longer active")
   }
 
-  const tx = await client.transaction()
-  try {
+  const created = await withTransaction(client, "write", async (tx) => {
     const created = await createDelegatedCredentialRecord(tx, {
       agentId: input.agentId,
       ownerUserId: input.userId,
@@ -276,18 +276,9 @@ export async function refreshAgentDelegatedCredential(
         created.row.issued_at,
       ],
     })
-    await tx.commit()
-    tx.close()
-    return serializeDelegatedCredential(created)
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[agent-credentials] rollback failed while creating delegated credential", rollbackError)
-    }
-    tx.close()
-    throw error
-  }
+    return created
+  })
+  return serializeDelegatedCredential(created)
 }
 
 export async function refreshAgentDelegatedCredentialWithConnectionToken(

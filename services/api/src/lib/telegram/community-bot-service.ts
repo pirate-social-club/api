@@ -2,7 +2,9 @@ import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import { executeFirst } from "../db-helpers"
 import { badRequestError, providerUnavailable } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { logPipelineInfo, type PipelineLogFields } from "../observability/pipeline-log"
 import { getControlPlaneClient } from "../runtime-deps"
+import { withTransaction } from "../transactions"
 import { numberOrNull, rowValue, stringOrNull } from "../sql-row"
 import { resolveCommunityDbWrapKey, resolveCommunityDbWrapKeyVersion } from "../communities/create/repository"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
@@ -22,6 +24,10 @@ import { requireOwnedTelegramCommunity } from "./community-chat-service"
 
 type TelegramCommunityBotStatus = "active" | "revoked" | "invalid"
 type TelegramWebhookStatus = "pending" | "active" | "failed" | "disabled"
+
+function logTelegramCommunityBotWarn(message: string, fields: PipelineLogFields): void {
+  logPipelineInfo(message, { level: "warn", ...fields })
+}
 
 type TelegramCommunityBotRow = {
   telegram_community_bot_id: string
@@ -203,7 +209,7 @@ async function registerCommunityBotWebhook(input: {
     })
     return "active"
   } catch (error) {
-    console.warn("[telegram-community-bot] webhook registration failed", {
+    logTelegramCommunityBotWarn("[telegram-community-bot] webhook registration failed", {
       message: error instanceof Error ? error.message : String(error),
     })
     return "failed"
@@ -270,9 +276,8 @@ export async function saveCommunityTelegramBot(input: {
     webhookSecret,
   })
 
-  const tx = await client.transaction("write")
-  let inserted: TelegramCommunityBotRow | null = null
-  try {
+  const botUsername = profile.username
+  const inserted = await withTransaction(client, "write", async (tx) => {
     const existing = await readTelegramCommunityBot({
       env: input.env,
       communityId: community.community_id,
@@ -322,14 +327,14 @@ export async function saveCommunityTelegramBot(input: {
         input.actor.userId,
       ],
     })
-    inserted = {
+    const row: TelegramCommunityBotRow = {
       telegram_community_bot_id: botId,
       community_id: community.community_id,
       encrypted_bot_token: encryptedToken,
       token_last4: tokenLast4,
       encryption_key_version: encryptionKeyVersion,
       telegram_bot_user_id: String(profile.id),
-      bot_username: profile.username,
+      bot_username: botUsername,
       bot_display_name: profile.first_name,
       webhook_id: webhookId,
       webhook_secret: webhookSecret,
@@ -341,13 +346,8 @@ export async function saveCommunityTelegramBot(input: {
       rotated_from: existing?.telegram_community_bot_id ?? null,
       actor_user_id: input.actor.userId,
     }
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+    return row
+  })
   return serializeBotResource(inserted)
 }
 
@@ -379,7 +379,7 @@ export async function revokeCommunityTelegramBot(input: {
         username: existing.bot_username,
       }, { drop_pending_updates: false })
     } catch (error) {
-      console.warn("[telegram-community-bot] deleteWebhook failed during revoke", {
+      logTelegramCommunityBotWarn("[telegram-community-bot] deleteWebhook failed during revoke", {
         community: community.community_id,
         bot: existing.telegram_community_bot_id,
         error: error instanceof Error ? error.message : String(error),

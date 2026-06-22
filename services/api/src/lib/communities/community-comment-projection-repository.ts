@@ -1,6 +1,7 @@
 import type { Client } from "../sql-client"
 import { internalError } from "../errors"
 import { makeId } from "../helpers"
+import { withTransaction } from "../transactions"
 import { auditEventInsert } from "../audit"
 import { getCommunityCommentProjectionRowByCommentId } from "../auth/auth-db-community-queries"
 import type { CommunityCommentProjectionRow } from "../auth/auth-db-rows"
@@ -21,9 +22,8 @@ export async function recordCommunityCommentProjection(
 ): Promise<CommunityCommentProjectionRow> {
   const existing = await getCommunityCommentProjectionRowByCommentId(client, input.sourceCommentId)
   const projectionId = existing?.projection_id ?? makeId("ccp")
-  const tx = await client.transaction("write")
 
-  try {
+  return await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -78,16 +78,6 @@ export async function recordCommunityCommentProjection(
       throw internalError("Community comment projection is missing after insert")
     }
 
-    await tx.commit()
     return projection
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-comment-projection] rollback failed while recording comment projection", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }

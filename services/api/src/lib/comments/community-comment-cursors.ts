@@ -1,4 +1,5 @@
 import { badRequestError } from "../errors"
+import { packCursor, unpackCursor } from "../cursor-codec"
 import { numberOrNull, rowValue } from "../sql-row"
 import type { CommentListItem, CommentSort } from "./comment-types"
 import { serializeComment, toCommentRow } from "./community-comment-serialization"
@@ -37,12 +38,12 @@ export function rowToCommentListItem(row: unknown): CommentListItem {
 }
 
 export function encodeCommentCursor(cursor: CommentCursorPayload): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")
+  return packCursor(cursor)
 }
 
 export function decodeCommentCursor(cursor: string, sort: CommentSort): CommentCursorPayload {
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as CommentCursorPayload
+    const parsed = unpackCursor<CommentCursorPayload>(cursor)
     if (!parsed || typeof parsed !== "object") {
       throw new Error("invalid cursor")
     }
