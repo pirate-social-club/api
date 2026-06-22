@@ -73,6 +73,7 @@ export {
 export {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
+  setCommunityLifecycleStatus,
 } from "./community-mutation-repository"
 
 import {
@@ -112,6 +113,7 @@ import {
 import {
   attachNamespaceToCommunity,
   setPendingNamespaceVerificationSession,
+  setCommunityLifecycleStatus,
 } from "./community-mutation-repository"
 
 export async function getCommunityPostProjectionByPostId(
@@ -426,6 +428,15 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     updatedAt: string
   }): Promise<void> {
     return setPendingNamespaceVerificationSession(this.client, input)
+  }
+
+  async setCommunityLifecycleStatus(input: {
+    communityId: string
+    targetStatus: CommunityRow["status"]
+    allowedFromStatuses: readonly CommunityRow["status"][]
+    updatedAt: string
+  }): Promise<CommunityRow> {
+    return setCommunityLifecycleStatus(this.client, input)
   }
 
   // d1_native provisioning orchestrator helpers (step 4 of the D1-native

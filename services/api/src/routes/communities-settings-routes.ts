@@ -21,6 +21,10 @@ import {
   type CommunityMachineAccessPolicyPatch,
 } from "../lib/communities/community-machine-access-service"
 import {
+  archiveCommunity,
+  unarchiveCommunity,
+} from "../lib/communities/community-lifecycle-service"
+import {
   getCommunityKaraokePolicy,
   updateCommunityKaraokePolicy,
   type CommunityKaraokePolicyPatch,
@@ -86,6 +90,28 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       communityId,
       actor,
       body,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/archive", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await archiveCommunity({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/unarchive", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await unarchiveCommunity({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
     })
     return c.json(result, 200)
   })

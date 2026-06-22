@@ -6,6 +6,7 @@ import { executeFirst } from "../../db-helpers"
 import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import { requireLiveCommunity } from "../community-status"
 import { enqueueCommunityJob } from "../jobs/store"
 import {
   OWNER_OR_ADMIN_ROLE,
@@ -397,10 +398,7 @@ export async function createLiveRoom(input: {
   communityRepository: LiveRoomRepository
   userRepository: UserRepository
 }): Promise<LiveRoom> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community) {
-    throw notFoundError("Community not found")
-  }
+  await requireLiveCommunity(input.communityRepository, input.communityId)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const prepared = await createLiveRoomPreflight({
@@ -456,10 +454,7 @@ export async function publishLiveRoom(input: {
   communityRepository: LiveRoomRepository
   userRepository: UserRepository
 }): Promise<PublishLiveRoomResponse> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community) {
-    throw notFoundError("Community not found")
-  }
+  await requireLiveCommunity(input.communityRepository, input.communityId)
   const listingBody = input.body.listing
   if (!listingBody) {
     throw badRequestError("listing is required")

@@ -8,6 +8,7 @@ import {
   hasCommunityRole,
 } from "../membership/membership-state-store"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import { requireLiveCommunity } from "../community-status"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -390,6 +391,12 @@ export async function hydrateCommunityListing(
   return serializeListing(listing)
 }
 
+/**
+ * Shared listing-creation transaction body. Runs inside an already-open shard write tx and
+ * does NOT validate community lifecycle status — callers MUST guard with requireLiveCommunity
+ * (or equivalent) at their entry point before opening the write client. Current callers:
+ * createCommunityListing and live-rooms publishLiveRoom, both of which guard upstream.
+ */
 export async function createCommunityListingInTransaction(input: {
   env: Env
   userId: string
@@ -412,6 +419,7 @@ export async function createCommunityListing(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
 }): Promise<CommunityListing> {
+  await requireLiveCommunity(input.communityRepository, input.communityId)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     return await createCommunityListingInTransaction({

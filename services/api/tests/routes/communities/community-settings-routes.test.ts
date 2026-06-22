@@ -5,6 +5,7 @@ import {
   completeAgeOver18Verification,
   completeUniqueHumanVerification,
   exchangeJwt,
+  getCommunityControlPlaneState,
   prepareVerifiedNamespace,
   requestJson,
 } from "./community-routes-test-helpers"
@@ -110,6 +111,75 @@ afterEach(async () => {
 })
 
 describe("community settings routes", () => {
+  test("community owner can archive and unarchive while strangers are denied", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "community-lifecycle-owner")
+    const stranger = await exchangeJwt(ctx.env, "community-lifecycle-stranger")
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Lifecycle Route Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, owner.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        id: string
+      }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const strangerArchive = await app.request(
+      `http://pirate.test/communities/${communityId}/archive`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${stranger.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(strangerArchive.status).toBe(404)
+
+    const ownerArchive = await app.request(
+      `http://pirate.test/communities/${communityId}/archive`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(ownerArchive.status).toBe(200)
+    expect(await json(ownerArchive)).toMatchObject({
+      community_id: communityId,
+      status: "archived",
+    })
+    expect((await getCommunityControlPlaneState(ctx.env, communityId)).status).toBe("archived")
+
+    const ownerUnarchive = await app.request(
+      `http://pirate.test/communities/${communityId}/unarchive`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(ownerUnarchive.status).toBe(200)
+    expect(await json(ownerUnarchive)).toMatchObject({
+      community_id: communityId,
+      status: "active",
+    })
+    expect((await getCommunityControlPlaneState(ctx.env, communityId)).status).toBe("active")
+  })
+
   test("label settings update returns the public community contract shape", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
