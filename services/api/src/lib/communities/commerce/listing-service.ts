@@ -209,7 +209,40 @@ export async function listCommunityListings(input: {
   }
 }
 
-export async function createCommunityListingInTransaction(input: {
+/**
+ * The fully resolved column values for a `listings` INSERT, plus the resolved
+ * target. Produced by `prepareCommunityListingWrite` (all reads/validation) so
+ * that `insertCommunityListingRow` can run as a pure, read-free write — safe
+ * inside a buffered D1 `transaction("write")` (which sends every statement to
+ * one atomic shard `batchWrite` where SELECTs are rejected).
+ */
+type PreparedCommunityListingWrite = {
+  listingId: string
+  createdAt: string
+  assetId: string | null
+  liveRoomId: string | null
+  status: CreateCommunityListingRequest["status"]
+  priceUsd: number
+  regionalPricingPolicyJson: string
+  vinylReleaseProvider: ListingVinylReleaseConfig["vinyl_release_provider"]
+  vinylReleaseUrl: string | null
+  createdByUserId: string
+}
+
+/**
+ * Validate a listing request and resolve every column value, doing ALL the
+ * reads (membership, target asset/live-room, duplicate-listing checks) up front
+ * on a read-capable client. MUST run BEFORE opening a write transaction when the
+ * write goes through the routed D1 buffering client — those reads cannot run
+ * inside the buffered batch.
+ *
+ * `liveRoomTarget: "create-in-tx"` is the live-room-publish case: the target
+ * live room is created in the SAME write tx (so it can't be read here yet) and
+ * is known-good by construction — host = the requesting user, brand new, no
+ * possible prior listing — so the per-room reads are skipped. The room's id is
+ * supplied to `insertCommunityListingRow` after it is created.
+ */
+export async function prepareCommunityListingWrite(input: {
   env: Env
   userId: string
   communityId: string
@@ -217,9 +250,20 @@ export async function createCommunityListingInTransaction(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
   client: ListingExecutor
-}): Promise<CommunityListing> {
-  const { assetId, liveRoomId } = resolveRequestedListingTarget(input.body)
+  liveRoomTarget?: "validate" | "create-in-tx"
+}): Promise<PreparedCommunityListingWrite> {
+  const creatingLiveRoomInTx = input.liveRoomTarget === "create-in-tx"
+  let assetId: string | null = null
+  let liveRoomId: string | null = null
   let assetKind: ListingAssetKind | "live_room" | null = null
+  if (creatingLiveRoomInTx) {
+    assetKind = "live_room"
+  } else {
+    const target = resolveRequestedListingTarget(input.body)
+    assetId = target.assetId
+    liveRoomId = target.liveRoomId
+  }
+
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
   if (!canAccessCommunity(membership)) {
     throw notFoundError("Community not found")
@@ -276,9 +320,36 @@ export async function createCommunityListingInTransaction(input: {
     provider: input.body.vinyl_release_provider,
     url: input.body.vinyl_release_url,
   })
-  const listingId = makeId("lst")
-  const createdAt = nowIso()
-  await input.client.execute({
+  return {
+    listingId: makeId("lst"),
+    createdAt: nowIso(),
+    assetId,
+    liveRoomId,
+    status: input.body.status,
+    priceUsd: centsToUsd(input.body.price_cents),
+    regionalPricingPolicyJson: JSON.stringify({
+      regional_pricing_enabled: input.body.regional_pricing_enabled,
+      donation_partner_id: donationConfig.donation_partner_id,
+      donation_share_pct: donationConfig.donation_share_pct,
+    }),
+    vinylReleaseProvider: vinylReleaseConfig.vinyl_release_provider,
+    vinylReleaseUrl: vinylReleaseConfig.vinyl_release_url,
+    createdByUserId: input.userId,
+  }
+}
+
+/**
+ * Write-only INSERT of a prepared listing. No reads — safe inside a buffered D1
+ * write tx. `liveRoomIdOverride` supplies the live-room target when it is created
+ * in the same tx (its id is unknown at `prepareCommunityListingWrite` time).
+ */
+export async function insertCommunityListingRow(
+  client: ListingExecutor,
+  communityId: string,
+  prepared: PreparedCommunityListingWrite,
+  liveRoomIdOverride?: string,
+): Promise<void> {
+  await client.execute({
     sql: `
       INSERT INTO listings (
         listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
@@ -290,28 +361,47 @@ export async function createCommunityListingInTransaction(input: {
       )
     `,
     args: [
-      listingId,
-      input.communityId,
-      assetId,
-      liveRoomId,
-      input.body.status,
-      centsToUsd(input.body.price_cents),
-      JSON.stringify({
-        regional_pricing_enabled: input.body.regional_pricing_enabled,
-        donation_partner_id: donationConfig.donation_partner_id,
-        donation_share_pct: donationConfig.donation_share_pct,
-      }),
-      vinylReleaseConfig.vinyl_release_provider,
-      vinylReleaseConfig.vinyl_release_url,
-      input.userId,
-      createdAt,
+      prepared.listingId,
+      communityId,
+      prepared.assetId,
+      liveRoomIdOverride ?? prepared.liveRoomId,
+      prepared.status,
+      prepared.priceUsd,
+      prepared.regionalPricingPolicyJson,
+      prepared.vinylReleaseProvider,
+      prepared.vinylReleaseUrl,
+      prepared.createdByUserId,
+      prepared.createdAt,
     ],
   })
-  const listing = await getListingRowById(input.client, input.communityId, listingId)
+}
+
+/** Hydrate a freshly written listing into its API shape. Read — run on a
+ * read-capable client (post-commit when the write went through a buffered tx). */
+export async function hydrateCommunityListing(
+  client: ListingExecutor,
+  communityId: string,
+  listingId: string,
+): Promise<CommunityListing> {
+  const listing = await getListingRowById(client, communityId, listingId)
   if (!listing) {
     throw notFoundError("Listing not found")
   }
   return serializeListing(listing)
+}
+
+export async function createCommunityListingInTransaction(input: {
+  env: Env
+  userId: string
+  communityId: string
+  body: CreateCommunityListingRequest
+  communityRepository: CommunityListingRepository
+  userRepository: UserRepository
+  client: ListingExecutor
+}): Promise<CommunityListing> {
+  const prepared = await prepareCommunityListingWrite(input)
+  await insertCommunityListingRow(input.client, input.communityId, prepared)
+  return hydrateCommunityListing(input.client, input.communityId, prepared.listingId)
 }
 
 export async function createCommunityListing(input: {
