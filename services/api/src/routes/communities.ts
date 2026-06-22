@@ -4,6 +4,7 @@ import {
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { registerCommunityAdminRoutes } from "./communities-admin-routes"
+import { registerCommunityBookingsRoutes } from "./communities-bookings"
 import { registerCommunityAssistantRoutes } from "./communities-assistant-routes"
 import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityContentRoutes } from "./communities-content-routes"
@@ -83,6 +84,7 @@ registerCommunityContentRoutes(communities)
 registerCommunityModerationRoutes(communities)
 registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
+registerCommunityBookingsRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
 registerCommunityKaraokeSessionRoutes(communities)
