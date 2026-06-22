@@ -504,6 +504,7 @@ export async function getCommunityControlPlaneState(
 ): Promise<{
   namespaceVerificationId: string | null
   routeSlug: string | null
+  status: string | null
 }> {
   const client = createClient({
     url: String(env.CONTROL_PLANE_DATABASE_URL),
@@ -512,7 +513,7 @@ export async function getCommunityControlPlaneState(
   try {
     const communityResult = await client.execute({
       sql: `
-        SELECT namespace_verification_id, route_slug
+        SELECT namespace_verification_id, route_slug, status
         FROM communities
         WHERE community_id = ?1
         LIMIT 1
@@ -525,6 +526,7 @@ export async function getCommunityControlPlaneState(
         ? null
         : String(communityResult.rows[0]?.namespace_verification_id),
       routeSlug: communityResult.rows[0]?.route_slug == null ? null : String(communityResult.rows[0]?.route_slug),
+      status: communityResult.rows[0]?.status == null ? null : String(communityResult.rows[0]?.status),
     }
   } finally {
     client.close()

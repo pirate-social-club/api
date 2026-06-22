@@ -260,6 +260,12 @@ export interface CommunityMutationRepository {
     sessionId: string | null
     updatedAt: string
   }): Promise<void>
+  setCommunityLifecycleStatus(input: {
+    communityId: string
+    targetStatus: CommunityRow["status"]
+    allowedFromStatuses: readonly CommunityRow["status"][]
+    updatedAt: string
+  }): Promise<CommunityRow>
 }
 
 export interface CommunityRepository
