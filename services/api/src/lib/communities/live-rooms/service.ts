@@ -41,7 +41,11 @@ import {
   serializeLiveRoom,
   type LiveRoomExecutor,
 } from "./store"
-import { createCommunityListingInTransaction } from "../commerce/listing-service"
+import {
+  hydrateCommunityListing,
+  insertCommunityListingRow,
+  prepareCommunityListingWrite,
+} from "../commerce/listing-service"
 import {
   assertLiveRoomViewerSessionUid,
   assertPublicLiveRoomViewerSessionUid,
@@ -475,9 +479,27 @@ export async function publishLiveRoom(input: {
     if (prepared.accessMode !== "paid") {
       throw badRequestError("publish requires a paid live room")
     }
+    // Validate the listing and resolve every column value BEFORE opening the tx:
+    // the routed D1 write tx buffers statements into one atomic batchWrite where
+    // reads (membership/target/dup checks) can't run. The live-room target is
+    // created in the same tx below — known-good by construction (host = this user,
+    // brand new), so its id is supplied to the write-only insert after creation.
+    const preparedListing = await prepareCommunityListingWrite({
+      env: input.env,
+      userId: input.userId,
+      communityId: input.communityId,
+      body: {
+        ...listingBody,
+        asset: null,
+        live_room: null,
+      },
+      communityRepository: input.communityRepository,
+      userRepository: input.userRepository,
+      client: db.client,
+      liveRoomTarget: "create-in-tx",
+    })
     const tx = await db.client.transaction("write")
     let created: Awaited<ReturnType<typeof createLiveRoomInTransaction>> | null = null
-    let listing: CommunityListing | null = null
     try {
       created = await createLiveRoomInTransaction({
         tx,
@@ -485,19 +507,8 @@ export async function publishLiveRoom(input: {
         communityId: input.communityId,
         prepared,
       })
-      listing = await createCommunityListingInTransaction({
-        env: input.env,
-        userId: input.userId,
-        communityId: input.communityId,
-        body: {
-          ...listingBody,
-          asset: null,
-          live_room: created.liveRoomId,
-        },
-        communityRepository: input.communityRepository,
-        userRepository: input.userRepository,
-        client: tx,
-      })
+      // Write-only: insert the live room (above) and the listing as one atomic batch.
+      await insertCommunityListingRow(tx, input.communityId, preparedListing, created.liveRoomId)
       await tx.commit()
     } catch (error) {
       try {
@@ -509,7 +520,7 @@ export async function publishLiveRoom(input: {
     } finally {
       tx.close()
     }
-    if (!created || !listing) {
+    if (!created) {
       throw notFoundError("Live room not found")
     }
     await recordLiveRoomAnchorPostProjection({
@@ -521,6 +532,8 @@ export async function publishLiveRoom(input: {
       anchorPost: created.anchorPost,
       createdAt: created.createdAt,
     })
+    // Hydrate the listing AFTER commit (buffer-safe readback on db.client).
+    const listing = await hydrateCommunityListing(db.client, input.communityId, preparedListing.listingId)
     return {
       room: serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, created.liveRoomId)),
       listing,
