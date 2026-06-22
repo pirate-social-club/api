@@ -20,6 +20,8 @@ class FakeSttSocket implements KaraokeSttSocket {
   readonly sent: string[] = []
   closed: { code?: number; reason?: string } | null = null
   private messageListeners: ((event: { data: string | ArrayBuffer }) => void)[] = []
+  private closeListeners: ((event: { code: number; reason: string }) => void)[] = []
+  private errorListeners: ((event: unknown) => void)[] = []
 
   send(data: string): void {
     this.sent.push(data)
@@ -32,7 +34,20 @@ class FakeSttSocket implements KaraokeSttSocket {
   addEventListener(type: "message" | "close" | "error", listener: (event: never) => void): void {
     if (type === "message") {
       this.messageListeners.push(listener as (event: { data: string | ArrayBuffer }) => void)
+    } else if (type === "close") {
+      this.closeListeners.push(listener as (event: { code: number; reason: string }) => void)
+    } else if (type === "error") {
+      this.errorListeners.push(listener as (event: unknown) => void)
     }
+  }
+
+  // Simulate an unexpected provider drop.
+  triggerClose(code = 1006, reason = "drop"): void {
+    for (const listener of this.closeListeners) listener({ code, reason })
+  }
+
+  triggerError(): void {
+    for (const listener of this.errorListeners) listener({})
   }
 
   async deliver(message: unknown): Promise<void> {
@@ -343,5 +358,87 @@ describe("connectWorkerdWebSocket (token auth)", () => {
     await expect(
       connectWorkerdWebSocket({ url: "wss://api.elevenlabs.io/v1/speech-to-text/realtime", apiKey: "k" }),
     ).rejects.toThrow(/token_missing/)
+  })
+})
+
+describe("STT lifecycle: unexpected close", () => {
+  function setup() {
+    const socket = new FakeSttSocket()
+    let unexpected = 0
+    const adapter = new ElevenLabsKaraokeSttAdapter({ apiKey: "k", connect: async () => socket })
+    const start = () =>
+      adapter.start({
+        attemptId: "a",
+        onMessage: async () => {},
+        onUnexpectedClose: () => {
+          unexpected += 1
+        },
+        sessionId: "s",
+      })
+    return { adapter, socket, start, unexpected: () => unexpected }
+  }
+
+  test("an unexpected socket close fires onUnexpectedClose", async () => {
+    const h = setup()
+    await h.start()
+    h.socket.triggerClose()
+    expect(h.unexpected()).toBe(1)
+  })
+
+  test("a socket error fires onUnexpectedClose", async () => {
+    const h = setup()
+    await h.start()
+    h.socket.triggerError()
+    expect(h.unexpected()).toBe(1)
+  })
+
+  test("close-then-error fires onUnexpectedClose exactly once (idempotent)", async () => {
+    const h = setup()
+    await h.start()
+    h.socket.triggerClose()
+    h.socket.triggerError()
+    expect(h.unexpected()).toBe(1)
+  })
+
+  test("intentional close() does NOT fire onUnexpectedClose", async () => {
+    const h = setup()
+    await h.start()
+    await h.adapter.close()
+    h.socket.triggerClose() // close() also closes the underlying socket
+    expect(h.unexpected()).toBe(0)
+  })
+
+  test("a drop while close() is draining an in-flight commit is suppressed", async () => {
+    const h = setup()
+    await h.start()
+    await h.adapter.sendPcm16(frame({ pcm16: new Uint8Array(16_000).buffer })) // > 400ms floor
+    expect(await h.adapter.commit()).not.toBeNull() // in-flight commit → close() drains
+    const closing = h.adapter.close() // sets `closing`, then awaits the drain
+    h.socket.triggerClose() // drop mid-drain — must be suppressed
+    await h.socket.deliver({ message_type: "committed_transcript_with_timestamps", words: [] }) // resolve drain
+    await closing
+    expect(h.unexpected()).toBe(0)
+  })
+
+  test("a terminal provider error suppresses a later socket close", async () => {
+    const h = setup()
+    await h.start()
+    await h.socket.deliver({ message_type: "auth_error", error: "nope" }) // sets closed=true
+    h.socket.triggerClose()
+    expect(h.unexpected()).toBe(0)
+  })
+
+  test("a transient provider error (rate_limited) routes to the reconnect path", async () => {
+    const h = setup()
+    await h.start()
+    await h.socket.deliver({ message_type: "rate_limited", error: "slow down" })
+    expect(h.unexpected()).toBe(1)
+  })
+
+  test("a terminal provider error (auth_error) does NOT reconnect", async () => {
+    const h = setup()
+    await h.start()
+    await h.socket.deliver({ message_type: "auth_error", error: "nope" })
+    expect(h.unexpected()).toBe(0)
   })
 })

@@ -44,6 +44,14 @@ const INBOUND_ERROR_TYPES = new Set([
   "input_error",
   "error",
 ])
+// Provider errors that are transient capacity/pressure conditions — a reconnect
+// with backoff can recover, so they route through the unexpected-drop path. The
+// remaining INBOUND_ERROR_TYPES (auth/quota/input/time-limit) are terminal.
+const RETRYABLE_PROVIDER_ERROR_TYPES = new Set([
+  "rate_limited",
+  "queue_overflow",
+  "resource_exhausted",
+])
 // ---------------------------------------------------------------------------
 
 export interface KaraokeSttSocketMessageEvent {
@@ -171,6 +179,13 @@ export class ElevenLabsKaraokeSttAdapter {
   private socket: KaraokeSttSocket | null = null
   private emitter: KaraokeSttEventEmitter | null = null
   private closed = false
+  // Set for the duration of close() so a socket drop while draining an in-flight
+  // commit is not mistaken for an unexpected network drop.
+  private closing = false
+  // Host-supplied. Fired ONLY on an unexpected provider drop (network
+  // close/error) so the host can reconnect — never on intentional close() or a
+  // terminal provider protocol error (those set closing/closed first).
+  private onUnexpectedClose: (() => void) | null = null
   private sampleRate = 16_000
   private streamCursorMs = 0
   private segments: StreamSegment[] = []
@@ -199,8 +214,11 @@ export class ElevenLabsKaraokeSttAdapter {
     attemptId: string
     sessionId: string
     onMessage: (message: KaraokeSttAdapterMessage) => Promise<void>
+    onUnexpectedClose?: () => void
   }): Promise<void> {
     this.closed = false
+    this.closing = false
+    this.onUnexpectedClose = input.onUnexpectedClose ?? null
     this.streamCursorMs = 0
     this.segments = []
     this.uncommittedBytes = 0
@@ -228,12 +246,19 @@ export class ElevenLabsKaraokeSttAdapter {
     socket.addEventListener("message", (event) => {
       this.inbound = this.inbound.then(() => this.handleMessage(event.data)).catch(() => undefined)
     })
-    socket.addEventListener("close", () => {
-      this.markClosed()
-    })
-    socket.addEventListener("error", () => {
-      this.markClosed()
-    })
+    socket.addEventListener("close", () => this.handleSocketDrop())
+    socket.addEventListener("error", () => this.handleSocketDrop())
+  }
+
+  // Socket close/error. A genuine network drop (neither closing nor closed)
+  // notifies the host so it can reconnect; an intentional close() (closing) or a
+  // terminal provider error (already closed) is suppressed. Idempotent across a
+  // close-then-error pair (markClosed sets closed, so the second call returns).
+  private handleSocketDrop(): void {
+    if (this.closing || this.closed) return
+    const notify = this.onUnexpectedClose
+    this.markClosed()
+    notify?.()
   }
 
   async sendPcm16(frame: KaraokeClientBinaryFrame): Promise<void> {
@@ -274,6 +299,9 @@ export class ElevenLabsKaraokeSttAdapter {
   }
 
   async close(): Promise<void> {
+    // Mark intentional close up front so a drop during the drain window below
+    // (socket still open) is not reported as an unexpected disconnect.
+    this.closing = true
     // Drain an in-flight commit so a pending/acknowledged final is never discarded.
     if (this.inFlight && this.socket && !this.closed) {
       await new Promise<void>((resolve) => {
@@ -354,9 +382,6 @@ export class ElevenLabsKaraokeSttAdapter {
     const type = readString(message.message_type) || readString(message.type)
 
     if (INBOUND_ERROR_TYPES.has(type)) {
-      // Stop forwarding audio on a provider error. (Typed error propagation to
-      // the client via an adapter→host channel is part of the lifecycle pass.)
-      this.closed = true
       // Log the full provider payload (truncated), not just the coarse code —
       // `{code: auth_error}` alone hid that the real failure was an
       // unauthenticated upgrade ("You must be authenticated to use this endpoint").
@@ -364,6 +389,17 @@ export class ElevenLabsKaraokeSttAdapter {
         code: type,
         payload: JSON.stringify(message).slice(0, 400),
       })
+      if (RETRYABLE_PROVIDER_ERROR_TYPES.has(type)) {
+        // Transient (rate/queue/resource pressure) — treat like a drop so the
+        // host reconnects with bounded backoff and recovers, instead of silently
+        // stopping scoring for the rest of the song.
+        this.handleSocketDrop()
+      } else {
+        // Terminal (auth/quota/input/time-limit) — a reconnect would just loop;
+        // stop forwarding. (Surfacing these to the client as a visible/uncertain
+        // result rather than a silent stop is the remaining follow-up.)
+        this.closed = true
+      }
       return
     }
 
