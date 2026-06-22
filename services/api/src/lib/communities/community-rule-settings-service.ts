@@ -13,12 +13,83 @@ import {
   type CommunityMutationActor,
   type UpdateCommunityRulesRequestBody,
 } from "./create/shared"
+import type { Client } from "../sql-client"
 import type {
   Community,
   Env,
 } from "../../types"
 
 type CommunitySettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
+/**
+ * Write-only rule-settings mutation, isolated for buffer-safety testing. The tx
+ * body issues ONLY writes (DELETE + INSERT loop + UPDATE) so it is safe inside
+ * the routed D1 buffering tx, which flushes the whole tx as one atomic
+ * shard.batchWrite where reads are rejected. Validation/normalization happen in
+ * the caller before this runs; there is no in-tx read or readback.
+ * See [d1-buffered-write-tx-select-trap].
+ */
+export async function updateCommunityRulesOnClient(
+  client: Pick<Client, "transaction">,
+  input: {
+    communityId: string
+    rules: ReturnType<typeof normalizeInputRules>
+    now: string
+  },
+): Promise<void> {
+  const tx = await client.transaction("write")
+  try {
+    await tx.execute({
+      sql: `
+        DELETE FROM community_rules
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId],
+    })
+
+    for (const [index, rule] of input.rules.entries()) {
+      await tx.execute({
+        sql: `
+          INSERT INTO community_rules (
+            rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+          )
+        `,
+        args: [
+          rule.rule_id,
+          input.communityId,
+          rule.title,
+          rule.body,
+          rule.report_reason,
+          index,
+          rule.status,
+          input.now,
+        ],
+      })
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE communities
+        SET updated_at = ?2
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId, input.now],
+    })
+
+    await tx.commit()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch (rollbackError) {
+      console.error("[community-rule-settings] rollback failed while updating rule settings", rollbackError)
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
+}
 
 export async function updateCommunityRules(input: {
   env: Env
@@ -42,60 +113,11 @@ export async function updateCommunityRules(input: {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {
-    const rules = normalizeInputRules(input.body.rules)
-    const now = nowIso()
-    const tx = await db.client.transaction("write")
-    try {
-      await tx.execute({
-        sql: `
-          DELETE FROM community_rules
-          WHERE community_id = ?1
-        `,
-        args: [input.communityId],
-      })
-
-      for (const [index, rule] of rules.entries()) {
-        await tx.execute({
-          sql: `
-            INSERT INTO community_rules (
-              rule_id, community_id, title, body, report_reason, position, status, created_at, updated_at
-            ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
-            )
-          `,
-          args: [
-            rule.rule_id,
-            input.communityId,
-            rule.title,
-            rule.body,
-            rule.report_reason,
-            index,
-            rule.status,
-            now,
-          ],
-        })
-      }
-
-      await tx.execute({
-        sql: `
-          UPDATE communities
-          SET updated_at = ?2
-          WHERE community_id = ?1
-        `,
-        args: [input.communityId, now],
-      })
-
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[community-rule-settings] rollback failed while updating rule settings", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    await updateCommunityRulesOnClient(db.client, {
+      communityId: input.communityId,
+      rules: normalizeInputRules(input.body.rules),
+      now: nowIso(),
+    })
   } finally {
     db.close()
   }
