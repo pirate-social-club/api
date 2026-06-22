@@ -53,9 +53,7 @@ function buildApp(actor: ActorContext | AdminActorContext): Hono<AuthenticatedEn
   return app
 }
 
-// Built from low-entropy segments so a secret scanner does not flag the fixture
-// as a generic-api-key. Still a valid v4 UUID (version nibble 4, variant 8).
-const VALID_IDEMPOTENCY_KEY = "11111111-1111-4111-8111-111111111111"
+const VALID_IDEMPOTENCY_KEY = "5a59af75-bf63-41d7-b181-fc3620d2c7c7"
 const POST_ID = "post_00000000-0000-4000-8000-000000000001"
 const COMMUNITY_ID = "com_00000000-0000-4000-8000-000000000001"
 const PATH = `http://pirate.test/${COMMUNITY_ID}/posts/${POST_ID}/karaoke/sessions`

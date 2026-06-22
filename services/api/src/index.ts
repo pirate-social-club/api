@@ -164,6 +164,7 @@ app.use(
     allowHeaders: [
       "Content-Type",
       "Authorization",
+      "Idempotency-Key",
       "X-Admin-As-User-Id",
       "X-Admin-Token",
       "X-Agent-Connection-Token",
@@ -171,6 +172,7 @@ app.use(
       "X-Pirate-Anonymous-Id",
       "X-Pirate-Session-Id",
       "X-Pirate-Submit-Trace-Id",
+      "X-Request-Id",
     ],
   }),
 )

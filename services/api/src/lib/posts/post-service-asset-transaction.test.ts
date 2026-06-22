@@ -3,6 +3,14 @@ import { createClient } from "@libsql/client"
 import { existsSync, unlinkSync } from "node:fs"
 
 import type { Env } from "../../env"
+// Snapshotted BEFORE the mock.module() calls below. bun's mock.module is
+// process-global and sticky (it never auto-restores), so this file's
+// openCommunityDb mock leaks into every later test file. Capturing the real
+// module here lets the mock delegate back to it whenever it is reached without
+// an activeClient configured — i.e. from another test file (e.g. the karaoke
+// policy tests, which reach openCommunityDb through the d1-aware clients).
+import * as realCommunityDbFactory from "../communities/community-db-factory"
+const realCommunityDbFactorySnapshot = { ...realCommunityDbFactory }
 
 type TestClient = ReturnType<typeof createClient>
 
@@ -53,9 +61,12 @@ function wrapClient(client: TestClient): TestClient {
 }
 
 const communityDbFactoryMock = () => ({
-  openCommunityDb: async () => {
+  ...realCommunityDbFactorySnapshot,
+  openCommunityDb: async (...args: Parameters<typeof realCommunityDbFactory.openCommunityDb>) => {
     if (!activeClient) {
-      throw new Error("test community db is not configured")
+      // Reached from another test file; use the real implementation so the
+      // sticky mock does not break it.
+      return realCommunityDbFactorySnapshot.openCommunityDb(...args)
     }
     return {
       client: wrapClient(activeClient),

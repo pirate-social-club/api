@@ -12,6 +12,7 @@ import {
   type CommunityMutationActor,
 } from "./create/shared"
 import type { CommunityRow } from "../auth/auth-db-rows"
+import type { Client } from "../sql-client"
 import type { Env } from "../../types"
 import type { KaraokeScoringPolicy } from "@pirate/karaoke-runtime"
 
@@ -37,6 +38,77 @@ export type CommunityKaraokePolicyPatch = {
   karaoke_audio_retention?: "not_stored"
 }
 
+function defaultCommunityKaraokePolicy(input: {
+  communityId: string
+  updatedAt?: string | null
+}): CommunityKaraokePolicy {
+  return {
+    community_id: input.communityId,
+    karaoke_audio_retention: "not_stored",
+    karaoke_enabled: false,
+    karaoke_scoring_enabled: false,
+    karaoke_stt_model: null,
+    karaoke_stt_provider: "assistant",
+    karaoke_voice_coach_enabled: false,
+    updated_at: input.updatedAt ?? null,
+  }
+}
+
+function toCommunityKaraokePolicy(input: {
+  communityId: string
+  row: Record<string, unknown> | undefined
+}): CommunityKaraokePolicy {
+  const row = input.row
+  if (!row) {
+    return defaultCommunityKaraokePolicy({ communityId: input.communityId })
+  }
+
+  return {
+    community_id: input.communityId,
+    karaoke_audio_retention: "not_stored",
+    karaoke_enabled: Number(row.karaoke_enabled ?? 0) === 1,
+    karaoke_scoring_enabled: Number(row.karaoke_scoring_enabled ?? 0) === 1,
+    karaoke_stt_model: typeof row.karaoke_stt_model === "string" && row.karaoke_stt_model.trim()
+      ? row.karaoke_stt_model
+      : null,
+    karaoke_stt_provider: (["assistant", "elevenlabs", "mistral", "none", "openai"].includes(String(row.karaoke_stt_provider))
+      ? String(row.karaoke_stt_provider)
+      : "assistant") as CommunityKaraokePolicy["karaoke_stt_provider"],
+    karaoke_voice_coach_enabled: Number(row.karaoke_voice_coach_enabled ?? 0) === 1,
+    updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
+  }
+}
+
+async function ensureCommunityKaraokePolicyRow(input: {
+  client: Client
+  community: CommunityRow
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      INSERT INTO communities (
+        community_id, display_name, description, status, artist_identity_id,
+        artist_governance_state, membership_mode, default_age_gate_policy, allow_anonymous_identity,
+        anonymous_identity_scope, donation_partner_id, donation_policy_mode, donation_partner_status,
+        governance_mode, settings_json, created_by_user_id, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, 'active', NULL,
+        'fan_run', 'open', 'none', 0,
+        NULL, NULL, 'none', 'unconfigured',
+        'centralized', NULL, ?4, ?5, ?5
+      )
+      ON CONFLICT(community_id) DO NOTHING
+    `,
+    args: [
+      input.community.community_id,
+      input.community.display_name,
+      input.community.description,
+      input.community.creator_user_id,
+      input.community.created_at || input.now,
+    ],
+  })
+}
+
 export async function resolveCommunityKaraokeScoringPolicy(input: {
   env: Env
   communityRepository: CommunityKaraokePolicyRepository
@@ -57,7 +129,7 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
       args: [input.communityId],
     })
     const row = result.rows[0]
-    if (!row) throw notFoundError("Community not found")
+    if (!row) return { kind: "disabled" }
     if (Number(row.karaoke_scoring_enabled ?? 0) !== 1) return { kind: "disabled" }
 
     const configuredProvider = String(row.karaoke_stt_provider ?? "assistant")
@@ -150,24 +222,7 @@ async function readCommunityKaraokePolicy(input: {
       args: [input.communityId],
     })
     const row = result.rows[0]
-    if (!row) {
-      throw notFoundError("Community not found")
-    }
-
-    return {
-      community_id: input.communityId,
-      karaoke_audio_retention: "not_stored",
-      karaoke_enabled: Number(row.karaoke_enabled ?? 0) === 1,
-      karaoke_scoring_enabled: Number(row.karaoke_scoring_enabled ?? 0) === 1,
-      karaoke_stt_model: typeof row.karaoke_stt_model === "string" && row.karaoke_stt_model.trim()
-        ? row.karaoke_stt_model
-        : null,
-      karaoke_stt_provider: (["assistant", "elevenlabs", "mistral", "none", "openai"].includes(String(row.karaoke_stt_provider))
-        ? String(row.karaoke_stt_provider)
-        : "assistant") as CommunityKaraokePolicy["karaoke_stt_provider"],
-      karaoke_voice_coach_enabled: Number(row.karaoke_voice_coach_enabled ?? 0) === 1,
-      updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
-    }
+    return toCommunityKaraokePolicy({ communityId: input.communityId, row })
   } finally {
     db.close()
   }
@@ -227,6 +282,11 @@ export async function updateCommunityKaraokePolicy(input: {
   const now = nowIso()
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
+    await ensureCommunityKaraokePolicyRow({
+      client: db.client,
+      community,
+      now,
+    })
     await db.client.execute({
       sql: `
         UPDATE communities

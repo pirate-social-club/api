@@ -72,7 +72,10 @@ export interface ElevenLabsKaraokeSttAdapterOptions {
 
 /** Opens an ElevenLabs realtime STT WebSocket from within workerd. */
 async function connectWorkerdWebSocket(input: { url: string; apiKey: string }): Promise<KaraokeSttSocket> {
-  const response = await fetch(input.url, {
+  // workerd's fetch() rejects ws://wss:// schemes ("Fetch API cannot load: wss://…");
+  // an outbound WebSocket is opened with an http(s):// URL + an Upgrade header.
+  const upgradeUrl = input.url.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://")
+  const response = await fetch(upgradeUrl, {
     headers: { "xi-api-key": input.apiKey, Upgrade: "websocket" },
   })
   const socket = response.webSocket
@@ -173,7 +176,12 @@ export class ElevenLabsKaraokeSttAdapter {
     this.streamGeneration = crypto.randomUUID()
     this.emitter = new KaraokeSttEventEmitter(input.sessionId, input.attemptId, input.onMessage)
 
-    const socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
+    let socket: KaraokeSttSocket
+    try {
+      socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
+    } catch (error) {
+      throw error
+    }
     this.socket = socket
     socket.addEventListener("message", (event) => {
       this.inbound = this.inbound.then(() => this.handleMessage(event.data)).catch(() => undefined)

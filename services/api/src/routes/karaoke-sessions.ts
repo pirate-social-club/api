@@ -21,6 +21,8 @@ function errorResponse(requestId: string, status: number, code: string, message:
 
 karaokeSessions.get("/:sessionId/websocket", async (c) => {
   const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
+  const sessionId = c.req.param("sessionId")
+  const namespace = c.env.KARAOKE_SESSION_RUNTIME
   if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
     return errorResponse(requestId, 426, "websocket_upgrade_required", "WebSocket upgrade is required")
   }
@@ -41,11 +43,9 @@ karaokeSessions.get("/:sessionId/websocket", async (c) => {
   if (verified.error) {
     return errorResponse(requestId, 401, `karaoke_gateway_${verified.error}`, "Karaoke gateway token is invalid")
   }
-  const sessionId = c.req.param("sessionId")
   if (verified.claims.sessionId !== sessionId) {
     return errorResponse(requestId, 403, "karaoke_gateway_session_mismatch", "Karaoke gateway session does not match")
   }
-  const namespace = c.env.KARAOKE_SESSION_RUNTIME
   if (!namespace) {
     return errorResponse(requestId, 503, "karaoke_runtime_unavailable", "Karaoke runtime is unavailable")
   }
