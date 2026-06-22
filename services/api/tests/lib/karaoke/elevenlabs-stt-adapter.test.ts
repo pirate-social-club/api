@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import {
   KARAOKE_TRANSPORT_PROTOCOL_VERSION,
   type KaraokeClientBinaryFrame,
@@ -6,6 +6,8 @@ import {
 } from "@pirate/karaoke-runtime"
 
 import {
+  connectWorkerdWebSocket,
+  ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH,
   ElevenLabsKaraokeSttAdapter,
   type KaraokeSttSocket,
 } from "../../../src/lib/karaoke/elevenlabs-stt-adapter"
@@ -270,5 +272,76 @@ describe("ElevenLabsKaraokeSttAdapter", () => {
     await socket.deliver({ message_type: "session_started" })
     await socket.deliver({ foo: "bar" })
     expect(messages).toHaveLength(0)
+  })
+
+  test("stops forwarding audio after a provider auth_error", async () => {
+    const { adapter, socket } = await startAdapter()
+    await socket.deliver({
+      message_type: "auth_error",
+      error: "You must be authenticated to use this endpoint.",
+    })
+    const before = socket.sent.length
+    await adapter.sendPcm16(frame())
+    expect(socket.sent.length).toBe(before)
+  })
+})
+
+describe("connectWorkerdWebSocket (token auth)", () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  test("mints a single-use token over REST, then upgrades with ?token= and no api-key header", async () => {
+    const calls: { url: string; init?: { method?: string; headers?: Record<string, string> } }[] = []
+    let accepted = false
+    const fakeSocket = { accept: () => { accepted = true } }
+    globalThis.fetch = (async (url: unknown, init?: unknown) => {
+      calls.push({ url: String(url), init: init as { method?: string; headers?: Record<string, string> } })
+      if (String(url).includes(ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH)) {
+        return { ok: true, status: 200, json: async () => ({ token: "tok_abc" }) }
+      }
+      return { webSocket: fakeSocket, status: 101 }
+    }) as unknown as typeof fetch
+
+    await connectWorkerdWebSocket({
+      url: "wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&disable_logging=true",
+      apiKey: "sk_test",
+    })
+
+    const mint = calls.find((c) => c.url.includes(ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH))
+    expect(mint?.url).toBe("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe")
+    expect(mint?.init?.method).toBe("POST")
+    expect(mint?.init?.headers?.["xi-api-key"]).toBe("sk_test")
+
+    const upgrade = calls.find((c) => c.url.includes("/speech-to-text/realtime"))
+    expect(upgrade?.url).toContain("token=tok_abc")
+    expect(upgrade?.url).toContain("model_id=scribe_v2_realtime")
+    expect(upgrade?.init?.headers?.["xi-api-key"]).toBeUndefined()
+    expect(upgrade?.init?.headers?.Upgrade).toBe("websocket")
+    expect(accepted).toBe(true)
+  })
+
+  test("throws and never attempts the WS upgrade when token mint is unauthorized", async () => {
+    let upgradeAttempted = false
+    globalThis.fetch = (async (url: unknown) => {
+      if (String(url).includes(ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH)) {
+        return { ok: false, status: 401, text: async () => "Unauthorized" }
+      }
+      upgradeAttempted = true
+      return { webSocket: { accept() {} }, status: 101 }
+    }) as unknown as typeof fetch
+
+    await expect(
+      connectWorkerdWebSocket({ url: "wss://api.elevenlabs.io/v1/speech-to-text/realtime", apiKey: "bad" }),
+    ).rejects.toThrow(/token_mint_failed_401/)
+    expect(upgradeAttempted).toBe(false)
+  })
+
+  test("throws when the mint response carries no token", async () => {
+    globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => ({}) })) as unknown as typeof fetch
+    await expect(
+      connectWorkerdWebSocket({ url: "wss://api.elevenlabs.io/v1/speech-to-text/realtime", apiKey: "k" }),
+    ).rejects.toThrow(/token_missing/)
   })
 })

@@ -71,12 +71,47 @@ export interface ElevenLabsKaraokeSttAdapterOptions {
 }
 
 /** Opens an ElevenLabs realtime STT WebSocket from within workerd. */
-async function connectWorkerdWebSocket(input: { url: string; apiKey: string }): Promise<KaraokeSttSocket> {
+export const ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH = "/v1/single-use-token/realtime_scribe"
+
+/**
+ * Opens the ElevenLabs realtime STT socket from the Workers runtime.
+ *
+ * Auth: the realtime STT WebSocket authenticates via a `token` query parameter,
+ * NOT the `xi-api-key` request header. The header is honored on REST calls (e.g.
+ * forced alignment) but is not conveyed to the provider on the workerd
+ * fetch-based WS upgrade, so a header-authed upgrade arrives unauthenticated and
+ * the provider replies `auth_error` ("You must be authenticated…"). We therefore
+ * mint a single-use realtime-scribe token over REST (which DOES carry the header)
+ * and put it in the WS query string. Single-use → minted fresh on every
+ * connect/reconnect.
+ */
+export async function connectWorkerdWebSocket(input: { url: string; apiKey: string }): Promise<KaraokeSttSocket> {
   // workerd's fetch() rejects ws://wss:// schemes ("Fetch API cannot load: wss://…");
   // an outbound WebSocket is opened with an http(s):// URL + an Upgrade header.
   const upgradeUrl = input.url.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://")
-  const response = await fetch(upgradeUrl, {
-    headers: { "xi-api-key": input.apiKey, Upgrade: "websocket" },
+
+  const tokenEndpoint = new URL(ELEVENLABS_REALTIME_SCRIBE_TOKEN_PATH, upgradeUrl)
+  const tokenResponse = await fetch(tokenEndpoint.toString(), {
+    method: "POST",
+    headers: { "xi-api-key": input.apiKey },
+  })
+  if (!tokenResponse.ok) {
+    // 401/403 here is a real auth/config failure (bad/missing key, or the key
+    // lacks realtime-STT scope). Surface it — do NOT silently fall back to a
+    // header-authed upgrade, which would recreate the unauthenticated all-miss.
+    const detail = (await tokenResponse.text().catch(() => "")).slice(0, 200)
+    throw new Error(`elevenlabs_stt_token_mint_failed_${tokenResponse.status}${detail ? `: ${detail}` : ""}`)
+  }
+  const minted = (await tokenResponse.json().catch(() => null)) as { token?: string } | null
+  const token = minted?.token?.trim()
+  if (!token) {
+    throw new Error("elevenlabs_stt_token_missing")
+  }
+
+  const wsUrl = new URL(upgradeUrl)
+  wsUrl.searchParams.set("token", token)
+  const response = await fetch(wsUrl.toString(), {
+    headers: { Upgrade: "websocket" },
   })
   const socket = response.webSocket
   if (!socket) {
@@ -315,7 +350,13 @@ export class ElevenLabsKaraokeSttAdapter {
       // Stop forwarding audio on a provider error. (Typed error propagation to
       // the client via an adapter→host channel is part of the lifecycle pass.)
       this.closed = true
-      console.warn("[karaoke-stt] elevenlabs provider error", { code: type })
+      // Log the full provider payload (truncated), not just the coarse code —
+      // `{code: auth_error}` alone hid that the real failure was an
+      // unauthenticated upgrade ("You must be authenticated to use this endpoint").
+      console.warn("[karaoke-stt] elevenlabs provider error", {
+        code: type,
+        payload: JSON.stringify(message).slice(0, 400),
+      })
       return
     }
 
