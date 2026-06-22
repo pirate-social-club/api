@@ -392,7 +392,7 @@ describe("STT lifecycle: unexpected close", () => {
     expect(h.unexpected()).toBe(1)
   })
 
-  test("close-then-error fires onUnexpectedClose exactly once (idempotent)", async () => {
+  test("an unexpected close then error fires onUnexpectedClose once (idempotent)", async () => {
     const h = setup()
     await h.start()
     h.socket.triggerClose()
