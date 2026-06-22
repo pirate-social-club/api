@@ -153,6 +153,12 @@ jobs:
       - name: Link web repo for cross-repo file deps
         run: |
           ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
+          # api package.json pins @pirate/karaoke-runtime at file:../../../web-karaoke-rel/...
+          # (release worktree name), so mirror the web checkout under that name too.
+          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web-karaoke-rel"
+          # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
+          # core repo is checked out at $GITHUB_WORKSPACE/core, so link it as a sibling too.
+          ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
 
       - name: Install song preview container dependencies
         working-directory: services/song-preview-container
