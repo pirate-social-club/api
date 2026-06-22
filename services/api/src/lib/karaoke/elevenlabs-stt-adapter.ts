@@ -215,6 +215,13 @@ export class ElevenLabsKaraokeSttAdapter {
     try {
       socket = await this.connect({ apiKey: this.apiKey, url: this.buildUrl() })
     } catch (error) {
+      // Surface the connect failure (token mint / upgrade) — sanitized, no key.
+      // This is what becomes the session_error.message and the all-miss cause;
+      // logging it makes it visible in `wrangler tail` (flushed on socket close)
+      // even though the throw happens before any provider-message log.
+      console.error("[karaoke-stt] STT connect failed", {
+        message: error instanceof Error ? error.message : String(error),
+      })
       throw error
     }
     this.socket = socket
