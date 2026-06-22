@@ -16,6 +16,10 @@ async function enqueuePostTranslationJob(input: {
   postId: string
   locale: string
   createdAt: string
+  // Pass false when enqueuing inside a transaction("write"): the dedup lookup is a
+  // SELECT, which the routed D1 write client buffers into batchWrite() where the shard
+  // write guard rejects it. Defaults to dedupe-on for the read-path caller.
+  dedupe?: boolean
 }): Promise<void> {
   await enqueueCommunityJob({
     client: input.client,
@@ -28,6 +32,7 @@ async function enqueuePostTranslationJob(input: {
       locale: input.locale,
     }),
     createdAt: input.createdAt,
+    dedupe: input.dedupe,
   })
 }
 
@@ -52,6 +57,8 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
       postId: input.post.post_id,
       locale,
       createdAt: input.createdAt,
+      // Runs inside createPost's write tx — skip the dedup SELECT (buffered batchWrite).
+      dedupe: false,
     })
   }
 }
@@ -101,6 +108,8 @@ async function enqueuePostLabelJob(input: {
       reason: input.reason ?? "publish",
     }),
     createdAt: input.createdAt,
+    // Runs inside createPost's write tx — skip the dedup SELECT (buffered batchWrite).
+    dedupe: false,
   })
 }
 
@@ -125,6 +134,8 @@ export async function enqueueEmbedHydrateIfNeeded(input: {
       link_url: input.post.link_url,
     }),
     createdAt: input.createdAt,
+    // Runs inside createPost's write tx — skip the dedup SELECT (buffered batchWrite).
+    dedupe: false,
   })
 }
 
