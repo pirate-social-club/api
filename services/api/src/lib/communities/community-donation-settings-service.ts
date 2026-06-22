@@ -18,12 +18,97 @@ import {
   selectEndaomentOrganizationMatch,
   type UpdateCommunityDonationPolicyRequestBody,
 } from "./create/shared"
+import type { Client } from "../sql-client"
 import type {
   Community,
   Env,
 } from "../../types"
 
 type CommunityDonationSettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+
+/**
+ * Write-only donation-policy mutation, isolated for buffer-safety testing. The
+ * tx body issues ONLY writes (conditional INSERT donation_partners ON CONFLICT +
+ * UPDATE communities) so it is safe inside the routed D1 buffering tx (flushed as
+ * one atomic shard.batchWrite where reads are rejected). The settings read and
+ * all resolution happen in the caller before this runs — no in-tx read.
+ * See [d1-buffered-write-tx-select-trap].
+ */
+export async function updateCommunityDonationPolicyOnClient(
+  client: Pick<Client, "transaction">,
+  input: {
+    communityId: string
+    donationPolicyMode: ReturnType<typeof normalizeDonationPolicyMode>
+    resolvedPartnerId: string | null
+    partnerStatus: string
+    donationPartner: NonNullable<UpdateCommunityDonationPolicyRequestBody["donation_partner"]> | null
+    nextSettings: Record<string, unknown>
+    now: string
+  },
+): Promise<void> {
+  const tx = await client.transaction("write")
+  try {
+    if (input.resolvedPartnerId && input.donationPartner) {
+      await tx.execute({
+        sql: `
+          INSERT INTO donation_partners (
+            donation_partner_id, display_name, provider, provider_partner_ref,
+            payout_destination_ref, image_url, review_status, status, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+          ON CONFLICT(donation_partner_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            provider = excluded.provider,
+            provider_partner_ref = excluded.provider_partner_ref,
+            payout_destination_ref = excluded.payout_destination_ref,
+            image_url = excluded.image_url,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          input.donationPartner.donation_partner_id.trim(),
+          input.donationPartner.display_name.trim(),
+          "endaoment",
+          input.donationPartner.provider_partner_ref?.trim() || null,
+          input.donationPartner.provider_partner_ref?.trim() || null,
+          input.donationPartner.image_url?.trim() || null,
+          "approved",
+          "active",
+          input.now,
+        ],
+      })
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE communities
+        SET donation_policy_mode = ?2,
+            donation_partner_id = ?3,
+            donation_partner_status = ?4,
+            settings_json = ?5,
+            updated_at = ?6
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        input.donationPolicyMode,
+        input.resolvedPartnerId,
+        input.partnerStatus,
+        JSON.stringify(input.nextSettings),
+        input.now,
+      ],
+    })
+
+    await tx.commit()
+  } catch (error) {
+    try {
+      await tx.rollback()
+    } catch (rollbackError) {
+      console.error("[community-donation-settings] rollback failed while updating donation settings", rollbackError)
+    }
+    throw error
+  } finally {
+    tx.close()
+  }
+}
 
 export async function resolveCommunityDonationPartner(input: {
   env: Env
@@ -170,61 +255,15 @@ export async function updateCommunityDonationPolicy(input: {
     delete existingSettings.donation_partner
     const nextSettings = { ...existingSettings }
 
-    const tx = await db.client.transaction("write")
-    try {
-      if (resolvedPartnerId && donation_partner) {
-        await tx.execute({
-          sql: `
-            INSERT INTO donation_partners (
-              donation_partner_id, display_name, provider, provider_partner_ref,
-              payout_destination_ref, image_url, review_status, status, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
-            ON CONFLICT(donation_partner_id) DO UPDATE SET
-              display_name = excluded.display_name,
-              provider = excluded.provider,
-              provider_partner_ref = excluded.provider_partner_ref,
-              payout_destination_ref = excluded.payout_destination_ref,
-              image_url = excluded.image_url,
-              updated_at = excluded.updated_at
-          `,
-          args: [
-            donation_partner.donation_partner_id.trim(),
-            donation_partner.display_name.trim(),
-            "endaoment",
-            donation_partner.provider_partner_ref?.trim() || null,
-            donation_partner.provider_partner_ref?.trim() || null,
-            donation_partner.image_url?.trim() || null,
-            "approved",
-            "active",
-            now,
-          ],
-        })
-      }
-
-      await tx.execute({
-        sql: `
-          UPDATE communities
-          SET donation_policy_mode = ?2,
-              donation_partner_id = ?3,
-              donation_partner_status = ?4,
-              settings_json = ?5,
-              updated_at = ?6
-          WHERE community_id = ?1
-        `,
-        args: [input.communityId, donation_policy_mode, resolvedPartnerId, partnerStatus, JSON.stringify(nextSettings), now],
-      })
-
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[community-donation-settings] rollback failed while updating donation settings", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    await updateCommunityDonationPolicyOnClient(db.client, {
+      communityId: input.communityId,
+      donationPolicyMode: donation_policy_mode,
+      resolvedPartnerId,
+      partnerStatus,
+      donationPartner: donation_partner ?? null,
+      nextSettings,
+      now,
+    })
   } finally {
     db.close()
   }

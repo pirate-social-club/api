@@ -3,6 +3,7 @@ import type { CommunityRow } from "../../auth/auth-db-rows"
 import { badRequestError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { boolOrNull, numberOrNull, stringOrNull } from "../../sql-row"
+import type { Client } from "../../sql-client"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import {
   canManageAssistantPolicy,
@@ -626,20 +627,27 @@ function promptsChanged(left: CommunityAssistantPolicy, right: CommunityAssistan
     || JSON.stringify(left.starterPrompts) !== JSON.stringify(right.starterPrompts)
 }
 
-async function persistPolicy(input: {
-  env: Env
-  communityRepository: CommunityAssistantRepository
-  communityId: string
-  actorUserId: string
-  previousPolicy: CommunityAssistantPolicy
-  nextPolicy: CommunityAssistantPolicy
-  now: string
-}): Promise<void> {
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+/**
+ * Write-only assistant-policy upsert, isolated for buffer-safety testing. The tx
+ * body issues ONLY writes (INSERT...ON CONFLICT + a conditional prompt-revision
+ * INSERT) so it is safe inside the routed D1 buffering tx (flushed as one atomic
+ * shard.batchWrite where reads are rejected). `promptsChanged` is a pure compare
+ * of the caller-resolved policies; there is no in-tx read.
+ * See [d1-buffered-write-tx-select-trap].
+ */
+export async function persistAssistantPolicyOnClient(
+  client: Pick<Client, "transaction">,
+  input: {
+    communityId: string
+    actorUserId: string
+    previousPolicy: CommunityAssistantPolicy
+    nextPolicy: CommunityAssistantPolicy
+    now: string
+  },
+): Promise<void> {
+  const tx = await client.transaction("write")
   try {
-    const tx = await db.client.transaction("write")
-    try {
-      await tx.execute({
+    await tx.execute({
         sql: `
           INSERT INTO community_assistant_policy (
             id, community_id, enabled, display_name, short_bio, avatar_ref, system_prompt,
@@ -746,15 +754,35 @@ async function persistPolicy(input: {
         })
       }
 
-      await tx.commit()
-    } catch (error) {
-      await tx.rollback().catch((rollbackError) => {
-        console.error("[community-assistant-policy] rollback failed while updating policy", rollbackError)
-      })
-      throw error
-    } finally {
-      tx.close()
-    }
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch((rollbackError) => {
+      console.error("[community-assistant-policy] rollback failed while updating policy", rollbackError)
+    })
+    throw error
+  } finally {
+    tx.close()
+  }
+}
+
+async function persistPolicy(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  actorUserId: string
+  previousPolicy: CommunityAssistantPolicy
+  nextPolicy: CommunityAssistantPolicy
+  now: string
+}): Promise<void> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await persistAssistantPolicyOnClient(db.client, {
+      communityId: input.communityId,
+      actorUserId: input.actorUserId,
+      previousPolicy: input.previousPolicy,
+      nextPolicy: input.nextPolicy,
+      now: input.now,
+    })
   } finally {
     db.close()
   }
