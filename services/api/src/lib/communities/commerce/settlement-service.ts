@@ -790,6 +790,30 @@ async function settleCommunityPurchaseForBuyer(input: {
     let canonicalSettlementTxRef = input.body.settlement_tx_ref
     let charityPayouts = new Map<string, ResolvedCharityPayout>()
     const royaltyEarningEvents: RoyaltyEarningEventForNotification[] = []
+    // Funding-proof verification runs for ALL paid quotes, not just asset purchases.
+    // Previously this was gated behind `if (quote.asset_id)`, which let non-asset purchases
+    // (e.g. live-room tickets) finalize entitlement on a client-provided funding_tx_ref
+    // without verifying that funds actually moved on-chain — a "free ticket" hole.
+    let buyerWalletAddress: string | null = null
+    if (quote.final_price_usd > 0) {
+      buyerWalletAddress = await input.resolveBuyerWalletAddress()
+      const fundingReceipt = await confirmBuyerFundingForSettlement({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        quote,
+        purchaseId,
+        buyerAddress: buyerWalletAddress,
+        fundingTxRef: input.body.funding_tx_ref,
+        now: createdAt,
+      })
+      // For non-asset purchases, use the verified funding tx ref as the canonical
+      // settlement tx ref when the client didn't provide one. This ensures the
+      // purchase row always carries a server-verified on-chain reference.
+      if (!quote.asset_id && !canonicalSettlementTxRef) {
+        canonicalSettlementTxRef = fundingReceipt.txRef
+      }
+    }
     if (quote.asset_id) {
       const asset = await getAssetRow(db.client, input.communityId, quote.asset_id)
       if (!asset) {
@@ -806,7 +830,9 @@ async function settleCommunityPurchaseForBuyer(input: {
           throw badRequestError("Locked asset is not ready for purchase settlement")
         }
       }
-      const buyerWalletAddress = await input.resolveBuyerWalletAddress()
+      // buyerWalletAddress was resolved above during funding-proof verification.
+      // For the impossible free-asset edge case (final_price_usd === 0), resolve it here.
+      const assetBuyerWalletAddress = buyerWalletAddress ?? await input.resolveBuyerWalletAddress()
       const purchaseRef = derivePurchaseRef({
         communityId: input.communityId,
         purchaseId,
@@ -822,16 +848,6 @@ async function settleCommunityPurchaseForBuyer(input: {
       if (asset.story_royalty_registration_status !== "registered" || !asset.story_ip_id?.trim()) {
         throw badRequestError("Story royalty-native asset registration is not configured")
       }
-      await confirmBuyerFundingForSettlement({
-        env: input.env,
-        client: db.client,
-        communityId: input.communityId,
-        quote,
-        purchaseId,
-        buyerAddress: buyerWalletAddress,
-        fundingTxRef: input.body.funding_tx_ref,
-        now: createdAt,
-      })
       charityPayouts = await executeCharityPayoutsForSettlement({
         env: input.env,
         client: db.client,
@@ -845,7 +861,7 @@ async function settleCommunityPurchaseForBuyer(input: {
       const storyPaymentIdempotencyKey = `${quote.quote_id}:story_royalty:${asset.story_ip_id}:${storyPayoutAmount.toString()}`
       const storyPaymentMetadata = JSON.stringify({
         amount_wip_wei: storyPayoutAmount.toString(),
-        buyer_wallet_address: buyerWalletAddress,
+        buyer_wallet_address: assetBuyerWalletAddress,
         asset: asset.asset_id,
         story_ip_id: asset.story_ip_id,
         creator_user_id: asset.creator_user_id,
@@ -876,7 +892,7 @@ async function settleCommunityPurchaseForBuyer(input: {
           const storySettlement = await payStoryRoyaltyOnBehalfForPurchase({
             env: input.env,
             purchaseRef,
-            buyerAddress: buyerWalletAddress,
+            buyerAddress: assetBuyerWalletAddress,
             receiverIpId: asset.story_ip_id,
             payerIpId: null,
             entitlementTokenId: asset.access_mode === "locked"
@@ -914,7 +930,7 @@ async function settleCommunityPurchaseForBuyer(input: {
           assetId: asset.asset_id,
           storyIpId: asset.story_ip_id,
           amountWipWei: storyPayoutAmount.toString(),
-          buyerWalletAddress,
+          buyerWalletAddress: assetBuyerWalletAddress,
           txHash: royaltyTxHash,
           purchaseId,
           title: asset.display_title,
@@ -975,7 +991,7 @@ async function settleCommunityPurchaseForBuyer(input: {
         }
       }
       if (asset.access_mode === "locked") {
-        const entitlementEffectKey = `${asset.asset_id}:${asset.story_entitlement_token_id}:${buyerWalletAddress.toLowerCase()}`
+        const entitlementEffectKey = `${asset.asset_id}:${asset.story_entitlement_token_id}:${assetBuyerWalletAddress.toLowerCase()}`
         const entitlementIdempotencyKey = `${quote.quote_id}:story_entitlement:${entitlementEffectKey}`
         const entitlementEffect = await beginPurchaseSettlementEffectAttempt({
           client: db.client,
@@ -994,7 +1010,7 @@ async function settleCommunityPurchaseForBuyer(input: {
               : await mintStoryRoyaltyPurchaseEntitlement({
                 env: input.env,
                 purchaseRef,
-                buyerAddress: buyerWalletAddress,
+                buyerAddress: assetBuyerWalletAddress,
                 entitlementTokenId: BigInt(asset.story_entitlement_token_id!),
               })
             await confirmPurchaseSettlementEffect({
