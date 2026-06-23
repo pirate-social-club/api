@@ -283,6 +283,9 @@ export async function createControlPlaneTestClient(options?: {
       const storage = resolveLocalDevStorage({
         CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
         LOCAL_COMMUNITY_DB_ROOT: join(tempDir, "community-dbs"),
+        // Thread PIRATE_CORE_REPO explicitly so route tests resolve migrations from the
+        // intended committed core source instead of silently picking up an adjacent checkout.
+        PIRATE_CORE_REPO: process.env.PIRATE_CORE_REPO,
       }, serviceRoot)
       await applyLocalControlPlaneMigrations(storage)
     } else {
