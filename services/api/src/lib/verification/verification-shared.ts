@@ -31,6 +31,22 @@ export type {
   SpacesAcceptedSnapshot,
 } from "./namespace-verification-policy"
 
+/**
+ * Normalize a URL-ish value to its origin (scheme://host[:port]), or null if
+ * blank/unparseable. Shared by the Very and Self verification providers.
+ */
+export function normalizeOrigin(value: string | null | undefined): string | null {
+  const trimmed = String(value || "").trim()
+  if (!trimmed) {
+    return null
+  }
+  try {
+    return new URL(trimmed).origin
+  } catch {
+    return null
+  }
+}
+
 export async function getVerificationSessionRowForUser(
   client: Client,
   verificationSessionId: string,

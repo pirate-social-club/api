@@ -9,6 +9,7 @@ import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
+import { normalizeOrigin } from "./verification-shared"
 import type { Env } from "../../env"
 import type { RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
@@ -361,17 +362,6 @@ function trimEnv(value: string | undefined): string {
   return String(value || "").trim()
 }
 
-function normalizeOrigin(value: string | null | undefined): string | null {
-  const trimmed = String(value || "").trim()
-  if (!trimmed) {
-    return null
-  }
-  try {
-    return new URL(trimmed).origin
-  } catch {
-    return null
-  }
-}
 
 function isHttpsOrigin(origin: string | null): origin is string {
   return origin != null && origin.startsWith("https://")
