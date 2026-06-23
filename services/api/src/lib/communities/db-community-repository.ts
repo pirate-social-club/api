@@ -32,49 +32,13 @@ export type {
   CommunityProvisioningRepository,
   CommunityReadRepository,
   CommunityRepository,
-  CommunityRepositoryLifecycle,
 } from "./community-repository-types"
 
-export {
-  getCommunityById,
-  getCommunityByIdentifierCandidates,
-  getCommunityByRouteSlug,
-  getCommunityByNamespaceVerificationId,
-  listActiveCommunities,
-  searchActiveCommunities,
-  getPrimaryCommunityDatabaseBinding,
-  getActiveCommunityDbCredential,
-  getJobById,
-  getLatestCommunityProvisioningJob,
-} from "./community-read-repository"
-
-export {
-  createCommunityProvisioningRequest,
-  retryCommunityProvisioningRequest,
-  markCommunityProvisioningSucceeded,
-  persistProvisionedCommunityDatabaseAccess,
-  markCommunityProvisioningFailed,
-} from "./provisioning/repository"
-
-export { recordCommunityPostProjection } from "./community-post-projection-repository"
-export {
-  updateCommunityPostProjectionMetrics,
-  updateCommunityPostProjectionPayload,
-  updateCommunityPostProjectionStatus,
-} from "./community-post-projection-repository"
-export { recordCommunityCommentProjection } from "./community-comment-projection-repository"
-export {
-  incrementCommunityFollowerCount,
-  setCommunityFollowerCount,
-  upsertCommunityFollowProjection,
-  upsertCommunityMembershipProjection,
-} from "./membership/projection-repository"
-
-export {
-  attachNamespaceToCommunity,
-  setPendingNamespaceVerificationSession,
-  setCommunityLifecycleStatus,
-} from "./community-mutation-repository"
+// `getJobById` is the only re-export consumed through this barrel
+// (src/lib/onboarding/db-reddit-onboarding-repository.ts). Every other read,
+// provisioning, projection, and mutation helper is imported directly from its
+// source module, so they are not re-exported here.
+export { getJobById } from "./community-read-repository"
 
 import {
   getCommunityById,
@@ -116,32 +80,20 @@ import {
   setCommunityLifecycleStatus,
 } from "./community-mutation-repository"
 
-export async function getCommunityPostProjectionByPostId(
+// Internal helpers for the repository class below (the projection-by-id lookups
+// are not exported — callers go through DatabaseCommunityRepository).
+async function getCommunityPostProjectionByPostId(
   client: Client,
   postId: string,
 ): Promise<CommunityPostProjectionRow | null> {
   return getCommunityPostProjectionRowByPostId(client, postId)
 }
 
-export async function getCommunityCommentProjectionByCommentId(
+async function getCommunityCommentProjectionByCommentId(
   client: Client,
   commentId: string,
 ): Promise<CommunityCommentProjectionRow | null> {
   return getCommunityCommentProjectionRowByCommentId(client, commentId)
-}
-
-export async function listCommunityMembershipProjectionsByUserId(
-  client: Client,
-  userId: string,
-): Promise<CommunityMembershipProjectionRow[]> {
-  return listCommunityMembershipProjectionRowsByUserId(client, userId)
-}
-
-export async function listCommunityFollowProjectionsByUserId(
-  client: Client,
-  userId: string,
-): Promise<CommunityFollowProjectionRow[]> {
-  return listCommunityFollowProjectionRowsByUserId(client, userId)
 }
 
 export class DatabaseCommunityRepository implements CommunityRepository {
