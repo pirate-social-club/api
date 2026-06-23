@@ -66,8 +66,8 @@ async function seedProfile(client: Client, opts: {
     sql: `INSERT INTO booking_profiles (
             host_user_id, display_headline, bio, topics_json, intro_video_ref,
             host_timezone, base_price_cents, default_slot_duration_seconds,
-            platform_fee_bps, is_published, created_at, updated_at
-          ) VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3, 1800, ?4, ?5, ?6, ?6)`,
+            platform_fee_bps, payout_wallet_address, is_published, created_at, updated_at
+          ) VALUES (?1, NULL, NULL, NULL, NULL, ?2, ?3, 1800, ?4, ?7, ?5, ?6, ?6)`,
     args: [
       opts.hostUserId,
       opts.hostTimezone ?? "UTC",
@@ -75,6 +75,7 @@ async function seedProfile(client: Client, opts: {
       opts.platformFeeBps ?? 1000,
       (opts.isPublished ?? true) ? 1 : 0,
       now,
+      "0x1111111111111111111111111111111111111111",
     ],
   })
 }

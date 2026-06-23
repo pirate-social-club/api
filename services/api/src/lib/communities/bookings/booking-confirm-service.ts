@@ -86,6 +86,21 @@ async function loadPlatformFeeBps(env: Env, hostUserId: string): Promise<number>
   return asNumber(r.rows[0]?.platform_fee_bps ?? 1000)
 }
 
+// Confirm-time host settlement profile: fee + the payout destination that gets snapshotted onto
+// the booking. Payout wallet is required at confirm (mirrors the publish gate) so a paid booking
+// always has somewhere to settle the host.
+async function loadHostSettlement(env: Env, hostUserId: string): Promise<{ platformFeeBps: number; payoutWalletAddress: string | null }> {
+  const r = await getControlPlaneClient(env).execute({
+    sql: `SELECT platform_fee_bps, payout_wallet_address FROM booking_profiles WHERE host_user_id = ?1`,
+    args: [hostUserId],
+  })
+  const row = r.rows[0]
+  return {
+    platformFeeBps: asNumber(row?.platform_fee_bps ?? 1000),
+    payoutWalletAddress: row?.payout_wallet_address ? String(row.payout_wallet_address) : null,
+  }
+}
+
 async function loadBookingByHold(env: Env, repo: CommunityRepository, communityId: string, holdId: string): Promise<BookingSnapshot | null> {
   const handle = await openCommunityReadClient(env, repo, communityId)
   try {
@@ -174,7 +189,7 @@ export async function quoteBookingHold(input: {
 }
 
 export type ConfirmBookingResult =
-  | { ok: false; reason: "hold_not_found" | "hold_not_active" | "hold_expired" }
+  | { ok: false; reason: "hold_not_found" | "hold_not_active" | "hold_expired" | "host_payout_unconfigured" }
   | { ok: true; already: boolean; booking: BookingSnapshot }
 
 export async function confirmBookingHold(input: {
@@ -223,10 +238,15 @@ export async function confirmBookingHold(input: {
     fundingTxRef: input.fundingTxRef,
   })
 
-  const platformFeeBps = await loadPlatformFeeBps(input.env, hold.host_user_id)
-  const allocation = computeAllocation(hold.price_cents, feePolicy(platformFeeBps))
+  const settlement = await loadHostSettlement(input.env, hold.host_user_id)
+  if (!settlement.payoutWalletAddress) return { ok: false, reason: "host_payout_unconfigured" }
+  const allocation = computeAllocation(hold.price_cents, feePolicy(settlement.platformFeeBps))
   const feeCents = allocation.legs.find((l) => l.recipientType === "platform_fee")?.amountCents ?? 0
   const hostCents = allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0
+  const platformFeeBps = settlement.platformFeeBps
+  // Durable destination snapshots: refund returns to the verified payer; payout goes to the
+  // host payout wallet captured here (never re-resolved later).
+  const fundingWalletAddress = receipt.fromAddress ?? buyerAddress
   const bookingId = `bkg_${crypto.randomUUID()}`
 
   // 3) D1 write tx: create the confirmed booking + consume the hold. The bookings(hold_id)
@@ -239,11 +259,11 @@ export async function confirmBookingHold(input: {
         sql: `INSERT INTO bookings (
                 booking_id, community_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
                 gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status,
-                funding_tx_ref, live_room_id, confirmed_at, created_at, updated_at
-              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'confirmed', ?12, NULL, ?13, ?13, ?13)`,
+                funding_tx_ref, funding_wallet_address, host_payout_wallet_address, live_room_id, confirmed_at, created_at, updated_at
+              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'confirmed', ?12, ?13, ?14, NULL, ?15, ?15, ?15)`,
         args: [bookingId, input.communityId, hold.hold_id, hold.host_user_id, input.bookerUserId,
           hold.slot_start_utc, hold.slot_end_utc, hold.price_cents, platformFeeBps, feeCents, hostCents,
-          receipt.txRef, input.nowUtc],
+          receipt.txRef, fundingWalletAddress, settlement.payoutWalletAddress, input.nowUtc],
       })
       await tx.execute({
         sql: `UPDATE booking_holds SET status = 'consumed', updated_at = ?2 WHERE hold_id = ?1`,

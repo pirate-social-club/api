@@ -130,6 +130,7 @@ const VALID_PROFILE = {
   host_timezone: "Europe/Vienna",
   base_price_cents: 5000,
   default_slot_duration_seconds: 1800,
+  payout_wallet_address: "0x1111111111111111111111111111111111111111",
 }
 
 describe("host-bookings — auth", () => {
@@ -207,6 +208,25 @@ describe("host-bookings — profile", () => {
     expect(res.status).toBe(200)
     const body = await json(res) as { is_published: boolean }
     expect(body.is_published).toBe(true)
+  })
+
+  test("publish without a payout wallet is blocked (409)", async () => {
+    const { ctx, accessToken } = await setup()
+    const { payout_wallet_address, ...noPayout } = VALID_PROFILE
+    await postProfile(ctx.env, accessToken, noPayout)
+    const res = await postAction(ctx.env, accessToken, "publish")
+    expect(res.status).toBe(409)
+    expect((await json(res) as { error: string }).error).toBe("payout_wallet_required")
+  })
+
+  test("POST rejects an invalid payout wallet address (400)", async () => {
+    const { ctx, accessToken } = await setup()
+    await postProfile(ctx.env, accessToken, VALID_PROFILE)
+    const res = await postProfile(ctx.env, accessToken, { payout_wallet_address: "not-an-address" })
+    expect(res.status).toBe(400)
+    const body = await json(res) as { error: string; fields: Array<{ field: string }> }
+    expect(body.error).toBe("validation_failed")
+    expect(body.fields.map((f) => f.field)).toContain("payout_wallet_address")
   })
 
   test("unpublish sets is_published to false", async () => {
