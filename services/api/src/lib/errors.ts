@@ -35,10 +35,6 @@ export function eligibilityFailed(message: string, details: Record<string, unkno
   return new HttpError(403, "eligibility_failed", message, false, details)
 }
 
-export function gateFailed(message: string): HttpError {
-  return new HttpError(403, "gate_failed", message)
-}
-
 export function rateLimited(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(429, "rate_limited", message, true, details)
 }

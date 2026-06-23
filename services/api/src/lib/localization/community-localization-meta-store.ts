@@ -1,6 +1,5 @@
 import type { DbExecutor } from "../db-helpers"
 import { makeId } from "../helpers"
-import { executeFirst } from "../db-helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 
 export type CommunityLocalizationTranslationPolicy = "none" | "machine_allowed" | "human_only" | "hybrid"
@@ -47,26 +46,6 @@ export async function listCommunityLocalizationMeta(input: {
     const record = toCommunityLocalizationMetaRecord(row)
     return [record.field_key, record] as const
   }))
-}
-
-export async function getCommunityLocalizationMeta(input: {
-  executor: DbExecutor
-  communityId: string
-  fieldKey: string
-}): Promise<CommunityLocalizationMetaRecord | null> {
-  const row = await executeFirst(input.executor, {
-    sql: `
-      SELECT community_localization_meta_id, community_id, field_key, source_hash,
-             source_language, translation_policy, created_at, updated_at
-      FROM community_localization_meta
-      WHERE community_id = ?1
-        AND field_key = ?2
-      LIMIT 1
-    `,
-    args: [input.communityId, input.fieldKey],
-  })
-
-  return row ? toCommunityLocalizationMetaRecord(row) : null
 }
 
 export async function upsertCommunityLocalizationMeta(input: {
