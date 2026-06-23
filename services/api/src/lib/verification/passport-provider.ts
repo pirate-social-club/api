@@ -1,4 +1,5 @@
 import { internalError, providerUnavailable } from "../errors"
+import { trimEnv } from "../env-strings"
 import type { Env } from "../../env"
 import type { VerificationCapabilities } from "../../types"
 
@@ -36,10 +37,6 @@ let passportProviderForTests: PassportProvider | null = null
 
 export function setPassportProviderForTests(provider: PassportProvider | null): void {
   passportProviderForTests = provider
-}
-
-function trimEnv(value: string | undefined): string {
-  return typeof value === "string" ? value.trim() : ""
 }
 
 function numericValue(value: unknown): number | null {

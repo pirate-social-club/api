@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import { trimEnv } from "../env-strings"
 import type { Post, SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
@@ -40,10 +41,6 @@ export type SongBundleAnalysisResult = {
   alignmentStatus: "completed" | "failed"
   alignmentError: string | null
   timedLyrics: Record<string, unknown> | null
-}
-
-function trimEnv(value: string | undefined): string {
-  return String(value || "").trim()
 }
 
 function providerTimeoutMs(value: string | undefined, fallbackMs: number): number {

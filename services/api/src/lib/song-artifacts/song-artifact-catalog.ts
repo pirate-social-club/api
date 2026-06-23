@@ -1,10 +1,7 @@
 import type { Env } from "../../env"
+import { trimEnv } from "../env-strings"
 import type { SongArtifactBundle, SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
-
-function trimEnv(value: string | undefined): string {
-  return String(value || "").trim()
-}
 
 function extensionFromMimeType(mimeType: string | undefined): string {
   const normalized = String(mimeType || "").trim().toLowerCase()

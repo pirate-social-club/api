@@ -1,6 +1,7 @@
 import { ZKPassport, type ProofResult, type Query, type QueryResult } from "@zkpassport/sdk"
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
+import { trimEnv } from "../env-strings"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { sha256Hex } from "../crypto"
 import type { Env } from "../../env"
@@ -71,10 +72,6 @@ export interface ZkPassportProvider {
     upstreamSessionRef: string
     providerPayloadRef: unknown
   }): Promise<ZkPassportSessionOutcome>
-}
-
-function trimEnv(value: string | undefined): string {
-  return value?.trim() ?? ""
 }
 
 function truthyEnv(value: string | undefined): boolean {

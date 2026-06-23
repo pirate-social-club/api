@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import { trimEnv } from "../env-strings"
 import type { Community, CreatePostRequest, Post } from "../../types"
 import { buildDefaultAdultContentPolicy } from "../communities/community-policy-defaults"
 import { HttpError, providerUnavailable } from "../errors"
@@ -37,10 +38,6 @@ const DEFAULT_OPENAI_MODERATION_SETTINGS: Required<OpenAIModerationSettings> = {
   scan_images: true,
 }
 const DEFAULT_SEXUAL_MINORS_BLOCK_THRESHOLD = 0.95
-
-function trimEnv(value: string | undefined): string {
-  return String(value || "").trim()
-}
 
 function mergeSettings(settings: OpenAIModerationSettings | null | undefined): Required<OpenAIModerationSettings> {
   return {

@@ -1,12 +1,8 @@
 import { internalError, providerUnavailable } from "../errors"
+import { trimEnvOrNull } from "../env-strings"
 import type { Env } from "../../env"
 
 const CLAWKEY_TIMEOUT_MS = 15_000
-
-function trimEnv(value: string | undefined): string | null {
-  const trimmed = String(value ?? "").trim()
-  return trimmed ? trimmed : null
-}
 
 type ClawkeyRegisterInitResponse = {
   sessionId?: unknown
@@ -48,7 +44,7 @@ export interface ClawkeyProvider {
 let testOverride: ClawkeyProvider | null = null
 
 function getBaseUrl(env: Env): string {
-  return trimEnv(env.CLAWKEY_API_URL) || "https://api.ag9.ai/v1"
+  return trimEnvOrNull(env.CLAWKEY_API_URL) || "https://api.ag9.ai/v1"
 }
 
 function resolveClawkeyUrl(env: Env, path: string): URL {

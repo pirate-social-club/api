@@ -10,6 +10,7 @@ import { isProductionEnv, makeId } from "../helpers"
 import { normalizeIdentityCountryCode, normalizeIdentityCountryCodes } from "../identity/country-codes"
 import { logVerificationDebug } from "./verification-logging"
 import { normalizeOrigin } from "./verification-shared"
+import { trimEnv } from "../env-strings"
 import type { Env } from "../../env"
 import type { RequestedVerificationCapability, SelfVerificationDisclosures, SelfVerificationLaunch, VerificationIntent, VerificationRequirement } from "../../types"
 
@@ -356,10 +357,6 @@ export interface SelfProvider {
     proof: unknown
     providerPayloadRef: unknown
   }): Promise<SelfSessionOutcome>
-}
-
-function trimEnv(value: string | undefined): string {
-  return String(value || "").trim()
 }
 
 
