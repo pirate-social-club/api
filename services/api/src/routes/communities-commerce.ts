@@ -22,6 +22,7 @@ import {
   type DerivativeSourceScope,
 } from "../lib/communities/commerce/service"
 import { getCommunity } from "../lib/communities/membership/community-read-service"
+import { requireLiveCommunity } from "../lib/communities/community-status"
 import { badRequestError } from "../lib/errors"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
@@ -286,6 +287,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
 
   communities.post("/:communityId/purchase-quote-preflight", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    await requireLiveCommunity(communityRepository, communityId)
     const body = await requireJsonBody<CommunityPurchaseQuotePreflightRequest>(c, "Invalid purchase quote preflight payload")
     const result = await preflightCommunityPurchaseQuote({
       env: c.env,
@@ -300,6 +302,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
 
   communities.post("/:communityId/purchase-quotes", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    await requireLiveCommunity(communityRepository, communityId)
     const body = await requireJsonBody<CommunityPurchaseQuoteRequest>(c, "Invalid purchase quote payload")
     const result = await createCommunityPurchaseQuote({
       env: c.env,
@@ -314,6 +317,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
 
   communities.post("/:communityId/purchase-settlements", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    await requireLiveCommunity(communityRepository, communityId)
     const body = await requireJsonBody<CommunityPurchaseSettlementRequest>(c, "Invalid purchase settlement payload")
     const result = await settleCommunityPurchase({
       env: c.env,

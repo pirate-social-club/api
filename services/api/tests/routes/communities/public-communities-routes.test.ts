@@ -219,4 +219,74 @@ describe("public community routes", () => {
     const restoredPreview = await app.request(`http://pirate.test/public-communities/${communityId}`, {}, ctx.env)
     expect(restoredPreview.status).toBe(200)
   })
+
+  test("archived community blocks purchases (authenticated + public) and live-room create", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "archived-blocks-writes-user")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Block Writes Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const cid = ((await json(create)) as { community: { id: string } }).community.id
+
+    const archive = await requestJson(`http://pirate.test/communities/${cid}/archive`, {}, ctx.env, session.accessToken)
+    expect(archive.status).toBe(200)
+
+    // Authenticated purchase quote — requireLiveCommunity fires before body parse.
+    const authQuote = await requestJson(`http://pirate.test/communities/${cid}/purchase-quotes`, {}, ctx.env, session.accessToken)
+    expect(authQuote.status).toBe(404)
+
+    // Public purchase quote — resolveCommunityRow 404s before body parse.
+    const pubQuote = await app.request(`http://pirate.test/public-communities/${cid}/purchase-quotes`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, ctx.env)
+    expect(pubQuote.status).toBe(404)
+
+    // Public purchase settlement — same guard.
+    const pubSettle = await app.request(`http://pirate.test/public-communities/${cid}/purchase-settlements`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, ctx.env)
+    expect(pubSettle.status).toBe(404)
+
+    // Live-room create — existing requireLiveCommunity guard (regression pin).
+    const liveRoom = await requestJson(`http://pirate.test/communities/${cid}/live-rooms`, {
+      title: "blocked", description: "blocked",
+    }, ctx.env, session.accessToken)
+    expect(liveRoom.status).toBe(404)
+  })
+
+  test("archived community blocks membership + listing writes (isCommunityLive surfaces)", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "archived-surfaces-owner")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Surfaces Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, owner.accessToken)
+    expect(create.status).toBe(202)
+    const cid = ((await json(create)) as { community: { id: string } }).community.id
+
+    expect((await requestJson(`http://pirate.test/communities/${cid}/archive`, {}, ctx.env, owner.accessToken)).status).toBe(200)
+
+    // Membership join/request — isCommunityLive in request-service/eligibility.
+    const joiner = await exchangeJwt(ctx.env, "archived-surfaces-joiner")
+    const join = await requestJson(`http://pirate.test/communities/${cid}/join`, { note: "hi" }, ctx.env, joiner.accessToken)
+    expect(join.status).toBe(404)
+
+    // Follow — isCommunityLive in follow-service.
+    const follow = await requestJson(`http://pirate.test/communities/${cid}/follow`, {}, ctx.env, joiner.accessToken)
+    expect(follow.status).toBe(404)
+
+    // Listing create — requireLiveCommunity guard from #64.
+    const listing = await requestJson(`http://pirate.test/communities/${cid}/listings`, {
+      title: "blocked", price_usd: 5,
+    }, ctx.env, owner.accessToken)
+    expect(listing.status).toBe(404)
+  })
 })
