@@ -4,6 +4,7 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { resolveBookingAvailability } from "../lib/communities/bookings/booking-availability-service"
 import { confirmBookingHold, quoteBookingHold } from "../lib/communities/bookings/booking-confirm-service"
 import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
+import { cancelBooking } from "../lib/communities/bookings/booking-lifecycle-service"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -122,5 +123,23 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       return c.json({ error: result.reason }, result.reason === "hold_not_found" ? 404 : 409)
     }
     return c.json({ booking: result.booking, already_confirmed: result.already }, result.already ? 200 : 201)
+  })
+
+  // Slice D: cancel a confirmed booking. The actor's role (host vs booker) is inferred and
+  // determines the refund policy; resolves the operator refund/payout, releases the slot lock.
+  communities.post("/:communityId/bookings/:bookingId/cancel", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await cancelBooking({
+      env: c.env,
+      communityRepository,
+      communityId,
+      bookingId: c.req.param("bookingId"),
+      actorUserId: actor.userId,
+      nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) {
+      return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
+    }
+    return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
   })
 }
