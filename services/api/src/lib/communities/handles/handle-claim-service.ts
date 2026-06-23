@@ -17,6 +17,7 @@ import type {
 import type { UserRepository } from "../../auth/repositories"
 import { HttpError, conflictError, badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
+import { withTransaction } from "../../transactions"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
@@ -899,8 +900,7 @@ export async function reserveCommunityHandleOnClient(
 
   const now = nowIso()
   const handleId = makeId("ch")
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         INSERT INTO community_handles (
@@ -925,13 +925,7 @@ export async function reserveCommunityHandleOnClient(
         now,
       ],
     })
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 
   // Readback AFTER commit — the buffered tx can't read the inserted row.
   const result = await client.execute({

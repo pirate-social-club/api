@@ -17,6 +17,7 @@ import type {
 import type { CommunityProvisioningMode } from "../community-repository-types"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
+import { withTransaction } from "../../transactions"
 import type { VerificationRepository } from "../../verification/verification-repository"
 import { createNamespaceVerificationTask, resolveNamespaceVerificationTask } from "../../notifications/notification-task-service"
 import type {
@@ -161,8 +162,7 @@ async function upsertLocalNamespaceAttachment(input: {
   const namespaceHandlePolicyId = `nhp_${input.communityId}`
 
   try {
-    const tx = await db.client.transaction("write")
-    try {
+    await withTransaction(db.client, "write", async (tx) => {
       await tx.execute({
         sql: `
           INSERT INTO namespace_bindings (
@@ -231,17 +231,7 @@ async function upsertLocalNamespaceAttachment(input: {
         ],
       })
 
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[community-provisioning] rollback failed while preparing namespace attach", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
   } finally {
     db.close()
   }
