@@ -5,6 +5,7 @@ import { resolveBookingAvailability } from "../lib/communities/bookings/booking-
 import { confirmBookingHold, quoteBookingHold } from "../lib/communities/bookings/booking-confirm-service"
 import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
 import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
+import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -174,5 +175,31 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ booking: result.booking, already_resolved: result.already }, 200)
+  })
+
+  // Slice D2/D3: attach to the booking's private 1:1 session (host/booker only). Mints an Agora
+  // token for the derived channel and opens an attendance session.
+  communities.post("/:communityId/bookings/:bookingId/session/attach", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await attachBookingSession({
+      env: c.env, communityRepository, communityId,
+      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
+    return c.json({ session_id: result.sessionId, party: result.party, channel: result.channel, agora: result.agora }, 200)
+  })
+
+  // Slice D3: liveness heartbeat for an attendance session (identity-bound to the session owner).
+  communities.post("/:communityId/bookings/:bookingId/session/heartbeat", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await c.req.json<{ session_id?: unknown }>().catch(() => null)
+    const sessionId = body && typeof body.session_id === "string" ? body.session_id : ""
+    if (!sessionId) return c.json({ error: "invalid_payload" }, 400)
+    const result = await heartbeatBookingSession({
+      env: c.env, communityRepository, communityId,
+      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(), sessionId,
+    })
+    if (!result.ok) return c.json({ error: result.reason }, 404)
+    return c.json({ ok: true }, 200)
   })
 }

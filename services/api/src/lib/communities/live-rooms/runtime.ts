@@ -92,7 +92,7 @@ function runtimeIdForRoom(room: Pick<LiveRoom, "community" | "id">): string {
   return `${room.community}:${room.id}`
 }
 
-function buildAgoraBlock(input: {
+export function buildAgoraBlock(input: {
   env: Env
   channel: string
   uid: number
