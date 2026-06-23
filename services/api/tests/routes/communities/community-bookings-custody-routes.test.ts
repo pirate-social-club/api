@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { createClient } from "@libsql/client"
 
-import { executeBookingOperatorEffect, setBookingOperatorUsdcTransferForTests } from "../../src/lib/communities/bookings/booking-custody-adapter"
-import { cancelBooking, completeBooking } from "../../src/lib/communities/bookings/booking-lifecycle-service"
-import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
-import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
-import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
-import { completeUniqueHumanVerification, exchangeJwt, requestJson } from "../routes/communities/community-routes-test-helpers"
+import { executeBookingOperatorEffect, setBookingOperatorUsdcTransferForTests } from "../../../src/lib/communities/bookings/booking-custody-adapter"
+import { cancelBooking, completeBooking } from "../../../src/lib/communities/bookings/booking-lifecycle-service"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { completeUniqueHumanVerification, exchangeJwt, requestJson } from "./community-routes-test-helpers"
 
 setDefaultTimeout(20_000)
 
