@@ -112,13 +112,14 @@ async function lockStatus(client: Client, bookingId: string): Promise<string | u
   return r.rows[0] ? String(r.rows[0].status) : undefined
 }
 
-async function postCancel(env: Ctx["env"], communityId: string, bookingId: string, token: string) {
+async function postAction(action: string, env: Ctx["env"], communityId: string, bookingId: string, token: string) {
   return app.request(
-    `http://pirate.test/communities/${communityId}/bookings/${bookingId}/cancel`,
+    `http://pirate.test/communities/${communityId}/bookings/${bookingId}/${action}`,
     { method: "POST", headers: { authorization: `Bearer ${token}` } },
     env,
   )
 }
+const postCancel = (env: Ctx["env"], communityId: string, bookingId: string, token: string) => postAction("cancel", env, communityId, bookingId, token)
 
 async function setup(): Promise<{ ctx: Ctx; communityId: string; host: { accessToken: string; userId: string }; booker: { accessToken: string; userId: string } }> {
   const ctx = await createRouteTestContext()
@@ -241,5 +242,105 @@ describe("community bookings — cancel lifecycle (Slice D)", () => {
     expect(body.booking.refund_tx_ref).toBe("op_prior_refund")
     expect(opEffects.length).toBe(0)
     expect(await lockStatus(ctx.client, "bkg_r")).toBe("released")
+  })
+})
+
+describe("community bookings — start session (Slice D)", () => {
+  test("either party starts: confirmed → live, no money", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_s1", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(2), slotEndUtc: hoursFromNow(2.5) })
+    const res = await postAction("start", ctx.env, communityId, "bkg_s1", booker.accessToken)
+    expect(res.status).toBe(200)
+    expect((await json(res) as { booking: { status: string } }).booking.status).toBe("live")
+    expect(opEffects.length).toBe(0)
+  })
+
+  test("non-party cannot start (404); starting a non-confirmed booking is 409", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_s2", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(2), slotEndUtc: hoursFromNow(2.5), status: "settled" })
+    const intruder = await exchangeJwt(ctx.env, "lifecycle-intruder")
+    await completeUniqueHumanVerification(ctx.env, intruder.accessToken)
+    await addCommunityMember(root, communityId, intruder.userId)
+    expect((await postAction("start", ctx.env, communityId, "bkg_s2", intruder.accessToken)).status).toBe(404)
+    expect((await postAction("start", ctx.env, communityId, "bkg_s2", host.accessToken)).status).toBe(409)
+  })
+})
+
+describe("community bookings — complete + payout (Slice D)", () => {
+  test("host completes a live session → settled, host paid retained 4500, no refund, lock released", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_c", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), status: "live" })
+    await seedActiveBookingLock(ctx.client, { lockId: "blk_c", hostUserId: host.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), communityId, bookingId: "bkg_c" })
+    const res = await postAction("complete", ctx.env, communityId, "bkg_c", host.accessToken)
+    expect(res.status).toBe(200)
+    const body = await json(res) as { booking: { status: string; refund_cents: number; payout_tx_ref: string } }
+    expect(body.booking.status).toBe("settled")
+    expect(body.booking.refund_cents).toBe(0)
+    expect(opEffects.map((e) => `${e.kind}:${e.amountCents}`)).toEqual(["payout:4500"])
+    expect(await lockStatus(ctx.client, "bkg_c")).toBe("released")
+  })
+
+  test("booker cannot complete (404); completing a non-live booking is 409", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_c2", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), status: "live" })
+    expect((await postAction("complete", ctx.env, communityId, "bkg_c2", booker.accessToken)).status).toBe(404)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_c3", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5) }) // confirmed, not live
+    expect((await postAction("complete", ctx.env, communityId, "bkg_c3", host.accessToken)).status).toBe(409)
+    expect(opEffects.length).toBe(0)
+  })
+
+  test("repeat complete is idempotent: payout runs once", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_c4", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), status: "live" })
+    await seedActiveBookingLock(ctx.client, { lockId: "blk_c4", hostUserId: host.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), communityId, bookingId: "bkg_c4" })
+    expect((await postAction("complete", ctx.env, communityId, "bkg_c4", host.accessToken)).status).toBe(200)
+    const second = await postAction("complete", ctx.env, communityId, "bkg_c4", host.accessToken)
+    expect((await json(second) as { already_settled: boolean }).already_settled).toBe(true)
+    expect(opEffects.length).toBe(1)
+  })
+})
+
+describe("community bookings — no-show (Slice D)", () => {
+  test("host reports booker no-show → settled, host paid 4500, no refund", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_n1", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), status: "live" })
+    await seedActiveBookingLock(ctx.client, { lockId: "blk_n1", hostUserId: host.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), communityId, bookingId: "bkg_n1" })
+    const res = await postAction("no-show", ctx.env, communityId, "bkg_n1", host.accessToken)
+    expect(res.status).toBe(200)
+    const body = await json(res) as { booking: { status: string; refund_cents: number } }
+    expect(body.booking.status).toBe("settled")
+    expect(body.booking.refund_cents).toBe(0)
+    expect(opEffects.map((e) => `${e.kind}:${e.amountCents}`)).toEqual(["payout:4500"])
+    expect(await lockStatus(ctx.client, "bkg_n1")).toBe("released")
+  })
+
+  test("booker reports host no-show → refunded, booker gets full refund 5000", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_n2", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), status: "live" })
+    await seedActiveBookingLock(ctx.client, { lockId: "blk_n2", hostUserId: host.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5), communityId, bookingId: "bkg_n2" })
+    const res = await postAction("no-show", ctx.env, communityId, "bkg_n2", booker.accessToken)
+    expect(res.status).toBe(200)
+    const body = await json(res) as { booking: { status: string; refund_cents: number } }
+    expect(body.booking.status).toBe("refunded")
+    expect(body.booking.refund_cents).toBe(5000)
+    expect(opEffects.map((e) => `${e.kind}:${e.amountCents}`)).toEqual(["refund:5000"])
+  })
+
+  test("non-party cannot report no-show (404); no-show on a non-live booking is 409", async () => {
+    const { ctx, communityId, host, booker } = await setup()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    await seedConfirmedBooking(root, communityId, { bookingId: "bkg_n3", hostUserId: host.userId, bookerUserId: booker.userId, slotStartUtc: hoursFromNow(1), slotEndUtc: hoursFromNow(1.5) }) // confirmed
+    const intruder = await exchangeJwt(ctx.env, "lifecycle-intruder")
+    await completeUniqueHumanVerification(ctx.env, intruder.accessToken)
+    await addCommunityMember(root, communityId, intruder.userId)
+    expect((await postAction("no-show", ctx.env, communityId, "bkg_n3", intruder.accessToken)).status).toBe(404)
+    expect((await postAction("no-show", ctx.env, communityId, "bkg_n3", host.accessToken)).status).toBe(409)
   })
 })

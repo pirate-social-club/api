@@ -4,7 +4,7 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { resolveBookingAvailability } from "../lib/communities/bookings/booking-availability-service"
 import { confirmBookingHold, quoteBookingHold } from "../lib/communities/bookings/booking-confirm-service"
 import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
-import { cancelBooking } from "../lib/communities/bookings/booking-lifecycle-service"
+import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -141,5 +141,38 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     }
     return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
+  })
+
+  // Slice D: start the 1:1 session (confirmed → live). Either party may start; no money moves.
+  communities.post("/:communityId/bookings/:bookingId/start", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await startBookingSession({
+      env: c.env, communityRepository, communityId,
+      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
+    return c.json({ booking: result.booking, already_live: result.already }, 200)
+  })
+
+  // Slice D: complete a live session (live → completed → settled); pays the host. Host-only.
+  communities.post("/:communityId/bookings/:bookingId/complete", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await completeBooking({
+      env: c.env, communityRepository, communityId,
+      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
+    return c.json({ booking: result.booking, already_settled: result.already }, 200)
+  })
+
+  // Slice D: report a no-show on a live booking. The actor reports the OTHER party absent.
+  communities.post("/:communityId/bookings/:bookingId/no-show", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await noShowBooking({
+      env: c.env, communityRepository, communityId,
+      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
+    return c.json({ booking: result.booking, already_resolved: result.already }, 200)
   })
 }

@@ -57,8 +57,8 @@ function lifecyclePolicy(platformFeeBps: number): BookingPolicy {
   }
 }
 
-// The host payout for a cancellation is whatever the platform retains after the refund, split
-// 90/10. Derived deterministically from the PERSISTED refund (not nowUtc), so retries are stable.
+// The host payout for a settlement is whatever the platform retains after the refund, split 90/10.
+// Derived deterministically from the PERSISTED refund (not nowUtc), so retries are stable.
 function retainedHostPayout(grossCents: number, refundCents: number, platformFeeBps: number): number {
   const allocation = computeAllocation(Math.max(0, grossCents - refundCents), lifecyclePolicy(platformFeeBps))
   return allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0
@@ -154,115 +154,227 @@ async function writeBooking(env: Env, repo: CommunityRepository, communityId: st
   }
 }
 
-type CancelBy = "host" | "booker"
+// --- Terminal settlement: every money-out path (cancel / complete / no-show) reserves a durable
+//     intent state, then runs idempotency-keyed custody effects, then finalizes. The maps below
+//     pin the per-intent timestamp (Phase A) and the finalize state/timestamp (Phase C). Column
+//     names come only from these whitelists — never from input — so the dynamic SET is injection-safe.
+const INTENT_AT: Record<string, "cancelled_at" | "completed_at" | null> = {
+  cancelled_by_host: "cancelled_at",
+  cancelled_by_booker: "cancelled_at",
+  completed: "completed_at",
+  no_show_host: null,
+  no_show_booker: null,
+}
+const FINALIZE: Record<string, { finalState: BookingState; finalAt: "settled_at" | null }> = {
+  cancelled_by_host: { finalState: "refunded", finalAt: null },
+  cancelled_by_booker: { finalState: "refunded", finalAt: null },
+  no_show_host: { finalState: "refunded", finalAt: null },
+  completed: { finalState: "settled", finalAt: "settled_at" },
+  no_show_booker: { finalState: "settled", finalAt: "settled_at" },
+}
+
+interface SettlementContext {
+  env: Env
+  communityRepository: CommunityRepository
+  communityId: string
+  nowUtc: string
+}
+
+// Reservation/outbox settlement: A) persist the refund decision + intent state (BEFORE money),
+// B) idempotency-keyed operator effects, C) finalize. Resumes when the booking is already in the
+// intent state (a prior attempt reserved but didn't finalize) — same keys, no double-spend.
+async function executeSettlement(
+  ctx: SettlementContext,
+  booking: BookingRow,
+  fromState: BookingState,
+  intentState: BookingState,
+  decidedRefundCents: number,
+): Promise<BookingLifecycleSnapshot> {
+  const needsReserve = booking.status === fromState
+  const refundCents = needsReserve ? decidedRefundCents : booking.refund_cents ?? 0
+
+  // --- Phase A (reserve): persist intent + refund decision, guarded on the from-state.
+  if (needsReserve) {
+    const intentAt = INTENT_AT[intentState]
+    const setClause = intentAt
+      ? `status = ?2, refund_cents = ?3, ${intentAt} = ?4, updated_at = ?4`
+      : `status = ?2, refund_cents = ?3, updated_at = ?4`
+    await writeBooking(ctx.env, ctx.communityRepository, ctx.communityId, {
+      sql: `UPDATE bookings SET ${setClause} WHERE booking_id = ?1 AND status = ?5`,
+      args: [booking.booking_id, intentState, refundCents, ctx.nowUtc, fromState],
+    })
+  }
+
+  // --- Phase B (execute): idempotency-keyed custody effects from the persisted refund decision.
+  const payoutCents = retainedHostPayout(booking.gross_cents, refundCents, booking.platform_fee_bps)
+  let refundTxRef: string | null = null
+  let payoutTxRef: string | null = null
+  if (refundCents > 0) {
+    refundTxRef = (await executeOperatorEffect(ctx.env, {
+      kind: "refund", toUserId: booking.booker_user_id, amountCents: refundCents,
+      bookingId: booking.booking_id, idempotencyKey: `booking_refund:${booking.booking_id}`,
+    })).txRef
+  }
+  if (payoutCents > 0) {
+    payoutTxRef = (await executeOperatorEffect(ctx.env, {
+      kind: "payout", toUserId: booking.host_user_id, amountCents: payoutCents,
+      bookingId: booking.booking_id, idempotencyKey: `booking_payout:${booking.booking_id}`,
+    })).txRef
+  }
+
+  // --- Phase C (finalize): intent → refunded/settled + tx refs.
+  const fin = FINALIZE[intentState]
+  const setClause = fin.finalAt
+    ? `status = ?2, refund_tx_ref = ?3, payout_tx_ref = ?4, ${fin.finalAt} = ?5, updated_at = ?5`
+    : `status = ?2, refund_tx_ref = ?3, payout_tx_ref = ?4, updated_at = ?5`
+  await writeBooking(ctx.env, ctx.communityRepository, ctx.communityId, {
+    sql: `UPDATE bookings SET ${setClause} WHERE booking_id = ?1`,
+    args: [booking.booking_id, fin.finalState, refundTxRef, payoutTxRef, ctx.nowUtc],
+  })
+
+  await releaseBookingLock(ctx.env, booking.booking_id, ctx.nowUtc)
+
+  return { booking_id: booking.booking_id, status: fin.finalState, refund_cents: refundCents, refund_tx_ref: refundTxRef, payout_tx_ref: payoutTxRef }
+}
+
 const CANCELLED_STATES = new Set<string>(["cancelled_by_host", "cancelled_by_booker"])
+const NO_SHOW_STATES = new Set<string>(["no_show_host", "no_show_booker"])
 
-export type CancelBookingResult =
-  | { ok: false; reason: "not_found" | "illegal_transition" }
-  | { ok: true; already: boolean; cancelledBy: CancelBy; booking: BookingLifecycleSnapshot }
-
-/**
- * Cancel a booking via a reservation/outbox flow so money never moves before durable state
- * records the intent:
- *   A) reserve   — confirmed → cancelled_by_* + persist the (nowUtc-dependent) refund decision
- *   B) execute   — idempotency-keyed operator refund/payout (retry-safe at the seam)
- *   C) finalize  — cancelled_by_* → refunded + record tx refs
- * A crash between B and C leaves the booking in cancelled_by_*; a retry resumes at B with the
- * same keys (no double-spend) and completes C.
- */
-export async function cancelBooking(input: {
+export interface LifecycleInput {
   env: Env
   communityRepository: CommunityRepository
   communityId: string
   bookingId: string
   actorUserId: string
   nowUtc: string
-}): Promise<CancelBookingResult> {
+}
+function ctxOf(input: LifecycleInput): SettlementContext {
+  return { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, nowUtc: input.nowUtc }
+}
+
+export type LifecycleResult =
+  | { ok: false; reason: "not_found" | "illegal_transition" }
+  | { ok: true; already: boolean; booking: BookingLifecycleSnapshot }
+
+type CancelBy = "host" | "booker"
+export type CancelBookingResult =
+  | { ok: false; reason: "not_found" | "illegal_transition" }
+  | { ok: true; already: boolean; cancelledBy: CancelBy; booking: BookingLifecycleSnapshot }
+
+/** Start the 1:1 session: confirmed → live. Either party may start; no money moves. */
+export async function startBookingSession(input: LifecycleInput): Promise<LifecycleResult> {
+  const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!booking) return { ok: false, reason: "not_found" }
+  if (booking.host_user_id !== input.actorUserId && booking.booker_user_id !== input.actorUserId) {
+    return { ok: false, reason: "not_found" }
+  }
+  if (booking.status === "live") {
+    return { ok: true, already: true, booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId) }
+  }
+  if (!canTransition(booking.status as BookingState, "SESSION_STARTED")) {
+    return { ok: false, reason: "illegal_transition" }
+  }
+  await writeBooking(input.env, input.communityRepository, input.communityId, {
+    sql: `UPDATE bookings SET status = 'live', updated_at = ?2 WHERE booking_id = ?1 AND status = 'confirmed'`,
+    args: [booking.booking_id, input.nowUtc],
+  })
+  return { ok: true, already: false, booking: { booking_id: booking.booking_id, status: "live", refund_cents: booking.refund_cents ?? 0, refund_tx_ref: null, payout_tx_ref: null } }
+}
+
+/**
+ * Cancel a confirmed booking. The actor's role (host vs booker) is inferred and sets the refund
+ * policy; settlement runs via the reservation/outbox flow.
+ */
+export async function cancelBooking(input: LifecycleInput): Promise<CancelBookingResult> {
   const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
   if (!booking) return { ok: false, reason: "not_found" }
 
-  // The actor's role determines the cancel policy. Only a party to the booking may cancel.
   let cancelBy: CancelBy
   if (booking.host_user_id === input.actorUserId) cancelBy = "host"
   else if (booking.booker_user_id === input.actorUserId) cancelBy = "booker"
   else return { ok: false, reason: "not_found" }
 
-  // Idempotent terminal state.
   if (booking.status === "refunded") {
     return { ok: true, already: true, cancelledBy: cancelBy, booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId) }
   }
 
-  // Decide the cancellation: resume from an already-reserved cancelled_by_* state, or compute the
-  // (nowUtc-dependent) refund from 'confirmed'. The reserve write happens below before any money.
-  let cancelledState: BookingState
+  let intentState: BookingState
   let refundCents: number
-  let needsReserve: boolean
   if (CANCELLED_STATES.has(booking.status)) {
-    cancelledState = booking.status as BookingState
+    intentState = booking.status as BookingState
     refundCents = booking.refund_cents ?? 0
-    needsReserve = false
   } else {
-    const cancelEvent = cancelBy === "host" ? "HOST_CANCELS" : "BOOKER_CANCELS"
-    if (!canTransition(booking.status as BookingState, cancelEvent)) {
-      return { ok: false, reason: "illegal_transition" }
-    }
-    cancelledState = applyTransition(booking.status as BookingState, cancelEvent)
+    const event = cancelBy === "host" ? "HOST_CANCELS" : "BOOKER_CANCELS"
+    if (!canTransition(booking.status as BookingState, event)) return { ok: false, reason: "illegal_transition" }
+    intentState = applyTransition(booking.status as BookingState, event)
     const policy = lifecyclePolicy(booking.platform_fee_bps)
-    const refund = resolveRefund({
-      state: cancelledState,
-      cancelledBy: cancelBy,
-      slotStartUtc: booking.slot_start_utc,
-      nowUtc: input.nowUtc,
-      policy,
-      allocation: computeAllocation(booking.gross_cents, policy),
-    })
-    refundCents = refund.refundCents
-    needsReserve = true
+    refundCents = resolveRefund({
+      state: intentState, cancelledBy: cancelBy, slotStartUtc: booking.slot_start_utc,
+      nowUtc: input.nowUtc, policy, allocation: computeAllocation(booking.gross_cents, policy),
+    }).refundCents
   }
 
-  const payoutCents = retainedHostPayout(booking.gross_cents, refundCents, booking.platform_fee_bps)
+  const settled = await executeSettlement(ctxOf(input), booking, "confirmed", intentState, refundCents)
+  return { ok: true, already: false, cancelledBy: cancelBy, booking: settled }
+}
 
-  // --- Phase A (reserve): persist the refund decision BEFORE any money moves, in its own
-  //     short-lived connection (no DB connection is held across the operator effect). Guarded on
-  //     status='confirmed' so a concurrent reserve can't double-apply.
-  if (needsReserve) {
-    await writeBooking(input.env, input.communityRepository, input.communityId, {
-      sql: `UPDATE bookings SET status = ?2, refund_cents = ?3, cancelled_at = ?4, updated_at = ?4
-            WHERE booking_id = ?1 AND status = 'confirmed'`,
-      args: [booking.booking_id, cancelledState, refundCents, input.nowUtc],
-    })
+/** Complete a live session: live → completed → settled, paying the host their retained share. */
+export async function completeBooking(input: LifecycleInput): Promise<LifecycleResult> {
+  const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!booking) return { ok: false, reason: "not_found" }
+  // Only the host attests delivery; a booker dispute is a separate path (DISPUTE_OPENED).
+  if (booking.host_user_id !== input.actorUserId) return { ok: false, reason: "not_found" }
+
+  if (booking.status === "settled") {
+    return { ok: true, already: true, booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId) }
+  }
+  let refundCents = booking.refund_cents ?? 0
+  if (booking.status !== "completed") {
+    if (!canTransition(booking.status as BookingState, "SESSION_ENDED")) return { ok: false, reason: "illegal_transition" }
+    const policy = lifecyclePolicy(booking.platform_fee_bps)
+    refundCents = resolveRefund({
+      state: "completed", cancelledBy: "system", slotStartUtc: booking.slot_start_utc,
+      nowUtc: input.nowUtc, policy, allocation: computeAllocation(booking.gross_cents, policy),
+    }).refundCents
   }
 
-  // --- Phase B (execute): idempotency-keyed custody effects from the persisted refund decision.
-  let refundTxRef: string | null = null
-  let payoutTxRef: string | null = null
-  if (refundCents > 0) {
-    refundTxRef = (await executeOperatorEffect(input.env, {
-      kind: "refund", toUserId: booking.booker_user_id, amountCents: refundCents,
-      bookingId: booking.booking_id, idempotencyKey: `booking_refund:${booking.booking_id}`,
-    })).txRef
-  }
-  if (payoutCents > 0) {
-    payoutTxRef = (await executeOperatorEffect(input.env, {
-      kind: "payout", toUserId: booking.host_user_id, amountCents: payoutCents,
-      bookingId: booking.booking_id, idempotencyKey: `booking_payout:${booking.booking_id}`,
-    })).txRef
+  const settled = await executeSettlement(ctxOf(input), booking, "live", "completed", refundCents)
+  return { ok: true, already: false, booking: settled }
+}
+
+/**
+ * Report a no-show on a live booking. The actor reports the OTHER party absent: host → booker
+ * no-show (host keeps payout); booker → host no-show (full refund to booker).
+ */
+export async function noShowBooking(input: LifecycleInput): Promise<LifecycleResult> {
+  const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!booking) return { ok: false, reason: "not_found" }
+
+  let event: "HOST_NO_SHOW" | "BOOKER_NO_SHOW"
+  if (booking.host_user_id === input.actorUserId) event = "BOOKER_NO_SHOW"
+  else if (booking.booker_user_id === input.actorUserId) event = "HOST_NO_SHOW"
+  else return { ok: false, reason: "not_found" }
+
+  // no_show_host → refunded, no_show_booker → settled: either terminal means already done.
+  if (booking.status === "refunded" || booking.status === "settled") {
+    return { ok: true, already: true, booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId) }
   }
 
-  // --- Phase C (finalize): cancelled_by_* → refunded + tx refs.
-  const finalState = applyTransition(cancelledState, "REFUND_EXECUTED")
-  await writeBooking(input.env, input.communityRepository, input.communityId, {
-    sql: `UPDATE bookings SET status = ?2, refund_tx_ref = ?3, payout_tx_ref = ?4, updated_at = ?5
-          WHERE booking_id = ?1`,
-    args: [booking.booking_id, finalState, refundTxRef, payoutTxRef, input.nowUtc],
-  })
-
-  await releaseBookingLock(input.env, booking.booking_id, input.nowUtc)
-
-  return {
-    ok: true,
-    already: false,
-    cancelledBy: cancelBy,
-    booking: { booking_id: booking.booking_id, status: finalState, refund_cents: refundCents, refund_tx_ref: refundTxRef, payout_tx_ref: payoutTxRef },
+  let intentState: BookingState
+  let refundCents: number
+  if (NO_SHOW_STATES.has(booking.status)) {
+    intentState = booking.status as BookingState
+    refundCents = booking.refund_cents ?? 0
+  } else {
+    if (!canTransition(booking.status as BookingState, event)) return { ok: false, reason: "illegal_transition" }
+    intentState = applyTransition(booking.status as BookingState, event)
+    const policy = lifecyclePolicy(booking.platform_fee_bps)
+    refundCents = resolveRefund({
+      state: intentState, cancelledBy: "system", slotStartUtc: booking.slot_start_utc,
+      nowUtc: input.nowUtc, policy, allocation: computeAllocation(booking.gross_cents, policy),
+    }).refundCents
   }
+
+  const settled = await executeSettlement(ctxOf(input), booking, "live", intentState, refundCents)
+  return { ok: true, already: false, booking: settled }
 }
