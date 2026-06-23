@@ -1,4 +1,5 @@
 import { badRequestError, providerUnavailable } from "../errors"
+import { trimEnv } from "../env-strings"
 import type { Env } from "../../env"
 import type { CreateSongArtifactBundleRequest } from "../../types"
 
@@ -73,10 +74,6 @@ function estimateWavDurationMs(bytes: Uint8Array): number | null {
 function getBunRuntime(): BunRuntime | null {
   const runtime = (globalThis as typeof globalThis & { Bun?: BunRuntime }).Bun
   return runtime && typeof runtime.spawn === "function" ? runtime : null
-}
-
-function trimEnvValue(value: string | undefined): string {
-  return String(value ?? "").trim()
 }
 
 function secondsFromMs(ms: number): string {
@@ -179,7 +176,7 @@ export async function cropAudioPreviewWithFfmpeg(input: {
   sourceMimeType: string
   previewWindow: SongPreviewWindow
 }): Promise<{ bytes: Uint8Array; durationMs: number | null }> {
-  if (trimEnvValue(input.env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
+  if (trimEnv(input.env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
     const durationMs = estimateWavDurationMs(input.sourceBytes)
     return {
       bytes: input.sourceBytes,
@@ -190,7 +187,7 @@ export async function cropAudioPreviewWithFfmpeg(input: {
   }
 
   void input.sourceMimeType
-  const ffmpegBin = trimEnvValue(input.env.SONG_PREVIEW_FFMPEG_BIN) || DEFAULT_FFMPEG_BIN
+  const ffmpegBin = trimEnv(input.env.SONG_PREVIEW_FFMPEG_BIN) || DEFAULT_FFMPEG_BIN
   const bytes = await cropAudioPreviewWithBunFfmpeg({
     ffmpegBin,
     sourceBytes: input.sourceBytes,

@@ -1,3 +1,5 @@
+import { trimEnv } from "./env-strings"
+
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 export type OpenRouterChatCompletionResponse = Record<string, unknown> & {
@@ -33,10 +35,6 @@ export type OpenRouterModel = {
 
 export type OpenRouterModelsResponse = {
   data?: OpenRouterModel[]
-}
-
-function trimEnv(value: string | null | undefined): string {
-  return String(value || "").trim()
 }
 
 export function firstTrimmedEnv(...values: Array<string | null | undefined>): string {

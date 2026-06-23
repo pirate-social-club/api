@@ -4,6 +4,7 @@ import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import { logVerificationDebug } from "./verification-logging"
 import { normalizeOrigin } from "./verification-shared"
+import { trimEnv } from "../env-strings"
 import type { Env } from "../../env"
 import type { VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
 import { unixSeconds } from "../../serializers/time"
@@ -80,10 +81,6 @@ type VeryVerifyResponse = {
 }
 
 let testOverride: VeryProvider | null = null
-
-function trimEnv(value: string | null | undefined): string {
-  return String(value || "").trim()
-}
 
 function isDevelopmentEnv(env: Env): boolean {
   return String(env.ENVIRONMENT || "").trim().toLowerCase() === "development"

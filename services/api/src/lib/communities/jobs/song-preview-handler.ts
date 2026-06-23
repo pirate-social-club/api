@@ -1,3 +1,4 @@
+import { trimEnv } from "../../env-strings"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
 import { updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
 import { providerUnavailable } from "../../errors"
@@ -33,12 +34,8 @@ export function setSongPreviewFailureUpdaterForTests(updater: SongPreviewFailure
   songPreviewFailureUpdater = updater ?? updateSongArtifactBundlePreview
 }
 
-function trimEnvValue(value: string | undefined): string {
-  return String(value ?? "").trim()
-}
-
 function positiveIntegerEnv(value: string | undefined, fallback: number): number {
-  const parsed = Number(trimEnvValue(value))
+  const parsed = Number(trimEnv(value))
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
@@ -47,7 +44,7 @@ function isLocalServiceHost(hostname: string): boolean {
 }
 
 function songPreviewServiceEndpoint(input: CommunityJobHandlerInput): string | null {
-  const configured = trimEnvValue(input.env.SONG_PREVIEW_SERVICE_URL)
+  const configured = trimEnv(input.env.SONG_PREVIEW_SERVICE_URL)
   if (!configured) return null
 
   let url: URL
@@ -72,7 +69,7 @@ function songPreviewServiceTimeoutMs(input: CommunityJobHandlerInput): number {
 }
 
 function canRunLocalFfmpegWorker(input: CommunityJobHandlerInput): boolean {
-  if (trimEnvValue(input.env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
+  if (trimEnv(input.env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
     return true
   }
   const runtime = (globalThis as typeof globalThis & { Bun?: BunRuntime }).Bun
@@ -110,7 +107,7 @@ async function runRemoteSongPreviewGenerate(
   endpoint: string | null,
   payload: SongPreviewGeneratePayload | null,
 ): Promise<string | null> {
-  const sharedSecret = trimEnvValue(input.env.SONG_PREVIEW_SHARED_SECRET)
+  const sharedSecret = trimEnv(input.env.SONG_PREVIEW_SHARED_SECRET)
   if (!sharedSecret) {
     throw providerUnavailable("Song preview service shared secret is not configured", {
       reason: "song_preview_service_secret_missing",
