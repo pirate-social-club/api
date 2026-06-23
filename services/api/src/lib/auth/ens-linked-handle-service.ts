@@ -238,7 +238,3 @@ export async function resolveVerifiedEnsProfile(env: Env, walletAddress: string)
     return null
   }
 }
-
-export async function resolveVerifiedEnsName(env: Env, walletAddress: string): Promise<string | null> {
-  return (await resolveVerifiedEnsProfile(env, walletAddress))?.name ?? null
-}

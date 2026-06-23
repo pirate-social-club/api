@@ -206,10 +206,6 @@ export function buildSongArtifactObjectKey(
   ].join("/")
 }
 
-export function buildFilebaseObjectUrl(origin: string, path: string): string {
-  return new URL(path, origin).toString()
-}
-
 export function buildIpfsGatewayUrl(env: Env, cid: string): string {
   const gateway = String(env.IPFS_GATEWAY_URL || "https://dweb.link/ipfs").trim()
   return `${gateway.replace(/\/+$/, "")}/${encodeURIComponent(cid)}`
