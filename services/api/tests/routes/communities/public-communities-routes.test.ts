@@ -219,4 +219,43 @@ describe("public community routes", () => {
     const restoredPreview = await app.request(`http://pirate.test/public-communities/${communityId}`, {}, ctx.env)
     expect(restoredPreview.status).toBe(200)
   })
+
+  test("archived community blocks purchases (authenticated + public) and live-room create", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "archived-blocks-writes-user")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Block Writes Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const cid = ((await json(create)) as { community: { id: string } }).community.id
+
+    const archive = await requestJson(`http://pirate.test/communities/${cid}/archive`, {}, ctx.env, session.accessToken)
+    expect(archive.status).toBe(200)
+
+    // Authenticated purchase quote — requireLiveCommunity fires before body parse.
+    const authQuote = await requestJson(`http://pirate.test/communities/${cid}/purchase-quotes`, {}, ctx.env, session.accessToken)
+    expect(authQuote.status).toBe(404)
+
+    // Public purchase quote — resolveCommunityRow 404s before body parse.
+    const pubQuote = await app.request(`http://pirate.test/public-communities/${cid}/purchase-quotes`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, ctx.env)
+    expect(pubQuote.status).toBe(404)
+
+    // Public purchase settlement — same guard.
+    const pubSettle = await app.request(`http://pirate.test/public-communities/${cid}/purchase-settlements`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }, ctx.env)
+    expect(pubSettle.status).toBe(404)
+
+    // Live-room create — existing requireLiveCommunity guard (regression pin).
+    const liveRoom = await requestJson(`http://pirate.test/communities/${cid}/live-rooms`, {
+      title: "blocked", description: "blocked",
+    }, ctx.env, session.accessToken)
+    expect(liveRoom.status).toBe(404)
+  })
 })

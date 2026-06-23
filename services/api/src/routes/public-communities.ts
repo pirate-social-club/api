@@ -399,7 +399,8 @@ function requirePublicLiveRoomViewerRenewBody(value: unknown): LiveRoomViewerRen
 
 publicCommunities.post("/:communityId/purchase-quotes", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
-  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  // resolveCommunityRow 404s archived/non-active communities — block purchases after archive.
+  const communityId = (await resolveCommunityRow(communityRepository, c.req.param("communityId"))).community_id
   const body = requirePublicPurchaseQuoteBody(await c.req.json().catch(() => null))
   const buyer = verifyPublicPurchaseQuoteWalletProof({
     communityId,
@@ -450,7 +451,8 @@ publicCommunities.get("/:communityId/assets/:assetId/content", async (c) => {
 
 publicCommunities.post("/:communityId/purchase-settlements", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
-  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  // resolveCommunityRow 404s archived/non-active communities — block settlements after archive.
+  const communityId = (await resolveCommunityRow(communityRepository, c.req.param("communityId"))).community_id
   const body = requirePublicPurchaseSettlementBody(await c.req.json().catch(() => null))
   const result = await settlePublicCommunityPurchase({
     env: c.env,
