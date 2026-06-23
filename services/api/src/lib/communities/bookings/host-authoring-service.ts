@@ -1,5 +1,6 @@
 import { asNumber, parseJsonArray } from "./booking-shared-helpers"
 import type { Env } from "../../../env"
+import { parseExpectedEvmAddress } from "../../evm-signer"
 import { getControlPlaneClient } from "../../runtime-deps"
 import {
   MAX_AVAILABILITY_EXCEPTIONS_PER_HOST,
@@ -45,7 +46,7 @@ export async function getBookingProfile(
   const result = await cp.execute({
     sql: `SELECT host_user_id, display_headline, bio, topics_json, intro_video_ref,
                  host_timezone, base_price_cents, default_slot_duration_seconds,
-                 platform_fee_bps, is_published, created_at, updated_at
+                 platform_fee_bps, payout_wallet_address, is_published, created_at, updated_at
           FROM booking_profiles WHERE host_user_id = ?1`,
     args: [hostUserId],
   })
@@ -55,11 +56,26 @@ export async function getBookingProfile(
 export async function upsertBookingProfile(
   env: Env,
   hostUserId: string,
-  input: BookingProfileInput,
+  input: BookingProfileInput & { payout_wallet_address?: string | null },
 ): Promise<ServiceResult<{ created: boolean; profile: ProfileRow }>> {
   const errors = validateBookingProfileInput(input)
   if (errors.length > 0) {
     return { ok: false, reason: "validation_failed", fields: errors }
+  }
+
+  // Optional payout wallet: normalize/validate as an EVM address; empty string or null clears it.
+  // undefined = not part of this update.
+  let payoutWallet: string | null | undefined
+  if (input.payout_wallet_address !== undefined) {
+    if (input.payout_wallet_address === null || input.payout_wallet_address === "") {
+      payoutWallet = null
+    } else {
+      const parsed = parseExpectedEvmAddress(input.payout_wallet_address)
+      if (!parsed) {
+        return { ok: false, reason: "validation_failed", fields: [{ field: "payout_wallet_address", reason: "must be a valid EVM address" }] }
+      }
+      payoutWallet = parsed
+    }
   }
 
   const existing = await getBookingProfile(env, hostUserId)
@@ -82,8 +98,8 @@ export async function upsertBookingProfile(
       sql: `INSERT INTO booking_profiles (
               host_user_id, display_headline, bio, topics_json, intro_video_ref,
               host_timezone, base_price_cents, default_slot_duration_seconds,
-              platform_fee_bps, is_published, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, false, ?10, ?10)`,
+              platform_fee_bps, payout_wallet_address, is_published, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, false, ?11, ?11)`,
       args: [
         hostUserId,
         input.display_headline ?? null,
@@ -94,6 +110,7 @@ export async function upsertBookingProfile(
         input.base_price_cents,
         input.default_slot_duration_seconds,
         input.platform_fee_bps ?? 1000,
+        payoutWallet ?? null,
         now,
       ],
     })
@@ -138,6 +155,10 @@ export async function upsertBookingProfile(
     sets.push(`platform_fee_bps = ?${idx++}`)
     args.push(input.platform_fee_bps)
   }
+  if (payoutWallet !== undefined) {
+    sets.push(`payout_wallet_address = ?${idx++}`)
+    args.push(payoutWallet)
+  }
 
   sets.push(`updated_at = ?${idx++}`)
   args.push(now)
@@ -160,6 +181,13 @@ export async function setProfilePublished(
 ): Promise<ServiceResult<ProfileRow>> {
   const cp = getControlPlaneClient(env)
   const now = nowIso()
+  if (published) {
+    // A profile cannot go bookable without a payout destination — every booking must have a place
+    // to settle the host. Mirrored by the confirm-time guard (defense in depth).
+    const profile = await getBookingProfile(env, hostUserId)
+    if (!profile) return { ok: false, reason: "profile_not_found" }
+    if (!profile.payout_wallet_address) return { ok: false, reason: "payout_wallet_required" }
+  }
   const result = await cp.execute({
     sql: `UPDATE booking_profiles SET is_published = ?2, updated_at = ?3
           WHERE host_user_id = ?1`,

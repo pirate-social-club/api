@@ -33,7 +33,7 @@ hostBookings.use("/me/*", authenticateAdminOrUser)
 
 function errStatus(reason: string): 400 | 404 | 409 {
   if (reason === "not_found") return 404
-  if (reason === "limit_exceeded" || reason === "profile_not_found") return 409
+  if (reason === "limit_exceeded" || reason === "profile_not_found" || reason === "payout_wallet_required") return 409
   return 400
 }
 
@@ -57,6 +57,7 @@ hostBookings.post("/me/profile", async (c) => {
     topics?: unknown
     intro_video_ref?: unknown
     platform_fee_bps?: unknown
+    payout_wallet_address?: unknown
   }>().catch(() => null)
   if (!body || typeof body !== "object") {
     return c.json({ error: "invalid_payload" }, 400)
@@ -71,8 +72,9 @@ hostBookings.post("/me/profile", async (c) => {
   if (body.topics !== undefined) input.topics = body.topics
   if (body.intro_video_ref !== undefined) input.intro_video_ref = body.intro_video_ref
   if (body.platform_fee_bps !== undefined) input.platform_fee_bps = body.platform_fee_bps
+  if (body.payout_wallet_address !== undefined) input.payout_wallet_address = body.payout_wallet_address
 
-  const result = await upsertBookingProfile(c.env, actor.userId, input)
+  const result = await upsertBookingProfile(c.env, actor.userId, input as Parameters<typeof upsertBookingProfile>[2])
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
