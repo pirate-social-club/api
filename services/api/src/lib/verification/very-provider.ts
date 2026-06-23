@@ -3,6 +3,7 @@ import { internalError, providerUnavailable } from "../errors"
 import { envFlag, makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import { logVerificationDebug } from "./verification-logging"
+import { normalizeOrigin } from "./verification-shared"
 import type { Env } from "../../env"
 import type { VerificationIntent, VerySessionBinding, VeryWidgetLaunch } from "../../types"
 import { unixSeconds } from "../../serializers/time"
@@ -255,18 +256,6 @@ export async function proxyVeryBridgeRequest(input: {
     }
   } finally {
     clearTimeout(timeout)
-  }
-}
-
-function normalizeOrigin(value: string | null | undefined): string | null {
-  const trimmed = trimEnv(value)
-  if (!trimmed) {
-    return null
-  }
-  try {
-    return new URL(trimmed).origin
-  } catch {
-    return null
   }
 }
 
