@@ -3,6 +3,7 @@ import { sha256Hex } from "../crypto"
 import { executeFirst } from "../db-helpers"
 import { authError, badRequestError, conflictError, notFoundError, providerUnavailable } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { getProfileRepository, getSessionRepository, getUserRepository } from "../auth/repositories"
 import { mintPirateAccessToken } from "../auth/pirate-session-token"
 import { getCommunityRepository } from "../communities/db-community-repository"
@@ -227,8 +228,7 @@ export async function createTelegramOnboardingIntent(input: {
   const expiresAt = new Date(Date.now() + TELEGRAM_ONBOARDING_TTL_MS).toISOString()
   const intentId = makeId("toi")
   const client = getControlPlaneClient(input.env)
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await expirePendingOnboardingIntents(tx, now)
     await cancelSupersededOnboardingIntents({
       client: tx,
@@ -265,13 +265,7 @@ export async function createTelegramOnboardingIntent(input: {
         now,
       ],
     })
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 
   return serializeIntentResource({
     env: input.env,
@@ -379,8 +373,7 @@ async function upsertTelegramAccount(input: {
   userId: string
 }): Promise<void> {
   const now = nowIso()
-  const tx = await input.client.transaction("write")
-  try {
+  await withTransaction(input.client, "write", async (tx) => {
     await tx.execute({
       sql: `
         DELETE FROM telegram_accounts
@@ -409,13 +402,7 @@ async function upsertTelegramAccount(input: {
         now,
       ],
     })
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 async function updateJoinGrantUser(input: {

@@ -5,6 +5,7 @@ import type { UserRepository } from "../../auth/repositories"
 import { executeFirst } from "../../db-helpers"
 import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
+import { withTransaction } from "../../transactions"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import { requireLiveCommunity } from "../community-status"
 import { enqueueCommunityJob } from "../jobs/store"
@@ -408,26 +409,14 @@ export async function createLiveRoom(input: {
       body: input.body,
       userRepository: input.userRepository,
     })
-    const tx = await db.client.transaction("write")
-    let created: Awaited<ReturnType<typeof createLiveRoomInTransaction>> | null = null
-    try {
-      created = await createLiveRoomInTransaction({
+    const created = await withTransaction(db.client, "write", async (tx) => {
+      return await createLiveRoomInTransaction({
         tx,
         userId: input.userId,
         communityId: input.communityId,
         prepared,
       })
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[live-rooms] rollback failed while creating live room", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
     if (!created) {
       throw notFoundError("Live room not found")
     }
@@ -493,28 +482,17 @@ export async function publishLiveRoom(input: {
       client: db.client,
       liveRoomTarget: "create-in-tx",
     })
-    const tx = await db.client.transaction("write")
-    let created: Awaited<ReturnType<typeof createLiveRoomInTransaction>> | null = null
-    try {
-      created = await createLiveRoomInTransaction({
+    const created = await withTransaction(db.client, "write", async (tx) => {
+      const createdRoom = await createLiveRoomInTransaction({
         tx,
         userId: input.userId,
         communityId: input.communityId,
         prepared,
       })
       // Write-only: insert the live room (above) and the listing as one atomic batch.
-      await insertCommunityListingRow(tx, input.communityId, preparedListing, created.liveRoomId)
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[live-rooms] rollback failed while publishing live room", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+      await insertCommunityListingRow(tx, input.communityId, preparedListing, createdRoom.liveRoomId)
+      return createdRoom
+    })
     if (!created) {
       throw notFoundError("Live room not found")
     }
@@ -946,8 +924,7 @@ export async function cancelLiveRoom(input: {
       throw conflictError("Live room cannot be canceled after it is live")
     }
     const now = nowIso()
-    const tx = await db.client.transaction("write")
-    try {
+    await withTransaction(db.client, "write", async (tx) => {
       await tx.execute({
         sql: `
           UPDATE live_rooms
@@ -962,17 +939,7 @@ export async function cancelLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[live-rooms] rollback failed while canceling live room", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
     // Hydrate AFTER commit — the buffered write tx can't read the room back.
     return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {
@@ -1096,8 +1063,7 @@ export async function endLiveRoom(input: {
       room,
     })
     const now = nowIso()
-    const tx = await db.client.transaction("write")
-    try {
+    await withTransaction(db.client, "write", async (tx) => {
       await tx.execute({
         sql: `
           UPDATE live_rooms
@@ -1124,17 +1090,7 @@ export async function endLiveRoom(input: {
         communityId: input.communityId,
         liveRoomId: input.liveRoomId,
       })
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[live-rooms] rollback failed while ending live room", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
     // Hydrate AFTER commit — the buffered write tx can't read the room back.
     return serializeLiveRoom(await getHydratedLiveRoom(db.client, input.communityId, input.liveRoomId))
   } finally {

@@ -1,5 +1,6 @@
 import type { Client } from "../../sql-client"
 import { internalError } from "../../errors"
+import { withTransaction } from "../../transactions"
 import { auditEventInsert } from "../../audit"
 import {
   getCommunityRowById,
@@ -372,9 +373,7 @@ export async function persistProvisionedCommunityDatabaseAccess(
     updatedAt: string
   },
 ): Promise<void> {
-  const tx = await client.transaction("write")
-
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -439,18 +438,7 @@ export async function persistProvisionedCommunityDatabaseAccess(
         ],
       },
     ])
-
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-provisioning] rollback failed while persisting provisioned database access", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 /**
@@ -518,9 +506,7 @@ export async function markCommunityProvisioningFailed(
     metadata: Record<string, unknown>
   },
 ): Promise<void> {
-  const tx = await client.transaction("write")
-
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -552,16 +538,5 @@ export async function markCommunityProvisioningFailed(
         metadata: input.metadata,
       }),
     ])
-
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-provisioning] rollback failed while marking provisioning failed", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }

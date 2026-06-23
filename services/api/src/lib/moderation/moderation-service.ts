@@ -8,6 +8,7 @@ import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { logPipelineInfo } from "../observability/pipeline-log"
 import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
 import { getPostById } from "../posts/community-post-query-store"
@@ -169,8 +170,7 @@ export async function reportPost(input: {
       communityId: input.communityId,
       target: { postId: input.postId },
     })
-    const tx = await db.client.transaction("write")
-    try {
+    return await withTransaction(db.client, "write", async (tx) => {
       let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
@@ -189,7 +189,7 @@ export async function reportPost(input: {
           now,
         })
       }
-      const created = await createUserReport({
+      return await createUserReport({
         executor: tx,
         communityId: input.communityId,
         moderationCaseId: moderationCase.moderation_case_id,
@@ -198,18 +198,7 @@ export async function reportPost(input: {
         body: input.body,
         now,
       })
-      await tx.commit()
-      return created
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[moderation] rollback failed while creating moderation case", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
   } finally {
     db.close()
   }
@@ -253,8 +242,7 @@ export async function reportComment(input: {
       communityId: input.communityId,
       target: { commentId: input.commentId },
     })
-    const tx = await db.client.transaction("write")
-    try {
+    return await withTransaction(db.client, "write", async (tx) => {
       let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
@@ -273,7 +261,7 @@ export async function reportComment(input: {
           now,
         })
       }
-      const created = await createUserReport({
+      return await createUserReport({
         executor: tx,
         communityId: input.communityId,
         moderationCaseId: moderationCase.moderation_case_id,
@@ -282,18 +270,7 @@ export async function reportComment(input: {
         body: input.body,
         now,
       })
-      await tx.commit()
-      return created
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[moderation] rollback failed while updating moderation case", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
   } finally {
     db.close()
   }
@@ -516,8 +493,7 @@ export async function resolveModerationCaseWithAction(input: {
       now,
     })
     const mutation = plan.mutation
-    const tx = await db.client.transaction("write")
-    try {
+    await withTransaction(db.client, "write", async (tx) => {
       await plan.applyWrites(tx)
       await createModerationAction({
         executor: tx,
@@ -535,17 +511,7 @@ export async function resolveModerationCaseWithAction(input: {
         moderationCaseId: caseRow.moderation_case_id,
         now,
       })
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[moderation] rollback failed while applying moderation decision", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
 
     if (caseRow.post_id && mutation?.nextStatus) {
       const nextStatus = mutation.nextStatus as "draft" | "published" | "hidden" | "removed" | "deleted"

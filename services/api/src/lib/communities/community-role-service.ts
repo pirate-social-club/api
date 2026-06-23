@@ -6,6 +6,7 @@ import type {
 } from "./db-community-repository"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { writeAuditEventForEnv } from "../audit"
 import type { Client } from "../sql-client"
 import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
@@ -190,8 +191,7 @@ export async function grantCommunityRoleOnClient(
     return false
   }
 
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         INSERT INTO community_roles (
@@ -204,14 +204,8 @@ export async function grantCommunityRoleOnClient(
       `,
       args: [makeId("rol"), input.communityId, input.targetUserId, input.role, input.grantedByUserId, input.now],
     })
-    await tx.commit()
-    return true
-  } catch (error) {
-    await tx.rollback().catch((rollbackError) => {
-      console.error("[community-roles] rollback failed while assigning community role", rollbackError)
-    })
-    throw error
-  }
+  })
+  return true
 }
 
 /**
@@ -227,8 +221,7 @@ export async function revokeCommunityRoleOnClient(
     return false
   }
 
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         UPDATE community_roles
@@ -242,14 +235,8 @@ export async function revokeCommunityRoleOnClient(
       `,
       args: [input.communityId, input.targetUserId, input.role, input.now],
     })
-    await tx.commit()
-    return true
-  } catch (error) {
-    await tx.rollback().catch((rollbackError) => {
-      console.error("[community-roles] rollback failed while revoking community role", rollbackError)
-    })
-    throw error
-  }
+  })
+  return true
 }
 
 export async function grantCommunityRole(input: {
