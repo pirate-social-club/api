@@ -12,12 +12,14 @@ export interface AttendanceConfig {
   staleMs: number // a gap longer than this ends a presence interval
   minOverlapMs: number // absolute floor for "completed" overlap
   overlapSlotFraction: number // fraction-of-slot floor for "completed" overlap
+  minSoloAttendanceMs: number // sustained in-window presence required to count as "attended"
 }
 
 export const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
   staleMs: 90_000, // heartbeats every 30s; 3 missed = stale
   minOverlapMs: 10 * 60_000, // 10 minutes
   overlapSlotFraction: 0.5, // or 50% of the slot, whichever is smaller
+  minSoloAttendanceMs: 60_000, // a single attach is not attendance — require ~1 min of real presence
 }
 
 export interface AttendanceEvaluation {
@@ -56,11 +58,10 @@ function presenceIntervals(samplesUtc: string[], staleMs: number, lo: number, hi
     .filter(([a, b]) => b > a)
 }
 
-function anyInWindow(samplesUtc: string[], lo: number, hi: number): boolean {
-  return samplesUtc.some((s) => {
-    const t = Date.parse(s)
-    return !Number.isNaN(t) && t >= lo && t <= hi
-  })
+function longestIntervalMs(intervals: Interval[]): number {
+  let max = 0
+  for (const [a, b] of intervals) max = Math.max(max, b - a)
+  return max
 }
 
 function overlapDurationMs(a: Interval[], b: Interval[]): number {
@@ -88,12 +89,14 @@ export function evaluateAttendance(input: {
   const slotMs = Math.max(0, hi - lo)
   const requiredOverlapMs = Math.min(config.minOverlapMs, Math.floor(slotMs * config.overlapSlotFraction))
 
-  const hostAttended = anyInWindow(input.hostSamplesUtc, lo, hi)
-  const bookerAttended = anyInWindow(input.bookerSamplesUtc, lo, hi)
-  const overlapMs = overlapDurationMs(
-    presenceIntervals(input.hostSamplesUtc, config.staleMs, lo, hi),
-    presenceIntervals(input.bookerSamplesUtc, config.staleMs, lo, hi),
-  )
+  // "Attended" requires SUSTAINED in-window presence, not a single sample — a lone attach (or a
+  // sample exactly at slotEnd) must not be enough to charge an absent counterparty. Presence is
+  // already clipped to the slot window, so early attaches and the slotEnd instant carry no duration.
+  const hostIntervals = presenceIntervals(input.hostSamplesUtc, config.staleMs, lo, hi)
+  const bookerIntervals = presenceIntervals(input.bookerSamplesUtc, config.staleMs, lo, hi)
+  const hostAttended = longestIntervalMs(hostIntervals) >= config.minSoloAttendanceMs
+  const bookerAttended = longestIntervalMs(bookerIntervals) >= config.minSoloAttendanceMs
+  const overlapMs = overlapDurationMs(hostIntervals, bookerIntervals)
 
   let outcome: AttendanceOutcome
   if (overlapMs >= requiredOverlapMs && requiredOverlapMs > 0) {

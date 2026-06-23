@@ -79,6 +79,48 @@ describe("evaluateAttendance — rule 1: clip to slot window", () => {
   })
 })
 
+describe("evaluateAttendance — solo no-show requires sustained presence", () => {
+  test("a single attach sample does not prove the counterparty no-showed", () => {
+    const r = evaluateAttendance({
+      hostSamplesUtc: ["2026-06-23T10:00:00.000Z"], // one attach, no heartbeats → no real presence
+      bookerSamplesUtc: [],
+      slotStartUtc: SLOT_START, slotEndUtc: SLOT_END,
+    })
+    expect(r.hostAttended).toBe(false)
+    expect(r.outcome).toBe("ambiguous") // NOT no_show_booker → no host payout
+  })
+
+  test("a sample exactly at slot_end does not count (half-open window)", () => {
+    const r = evaluateAttendance({
+      hostSamplesUtc: ["2026-06-23T11:00:00.000Z"], // exactly slotEnd
+      bookerSamplesUtc: [],
+      slotStartUtc: SLOT_START, slotEndUtc: SLOT_END,
+    })
+    expect(r.hostAttended).toBe(false)
+    expect(r.outcome).toBe("ambiguous")
+  })
+
+  test("sub-minute presence is not attendance", () => {
+    const r = evaluateAttendance({
+      hostSamplesUtc: ["2026-06-23T10:00:00.000Z", "2026-06-23T10:00:30.000Z"], // 30s < minSolo 60s
+      bookerSamplesUtc: [],
+      slotStartUtc: SLOT_START, slotEndUtc: SLOT_END,
+    })
+    expect(r.hostAttended).toBe(false)
+    expect(r.outcome).toBe("ambiguous")
+  })
+
+  test("sustained presence (>= 1 min) with an absent counterparty IS a no-show", () => {
+    const r = evaluateAttendance({
+      hostSamplesUtc: ["2026-06-23T10:00:00.000Z", "2026-06-23T10:00:30.000Z", "2026-06-23T10:01:00.000Z", "2026-06-23T10:01:30.000Z"],
+      bookerSamplesUtc: [],
+      slotStartUtc: SLOT_START, slotEndUtc: SLOT_END,
+    })
+    expect(r.hostAttended).toBe(true)
+    expect(r.outcome).toBe("no_show_booker")
+  })
+})
+
 describe("evaluateAttendance — rule 2: stale-gap splits presence (no fake overlap)", () => {
   test("a long silent gap does not bridge into continuous overlap", () => {
     // Booker present the whole hour; host present only 0-3min then 57-60min with a 54-min silent gap.
