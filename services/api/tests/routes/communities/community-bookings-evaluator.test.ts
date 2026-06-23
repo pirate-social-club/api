@@ -21,7 +21,7 @@ beforeEach(() => {
   resetRuntimeCaches()
   opEffects = []
   const ledger = new Map<string, string>()
-  setBookingOperatorEffectExecutorForTests(async (_env, effect) => {
+  setBookingOperatorEffectExecutorForTests(async (_ctx, effect) => {
     const existing = ledger.get(effect.idempotencyKey)
     if (existing) return { txRef: existing }
     const txRef = `op_${effect.idempotencyKey}`
@@ -57,8 +57,10 @@ async function seedBookingWithAttendance(root: string, communityId: string, opts
     const now = new Date().toISOString()
     await c.execute({
       sql: `INSERT INTO bookings (booking_id, community_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
-              gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status, funding_tx_ref, created_at, updated_at)
-            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 5000, 1000, 500, 4500, 'confirmed', '0xfunded', ?7, ?7)`,
+              gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status, funding_tx_ref,
+              funding_wallet_address, host_payout_wallet_address, created_at, updated_at)
+            VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 5000, 1000, 500, 4500, 'confirmed', '0xfunded',
+              '0x0000000000000000000000000000000000000b0c', '0x0000000000000000000000000000000000000a11', ?7, ?7)`,
       args: [opts.bookingId, communityId, opts.hostUserId, opts.bookerUserId, SLOT_START, SLOT_END, now],
     })
     // 16 minute-spaced samples 10:00..10:15 → continuous presence (<=90s apart), overlap 15min.

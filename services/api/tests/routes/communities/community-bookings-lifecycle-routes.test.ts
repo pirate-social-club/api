@@ -24,7 +24,7 @@ beforeEach(() => {
   executedKeys = new Map()
   // An idempotent custody adapter: a repeated idempotencyKey returns the existing tx rather than
   // transferring again — so a retry after a crash never double-spends.
-  setBookingOperatorEffectExecutorForTests(async (_env, effect) => {
+  setBookingOperatorEffectExecutorForTests(async (_ctx, effect) => {
     const existing = executedKeys.get(effect.idempotencyKey)
     if (existing) return { txRef: existing }
     const txRef = `op_${effect.idempotencyKey}`
@@ -63,8 +63,9 @@ async function seedConfirmedBooking(communityDbRoot: string, communityId: string
       sql: `INSERT INTO bookings (
               booking_id, community_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
               gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status, refund_cents,
-              funding_tx_ref, created_at, updated_at
-            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 5000, 1000, 500, 4500, ?7, ?8, '0xfunded', ?9, ?9)`,
+              funding_tx_ref, funding_wallet_address, host_payout_wallet_address, created_at, updated_at
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 5000, 1000, 500, 4500, ?7, ?8,
+              '0xfunded', '0x0000000000000000000000000000000000000b0c', '0x0000000000000000000000000000000000000a11', ?9, ?9)`,
       args: [opts.bookingId, communityId, opts.hostUserId, opts.bookerUserId, opts.slotStartUtc, opts.slotEndUtc, opts.status ?? "confirmed", opts.refundCents ?? null, now],
     })
   } finally {
