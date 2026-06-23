@@ -38,9 +38,7 @@ export async function createCommunityProvisioningRequest(
   binding: CommunityDatabaseBindingRow
   job: JobRow
 }> {
-  const tx = await client.transaction("write")
-
-  try {
+  return await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         INSERT INTO communities (
@@ -129,18 +127,8 @@ export async function createCommunityProvisioningRequest(
       throw internalError("Community provisioning request rows are missing after insert")
     }
 
-    await tx.commit()
     return { community: communityRow, binding: bindingRow, job: jobRow }
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-provisioning] rollback failed while creating provisioning request", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function retryCommunityProvisioningRequest(
@@ -159,9 +147,7 @@ export async function retryCommunityProvisioningRequest(
   binding: CommunityDatabaseBindingRow
   job: JobRow
 }> {
-  const tx = await client.transaction("write")
-
-  try {
+  return await withTransaction(client, "write", async (tx) => {
     const communityRow = await getCommunityRowById(tx, input.communityId)
     if (!communityRow) {
       throw internalError("Community row is missing for retry")
@@ -253,18 +239,8 @@ export async function retryCommunityProvisioningRequest(
       throw internalError("Community provisioning retry rows are missing after insert")
     }
 
-    await tx.commit()
     return { community: refreshedCommunityRow, binding: bindingRow, job: jobRow }
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-provisioning] rollback failed while retrying provisioning request", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function markCommunityProvisioningSucceeded(
@@ -285,9 +261,7 @@ export async function markCommunityProvisioningSucceeded(
   community: CommunityRow
   job: JobRow
 }> {
-  const tx = await client.transaction("write")
-
-  try {
+  return await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -339,18 +313,8 @@ export async function markCommunityProvisioningSucceeded(
       throw internalError("Provisioning success rows are missing after update")
     }
 
-    await tx.commit()
     return { community: communityRow, job: jobRow }
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-provisioning] rollback failed while marking provisioning succeeded", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function persistProvisionedCommunityDatabaseAccess(
