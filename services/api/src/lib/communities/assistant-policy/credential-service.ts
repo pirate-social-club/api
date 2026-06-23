@@ -4,6 +4,7 @@ import { executeFirst } from "../../db-helpers"
 import { makeId, nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
+import { withTransaction } from "../../transactions"
 import { resolveCommunityDbWrapKey, resolveCommunityDbWrapKeyVersion } from "../create/repository"
 import type {
   AssistantElevenLabsKeyStatus,
@@ -263,8 +264,7 @@ export async function saveCommunityAssistantCredential(input: {
   const keyLast4 = plaintextKey.slice(-4)
   const now = nowIso()
   const client = getControlPlaneClient(input.env)
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     const existing = serializeCredentialRow(await executeFirst(tx, {
       sql: `
         SELECT community_assistant_credential_id, community_id, provider, encrypted_secret,
@@ -315,15 +315,7 @@ export async function saveCommunityAssistantCredential(input: {
       ],
     })
 
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch((rollbackError) => {
-      console.error("[community-assistant-credential] rollback failed while saving key", rollbackError)
-    })
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 
   console.info("[community-assistant-credential] save:success", {
     communityId: input.communityId,

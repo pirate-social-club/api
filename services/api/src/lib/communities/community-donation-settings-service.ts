@@ -4,6 +4,7 @@ import type {
 } from "./db-community-repository"
 import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { openCommunityWriteClient } from "./community-read-access"
 import {
   type EndaomentOrganizationSearchResult,
@@ -46,8 +47,7 @@ export async function updateCommunityDonationPolicyOnClient(
     now: string
   },
 ): Promise<void> {
-  const tx = await client.transaction("write")
-  try {
+  await withTransaction(client, "write", async (tx) => {
     if (input.resolvedPartnerId && input.donationPartner) {
       await tx.execute({
         sql: `
@@ -97,17 +97,7 @@ export async function updateCommunityDonationPolicyOnClient(
       ],
     })
 
-    await tx.commit()
-  } catch (error) {
-    try {
-      await tx.rollback()
-    } catch (rollbackError) {
-      console.error("[community-donation-settings] rollback failed while updating donation settings", rollbackError)
-    }
-    throw error
-  } finally {
-    tx.close()
-  }
+  })
 }
 
 export async function resolveCommunityDonationPartner(input: {

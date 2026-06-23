@@ -4,6 +4,7 @@ import type {
 } from "./db-community-repository"
 import { notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
+import { withTransaction } from "../transactions"
 import { decodePublicId } from "../public-ids"
 import { openCommunityWriteClient } from "./community-read-access"
 import { listCommunityLabels, syncCommunityLabels } from "./community-label-store"
@@ -212,8 +213,8 @@ export async function updateCommunityLabelPolicy(input: {
       includeArchived: true,
     })
 
-    const tx = await db.client.transaction("write")
-    try {
+    const body = input.body
+    await withTransaction(db.client, "write", async (tx) => {
       await tx.execute({
         sql: `
           UPDATE communities
@@ -224,8 +225,8 @@ export async function updateCommunityLabelPolicy(input: {
         args: [input.communityId, JSON.stringify({
           ...existingSettings,
           label_policy: {
-            label_enabled: input.body.label_enabled,
-            require_label_on_top_level_posts: input.body.require_label_on_top_level_posts,
+            label_enabled: body.label_enabled,
+            require_label_on_top_level_posts: body.require_label_on_top_level_posts,
             definitions: storedDefinitions,
           },
         }), now],
@@ -244,18 +245,7 @@ export async function updateCommunityLabelPolicy(input: {
         })),
         now,
       })
-
-      await tx.commit()
-    } catch (error) {
-      try {
-        await tx.rollback()
-      } catch (rollbackError) {
-        console.error("[community-link-label-settings] rollback failed while updating link label settings", rollbackError)
-      }
-      throw error
-    } finally {
-      tx.close()
-    }
+    })
   } finally {
     db.close()
   }
