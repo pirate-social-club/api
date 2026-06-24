@@ -1,9 +1,32 @@
-import type { UpstreamIdentity, UpstreamWalletIdentity } from "../../types"
+import type { UpstreamIdentity, UpstreamWalletIdentity, WalletAttachmentKind } from "../../types"
 
 const ETHEREUM_MAINNET_NAMESPACE = "eip155:1"
 
+// Higher rank = richer/more-trusted classification. Used so deduplication never downgrades a
+// known embedded/delegated wallet to external just because the same address also arrives as a
+// bare (synthetic, external) entry — which is exactly what real Privy payloads do (an embedded
+// address appears in both identity.wallets and identity.walletAddresses).
+const ATTACHMENT_KIND_RANK: Record<WalletAttachmentKind, number> = {
+  embedded: 3,
+  delegated: 2,
+  external: 1,
+}
+
 function walletKey(wallet: Pick<UpstreamWalletIdentity, "chainNamespace" | "walletAddressNormalized">): string {
   return `${wallet.chainNamespace}:${wallet.walletAddressNormalized}`
+}
+
+// Merge two entries for the same wallet address without losing information: keep the
+// higher-ranked attachment kind and any non-null scriptPubkeyHex.
+function mergeWalletIdentity(existing: UpstreamWalletIdentity, incoming: UpstreamWalletIdentity): UpstreamWalletIdentity {
+  const attachmentKind = ATTACHMENT_KIND_RANK[incoming.attachmentKind] > ATTACHMENT_KIND_RANK[existing.attachmentKind]
+    ? incoming.attachmentKind
+    : existing.attachmentKind
+  return {
+    ...existing,
+    attachmentKind,
+    scriptPubkeyHex: existing.scriptPubkeyHex ?? incoming.scriptPubkeyHex ?? null,
+  }
 }
 
 function makeEthereumWalletIdentity(walletAddress: string): UpstreamWalletIdentity {
@@ -38,7 +61,9 @@ export function listIdentityWallets(identity: UpstreamIdentity): UpstreamWalletI
       walletAddressNormalized,
       scriptPubkeyHex: wallet.scriptPubkeyHex ?? null,
     }
-    deduped.set(walletKey(normalizedWallet), normalizedWallet)
+    const key = walletKey(normalizedWallet)
+    const existing = deduped.get(key)
+    deduped.set(key, existing ? mergeWalletIdentity(existing, normalizedWallet) : normalizedWallet)
   }
   return [...deduped.values()]
 }

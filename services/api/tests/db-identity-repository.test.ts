@@ -156,6 +156,75 @@ describe("control-plane identity repository", () => {
     }
   })
 
+  test("an embedded wallet present in both wallets and walletAddresses stays embedded (real Privy shape)", async () => {
+    // verifyPrivyAccessProof populates BOTH identity.wallets (rich, embedded) and
+    // identity.walletAddresses (bare strings) with the same embedded address. Dedup must not
+    // downgrade it to external, or embedded-first initialization silently fails.
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:real-shape",
+      providerUserRef: "did:privy:real-shape",
+      walletAddresses: [WALLET_A, WALLET_B],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+
+    expect(session.wallet_attachments).toHaveLength(2)
+    expect(session.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+
+    const kindRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((kindRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("embedded")
+  })
+
+  test("a previously external row is promoted to embedded when trusted metadata confirms it", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    // First exchange records WALLET_A as external (bare address, no embedded metadata yet) and
+    // therefore leaves the user with no identity wallet.
+    const first = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:promote",
+      providerUserRef: "did:privy:promote",
+      walletAddresses: [WALLET_A],
+      selectedWalletAddress: null,
+      wallets: [],
+    })
+    expect(first.user.primary_wallet_attachment).toBeNull()
+    const beforeRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((beforeRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("external")
+
+    // A later exchange now carries embedded metadata for the same address.
+    const second = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:promote",
+      providerUserRef: "did:privy:promote",
+      walletAddresses: [WALLET_A],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+
+    const afterRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((afterRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("embedded")
+    // Promotion makes it eligible for embedded-first initialization of the still-unset primary.
+    expect(second.profile.primary_wallet_address).toBe(WALLET_A)
+  })
+
   test("new privy user with only an external wallet has no primary", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup

@@ -408,6 +408,24 @@ export async function reconcileWalletAttachments(
 
   for (const wallet of identityWallets) {
     if (knownByAddress.has(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`)) {
+      // Known wallet: never re-insert, but safely PROMOTE a row that was previously
+      // misclassified as external when trusted Privy metadata now confirms it is embedded.
+      // The attachment_kind='external' guard makes this strictly an upgrade — an already
+      // embedded/delegated row is never downgraded.
+      if (wallet.attachmentKind === "embedded") {
+        await executor.execute({
+          sql: `
+            UPDATE wallet_attachments
+            SET attachment_kind = 'embedded', updated_at = ?4
+            WHERE user_id = ?1
+              AND chain_namespace = ?2
+              AND wallet_address_normalized = ?3
+              AND status = 'active'
+              AND attachment_kind = 'external'
+          `,
+          args: [input.userId, wallet.chainNamespace, wallet.walletAddressNormalized, input.updatedAt],
+        })
+      }
       continue
     }
 
