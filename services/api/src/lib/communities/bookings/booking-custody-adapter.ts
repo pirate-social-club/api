@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { conflictError, badRequestError } from "../../errors"
@@ -9,7 +9,7 @@ import {
   beginBookingSettlementEffectAttempt,
   confirmBookingSettlementEffect,
   failBookingSettlementEffect,
-  recordBookingSettlementEffectBroadcast,
+  recordBookingSettlementEffectSubmission,
   type BookingSettlementEffectKind,
 } from "./booking-settlement-effects"
 import {
@@ -43,23 +43,25 @@ interface BookingOperatorEffectContext {
   nowUtc: string
 }
 
-type BroadcastOperatorUsdcTransfer = (env: Env, input: {
-  to: string
-  amountCents: number
-}) => Promise<{ txRef: string }>
+// Durable submission seams. prepare SIGNS the transfer without sending and returns the raw signed
+// tx + its hash + nonce; broadcast SENDS a raw signed tx (idempotent — a re-broadcast of the same
+// nonce is a no-op on chain); wait blocks on confirmation. Split so the signed tx can be persisted
+// BEFORE it is ever broadcast.
+type PrepareOperatorUsdcTransfer = (env: Env, input: { to: string; amountCents: number }) => Promise<{ signedTx: string; txRef: string; nonce: number }>
+type BroadcastSignedOperatorUsdcTransfer = (env: Env, input: { signedTx: string }) => Promise<void>
+type WaitForOperatorUsdcTransfer = (env: Env, input: { txRef: string }) => Promise<void>
 
-type WaitForOperatorUsdcTransfer = (env: Env, input: {
-  txRef: string
-}) => Promise<void>
-
-let broadcastOperatorUsdcTransferForTests: BroadcastOperatorUsdcTransfer | null = null
+let prepareOperatorUsdcTransferForTests: PrepareOperatorUsdcTransfer | null = null
+let broadcastSignedOperatorUsdcTransferForTests: BroadcastSignedOperatorUsdcTransfer | null = null
 let waitForOperatorUsdcTransferForTests: WaitForOperatorUsdcTransfer | null = null
 
 export function setBookingOperatorUsdcTransferForTests(input: {
-  broadcast: BroadcastOperatorUsdcTransfer
+  prepare?: PrepareOperatorUsdcTransfer
+  broadcast?: BroadcastSignedOperatorUsdcTransfer
   wait?: WaitForOperatorUsdcTransfer
 } | null): void {
-  broadcastOperatorUsdcTransferForTests = input?.broadcast ?? null
+  prepareOperatorUsdcTransferForTests = input?.prepare ?? null
+  broadcastSignedOperatorUsdcTransferForTests = input?.broadcast ?? null
   waitForOperatorUsdcTransferForTests = input?.wait ?? null
 }
 
@@ -94,11 +96,14 @@ function usdcCentsToAtomic(amountCents: number): bigint {
   return BigInt(amountCents) * 10_000n
 }
 
-async function broadcastOperatorUsdcTransfer(env: Env, input: {
-  to: string
-  amountCents: number
-}): Promise<{ txRef: string }> {
-  if (broadcastOperatorUsdcTransferForTests) return broadcastOperatorUsdcTransferForTests(env, input)
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+// Sign the USDC transfer WITHOUT broadcasting. Returns the raw signed tx, its deterministic hash,
+// and the nonce so the submission can be persisted before the transfer ever goes out.
+async function prepareOperatorUsdcTransfer(env: Env, input: { to: string; amountCents: number }): Promise<{ signedTx: string; txRef: string; nonce: number }> {
+  if (prepareOperatorUsdcTransferForTests) return prepareOperatorUsdcTransferForTests(env, input)
 
   const config = resolveOperatorTransferConfig(env)
   const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
@@ -112,15 +117,36 @@ async function broadcastOperatorUsdcTransfer(env: Env, input: {
   const balance = await usdc.balanceOf(signer.address) as bigint
   if (balance < amount) throw badRequestError("Booking settlement operator has insufficient USDC")
 
-  const tx = await usdc.transfer(to, amount)
-  const txRef = String(tx.hash || "")
+  const data = usdc.interface.encodeFunctionData("transfer", [to, amount])
+  const populated = await signer.populateTransaction({ to: config.usdcTokenAddress, data })
+  // signTransaction rejects an explicit `from`; the nonce/gas/chainId are already populated.
+  delete (populated as { from?: unknown }).from
+  const signedTx = await signer.signTransaction(populated)
+  const txRef = Transaction.from(signedTx).hash
   if (!txRef) throw badRequestError("booking_settlement_missing_tx_hash")
-  return { txRef }
+  if (populated.nonce == null) throw badRequestError("booking_settlement_missing_nonce")
+  return { signedTx, txRef, nonce: Number(populated.nonce) }
 }
 
-async function waitForOperatorUsdcTransfer(env: Env, input: {
-  txRef: string
-}): Promise<void> {
+// Broadcast a raw signed tx. Tolerates "already known"/"nonce too low" — that means the SAME signed
+// transaction (idempotent by nonce) is already in the mempool or mined, never a second payment.
+async function broadcastSignedOperatorUsdcTransfer(env: Env, input: { signedTx: string }): Promise<void> {
+  if (broadcastSignedOperatorUsdcTransferForTests) return broadcastSignedOperatorUsdcTransferForTests(env, input)
+
+  const config = resolveOperatorTransferConfig(env)
+  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
+  try {
+    await provider.broadcastTransaction(input.signedTx)
+  } catch (error) {
+    const msg = errorMessage(error).toLowerCase()
+    if (msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")) {
+      return
+    }
+    throw error
+  }
+}
+
+async function waitForOperatorUsdcTransfer(env: Env, input: { txRef: string }): Promise<void> {
   if (waitForOperatorUsdcTransferForTests) return waitForOperatorUsdcTransferForTests(env, input)
 
   const config = resolveOperatorTransferConfig(env)
@@ -131,10 +157,6 @@ async function waitForOperatorUsdcTransfer(env: Env, input: {
 
 function effectKind(effect: BookingOperatorEffect): BookingSettlementEffectKind {
   return effect.kind === "refund" ? "booking_refund" : "booking_payout"
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 async function withCommunityWrite<T>(
@@ -174,57 +196,48 @@ export async function executeBookingOperatorEffect(
     return { txRef: row.settlement_ref }
   }
 
-  if (row.status === "submitted" && row.settlement_ref) {
+  // Recovery: a prior attempt already SIGNED and durably recorded the tx (crash in the broadcast
+  // window). Re-broadcast the identical signed tx (idempotent by nonce), wait, and confirm — money
+  // moves at most once.
+  if (row.status === "submitted" && row.signed_tx && row.settlement_ref) {
+    await broadcastSignedOperatorUsdcTransfer(ctx.env, { signedTx: row.signed_tx })
     await waitForOperatorUsdcTransfer(ctx.env, { txRef: row.settlement_ref })
     const confirmed = await withCommunityWrite(ctx, async (client) => confirmBookingSettlementEffect({
-      client,
-      idempotencyKey: effect.idempotencyKey,
-      settlementRef: row.settlement_ref!,
-      now: ctx.nowUtc,
+      client, idempotencyKey: effect.idempotencyKey, settlementRef: row.settlement_ref!, now: ctx.nowUtc,
     }))
     return { txRef: confirmed.settlement_ref! }
   }
 
-  if (begun.action === "existing_submitted" && !row.settlement_ref) {
+  // Another worker owns an in-flight attempt that has not signed yet (no signed_tx ⇒ nothing was
+  // broadcast). Back off rather than starting a competing transfer.
+  if (begun.action === "existing_submitted" && !row.signed_tx) {
     throw conflictError("Booking settlement effect has an unresolved submitted attempt")
   }
 
-  let txRef: string
+  // We own a fresh attempt. SIGN first (no money moves yet); a pre-sign failure is safe to mark
+  // failed because nothing was broadcast.
+  let prepared: { signedTx: string; txRef: string; nonce: number }
   try {
-    txRef = (await broadcastOperatorUsdcTransfer(ctx.env, {
-      to: recipientAddress,
-      amountCents: effect.amountCents,
-    })).txRef
+    prepared = await prepareOperatorUsdcTransfer(ctx.env, { to: recipientAddress, amountCents: effect.amountCents })
   } catch (error) {
     await withCommunityWrite(ctx, async (client) => failBookingSettlementEffect({
-      client,
-      idempotencyKey: effect.idempotencyKey,
-      failureReason: errorMessage(error),
-      now: ctx.nowUtc,
+      client, idempotencyKey: effect.idempotencyKey, failureReason: errorMessage(error), now: ctx.nowUtc,
     }))
     throw error
   }
 
-  await withCommunityWrite(ctx, async (client) => recordBookingSettlementEffectBroadcast({
-    client,
-    idempotencyKey: effect.idempotencyKey,
-    settlementRef: txRef,
-    now: ctx.nowUtc,
+  // Persist the signed tx + hash + nonce BEFORE broadcasting. After this point we never mark failed
+  // — the transfer may go out — and any retry recovers via the signed tx above.
+  await withCommunityWrite(ctx, async (client) => recordBookingSettlementEffectSubmission({
+    client, idempotencyKey: effect.idempotencyKey, settlementRef: prepared.txRef,
+    signedTx: prepared.signedTx, nonce: prepared.nonce, now: ctx.nowUtc,
   }))
 
-  try {
-    await waitForOperatorUsdcTransfer(ctx.env, { txRef })
-  } catch (error) {
-    // A tx hash is already durably recorded. Do not mark failed and do not retry with a second
-    // transfer; a later call will re-check this tx and confirm it, or surface the same failure.
-    throw error
-  }
+  await broadcastSignedOperatorUsdcTransfer(ctx.env, { signedTx: prepared.signedTx })
+  await waitForOperatorUsdcTransfer(ctx.env, { txRef: prepared.txRef })
 
   const confirmed = await withCommunityWrite(ctx, async (client) => confirmBookingSettlementEffect({
-    client,
-    idempotencyKey: effect.idempotencyKey,
-    settlementRef: txRef,
-    now: ctx.nowUtc,
+    client, idempotencyKey: effect.idempotencyKey, settlementRef: prepared.txRef, now: ctx.nowUtc,
   }))
   return { txRef: confirmed.settlement_ref! }
 }

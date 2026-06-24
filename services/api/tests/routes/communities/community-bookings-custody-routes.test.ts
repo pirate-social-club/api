@@ -23,20 +23,30 @@ const BOOKER_ADDRESS = "0x0000000000000000000000000000000000000222"
 const HOST_ADDRESS = "0x0000000000000000000000000000000000000111"
 
 let cleanup: (() => Promise<void>) | null = null
-let broadcasts: Array<{ to: string; amountCents: number }> = []
+let broadcasts: Array<{ to: string; amountCents: number }> = [] // transfer intents = prepare/sign calls
+let sentSignedTxs: string[] = [] // raw signed txs passed to broadcast (may include idempotent re-broadcasts)
 let waits: string[] = []
+let prepareError: Error | null = null
 let broadcastError: Error | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
   broadcasts = []
+  sentSignedTxs = []
   waits = []
+  prepareError = null
   broadcastError = null
   setBookingOperatorUsdcTransferForTests({
+    // prepare = sign (no money moves yet); one prepare == one signed nonce == at most one payment.
+    prepare: async (_env, input) => {
+      if (prepareError) throw prepareError
+      broadcasts.push({ to: input.to, amountCents: input.amountCents })
+      const ref = `tx_${input.to.slice(-4)}_${input.amountCents}`
+      return { signedTx: `signed_${ref}`, txRef: ref, nonce: broadcasts.length }
+    },
     broadcast: async (_env, input) => {
       if (broadcastError) throw broadcastError
-      broadcasts.push({ to: input.to, amountCents: input.amountCents })
-      return { txRef: `tx_${input.to.slice(-4)}_${input.amountCents}` }
+      sentSignedTxs.push(input.signedTx)
     },
     wait: async (_env, input) => {
       waits.push(input.txRef)
@@ -202,10 +212,10 @@ describe("booking custody adapter (D5)", () => {
     })
   })
 
-  test("a failed pre-broadcast transfer leaves the booking in its reserved intent state", async () => {
+  test("a failed pre-sign transfer leaves the booking in its reserved intent state", async () => {
     const { ctx, communityId, host, booker, root } = await setup()
     await seedBooking(root, communityId, { bookingId: "bkg_fail", hostUserId: host.userId, bookerUserId: booker.userId })
-    broadcastError = new Error("operator offline")
+    prepareError = new Error("operator offline")
 
     await expect(cancelBooking({
       env: ctx.env,
@@ -251,16 +261,16 @@ describe("booking custody adapter (D5)", () => {
     expect(broadcasts.length).toBe(0)
   })
 
-  test("a submitted effect with a tx ref is confirmed without another broadcast", async () => {
+  test("recovery: a submitted effect with a recorded signed tx re-broadcasts it (no re-sign) and confirms", async () => {
     const { ctx, communityId, host, booker, root } = await setup()
     await seedBooking(root, communityId, { bookingId: "bkg_recover", hostUserId: host.userId, bookerUserId: booker.userId })
     const now = new Date().toISOString()
     await rows(root, communityId, `INSERT INTO booking_settlement_effects (
       booking_settlement_effect_id, community_id, booking_id, effect_kind, idempotency_key,
-      status, amount_cents, recipient_address, settlement_ref, failure_reason, attempt_count,
+      status, amount_cents, recipient_address, settlement_ref, signed_tx, broadcast_nonce, failure_reason, attempt_count,
       submitted_at, confirmed_at, failed_at, created_at, updated_at
     ) VALUES ('bse_recover', ?1, 'bkg_recover', 'booking_refund', 'booking_refund:bkg_recover',
-      'submitted', 5000, ?2, '0xrecover', NULL, 1, ?3, NULL, NULL, ?3, ?3)`, [communityId, BOOKER_ADDRESS, now])
+      'submitted', 5000, ?2, '0xrecover', 'signed_recover', 7, NULL, 1, ?3, NULL, NULL, ?3, ?3)`, [communityId, BOOKER_ADDRESS, now])
 
     const result = await executeBookingOperatorEffect({
       env: ctx.env,
@@ -277,12 +287,36 @@ describe("booking custody adapter (D5)", () => {
     })
 
     expect(result.txRef).toBe("0xrecover")
-    expect(broadcasts.length).toBe(0)
+    expect(broadcasts.length).toBe(0) // NOT re-signed — the recorded signed tx is reused
+    expect(sentSignedTxs).toEqual(["signed_recover"]) // idempotent re-broadcast of the same tx
     expect(waits).toEqual(["0xrecover"])
     expect((await rows(root, communityId, "SELECT status, settlement_ref FROM booking_settlement_effects WHERE idempotency_key = 'booking_refund:bkg_recover'"))[0]).toEqual({
       status: "confirmed",
       settlement_ref: "0xrecover",
     })
+  })
+
+  test("durable submission: a broadcast failure after signing is recoverable and pays exactly once", async () => {
+    const { ctx, communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_crash", hostUserId: host.userId, bookerUserId: booker.userId })
+    const common = { env: ctx.env, communityRepository: getCommunityRepository(ctx.env), communityId, nowUtc: new Date().toISOString() }
+    const effect = { kind: "refund" as const, toUserId: booker.userId, recipientAddress: BOOKER_ADDRESS, amountCents: 5000, bookingId: "bkg_crash", idempotencyKey: "booking_refund:bkg_crash" }
+
+    // First attempt: signs + durably records, then broadcast fails (e.g. RPC drop / crash window).
+    broadcastError = new Error("rpc dropped")
+    await expect(executeBookingOperatorEffect(common, effect)).rejects.toThrow("rpc dropped")
+    // The signed tx was recorded BEFORE broadcast — the effect is NOT failed, it is recoverable.
+    const afterCrash = (await rows(root, communityId, "SELECT status, settlement_ref, signed_tx FROM booking_settlement_effects WHERE idempotency_key = 'booking_refund:bkg_crash'"))[0]
+    expect(afterCrash.status).toBe("submitted")
+    expect(afterCrash.signed_tx).toBe("signed_tx_0222_5000")
+    expect(afterCrash.settlement_ref).toBe("tx_0222_5000")
+
+    // Retry: re-broadcasts the SAME signed tx (no re-sign), confirms. Money signed exactly once.
+    broadcastError = null
+    const recovered = await executeBookingOperatorEffect(common, effect)
+    expect(recovered.txRef).toBe("tx_0222_5000")
+    expect(broadcasts.length).toBe(1) // signed exactly once across both attempts
+    expect((await rows(root, communityId, "SELECT status FROM booking_settlement_effects WHERE idempotency_key = 'booking_refund:bkg_crash'"))[0].status).toBe("confirmed")
   })
 })
 

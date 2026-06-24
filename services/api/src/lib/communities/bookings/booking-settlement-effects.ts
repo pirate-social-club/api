@@ -16,6 +16,8 @@ export interface BookingSettlementEffectRow {
   amount_cents: number
   recipient_address: string
   settlement_ref: string | null
+  signed_tx: string | null
+  broadcast_nonce: number | null
   failure_reason: string | null
   attempt_count: number
   submitted_at: string | null
@@ -36,6 +38,8 @@ function toBookingSettlementEffectRow(row: unknown): BookingSettlementEffectRow 
     amount_cents: requiredNumber(row, "amount_cents"),
     recipient_address: requiredString(row, "recipient_address"),
     settlement_ref: stringOrNull(rowValue(row, "settlement_ref")),
+    signed_tx: stringOrNull(rowValue(row, "signed_tx")),
+    broadcast_nonce: rowValue(row, "broadcast_nonce") != null ? requiredNumber(row, "broadcast_nonce") : null,
     failure_reason: stringOrNull(rowValue(row, "failure_reason")),
     attempt_count: requiredNumber(row, "attempt_count"),
     submitted_at: stringOrNull(rowValue(row, "submitted_at")),
@@ -73,8 +77,8 @@ export async function getBookingSettlementEffectByIdempotencyKey(input: {
   const row = await executeFirst(input.client, {
     sql: `
       SELECT booking_settlement_effect_id, community_id, booking_id, effect_kind, idempotency_key,
-             status, amount_cents, recipient_address, settlement_ref, failure_reason, attempt_count,
-             submitted_at, confirmed_at, failed_at, created_at, updated_at
+             status, amount_cents, recipient_address, settlement_ref, signed_tx, broadcast_nonce,
+             failure_reason, attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM booking_settlement_effects
       WHERE idempotency_key = ?1
       LIMIT 1
@@ -215,6 +219,42 @@ export async function recordBookingSettlementEffectBroadcast(input: {
   // already recorded (idempotent re-record); a different/absent ref means a conflicting broadcast.
   if ((result.rowsAffected ?? 0) !== 1 && row.settlement_ref !== input.settlementRef) {
     throw conflictError("Booking settlement broadcast could not be recorded (conflicting transaction reference)")
+  }
+  return row
+}
+
+// Durable submission: persist the signed transaction + its hash + nonce BEFORE broadcasting, so a
+// crash in the broadcast window is recoverable (the same signed tx is re-broadcast, idempotent by
+// nonce). Guarded on status='submitted' AND signed_tx IS NULL so it records exactly once.
+export async function recordBookingSettlementEffectSubmission(input: {
+  client: DbExecutor
+  idempotencyKey: string
+  settlementRef: string
+  signedTx: string
+  nonce: number
+  now: string
+}): Promise<BookingSettlementEffectRow> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE booking_settlement_effects
+      SET settlement_ref = ?2,
+          signed_tx = ?3,
+          broadcast_nonce = ?4,
+          updated_at = ?5
+      WHERE idempotency_key = ?1
+        AND status = 'submitted'
+        AND signed_tx IS NULL
+    `,
+    args: [input.idempotencyKey, input.settlementRef, input.signedTx, input.nonce, input.now],
+  })
+  const row = await getBookingSettlementEffectByIdempotencyKey({
+    client: input.client,
+    idempotencyKey: input.idempotencyKey,
+  })
+  if (!row) throw new Error("booking_settlement_effect_missing_after_submission")
+  // Idempotent only if the SAME signed tx is already recorded; anything else is a conflict.
+  if ((result.rowsAffected ?? 0) !== 1 && row.signed_tx !== input.signedTx) {
+    throw conflictError("Booking settlement submission could not be recorded (conflicting signed transaction)")
   }
   return row
 }
