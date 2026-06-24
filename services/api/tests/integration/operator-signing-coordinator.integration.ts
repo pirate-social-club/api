@@ -64,7 +64,10 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect((await effects(stub)).map((r) => r.nonce).sort()).toEqual([10, 11])
   })
 
-  it("deterministic wallet+chain routing: same name re-instantiates the SAME persisted nonce state", async () => {
+  it("deterministic wallet+chain routing: a fresh stub for the same name reuses the persisted nonce state (NOT an eviction test)", async () => {
+    // Note: this proves getByName routing determinism + DO SQLite persistence across stubs. It does
+    // NOT force an isolate eviction (vitest-pool-workers does not expose that); the persistence
+    // guarantee here is supplied by DO SQLite, which also backs post-eviction re-instantiation.
     const name = `op-signer-route-${seq++}`
     const s1 = env.OPERATOR_SIGNING_COORDINATOR.getByName(name)
     await injectChain(s1, { pending: 20, latest: 20, liveness: {} })
