@@ -4,13 +4,32 @@ import { authError } from "../errors"
 import { dedupeStrings, normalizeAddress } from "../helpers"
 import { parseBitcoinAddress } from "../bitcoin/bitcoin-address"
 import type { Env } from "../../env"
-import type { UpstreamIdentity, UpstreamWalletIdentity } from "../../types"
+import type { UpstreamIdentity, UpstreamWalletIdentity, WalletAttachmentKind } from "../../types"
 
 const DEFAULT_PRIVY_AUTH_API_URL = "https://auth.privy.io"
 const ETHEREUM_CHAIN_TYPE = "ethereum"
 const BITCOIN_SEGWIT_CHAIN_TYPE = "bitcoin-segwit"
 const BITCOIN_TAPROOT_CHAIN_TYPE = "bitcoin-taproot"
 const LINKED_WALLET_TYPE = "wallet"
+const PRIVY_EMBEDDED_CONNECTOR_TYPE = "embedded"
+const PRIVY_EMBEDDED_WALLET_CLIENT_TYPE = "privy"
+
+// Classify a Privy linked wallet account. Privy embedded EVM wallets carry
+// connector_type: "embedded" and wallet_client_type: "privy"; anything else (or missing
+// metadata) is treated conservatively as external and is never eligible for embedded-first
+// identity-wallet initialization.
+export function getPrivyAttachmentKind(account: LinkedAccount): WalletAttachmentKind {
+  const connectorType = "connector_type" in account
+    ? (account as { connector_type?: unknown }).connector_type
+    : undefined
+  const walletClientType = "wallet_client_type" in account
+    ? (account as { wallet_client_type?: unknown }).wallet_client_type
+    : undefined
+  if (connectorType === PRIVY_EMBEDDED_CONNECTOR_TYPE && walletClientType === PRIVY_EMBEDDED_WALLET_CLIENT_TYPE) {
+    return "embedded"
+  }
+  return "external"
+}
 
 let cachedJwks:
   | { apiUrl: string; appId: string; verificationKey: string | null; jwks: JWTVerifyGetKey }
@@ -48,6 +67,7 @@ function collectWalletIdentities(linkedAccounts: LinkedAccount[]): UpstreamWalle
         walletAddress: normalized,
         walletAddressNormalized: normalized,
         scriptPubkeyHex: null,
+        attachmentKind: getPrivyAttachmentKind(account),
       }
       wallets.set(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`, wallet)
       continue
@@ -58,11 +78,12 @@ function collectWalletIdentities(linkedAccounts: LinkedAccount[]): UpstreamWalle
       if (!parsed) {
         continue
       }
-      const wallet = {
+      const wallet: UpstreamWalletIdentity = {
         chainNamespace: parsed.chainNamespace,
         walletAddress: parsed.address,
         walletAddressNormalized: parsed.addressNormalized,
         scriptPubkeyHex: parsed.scriptPubkeyHex,
+        attachmentKind: "external",
       }
       wallets.set(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`, wallet)
     }
@@ -154,11 +175,14 @@ export async function verifyPrivyAccessProof(params: {
     providerSubject: user.id,
     providerUserRef: user.id,
     walletAddresses,
-    selectedWalletAddress: requestedWallet ?? walletAddresses[0] ?? null,
+    // Only an explicitly requested wallet is treated as a selection. Auth must never pick a
+    // wallet from incidental ordering — the identity wallet is initialized embedded-first and
+    // changed only via explicit user action. (See initializePrimaryWalletIfNeeded.)
+    selectedWalletAddress: requestedWallet ?? null,
     wallets,
     selectedWallet: requestedWallet
       ? wallets.find((wallet) => wallet.chainNamespace === "eip155:1" && wallet.walletAddressNormalized === requestedWallet) ?? null
-      : wallets.find((wallet) => wallet.chainNamespace === "eip155:1") ?? wallets[0] ?? null,
+      : null,
   }
 }
 

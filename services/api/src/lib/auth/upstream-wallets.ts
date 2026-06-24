@@ -12,6 +12,9 @@ function makeEthereumWalletIdentity(walletAddress: string): UpstreamWalletIdenti
     walletAddress,
     walletAddressNormalized: walletAddress,
     scriptPubkeyHex: null,
+    // Synthetic identities materialized from a bare address list (e.g. JWT wallet claims)
+    // carry no Privy embedded metadata, so they are external by definition.
+    attachmentKind: "external",
   }
 }
 
@@ -40,7 +43,10 @@ export function listIdentityWallets(identity: UpstreamIdentity): UpstreamWalletI
   return [...deduped.values()]
 }
 
-export function resolveSelectedIdentityWallet(identity: UpstreamIdentity): UpstreamWalletIdentity | null {
+// Resolve ONLY an explicit selection (a requested wallet, or a provider-supplied
+// selected_wallet_address such as JWT's). Unlike the previous helper, this intentionally has
+// NO ordering fallback — incidental wallet order must never determine the identity wallet.
+export function resolveExplicitSelectedIdentityWallet(identity: UpstreamIdentity): UpstreamWalletIdentity | null {
   const wallets = listIdentityWallets(identity)
   if (wallets.length === 0) {
     return null
@@ -64,5 +70,17 @@ export function resolveSelectedIdentityWallet(identity: UpstreamIdentity): Upstr
     }
   }
 
-  return wallets.find((wallet) => wallet.chainNamespace === ETHEREUM_MAINNET_NAMESPACE) ?? wallets[0] ?? null
+  return null
+}
+
+// Embedded-first candidate for one-time identity-wallet initialization: the Privy embedded
+// EVM wallet. Deterministic tie-break by normalized address so provider ordering is irrelevant.
+export function pickEmbeddedEvmIdentityWallet(identity: UpstreamIdentity): UpstreamWalletIdentity | null {
+  const embedded = listIdentityWallets(identity).filter((wallet) => (
+    wallet.attachmentKind === "embedded" && wallet.chainNamespace === ETHEREUM_MAINNET_NAMESPACE
+  ))
+  if (embedded.length === 0) {
+    return null
+  }
+  return [...embedded].sort((a, b) => a.walletAddressNormalized.localeCompare(b.walletAddressNormalized))[0]
 }

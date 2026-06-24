@@ -21,6 +21,7 @@ import {
   listGlobalHandleRowsByIds,
   loadSnapshot,
   reconcileWalletAttachments,
+  initializePrimaryWalletIfNeeded,
 } from "./auth-db-user-queries"
 import { listIdentityWallets } from "./upstream-wallets"
 import { listCreatedCommunityRowsByCreatorUserId } from "./auth-db-community-queries"
@@ -140,11 +141,13 @@ export class DatabaseIdentityRepository {
       const existing = await findActiveAuthProviderLink(tx, provider, providerSubject)
       if (existing) {
         resolvedUserId = existing.user_id
+        const updatedAt = nowIso()
         await reconcileWalletAttachments(tx, {
           userId: resolvedUserId,
           identity,
-          updatedAt: nowIso(),
+          updatedAt,
         })
+        await initializePrimaryWalletIfNeeded(tx, { userId: resolvedUserId, identity, updatedAt })
       } else {
         const createdAt = nowIso()
         const authProviderLinkId = makeId("apl")
@@ -174,6 +177,7 @@ export class DatabaseIdentityRepository {
             identity,
             updatedAt: createdAt,
           })
+          await initializePrimaryWalletIfNeeded(tx, { userId: existingWalletUserId, identity, updatedAt: createdAt })
 
           resolvedUserId = existingWalletUserId
         } else {
@@ -276,6 +280,7 @@ export class DatabaseIdentityRepository {
             identity,
             updatedAt: createdAt,
           })
+          await initializePrimaryWalletIfNeeded(tx, { userId, identity, updatedAt: createdAt })
 
           resolvedUserId = userId
         }
