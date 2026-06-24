@@ -144,10 +144,20 @@ jobs:
         # services/api depends on @pirate/karaoke-runtime via
         # file:../../../web/packages/karaoke-runtime — CI must mirror the
         # workspace layout (web as a sibling) so the file: path resolves.
+        #
+        # PINNED to a SHA, not the mutable `release/karaoke-web` branch. That branch drifts
+        # independently of this repo: commit cd4b93fb added a required `uncertainLineCount` field to
+        # KaraokeSessionSummary, which breaks `tsgo` against the (un-updated) api karaoke test in
+        # tests/lib/karaoke/session-do.test.ts — a time-dependent failure with no change in this repo.
+        # de5eafa2 is the last commit on release/karaoke-web before cd4b93fb (last type-compatible
+        # with the current api karaoke test).
+        # UPDATE PROCEDURE: when the api karaoke test is updated to the newer karaoke-runtime type
+        # (uncertainLineCount), bump this SHA to the matching release/karaoke-web commit, ideally
+        # landing both changes together.
         uses: actions/checkout@v4
         with:
           repository: pirate-social-club/web
-          ref: release/karaoke-web
+          ref: de5eafa2017d296580063397be2b2786f89dd5a2
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
