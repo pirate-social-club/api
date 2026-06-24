@@ -318,6 +318,40 @@ describe("booking custody adapter (D5)", () => {
     expect(broadcasts.length).toBe(1) // signed exactly once across both attempts
     expect((await rows(root, communityId, "SELECT status FROM booking_settlement_effects WHERE idempotency_key = 'booking_refund:bkg_crash'"))[0].status).toBe("confirmed")
   })
+
+  test("two distinct effects signed concurrently get unique nonces and both confirm", async () => {
+    const { ctx, communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_n1", hostUserId: host.userId, bookerUserId: booker.userId })
+    await seedBooking(root, communityId, { bookingId: "bkg_n2", hostUserId: host.userId, bookerUserId: booker.userId })
+
+    // Simulate the operator chain nonce: prepare reads the current pending nonce; it only advances
+    // when a tx is broadcast. WITHOUT serialization two concurrent prepares would read the same nonce.
+    let chainNonce = 5
+    const assignedNonces: number[] = []
+    setBookingOperatorUsdcTransferForTests({
+      prepare: async () => {
+        const n = chainNonce
+        await new Promise((r) => setTimeout(r, 5)) // widen the race window
+        assignedNonces.push(n)
+        return { signedTx: `signed_${n}`, txRef: `0xhash_${n}`, nonce: n }
+      },
+      broadcast: async () => { chainNonce += 1 }, // nonce consumed on broadcast
+      wait: async () => {},
+    })
+
+    const common = { env: ctx.env, communityRepository: getCommunityRepository(ctx.env), communityId, nowUtc: new Date().toISOString() }
+    const [r1, r2] = await Promise.all([
+      executeBookingOperatorEffect(common, { kind: "refund", toUserId: booker.userId, recipientAddress: BOOKER_ADDRESS, amountCents: 5000, bookingId: "bkg_n1", idempotencyKey: "booking_refund:bkg_n1" }),
+      executeBookingOperatorEffect(common, { kind: "refund", toUserId: booker.userId, recipientAddress: BOOKER_ADDRESS, amountCents: 5000, bookingId: "bkg_n2", idempotencyKey: "booking_refund:bkg_n2" }),
+    ])
+
+    // Serialized signing → sequential, UNIQUE nonces (5 and 6); both effects confirm.
+    expect(new Set(assignedNonces).size).toBe(2)
+    expect([...assignedNonces].sort()).toEqual([5, 6])
+    expect(r1.txRef).not.toBe(r2.txRef)
+    const statuses = await rows(root, communityId, "SELECT status FROM booking_settlement_effects WHERE booking_id IN ('bkg_n1','bkg_n2')")
+    expect(statuses.every((s) => s.status === "confirmed")).toBe(true)
+  })
 })
 
 describe("booking settlement effects — concurrency + validation (D5 hardening)", () => {
