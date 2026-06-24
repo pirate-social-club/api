@@ -198,76 +198,17 @@ export async function beginBookingSettlementEffectAttempt(input: {
   return { action: "created", row: created }
 }
 
-export async function recordBookingSettlementEffectBroadcast(input: {
-  client: DbExecutor
-  idempotencyKey: string
-  settlementRef: string
-  now: string
-}): Promise<BookingSettlementEffectRow> {
-  const result = await input.client.execute({
-    sql: `
-      UPDATE booking_settlement_effects
-      SET settlement_ref = ?2,
-          updated_at = ?3
-      WHERE idempotency_key = ?1
-        AND status = 'submitted'
-        AND settlement_ref IS NULL
-    `,
-    args: [input.idempotencyKey, input.settlementRef, input.now],
-  })
-  const row = await getBookingSettlementEffectByIdempotencyKey({
-    client: input.client,
-    idempotencyKey: input.idempotencyKey,
-  })
-  if (!row) throw new Error("booking_settlement_effect_missing_after_broadcast")
-  // The write must land exactly once. If it didn't, the only safe state is that the SAME ref is
-  // already recorded (idempotent re-record); a different/absent ref means a conflicting broadcast.
-  if ((result.rowsAffected ?? 0) !== 1 && row.settlement_ref !== input.settlementRef) {
-    throw conflictError("Booking settlement broadcast could not be recorded (conflicting transaction reference)")
-  }
-  return row
-}
-
-// Durable submission: persist the signed transaction + its hash + nonce BEFORE broadcasting, so a
-// crash in the broadcast window is recoverable (the same signed tx is re-broadcast, idempotent by
-// nonce). Guarded on status='submitted' AND signed_tx IS NULL so it records exactly once.
-export async function recordBookingSettlementEffectSubmission(input: {
-  client: DbExecutor
-  idempotencyKey: string
-  settlementRef: string
-  signedTx: string
-  nonce: number
-  now: string
-}): Promise<BookingSettlementEffectRow> {
-  const result = await input.client.execute({
-    sql: `
-      UPDATE booking_settlement_effects
-      SET settlement_ref = ?2,
-          signed_tx = ?3,
-          broadcast_nonce = ?4,
-          updated_at = ?5
-      WHERE idempotency_key = ?1
-        AND status = 'submitted'
-        AND signed_tx IS NULL
-    `,
-    args: [input.idempotencyKey, input.settlementRef, input.signedTx, input.nonce, input.now],
-  })
-  const row = await getBookingSettlementEffectByIdempotencyKey({
-    client: input.client,
-    idempotencyKey: input.idempotencyKey,
-  })
-  if (!row) throw new Error("booking_settlement_effect_missing_after_submission")
-  // Idempotent only if the SAME signed tx is already recorded; anything else is a conflict.
-  if ((result.rowsAffected ?? 0) !== 1 && row.signed_tx !== input.signedTx) {
-    throw conflictError("Booking settlement submission could not be recorded (conflicting signed transaction)")
-  }
-  return row
-}
-
 // Mirror the wallet-scoped coordinator (DO) outcome onto the booking-scoped ledger row. The DO
 // owns the authoritative signed tx; here we only record the coordinator pointer + tx hash + nonce +
 // coordinator state. Status is NOT changed (confirm does that) and signed_tx stays NULL (DO-owned),
 // so terminal coordinator failures never become eligible for the failed -> retry path.
+const COORDINATOR_STATE_RANK: Record<string, number> = {
+  reserving: 0, prepared: 1, broadcast: 2, reconciliation_required: 3, replaced: 4, failed_onchain: 4, confirmed: 5,
+}
+function coordinatorStateRank(state: string | null): number {
+  return state ? COORDINATOR_STATE_RANK[state] ?? 0 : 0
+}
+
 export async function mirrorBookingSettlementCoordinatorEffect(input: {
   client: DbExecutor
   idempotencyKey: string
@@ -277,16 +218,40 @@ export async function mirrorBookingSettlementCoordinatorEffect(input: {
   nonce: number | null
   now: string
 }): Promise<BookingSettlementEffectRow> {
+  const rank = coordinatorStateRank(input.coordinatorState)
+  // Monotonic, concurrency-safe mirror: never touch a confirmed ledger row; never null-out a
+  // recorded hash/nonce (COALESCE); never regress the coordinator state (rank guard); never replace
+  // a non-null hash/nonce with a DIFFERENT value (the WHERE rejects it → no rows changed).
   await input.client.execute({
     sql: `
       UPDATE booking_settlement_effects
-      SET coordinator_ref = ?2, coordinator_state = ?3, settlement_ref = ?4, broadcast_nonce = ?5, updated_at = ?6
+      SET coordinator_ref = ?2,
+          coordinator_state = ?3,
+          settlement_ref = COALESCE(?4, settlement_ref),
+          broadcast_nonce = COALESCE(?5, broadcast_nonce),
+          updated_at = ?6
       WHERE idempotency_key = ?1
+        AND status != 'confirmed'
+        AND (?4 IS NULL OR settlement_ref IS NULL OR settlement_ref = ?4)
+        AND (?5 IS NULL OR broadcast_nonce IS NULL OR broadcast_nonce = ?5)
+        AND ?7 >= (CASE coordinator_state
+              WHEN 'reserving' THEN 0 WHEN 'prepared' THEN 1 WHEN 'broadcast' THEN 2
+              WHEN 'reconciliation_required' THEN 3 WHEN 'replaced' THEN 4 WHEN 'failed_onchain' THEN 4
+              WHEN 'confirmed' THEN 5 ELSE 0 END)
     `,
-    args: [input.idempotencyKey, input.coordinatorRef, input.coordinatorState, input.settlementRef, input.nonce, input.now],
+    args: [input.idempotencyKey, input.coordinatorRef, input.coordinatorState, input.settlementRef, input.nonce, input.now, rank],
   })
   const row = await getBookingSettlementEffectByIdempotencyKey({ client: input.client, idempotencyKey: input.idempotencyKey })
   if (!row) throw new Error("booking_settlement_effect_missing_after_coordinator_mirror")
+  // Distinguish a benign no-op (confirmed / stale regression) from a genuine hash/nonce conflict.
+  if (row.status !== "confirmed") {
+    if (input.settlementRef && row.settlement_ref && row.settlement_ref !== input.settlementRef) {
+      throw conflictError("Booking settlement mirror transaction hash conflict")
+    }
+    if (input.nonce != null && row.broadcast_nonce != null && row.broadcast_nonce !== input.nonce) {
+      throw conflictError("Booking settlement mirror nonce conflict")
+    }
+  }
   return row
 }
 

@@ -66,6 +66,7 @@ function coordinator(env: Env): BookingSettlementCoordinator { return coordinato
 let confirmPollPlanForTests: number[] | null = null
 export function setBookingSettlementConfirmPollPlanForTests(delaysMs: number[] | null): void { confirmPollPlanForTests = delaysMs }
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000] // ~10.5s worst case, well under a request deadline
+const MAX_RECONCILE_ATTEMPTS = 3
 
 function normalizeRecipientAddress(raw: string): string {
   const a = parseExpectedEvmAddress(raw)
@@ -105,12 +106,17 @@ export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectCon
     client, communityId: ctx.communityId, bookingId: effect.bookingId, effectKind: kind,
     idempotencyKey: effect.idempotencyKey, amountCents: effect.amountCents, recipientAddress: recipient, now: ctx.nowUtc,
   }))
-  if (begun.row.status === "confirmed") return { txRef: begun.row.settlement_ref! }
+  if (begun.row.status === "confirmed") {
+    if (!begun.row.settlement_ref) throw new Error("confirmed_booking_settlement_effect_missing_settlement_ref")
+    return { txRef: begun.row.settlement_ref }
+  }
 
   // 2) Wallet-scoped coordinator: serial nonce + sign + broadcast.
   let s = await coordinator(ctx.env).settle(req)
-  // 3) Resolve transitional states via reconcile (bounded).
-  if (s.state === "prepared" || s.state === "reconciliation_required") s = await coordinator(ctx.env).reconcile(req)
+  // 3) Resolve transitional states (prepared = broadcast may have transiently failed) via BOUNDED reconcile.
+  for (let i = 0; (s.state === "prepared" || s.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
+    s = await coordinator(ctx.env).reconcile(req)
+  }
 
   // 4) Mirror the coordinator outcome (pointer + hash + nonce + state) onto the ledger — no signed tx.
   await mirrorCoordinator(ctx, effect, s)
@@ -157,17 +163,13 @@ async function ledgerConfirm(ctx: BookingOperatorEffectContext, effect: BookingO
 
 async function pollConfirm(ctx: BookingOperatorEffectContext, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
   const plan = confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS
-  let last: OperatorSettleResult | null = null
-  for (let i = 0; ; i++) {
-    try {
-      const r = await coordinator(ctx.env).confirm(req, txHash)
-      last = r
-      if (r.state === "confirmed" || r.state === "failed_onchain" || r.state === "replaced") return r
-    } catch {
-      // pending/absent → not confirmable yet; keep polling within the bounded plan.
-    }
-    if (i >= plan.length) break
+  // confirm() returns the chain state (pending → state stays 'broadcast'); only genuine errors
+  // (missing record / hash mismatch / immutable mismatch / RPC failure) throw — those are NOT
+  // retryable and propagate so the operation fails loudly rather than masquerading as "pending".
+  let r = await coordinator(ctx.env).confirm(req, txHash)
+  for (let i = 0; r.state === "broadcast" && i < plan.length; i++) {
     await sleep(plan[i])
+    r = await coordinator(ctx.env).confirm(req, txHash)
   }
-  return last ?? { idempotencyKey: "", txHash, nonce: null, state: "broadcast" }
+  return r
 }

@@ -185,11 +185,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row) throw conflictError("Operator settlement effect not found")
     this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
     if (row.tx_hash !== txHash) throw conflictError("Operator settlement confirmation hash mismatch")
-    if (row.state === "confirmed") return this.result(row)
+    if (row.state === "confirmed" || row.state === "failed_onchain" || row.state === "replaced") return this.result(row)
     const liveness = await chain().txLiveness(this.env, txHash)
+    if (liveness === "success") return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
     if (liveness === "failed") return this.result(this.cas(key, row.version, { state: "failed_onchain" }) ?? this.read(key)!)
-    if (liveness !== "success") throw conflictError(`Operator settlement not confirmable (chain state: ${liveness})`)
-    return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
+    // pending/absent: not confirmable yet — return the current chain state (no exception); the
+    // caller keeps polling, or a later reconcile() resolves it. Pending is NOT an error.
+    return this.result(row)
   }
 
   async reconcile(req: OperatorSettleRequest): Promise<OperatorSettleResult> {
