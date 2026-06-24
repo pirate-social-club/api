@@ -61,6 +61,7 @@ import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/schedule
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
+import { OperatorSigningCoordinatorDO } from "./lib/communities/bookings/operator-signing-coordinator-do"
 import type { Env } from "./env"
 import {
   publicReadCacheFillRequests,
@@ -71,6 +72,7 @@ import {
 export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
+export { OperatorSigningCoordinatorDO }
 
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined

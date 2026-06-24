@@ -198,6 +198,8 @@ export type Env = {
   ELEVENLABS_STT_WEBSOCKET_URL?: string
   // Singleton lease arbiter ensuring only one scheduled (cron) batch runs at a time.
   SCHEDULED_CRON_LOCK?: DurableObjectNamespace
+  // Wallet-scoped serial signer/nonce authority for booking operator USDC settlement.
+  OPERATOR_SIGNING_COORDINATOR?: DurableObjectNamespace
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string
