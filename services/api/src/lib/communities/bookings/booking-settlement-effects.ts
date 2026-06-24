@@ -202,13 +202,6 @@ export async function beginBookingSettlementEffectAttempt(input: {
 // owns the authoritative signed tx; here we only record the coordinator pointer + tx hash + nonce +
 // coordinator state. Status is NOT changed (confirm does that) and signed_tx stays NULL (DO-owned),
 // so terminal coordinator failures never become eligible for the failed -> retry path.
-const COORDINATOR_STATE_RANK: Record<string, number> = {
-  reserving: 0, prepared: 1, broadcast: 2, reconciliation_required: 3, replaced: 4, failed_onchain: 4, confirmed: 5,
-}
-function coordinatorStateRank(state: string | null): number {
-  return state ? COORDINATOR_STATE_RANK[state] ?? 0 : 0
-}
-
 export async function mirrorBookingSettlementCoordinatorEffect(input: {
   client: DbExecutor
   idempotencyKey: string
@@ -218,39 +211,49 @@ export async function mirrorBookingSettlementCoordinatorEffect(input: {
   nonce: number | null
   now: string
 }): Promise<BookingSettlementEffectRow> {
-  const rank = coordinatorStateRank(input.coordinatorState)
-  // Monotonic, concurrency-safe mirror: never touch a confirmed ledger row; never null-out a
-  // recorded hash/nonce (COALESCE); never regress the coordinator state (rank guard); never replace
-  // a non-null hash/nonce with a DIFFERENT value (the WHERE rejects it → no rows changed).
+  // Concurrency-safe mirror. The WHERE enforces the invariants atomically:
+  //  - never touch a confirmed ledger row;
+  //  - coordinator_ref is immutable once set;
+  //  - never null-out / replace a recorded hash or nonce (COALESCE + equality guard);
+  //  - apply ONLY explicit allowed coordinator-state transitions (not a numeric rank, so the valid
+  //    reconciliation_required -> broadcast recovery is permitted while regressions are rejected);
+  //  - terminal states (replaced / failed_onchain / confirmed) have no outgoing transitions.
   await input.client.execute({
     sql: `
       UPDATE booking_settlement_effects
-      SET coordinator_ref = ?2,
+      SET coordinator_ref = COALESCE(coordinator_ref, ?2),
           coordinator_state = ?3,
           settlement_ref = COALESCE(?4, settlement_ref),
           broadcast_nonce = COALESCE(?5, broadcast_nonce),
           updated_at = ?6
       WHERE idempotency_key = ?1
         AND status != 'confirmed'
+        AND (coordinator_ref IS NULL OR coordinator_ref = ?2)
         AND (?4 IS NULL OR settlement_ref IS NULL OR settlement_ref = ?4)
         AND (?5 IS NULL OR broadcast_nonce IS NULL OR broadcast_nonce = ?5)
-        AND ?7 >= (CASE coordinator_state
-              WHEN 'reserving' THEN 0 WHEN 'prepared' THEN 1 WHEN 'broadcast' THEN 2
-              WHEN 'reconciliation_required' THEN 3 WHEN 'replaced' THEN 4 WHEN 'failed_onchain' THEN 4
-              WHEN 'confirmed' THEN 5 ELSE 0 END)
+        AND (
+          coordinator_state IS NULL
+          OR coordinator_state = ?3
+          OR (coordinator_state = 'reserving' AND ?3 = 'prepared')
+          OR (coordinator_state = 'prepared' AND ?3 IN ('broadcast', 'reconciliation_required'))
+          OR (coordinator_state = 'reconciliation_required' AND ?3 IN ('broadcast', 'replaced', 'failed_onchain', 'confirmed'))
+          OR (coordinator_state = 'broadcast' AND ?3 IN ('reconciliation_required', 'replaced', 'failed_onchain', 'confirmed'))
+        )
     `,
-    args: [input.idempotencyKey, input.coordinatorRef, input.coordinatorState, input.settlementRef, input.nonce, input.now, rank],
+    args: [input.idempotencyKey, input.coordinatorRef, input.coordinatorState, input.settlementRef, input.nonce, input.now],
   })
   const row = await getBookingSettlementEffectByIdempotencyKey({ client: input.client, idempotencyKey: input.idempotencyKey })
   if (!row) throw new Error("booking_settlement_effect_missing_after_coordinator_mirror")
-  // Distinguish a benign no-op (confirmed / stale regression) from a genuine hash/nonce conflict.
-  if (row.status !== "confirmed") {
-    if (input.settlementRef && row.settlement_ref && row.settlement_ref !== input.settlementRef) {
-      throw conflictError("Booking settlement mirror transaction hash conflict")
-    }
-    if (input.nonce != null && row.broadcast_nonce != null && row.broadcast_nonce !== input.nonce) {
-      throw conflictError("Booking settlement mirror nonce conflict")
-    }
+  // Hard conflicts are rejected even on a confirmed row: a DIFFERENT non-null coordinator ref, hash,
+  // or nonce means a stale/incorrect caller reused this ledger key for a different transaction.
+  if (row.coordinator_ref && row.coordinator_ref !== input.coordinatorRef) {
+    throw conflictError("Booking settlement mirror coordinator reference conflict")
+  }
+  if (input.settlementRef && row.settlement_ref && row.settlement_ref !== input.settlementRef) {
+    throw conflictError("Booking settlement mirror transaction hash conflict")
+  }
+  if (input.nonce != null && row.broadcast_nonce != null && row.broadcast_nonce !== input.nonce) {
+    throw conflictError("Booking settlement mirror nonce conflict")
   }
   return row
 }

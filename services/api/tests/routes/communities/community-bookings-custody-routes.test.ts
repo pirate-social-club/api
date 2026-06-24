@@ -102,6 +102,31 @@ describe("booking settlement ledger — monotonic mirror (D5 F2/DO)", () => {
     } finally { c.close() }
   })
 
+  test("concurrent stale + advanced mirrors on two connections converge on the invariants", async () => {
+    const { communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_conc", hostUserId: host.userId, bookerUserId: booker.userId })
+    const url = buildLocalCommunityDbUrl(root, communityId)
+    const k = "c:bkg_conc:booking_refund"
+    const seed = dbClient(root, communityId)
+    await beginEffect(seed, communityId, "bkg_conc", k)
+    await mirror(seed, k, "broadcast", "0xA", 5)
+    seed.close()
+    // Race: one valid advance (broadcast → reconciliation_required) vs one stale regression+null
+    // (→ prepared, null hash/nonce). Either ordering must end at the advance with hash/nonce intact.
+    const cA = createClient({ url })
+    const cB = createClient({ url })
+    try {
+      await Promise.all([
+        mirror(cA, k, "reconciliation_required", "0xA", 5).catch(() => {}),
+        mirror(cB, k, "prepared", null, null).catch(() => {}),
+      ])
+      const row = await getBookingSettlementEffectByIdempotencyKey({ client: cA, idempotencyKey: k })
+      expect(row?.coordinator_state).toBe("reconciliation_required") // regression rejected, advance applied
+      expect(row?.settlement_ref).toBe("0xA") // never nulled
+      expect(row?.broadcast_nonce).toBe(5)
+    } finally { cA.close(); cB.close() }
+  })
+
   test("a conflicting hash or nonce is rejected", async () => {
     const { communityId, host, booker, root } = await setup()
     await seedBooking(root, communityId, { bookingId: "bkg_cf", hostUserId: host.userId, bookerUserId: booker.userId })
