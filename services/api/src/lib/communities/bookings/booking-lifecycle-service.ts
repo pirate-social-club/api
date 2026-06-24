@@ -10,6 +10,10 @@ import {
 import type { Env } from "../../../env"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import {
+  executeBookingOperatorEffect,
+  type BookingOperatorEffect,
+} from "./booking-custody-adapter"
 
 type CommunityRepository = Parameters<typeof openCommunityReadClient>[1]
 
@@ -24,6 +28,8 @@ interface BookingRow {
   platform_fee_bps: number
   refund_cents: number | null
   status: string
+  funding_wallet_address: string | null
+  host_payout_wallet_address: string | null
 }
 
 interface BookingLifecycleSnapshot {
@@ -64,26 +70,15 @@ function retainedHostPayout(grossCents: number, refundCents: number, platformFee
   return allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0
 }
 
-// Operator custody effect (USDC out): refund to booker / payout to host. The real on-chain
-// transfer from custody is a separate integration (the money-OUT mirror of PR0's funding-IN); it
-// sits behind a seam so the lifecycle/FSM/refund logic is testable now. The idempotencyKey is the
-// durable dedup handle: the real adapter MUST return the existing tx for a repeated key rather
-// than transferring twice, so a retry after a crash never double-spends.
-export interface OperatorEffect {
-  kind: "payout" | "refund"
-  toUserId: string
-  amountCents: number
-  bookingId: string
-  idempotencyKey: string
-}
-type OperatorEffectExecutor = (env: Env, effect: OperatorEffect) => Promise<{ txRef: string }>
+export type OperatorEffect = BookingOperatorEffect
+type OperatorEffectExecutor = (ctx: SettlementContext, effect: OperatorEffect) => Promise<{ txRef: string }>
 let operatorEffectExecutor: OperatorEffectExecutor | null = null
 export function setBookingOperatorEffectExecutorForTests(fn: OperatorEffectExecutor | null): void {
   operatorEffectExecutor = fn
 }
-async function executeOperatorEffect(env: Env, effect: OperatorEffect): Promise<{ txRef: string }> {
-  if (operatorEffectExecutor) return operatorEffectExecutor(env, effect)
-  throw new Error("operator custody effects are not configured")
+async function executeOperatorEffect(ctx: SettlementContext, effect: OperatorEffect): Promise<{ txRef: string }> {
+  if (operatorEffectExecutor) return operatorEffectExecutor(ctx, effect)
+  return executeBookingOperatorEffect(ctx, effect)
 }
 
 async function loadBooking(env: Env, repo: CommunityRepository, communityId: string, bookingId: string): Promise<BookingRow | null> {
@@ -91,7 +86,8 @@ async function loadBooking(env: Env, repo: CommunityRepository, communityId: str
   try {
     const r = await handle.client.execute({
       sql: `SELECT booking_id, community_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
-                   gross_cents, platform_fee_bps, refund_cents, status
+                   gross_cents, platform_fee_bps, refund_cents, status,
+                   funding_wallet_address, host_payout_wallet_address
             FROM bookings WHERE booking_id = ?1`,
       args: [bookingId],
     })
@@ -108,6 +104,8 @@ async function loadBooking(env: Env, repo: CommunityRepository, communityId: str
       platform_fee_bps: asNumber(row.platform_fee_bps),
       refund_cents: row.refund_cents != null ? asNumber(row.refund_cents) : null,
       status: String(row.status),
+      funding_wallet_address: row.funding_wallet_address ? String(row.funding_wallet_address) : null,
+      host_payout_wallet_address: row.host_payout_wallet_address ? String(row.host_payout_wallet_address) : null,
     }
   } finally {
     await handle.close()
@@ -180,6 +178,11 @@ interface SettlementContext {
   nowUtc: string
 }
 
+function requireSettlementAddress(address: string | null, code: string): string {
+  if (!address) throw new Error(code)
+  return address
+}
+
 // Reservation/outbox settlement: A) persist the refund decision + intent state (BEFORE money),
 // B) idempotency-keyed operator effects, C) finalize. Resumes when the booking is already in the
 // intent state (a prior attempt reserved but didn't finalize) — same keys, no double-spend.
@@ -210,14 +213,16 @@ async function executeSettlement(
   let refundTxRef: string | null = null
   let payoutTxRef: string | null = null
   if (refundCents > 0) {
-    refundTxRef = (await executeOperatorEffect(ctx.env, {
+    refundTxRef = (await executeOperatorEffect(ctx, {
       kind: "refund", toUserId: booking.booker_user_id, amountCents: refundCents,
+      recipientAddress: requireSettlementAddress(booking.funding_wallet_address, "booking_refund_destination_missing"),
       bookingId: booking.booking_id, idempotencyKey: `booking_refund:${booking.booking_id}`,
     })).txRef
   }
   if (payoutCents > 0) {
-    payoutTxRef = (await executeOperatorEffect(ctx.env, {
+    payoutTxRef = (await executeOperatorEffect(ctx, {
       kind: "payout", toUserId: booking.host_user_id, amountCents: payoutCents,
+      recipientAddress: requireSettlementAddress(booking.host_payout_wallet_address, "booking_payout_destination_missing"),
       bookingId: booking.booking_id, idempotencyKey: `booking_payout:${booking.booking_id}`,
     })).txRef
   }
