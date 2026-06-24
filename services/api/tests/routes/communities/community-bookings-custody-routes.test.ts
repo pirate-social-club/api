@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { createClient } from "@libsql/client"
 
 import { executeBookingOperatorEffect, setBookingOperatorUsdcTransferForTests } from "../../../src/lib/communities/bookings/booking-custody-adapter"
+import {
+  beginBookingSettlementEffectAttempt,
+  confirmBookingSettlementEffect,
+  recordBookingSettlementEffectBroadcast,
+  failBookingSettlementEffect,
+} from "../../../src/lib/communities/bookings/booking-settlement-effects"
 import { cancelBooking, completeBooking } from "../../../src/lib/communities/bookings/booking-lifecycle-service"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
@@ -276,5 +282,66 @@ describe("booking custody adapter (D5)", () => {
       status: "confirmed",
       settlement_ref: "0xrecover",
     })
+  })
+})
+
+describe("booking settlement effects — concurrency + validation (D5 hardening)", () => {
+  test("concurrent retries on a failed effect: exactly one claims (no double broadcast)", async () => {
+    const { communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_race", hostUserId: host.userId, bookerUserId: booker.userId })
+    const url = buildLocalCommunityDbUrl(root, communityId)
+    const base = { communityId, bookingId: "bkg_race", effectKind: "booking_refund" as const, idempotencyKey: "booking_refund:bkg_race", amountCents: 5000, recipientAddress: BOOKER_ADDRESS, now: new Date().toISOString() }
+    // Create then fail the effect (no broadcast ref) so it is eligible for retry.
+    const seedClient = createClient({ url })
+    await beginBookingSettlementEffectAttempt({ client: seedClient, ...base })
+    await failBookingSettlementEffect({ client: seedClient, idempotencyKey: base.idempotencyKey, failureReason: "boom", now: base.now })
+    seedClient.close()
+
+    // Two workers race on separate connections.
+    const cA = createClient({ url })
+    const cB = createClient({ url })
+    try {
+      const [a, b] = await Promise.all([
+        beginBookingSettlementEffectAttempt({ client: cA, ...base }).then((r) => r.action).catch(() => "error"),
+        beginBookingSettlementEffectAttempt({ client: cB, ...base }).then((r) => r.action).catch(() => "error"),
+      ])
+      // Exactly ONE wins the retry claim; the other must NOT also broadcast.
+      expect([a, b].filter((x) => x === "retry").length).toBe(1)
+    } finally {
+      cA.close()
+      cB.close()
+    }
+  })
+
+  test("confirm rejects a mismatched transaction reference", async () => {
+    const { communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_ref", hostUserId: host.userId, bookerUserId: booker.userId })
+    const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+    try {
+      const k = "booking_refund:bkg_ref"
+      await beginBookingSettlementEffectAttempt({ client: c, communityId, bookingId: "bkg_ref", effectKind: "booking_refund", idempotencyKey: k, amountCents: 5000, recipientAddress: BOOKER_ADDRESS, now: new Date().toISOString() })
+      await recordBookingSettlementEffectBroadcast({ client: c, idempotencyKey: k, settlementRef: "0xtxA", now: new Date().toISOString() })
+      await expect(confirmBookingSettlementEffect({ client: c, idempotencyKey: k, settlementRef: "0xtxB", now: new Date().toISOString() })).rejects.toThrow()
+      const ok = await confirmBookingSettlementEffect({ client: c, idempotencyKey: k, settlementRef: "0xtxA", now: new Date().toISOString() })
+      expect(ok.status).toBe("confirmed")
+      expect(ok.settlement_ref).toBe("0xtxA")
+    } finally {
+      c.close()
+    }
+  })
+
+  test("idempotency key reuse with different effect data is rejected", async () => {
+    const { communityId, host, booker, root } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg_imm", hostUserId: host.userId, bookerUserId: booker.userId })
+    const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+    try {
+      const k = "booking_refund:bkg_imm"
+      const base = { client: c, communityId, bookingId: "bkg_imm", effectKind: "booking_refund" as const, idempotencyKey: k, amountCents: 5000, recipientAddress: BOOKER_ADDRESS, now: new Date().toISOString() }
+      await beginBookingSettlementEffectAttempt(base)
+      await expect(beginBookingSettlementEffectAttempt({ ...base, amountCents: 9999 })).rejects.toThrow()
+      await expect(beginBookingSettlementEffectAttempt({ ...base, recipientAddress: HOST_ADDRESS })).rejects.toThrow()
+    } finally {
+      c.close()
+    }
   })
 })
