@@ -13,6 +13,9 @@ import type { Env } from "../../src/env"
 import karaokeSessions from "../../src/routes/karaoke-sessions"
 
 export { KaraokeSessionRuntimeDO } from "../../src/lib/karaoke/session-do"
+// Shared integration-test worker bundle: also re-export the booking operator signing coordinator DO
+// so its workerd-isolate tests can bind it (real input gates, RPC concurrency, SQLite storage).
+export { OperatorSigningCoordinatorDO } from "../../src/lib/communities/bookings/operator-signing-coordinator-do"
 
 const app = new Hono<{ Bindings: Env }>()
 app.route("/karaoke/sessions", karaokeSessions)

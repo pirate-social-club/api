@@ -4,6 +4,7 @@
 declare module "cloudflare:test" {
   interface ProvidedEnv {
     KARAOKE_SESSION_RUNTIME: DurableObjectNamespace
+    OPERATOR_SIGNING_COORDINATOR: DurableObjectNamespace
     KARAOKE_GATEWAY_SIGNING_KEY: string
     DB_CMTY_PILOT: D1Database
   }

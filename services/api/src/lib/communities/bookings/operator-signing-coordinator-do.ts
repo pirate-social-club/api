@@ -1,28 +1,18 @@
 import { DurableObject } from "cloudflare:workers"
-import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
-import { parseExpectedEvmAddress } from "../../evm-signer"
-import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
-import {
-  resolvePirateCheckoutRpcUrl,
-  resolvePirateCheckoutSourceChainId,
-  resolvePirateCheckoutUsdcTokenAddress,
-} from "../commerce/checkout-config"
 
-const ERC20_ABI = [
-  "function decimals() view returns (uint8)",
-  "function balanceOf(address owner) view returns (uint256)",
-  "function transfer(address to, uint256 amount) returns (bool)",
-] as const
-const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 const SIGNING_CLAIM_TTL_MS = 60_000
+const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export type OperatorEffectKind = "booking_payout" | "booking_refund"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number): string {
-  return `booking-operator-signer:${getAddress(operatorAddress)}:${chainId}`
+  const a = String(operatorAddress || "").trim()
+  if (!EVM_ADDRESS_RE.test(a)) throw badRequestError("Operator signer address is invalid")
+  // Lowercase (not EIP-55 checksum) so the DO name needs no ethers dependency; deterministic per wallet.
+  return `booking-operator-signer:${a.toLowerCase()}:${chainId}`
 }
 
 // The DO derives the canonical key itself — a caller cannot supply a colliding key.
@@ -51,9 +41,9 @@ export interface OperatorSettleResult {
   state: OperatorSettleState
 }
 
-interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
-type TxLiveness = "success" | "failed" | "pending" | "absent"
-interface ChainPrimitives {
+export interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
+export type TxLiveness = "success" | "failed" | "pending" | "absent"
+export interface ChainPrimitives {
   pendingNonce: (env: Env) => Promise<number>
   latestNonce: (env: Env) => Promise<number>
   gasParams: (env: Env) => Promise<GasParams>
@@ -62,74 +52,26 @@ interface ChainPrimitives {
   txLiveness: (env: Env, txHash: string) => Promise<TxLiveness>
 }
 
-function resolveConfig(env: Env): { privateKey: string; rpcUrl: string; chainId: number; usdc: string } {
-  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY || "").trim())
-  if (!privateKey) throw badRequestError("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY is invalid")
-  return { privateKey, rpcUrl: resolvePirateCheckoutRpcUrl(env), chainId: resolvePirateCheckoutSourceChainId(env), usdc: resolvePirateCheckoutUsdcTokenAddress(env) }
-}
 function normalizeRecipient(raw: string): string {
-  const a = parseExpectedEvmAddress(raw)
-  if (!a) throw badRequestError("Booking settlement recipient address is invalid")
-  return getAddress(a)
-}
-function centsToAtomic(amountCents: number): bigint {
-  if (!Number.isInteger(amountCents) || amountCents <= 0) throw badRequestError("Booking settlement amount must be positive")
-  return BigInt(amountCents) * 10_000n
+  const a = String(raw || "").trim()
+  if (!EVM_ADDRESS_RE.test(a)) throw badRequestError("Booking settlement recipient address is invalid")
+  // Lowercase for the DO's own storage/comparison (no ethers); the real signer re-checksums for the tx.
+  return a.toLowerCase()
 }
 function errMsg(e: unknown): string { return e instanceof Error ? e.message : String(e) }
 
-const realChain: ChainPrimitives = {
-  pendingNonce: async (env) => { const c = resolveConfig(env); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "pending") },
-  latestNonce: async (env) => { const c = resolveConfig(env); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "latest") },
-  gasParams: async (env) => {
-    const c = resolveConfig(env)
-    const fee = await new JsonRpcProvider(c.rpcUrl, c.chainId).getFeeData()
-    return { maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n, maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n, gasLimit: 100_000n }
-  },
-  signVerifiedTransfer: async (env, input) => {
-    const c = resolveConfig(env)
-    const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
-    const usdc = new Contract(c.usdc, ERC20_ABI, signer)
-    const to = normalizeRecipient(input.to)
-    const amount = centsToAtomic(input.amountCents)
-    // The amount math assumes 6 decimals — verify the token actually is, so a misconfigured token
-    // address can never transfer the wrong order of magnitude.
-    if (Number(await usdc.decimals()) !== 6) throw badRequestError("Booking settlement token must be USDC with 6 decimals")
-    if ((await usdc.balanceOf(signer.address) as bigint) < amount) throw badRequestError("Booking settlement operator has insufficient USDC")
-    const data = usdc.interface.encodeFunctionData("transfer", [to, amount])
-    const signedTx = await signer.signTransaction({
-      to: c.usdc, data, nonce: input.nonce, chainId: c.chainId, type: 2, value: 0,
-      maxFeePerGas: input.gas.maxFeePerGas, maxPriorityFeePerGas: input.gas.maxPriorityFeePerGas, gasLimit: input.gas.gasLimit,
-    })
-    const parsed = Transaction.from(signedTx)
-    if (!parsed.from || getAddress(parsed.from) !== signer.address) throw badRequestError("signed tx signer mismatch")
-    if (Number(parsed.chainId) !== c.chainId) throw badRequestError("signed tx chainId mismatch")
-    if (parsed.type !== 2) throw badRequestError("signed tx must be EIP-1559 (type 2)")
-    if (parsed.value !== 0n) throw badRequestError("signed tx must not transfer native value")
-    if (parsed.maxFeePerGas !== input.gas.maxFeePerGas || parsed.maxPriorityFeePerGas !== input.gas.maxPriorityFeePerGas || parsed.gasLimit !== input.gas.gasLimit) {
-      throw badRequestError("signed tx gas fields mismatch")
-    }
-    if (!parsed.to || getAddress(parsed.to) !== getAddress(c.usdc)) throw badRequestError("signed tx token contract mismatch")
-    if (Number(parsed.nonce) !== input.nonce) throw badRequestError("signed tx nonce mismatch")
-    const decoded = ERC20.interface.decodeFunctionData("transfer", parsed.data)
-    if (getAddress(decoded[0] as string) !== to) throw badRequestError("signed tx recipient mismatch")
-    if (BigInt(decoded[1] as bigint) !== amount) throw badRequestError("signed tx amount mismatch")
-    if (!parsed.hash) throw badRequestError("signed tx missing hash")
-    return { signedTx, txHash: parsed.hash }
-  },
-  broadcast: async (env, input) => { const c = resolveConfig(env); await new JsonRpcProvider(c.rpcUrl, c.chainId).broadcastTransaction(input.signedTx) },
-  txLiveness: async (env, txHash) => {
-    const c = resolveConfig(env)
-    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
-    const receipt = await provider.getTransactionReceipt(txHash)
-    if (receipt) return receipt.status === 1 ? "success" : "failed"
-    return (await provider.getTransaction(txHash)) ? "pending" : "absent"
-  },
+// The ethers-backed chain primitives are REGISTERED by the production worker entry (see
+// registerOperatorChainPrimitives) so the DO module has no ethers import — keeping ethers (and its
+// `ws` transitive cycle under miniflare) out of test worker bundles. Tests inject via the seam.
+let registeredChain: ChainPrimitives | null = null
+let chainForTests: ChainPrimitives | null = null
+export function registerOperatorChainPrimitives(c: ChainPrimitives): void { registeredChain = c }
+export function setOperatorChainPrimitivesForTests(p: ChainPrimitives | null): void { chainForTests = p }
+function chain(): ChainPrimitives {
+  const c = chainForTests ?? registeredChain
+  if (!c) throw badRequestError("Operator chain primitives are not configured")
+  return c
 }
-
-let chainForTests: Partial<ChainPrimitives> | null = null
-export function setOperatorChainPrimitivesForTests(p: Partial<ChainPrimitives> | null): void { chainForTests = p }
-function chain(): ChainPrimitives { return chainForTests ? { ...realChain, ...chainForTests } : realChain }
 
 interface EffectRow {
   idempotency_key: string

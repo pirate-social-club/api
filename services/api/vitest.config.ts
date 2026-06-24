@@ -25,6 +25,10 @@ export default defineWorkersConfig({
               className: "KaraokeSessionRuntimeDO",
               useSQLite: true,
             },
+            OPERATOR_SIGNING_COORDINATOR: {
+              className: "OperatorSigningCoordinatorDO",
+              useSQLite: true,
+            },
           },
           bindings: {
             ENVIRONMENT: "test",
