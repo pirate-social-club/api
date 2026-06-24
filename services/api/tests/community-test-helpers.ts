@@ -82,6 +82,9 @@ export function buildUserRepository(users: Record<string, User>): UserRepository
     async getWalletAttachmentById() {
       return null
     },
+    async setIdentityWallet(userId: string) {
+      return users[userId] ?? null
+    },
   }
 }
 

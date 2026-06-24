@@ -117,6 +117,9 @@ function buildStoryUserRepository(userId: string): UserRepository {
     async getWalletAttachmentById() {
       return null
     },
+    async setIdentityWallet() {
+      return null
+    },
   }
 }
 
@@ -570,6 +573,9 @@ describe("story royalty registration service", () => {
               async getWalletAttachmentById() {
                 return null
               },
+              async setIdentityWallet() {
+                return null
+              },
             },
           }),
         }
@@ -1020,6 +1026,9 @@ describe("story royalty registration service", () => {
           async getWalletAttachmentById() {
             return null
           },
+          async setIdentityWallet() {
+            return null
+          },
         },
       })
 
@@ -1106,6 +1115,9 @@ describe("story royalty registration service", () => {
               return [buildWalletAttachment()]
             },
             async getWalletAttachmentById() {
+              return null
+            },
+            async setIdentityWallet() {
               return null
             },
           },
