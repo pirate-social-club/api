@@ -672,7 +672,7 @@ describe("story royalty registration service", () => {
 
         await createSongAssetForPost({
           env,
-          client: tx,
+          client: { execute: tx.execute.bind(tx), transaction: db.client.transaction.bind(db.client) },
           communityId,
           post: {
             ...post,
@@ -760,7 +760,7 @@ describe("story royalty registration service", () => {
 
         await createSongAssetForPost({
           env,
-          client: tx,
+          client: { execute: tx.execute.bind(tx), transaction: db.client.transaction.bind(db.client) },
           communityId,
           post: {
             ...post,
@@ -906,7 +906,7 @@ describe("story royalty registration service", () => {
 
         const derivative = await createSongAssetForPost({
           env,
-          client: tx,
+          client: { execute: tx.execute.bind(tx), transaction: db.client.transaction.bind(db.client) },
           communityId,
           post: {
             ...derivativePost,

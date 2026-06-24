@@ -516,6 +516,12 @@ export type Post = {
   label_assignment_result_json?: Record<string, unknown> | null
 }
 
+export type RoyaltyAllocationRequest = {
+  recipient_kind: "creator" | "collaborator"
+  wallet_address: string
+  share_bps: number
+}
+
 type CreatePostRequestBase = {
   idempotency_key: string
   authorship_mode?: "human_direct" | "user_agent"
@@ -549,6 +555,7 @@ type CreatePostRequestBase = {
   upstream_asset_refs?: Array<string> | null
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null
   commercial_rev_share_pct?: number | null
+  royalty_allocations?: Array<RoyaltyAllocationRequest> | null
   lyrics?: string | null
   source_post?: string | null
   source_community?: string | null

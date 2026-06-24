@@ -1,4 +1,15 @@
-import type { Client } from "../../sql-client"
+import type { Client, InStatement } from "../../sql-client"
+import type { RoyaltyAllocationRequest } from "../../../types"
+import {
+  ROYALTY_ALLOCATION_VERSION,
+  assertExistingAssetAllocationMatches,
+  buildAllocationInsertStatements,
+  buildAllocationRows,
+  fingerprintForRequest,
+  persistAssetWithAllocations,
+  resolveAllocationChainId,
+  resolveCreatorWalletSnapshot,
+} from "./royalty-allocations"
 import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
 import { envFlag, isLocalEnvironment, nowIso } from "../../helpers"
@@ -343,7 +354,7 @@ async function authorizeAssetAccess(input: {
 
 export async function createAssetForPost(input: {
   env: Env
-  client: Pick<Client, "execute">
+  client: Pick<Client, "execute" | "transaction">
   communityId: string
   post: Post
   assetKind: Asset["asset_kind"]
@@ -356,6 +367,7 @@ export async function createAssetForPost(input: {
   displayTitle?: string | null
   licensePreset?: StoryLicensePreset | null
   commercialRevSharePct?: number | null
+  royaltyAllocations?: RoyaltyAllocationRequest[] | null
   requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
@@ -364,6 +376,17 @@ export async function createAssetForPost(input: {
   }
   const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (existing) {
+    if (input.royaltyAllocations && input.royaltyAllocations.length > 0) {
+      await assertExistingAssetAllocationMatches({
+        client: input.client,
+        communityId: input.communityId,
+        assetId: input.post.asset_id,
+        requestedFingerprint: await fingerprintForRequest(
+          input.royaltyAllocations,
+          resolveAllocationChainId(input.env),
+        ),
+      })
+    }
     return serializeAsset(existing)
   }
   const createdAt = nowIso()
@@ -595,7 +618,33 @@ export async function createAssetForPost(input: {
     })
   }
 
-  await input.client.execute({
+  const requestedAllocations = input.royaltyAllocations ?? []
+  let royaltyAllocationStatus: "none" | "draft" = "none"
+  let royaltyAllocationFingerprint: string | null = null
+  let allocationStatements: InStatement[] = []
+  if (requestedAllocations.length > 0) {
+    const allocationChainId = resolveAllocationChainId(input.env)
+    const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
+    const creator = await resolveCreatorWalletSnapshot({
+      userRepository: input.userRepository,
+      userId: input.post.author_user_id ?? "",
+    })
+    allocationStatements = buildAllocationInsertStatements(buildAllocationRows({
+      assetId: input.post.asset_id,
+      communityId: input.communityId,
+      creatorUserId: input.post.author_user_id ?? "",
+      allocations: requestedAllocations,
+      fingerprint,
+      creator,
+      chainId: allocationChainId,
+      now: createdAt,
+      newId: () => `rya_${crypto.randomUUID()}`,
+    }))
+    royaltyAllocationStatus = "draft"
+    royaltyAllocationFingerprint = fingerprint
+  }
+
+  const assetInsert: InStatement = {
     sql: `
       INSERT INTO assets (
         asset_id, community_id, source_post_id, display_title, song_artifact_bundle_id, creator_user_id, asset_kind,
@@ -607,7 +656,8 @@ export async function createAssetForPost(input: {
         story_revenue_token, story_royalty_registration_status, locked_delivery_status, locked_delivery_ref,
         locked_delivery_error, created_at, updated_at, story_publish_tx_ref, story_asset_version_id,
         story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
-        story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json
+        story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json,
+        royalty_allocation_status, royalty_allocation_version, royalty_allocation_fingerprint
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7,
         ?8, ?9, ?10, ?11,
@@ -617,7 +667,8 @@ export async function createAssetForPost(input: {
         ?25, ?26, ?27, ?28, ?29,
         ?30, ?31, ?32, ?32, ?33,
         ?34, ?35, ?36, ?37, ?38,
-        ?39, ?40, ?41
+        ?39, ?40, ?41,
+        ?42, ?43, ?44
       )
     `,
     args: [
@@ -662,8 +713,20 @@ export async function createAssetForPost(input: {
       storyWriteCondition,
       lockedDeliveryStorageRef,
       lockedDeliveryMetadataJson,
+      royaltyAllocationStatus,
+      ROYALTY_ALLOCATION_VERSION,
+      royaltyAllocationFingerprint,
     ],
-  })
+  }
+  if (allocationStatements.length > 0) {
+    await persistAssetWithAllocations({
+      client: input.client,
+      assetInsert,
+      allocationStatements,
+    })
+  } else {
+    await input.client.execute(assetInsert)
+  }
   const projectionCandidate = {
     assetKind: input.assetKind,
     publicationStatus,
@@ -711,12 +774,13 @@ export async function createAssetForPost(input: {
 
 export async function createSongAssetForPost(input: {
   env: Env
-  client: Pick<Client, "execute">
+  client: Pick<Client, "execute" | "transaction">
   communityId: string
   post: Post
   bundle: SongArtifactBundle
   licensePreset: StoryLicensePreset | null
   commercialRevSharePct: number | null
+  royaltyAllocations?: RoyaltyAllocationRequest[] | null
   requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
@@ -735,6 +799,7 @@ export async function createSongAssetForPost(input: {
     displayTitle: input.bundle.title,
     licensePreset: input.licensePreset,
     commercialRevSharePct: input.commercialRevSharePct,
+    royaltyAllocations: input.royaltyAllocations ?? null,
     requireStoryRoyaltyRegistration: input.requireStoryRoyaltyRegistration,
     userRepository: input.userRepository,
   })
