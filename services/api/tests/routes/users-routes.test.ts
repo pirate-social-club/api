@@ -5,6 +5,8 @@ import type { Env } from "../../src/types"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
 const WALLET_B = "0x2222222222222222222222222222222222222222"
+const WALLET_C = "0x3333333333333333333333333333333333333333"
+const WALLET_D = "0x4444444444444444444444444444444444444444"
 
 type WalletAttachment = { wallet_attachment: string; wallet_address: string; is_primary: boolean }
 
@@ -23,14 +25,18 @@ function request(url: string, init: { method: string; body?: unknown; token?: st
   ))
 }
 
-async function exchangeWithWallets(env: Env, sub: string): Promise<{
+async function exchangeWithWallets(
+  env: Env,
+  sub: string,
+  wallets: [string, string] = [WALLET_A, WALLET_B],
+): Promise<{
   accessToken: string
   walletAttachments: WalletAttachment[]
 }> {
   const jwt = await mintUpstreamJwt(env, {
     sub,
-    wallet_addresses: [WALLET_A, WALLET_B],
-    selected_wallet_address: WALLET_A,
+    wallet_addresses: wallets,
+    selected_wallet_address: wallets[0],
   })
   const response = await request("http://pirate.test/auth/session/exchange", {
     method: "POST",
@@ -88,7 +94,11 @@ describe("PUT /users/me/identity-wallet", () => {
   test("returns 404 for a nonexistent or foreign wallet attachment", async () => {
     const env = buildTestEnv()
     const { accessToken } = await exchangeWithWallets(env, "identity-wallet-owner")
-    const foreign = await exchangeWithWallets(env, "identity-wallet-foreigner")
+    const foreign = await exchangeWithWallets(
+      env,
+      "identity-wallet-foreigner",
+      [WALLET_C, WALLET_D],
+    )
     const foreignWalletId = foreign.walletAttachments[0]!.wallet_attachment
 
     const nonexistent = await request("http://pirate.test/users/me/identity-wallet", {
