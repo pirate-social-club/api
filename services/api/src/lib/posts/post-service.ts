@@ -284,6 +284,7 @@ export async function createPost(input: {
           bundle: resolvedSongBundleForAsset.bundle,
           licensePreset: input.body.license_preset ?? null,
           commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          royaltyAllocations: input.body.royalty_allocations ?? null,
           requireStoryRoyaltyRegistration,
           userRepository: input.userRepository,
         })
@@ -314,6 +315,7 @@ export async function createPost(input: {
           bundleId: null,
           licensePreset: input.body.license_preset ?? null,
           commercialRevSharePct: input.body.commercial_rev_share_pct ?? null,
+          royaltyAllocations: input.body.royalty_allocations ?? null,
           requireStoryRoyaltyRegistration,
           userRepository: input.userRepository,
         })

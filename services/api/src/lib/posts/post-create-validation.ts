@@ -43,6 +43,65 @@ function validateAssetLicense(input: {
   }
 }
 
+const EVM_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
+
+function isRoyaltyBearingLicense(value: unknown): boolean {
+  return value === "commercial-use" || value === "commercial-remix"
+}
+
+// Structural validation of a declared initial royalty split (spec: royalty-allocation.md).
+// The creator-wallet-identity + chain/wallet snapshot checks need auth context and are
+// enforced in the asset-creation service, atomically with persistence.
+function validateRoyaltyAllocations(input: { body: PostWriteRequest; contentLabel: string }): void {
+  const allocations = input.body.royalty_allocations
+  if (allocations == null) return
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    throw badRequestError("royalty_allocations must be a non-empty array when provided")
+  }
+  if (allocations.length > 10) {
+    throw badRequestError("royalty_allocations supports at most 10 recipients")
+  }
+  let creatorCount = 0
+  let totalBps = 0
+  let hasCollaborator = false
+  const seenWallets = new Set<string>()
+  for (const allocation of allocations) {
+    if (allocation.recipient_kind !== "creator" && allocation.recipient_kind !== "collaborator") {
+      throw badRequestError("royalty_allocations recipient_kind must be creator or collaborator")
+    }
+    if (allocation.recipient_kind === "creator") {
+      creatorCount += 1
+    } else {
+      hasCollaborator = true
+    }
+    const shareBps = allocation.share_bps
+    if (typeof shareBps !== "number" || !Number.isInteger(shareBps) || shareBps <= 0 || shareBps > 10000) {
+      throw badRequestError("royalty_allocations share_bps must be an integer from 1 to 10000")
+    }
+    totalBps += shareBps
+    const wallet = (allocation.wallet_address ?? "").trim()
+    if (!EVM_ADDRESS_PATTERN.test(wallet)) {
+      throw badRequestError("royalty_allocations wallet_address must be a valid EVM address")
+    }
+    const normalized = wallet.toLowerCase()
+    if (seenWallets.has(normalized)) {
+      throw badRequestError("royalty_allocations wallet_address values must be unique")
+    }
+    seenWallets.add(normalized)
+  }
+  if (creatorCount !== 1) {
+    throw badRequestError("royalty_allocations must include exactly one creator allocation")
+  }
+  if (totalBps !== 10000) {
+    throw badRequestError("royalty_allocations shares must total 10000 bps")
+  }
+  // Atomic Story distribution needs a commercial royalty policy (vault); a real split on
+  // non-royalty-bearing terms can never register, so reject it at validation.
+  if (hasCollaborator && !isRoyaltyBearingLicense(input.body.license_preset)) {
+    throw badRequestError(`royalty_allocations with a collaborator require a commercial license for this ${input.contentLabel}`)
+  }
+}
+
 function validateNullableIntegerField(value: unknown, fieldName: string): void {
   if (value == null) return
   if (typeof value !== "number" || !Number.isInteger(value)) {
@@ -222,6 +281,13 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
       contentLabel: body.rights_basis === "derivative" ? "derivative video" : "original video",
       requireLicense: body.access_mode === "locked",
     })
+    if (body.access_mode !== "locked" && body.royalty_allocations != null) {
+      throw badRequestError("royalty_allocations are only supported for locked video asset posts")
+    }
+    validateRoyaltyAllocations({
+      body,
+      contentLabel: body.rights_basis === "derivative" ? "derivative video" : "original video",
+    })
   }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")
@@ -263,6 +329,9 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.commercial_rev_share_pct != null) {
       throw badRequestError("commercial_rev_share_pct is only supported for original asset posts")
     }
+    if (body.royalty_allocations != null) {
+      throw badRequestError("royalty_allocations are only supported for song and video posts")
+    }
   }
   if (body.post_type === "song") {
     if ((body.identity_mode ?? "public") !== "public") {
@@ -280,6 +349,12 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
         ? "song"
         : "original song",
       requireLicense: true,
+    })
+    validateRoyaltyAllocations({
+      body,
+      contentLabel: body.song_mode === "remix" || body.rights_basis === "derivative"
+        ? "song"
+        : "original song",
     })
   }
 }
