@@ -1,31 +1,27 @@
-import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
+import { getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { conflictError, badRequestError } from "../../errors"
 import { parseExpectedEvmAddress } from "../../evm-signer"
-import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
 import { openCommunityWriteClient } from "../community-read-access"
 import {
   beginBookingSettlementEffectAttempt,
   confirmBookingSettlementEffect,
-  failBookingSettlementEffect,
-  recordBookingSettlementEffectSubmission,
+  mirrorBookingSettlementCoordinatorEffect,
   type BookingSettlementEffectKind,
 } from "./booking-settlement-effects"
 import {
-  resolvePirateCheckoutRpcUrl,
+  operatorSigningCoordinatorName,
+  type OperatorSettleRequest,
+  type OperatorSettleResult,
+  type OperatorSigningCoordinatorDO,
+} from "./operator-signing-coordinator-do"
+import {
+  resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutSourceChainId,
-  resolvePirateCheckoutTxWaitTimeoutMs,
-  resolvePirateCheckoutUsdcTokenAddress,
 } from "../commerce/checkout-config"
 
 type CommunityRepository = Parameters<typeof openCommunityWriteClient>[1]
-
-const ERC20_ABI = [
-  "function decimals() view returns (uint8)",
-  "function balanceOf(address owner) view returns (uint256)",
-  "function transfer(address to, uint256 amount) returns (bool)",
-] as const
 
 export interface BookingOperatorEffect {
   kind: "payout" | "refund"
@@ -43,142 +39,45 @@ interface BookingOperatorEffectContext {
   nowUtc: string
 }
 
-// Durable submission seams. prepare SIGNS the transfer without sending and returns the raw signed
-// tx + its hash + nonce; broadcast SENDS a raw signed tx (idempotent — a re-broadcast of the same
-// nonce is a no-op on chain); wait blocks on confirmation. Split so the signed tx can be persisted
-// BEFORE it is ever broadcast.
-type PrepareOperatorUsdcTransfer = (env: Env, input: { to: string; amountCents: number }) => Promise<{ signedTx: string; txRef: string; nonce: number }>
-type BroadcastSignedOperatorUsdcTransfer = (env: Env, input: { signedTx: string; expectedTxRef: string }) => Promise<void>
-type WaitForOperatorUsdcTransfer = (env: Env, input: { txRef: string }) => Promise<void>
-
-// The operator wallet has ONE nonce sequence shared by every settlement effect. Serialize the
-// sign→record→broadcast critical section so concurrent effects receive sequential nonces and never
-// collide on the same nonce. This is an in-process (per-isolate) guard; cross-isolate
-// serialization is enforced by settling only from the single serial cron lease (see D4).
-let operatorSigningLock: Promise<unknown> = Promise.resolve()
-function withOperatorSigningLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = operatorSigningLock.then(fn, fn)
-  operatorSigningLock = run.then(() => undefined, () => undefined)
-  return run
+// Coordinator seam: the wallet-scoped Durable Object is the nonce/signing/broadcast/chain authority.
+// A seam keeps the adapter unit-testable without spinning a DO; the DO has its own isolate tests.
+export interface BookingSettlementCoordinator {
+  settle(req: OperatorSettleRequest): Promise<OperatorSettleResult>
+  confirm(req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult>
+  reconcile(req: OperatorSettleRequest): Promise<OperatorSettleResult>
 }
 
-let prepareOperatorUsdcTransferForTests: PrepareOperatorUsdcTransfer | null = null
-let broadcastSignedOperatorUsdcTransferForTests: BroadcastSignedOperatorUsdcTransfer | null = null
-let waitForOperatorUsdcTransferForTests: WaitForOperatorUsdcTransfer | null = null
+let coordinatorForTests: BookingSettlementCoordinator | null = null
+export function setBookingSettlementCoordinatorForTests(c: BookingSettlementCoordinator | null): void { coordinatorForTests = c }
 
-export function setBookingOperatorUsdcTransferForTests(input: {
-  prepare?: PrepareOperatorUsdcTransfer
-  broadcast?: BroadcastSignedOperatorUsdcTransfer
-  wait?: WaitForOperatorUsdcTransfer
-} | null): void {
-  prepareOperatorUsdcTransferForTests = input?.prepare ?? null
-  broadcastSignedOperatorUsdcTransferForTests = input?.broadcast ?? null
-  waitForOperatorUsdcTransferForTests = input?.wait ?? null
+function realCoordinator(env: Env): BookingSettlementCoordinator {
+  const ns = env.OPERATOR_SIGNING_COORDINATOR as DurableObjectNamespace<OperatorSigningCoordinatorDO> | undefined
+  if (!ns) throw badRequestError("OPERATOR_SIGNING_COORDINATOR binding is not configured")
+  const stub = ns.getByName(operatorSigningCoordinatorName(resolvePirateCheckoutOperatorAddress(env), resolvePirateCheckoutSourceChainId(env)))
+  return {
+    settle: (req) => stub.settle(req),
+    confirm: (req, txHash) => stub.confirm(req, txHash),
+    reconcile: (req) => stub.reconcile(req),
+  }
 }
+function coordinator(env: Env): BookingSettlementCoordinator { return coordinatorForTests ?? realCoordinator(env) }
+
+// Bounded confirm polling. Tests can shorten/skip the delays.
+let confirmPollPlanForTests: number[] | null = null
+export function setBookingSettlementConfirmPollPlanForTests(delaysMs: number[] | null): void { confirmPollPlanForTests = delaysMs }
+const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000] // ~10.5s worst case, well under a request deadline
 
 function normalizeRecipientAddress(raw: string): string {
-  const address = parseExpectedEvmAddress(raw)
-  if (!address) throw badRequestError("Booking settlement recipient address is invalid")
-  return getAddress(address)
+  const a = parseExpectedEvmAddress(raw)
+  if (!a) throw badRequestError("Booking settlement recipient address is invalid")
+  return getAddress(a)
 }
-
-function resolveOperatorTransferConfig(env: Env): {
-  privateKey: string
-  rpcUrl: string
-  chainId: number
-  usdcTokenAddress: string
-  txWaitTimeoutMs: number
-} {
-  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY || "").trim())
-  if (!privateKey) throw badRequestError("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY is invalid")
-  return {
-    privateKey,
-    rpcUrl: resolvePirateCheckoutRpcUrl(env),
-    chainId: resolvePirateCheckoutSourceChainId(env),
-    usdcTokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
-    txWaitTimeoutMs: resolvePirateCheckoutTxWaitTimeoutMs(env),
-  }
-}
-
-function usdcCentsToAtomic(amountCents: number): bigint {
-  if (!Number.isInteger(amountCents) || amountCents <= 0) {
-    throw badRequestError("Booking settlement amount must be positive")
-  }
-  return BigInt(amountCents) * 10_000n
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-// Sign the USDC transfer WITHOUT broadcasting. Returns the raw signed tx, its deterministic hash,
-// and the nonce so the submission can be persisted before the transfer ever goes out.
-async function prepareOperatorUsdcTransfer(env: Env, input: { to: string; amountCents: number }): Promise<{ signedTx: string; txRef: string; nonce: number }> {
-  if (prepareOperatorUsdcTransferForTests) return prepareOperatorUsdcTransferForTests(env, input)
-
-  const config = resolveOperatorTransferConfig(env)
-  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
-  const signer = new Wallet(config.privateKey, provider)
-  const usdc = new Contract(config.usdcTokenAddress, ERC20_ABI, signer)
-  const to = normalizeRecipientAddress(input.to)
-  const amount = usdcCentsToAtomic(input.amountCents)
-
-  const decimals = Number(await usdc.decimals())
-  if (decimals !== 6) throw badRequestError("Booking settlement token must be USDC with 6 decimals")
-  const balance = await usdc.balanceOf(signer.address) as bigint
-  if (balance < amount) throw badRequestError("Booking settlement operator has insufficient USDC")
-
-  const data = usdc.interface.encodeFunctionData("transfer", [to, amount])
-  const populated = await signer.populateTransaction({ to: config.usdcTokenAddress, data })
-  // signTransaction rejects an explicit `from`; the nonce/gas/chainId are already populated.
-  delete (populated as { from?: unknown }).from
-  const signedTx = await signer.signTransaction(populated)
-  const txRef = Transaction.from(signedTx).hash
-  if (!txRef) throw badRequestError("booking_settlement_missing_tx_hash")
-  if (populated.nonce == null) throw badRequestError("booking_settlement_missing_nonce")
-  return { signedTx, txRef, nonce: Number(populated.nonce) }
-}
-
-// Broadcast a raw signed tx. On "already known"/"nonce too low" we do NOT assume success — that
-// could mean a DIFFERENT transaction consumed this nonce. Verify the EXACT expected hash exists on
-// chain; only then is it our (idempotent) transaction. Otherwise the nonce was replaced and this
-// payout would strand, so surface a conflict for reconciliation.
-async function broadcastSignedOperatorUsdcTransfer(env: Env, input: { signedTx: string; expectedTxRef: string }): Promise<void> {
-  if (broadcastSignedOperatorUsdcTransferForTests) return broadcastSignedOperatorUsdcTransferForTests(env, input)
-
-  const config = resolveOperatorTransferConfig(env)
-  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
-  try {
-    await provider.broadcastTransaction(input.signedTx)
-  } catch (error) {
-    const msg = errorMessage(error).toLowerCase()
-    const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
-    if (!nonceConsumed) throw error
-    // The nonce is gone — confirm it was consumed by OUR transaction, not a replacement.
-    const existing = await provider.getTransaction(input.expectedTxRef)
-    if (!existing) {
-      throw conflictError("Booking settlement nonce was replaced by another transaction (reconciliation required)")
-    }
-  }
-}
-
-async function waitForOperatorUsdcTransfer(env: Env, input: { txRef: string }): Promise<void> {
-  if (waitForOperatorUsdcTransferForTests) return waitForOperatorUsdcTransferForTests(env, input)
-
-  const config = resolveOperatorTransferConfig(env)
-  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
-  const receipt = await provider.waitForTransaction(input.txRef, 1, config.txWaitTimeoutMs)
-  if (!receipt || receipt.status !== 1) throw badRequestError("booking_settlement_transfer_failed")
-}
-
 function effectKind(effect: BookingOperatorEffect): BookingSettlementEffectKind {
   return effect.kind === "refund" ? "booking_refund" : "booking_payout"
 }
+function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)) }
 
-async function withCommunityWrite<T>(
-  ctx: BookingOperatorEffectContext,
-  fn: (client: Awaited<ReturnType<typeof openCommunityWriteClient>>["client"]) => Promise<T>,
-): Promise<T> {
+async function withCommunityWrite<T>(ctx: BookingOperatorEffectContext, fn: (client: Awaited<ReturnType<typeof openCommunityWriteClient>>["client"]) => Promise<T>): Promise<T> {
   const handle = await openCommunityWriteClient(ctx.env, ctx.communityRepository, ctx.communityId)
   try {
     return await fn(handle.client)
@@ -187,76 +86,88 @@ async function withCommunityWrite<T>(
   }
 }
 
-export async function executeBookingOperatorEffect(
-  ctx: BookingOperatorEffectContext,
-  effect: BookingOperatorEffect,
-): Promise<{ txRef: string }> {
+/**
+ * Execute one booking settlement money-out. Two layers: a booking-scoped ledger mirror (idempotent
+ * per effect within the community) and the wallet-scoped coordinator DO (serial nonce/sign/broadcast
+ * + chain state). Returns only when the coordinator has CONFIRMED the on-chain receipt. A
+ * confirmation timeout throws a retryable error and leaves both records recoverable (a later
+ * reconcile resumes) — never marked failed. Terminal coordinator failures (replaced / failed_onchain)
+ * are surfaced without ever creating another transaction.
+ */
+export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectContext, effect: BookingOperatorEffect): Promise<{ txRef: string }> {
   if (effect.amountCents <= 0) throw badRequestError("Booking settlement amount must be positive")
-  const recipientAddress = normalizeRecipientAddress(effect.recipientAddress)
+  const recipient = normalizeRecipientAddress(effect.recipientAddress)
+  const kind = effectKind(effect)
+  const req: OperatorSettleRequest = { communityId: ctx.communityId, bookingId: effect.bookingId, effectKind: kind, amountCents: effect.amountCents, recipientAddress: recipient }
 
-  const begun = await withCommunityWrite(ctx, async (client) => beginBookingSettlementEffectAttempt({
-    client,
-    communityId: ctx.communityId,
-    bookingId: effect.bookingId,
-    effectKind: effectKind(effect),
-    idempotencyKey: effect.idempotencyKey,
-    amountCents: effect.amountCents,
-    recipientAddress,
-    now: ctx.nowUtc,
+  // 1) Booking-scoped ledger reservation (idempotent CAS). Already-confirmed short-circuits.
+  const begun = await withCommunityWrite(ctx, (client) => beginBookingSettlementEffectAttempt({
+    client, communityId: ctx.communityId, bookingId: effect.bookingId, effectKind: kind,
+    idempotencyKey: effect.idempotencyKey, amountCents: effect.amountCents, recipientAddress: recipient, now: ctx.nowUtc,
   }))
+  if (begun.row.status === "confirmed") return { txRef: begun.row.settlement_ref! }
 
-  const row = begun.row
+  // 2) Wallet-scoped coordinator: serial nonce + sign + broadcast.
+  let s = await coordinator(ctx.env).settle(req)
+  // 3) Resolve transitional states via reconcile (bounded).
+  if (s.state === "prepared" || s.state === "reconciliation_required") s = await coordinator(ctx.env).reconcile(req)
 
-  if (row.status === "confirmed") {
-    if (!row.settlement_ref) throw new Error("confirmed_booking_settlement_effect_missing_ref")
-    return { txRef: row.settlement_ref }
+  // 4) Mirror the coordinator outcome (pointer + hash + nonce + state) onto the ledger — no signed tx.
+  await mirrorCoordinator(ctx, effect, s)
+
+  // 5) Per-state handling.
+  if (s.state === "confirmed") {
+    await ledgerConfirm(ctx, effect, s.txHash!)
+    return { txRef: s.txHash! }
   }
-
-  // Recovery: a prior attempt already SIGNED and durably recorded the tx (crash in the broadcast
-  // window). Re-broadcast the identical signed tx (idempotent by nonce), wait, and confirm — money
-  // moves at most once.
-  if (row.status === "submitted" && row.signed_tx && row.settlement_ref) {
-    await broadcastSignedOperatorUsdcTransfer(ctx.env, { signedTx: row.signed_tx, expectedTxRef: row.settlement_ref })
-    await waitForOperatorUsdcTransfer(ctx.env, { txRef: row.settlement_ref })
-    const confirmed = await withCommunityWrite(ctx, async (client) => confirmBookingSettlementEffect({
-      client, idempotencyKey: effect.idempotencyKey, settlementRef: row.settlement_ref!, now: ctx.nowUtc,
-    }))
-    return { txRef: confirmed.settlement_ref! }
+  if (s.state === "replaced" || s.state === "failed_onchain") {
+    // Terminal: leave the ledger submitted (never the failed -> retry path); the coordinator_state
+    // mirror records the terminal reason. Never create another transaction.
+    throw conflictError(`Booking settlement terminal at coordinator (${s.state}); reconciliation required`)
   }
-
-  // Another worker owns an in-flight attempt that has not signed yet (no signed_tx ⇒ nothing was
-  // broadcast). Back off rather than starting a competing transfer.
-  if (begun.action === "existing_submitted" && !row.signed_tx) {
-    throw conflictError("Booking settlement effect has an unresolved submitted attempt")
+  if (s.state === "reserving" || s.state === "failed_preparation") {
+    // Nothing broadcast; retryable. Leave records submitted for a later reconcile.
+    throw conflictError("Booking settlement is not yet broadcast (retryable)")
   }
+  // s.state === "broadcast": poll confirm with bounded backoff.
+  if (!s.txHash) throw conflictError("Booking settlement broadcast missing transaction hash")
+  const confirmed = await pollConfirm(ctx, req, s.txHash)
+  await mirrorCoordinator(ctx, effect, confirmed)
+  if (confirmed.state === "confirmed") {
+    await ledgerConfirm(ctx, effect, confirmed.txHash ?? s.txHash)
+    return { txRef: confirmed.txHash ?? s.txHash }
+  }
+  if (confirmed.state === "failed_onchain" || confirmed.state === "replaced") {
+    throw conflictError(`Booking settlement terminal at coordinator (${confirmed.state}); reconciliation required`)
+  }
+  // Confirmation did not complete within the bounded window — retryable, records left recoverable.
+  throw conflictError("Booking settlement confirmation pending (retryable)")
+}
 
-  // We own a fresh attempt. Serialize sign→record→broadcast under the operator signing lock so
-  // concurrent effects allocate sequential nonces (no two share a nonce). SIGN first (no money moves
-  // yet); a pre-sign failure is safe to mark failed because nothing was broadcast. The signed tx +
-  // hash + nonce are persisted BEFORE broadcasting, so after that point we never mark failed and any
-  // retry recovers via the recorded signed tx.
-  const prepared = await withOperatorSigningLock(async () => {
-    let p: { signedTx: string; txRef: string; nonce: number }
+async function mirrorCoordinator(ctx: BookingOperatorEffectContext, effect: BookingOperatorEffect, s: OperatorSettleResult): Promise<void> {
+  await withCommunityWrite(ctx, (client) => mirrorBookingSettlementCoordinatorEffect({
+    client, idempotencyKey: effect.idempotencyKey, coordinatorRef: s.idempotencyKey, coordinatorState: s.state,
+    settlementRef: s.txHash, nonce: s.nonce, now: ctx.nowUtc,
+  }))
+}
+
+async function ledgerConfirm(ctx: BookingOperatorEffectContext, effect: BookingOperatorEffect, txHash: string): Promise<void> {
+  await withCommunityWrite(ctx, (client) => confirmBookingSettlementEffect({ client, idempotencyKey: effect.idempotencyKey, settlementRef: txHash, now: ctx.nowUtc }))
+}
+
+async function pollConfirm(ctx: BookingOperatorEffectContext, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
+  const plan = confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS
+  let last: OperatorSettleResult | null = null
+  for (let i = 0; ; i++) {
     try {
-      p = await prepareOperatorUsdcTransfer(ctx.env, { to: recipientAddress, amountCents: effect.amountCents })
-    } catch (error) {
-      await withCommunityWrite(ctx, async (client) => failBookingSettlementEffect({
-        client, idempotencyKey: effect.idempotencyKey, failureReason: errorMessage(error), now: ctx.nowUtc,
-      }))
-      throw error
+      const r = await coordinator(ctx.env).confirm(req, txHash)
+      last = r
+      if (r.state === "confirmed" || r.state === "failed_onchain" || r.state === "replaced") return r
+    } catch {
+      // pending/absent → not confirmable yet; keep polling within the bounded plan.
     }
-    await withCommunityWrite(ctx, async (client) => recordBookingSettlementEffectSubmission({
-      client, idempotencyKey: effect.idempotencyKey, settlementRef: p.txRef,
-      signedTx: p.signedTx, nonce: p.nonce, now: ctx.nowUtc,
-    }))
-    await broadcastSignedOperatorUsdcTransfer(ctx.env, { signedTx: p.signedTx, expectedTxRef: p.txRef })
-    return p
-  })
-
-  await waitForOperatorUsdcTransfer(ctx.env, { txRef: prepared.txRef })
-
-  const confirmed = await withCommunityWrite(ctx, async (client) => confirmBookingSettlementEffect({
-    client, idempotencyKey: effect.idempotencyKey, settlementRef: prepared.txRef, now: ctx.nowUtc,
-  }))
-  return { txRef: confirmed.settlement_ref! }
+    if (i >= plan.length) break
+    await sleep(plan[i])
+  }
+  return last ?? { idempotencyKey: "", txHash, nonce: null, state: "broadcast" }
 }

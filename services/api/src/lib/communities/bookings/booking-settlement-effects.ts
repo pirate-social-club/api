@@ -18,6 +18,8 @@ export interface BookingSettlementEffectRow {
   settlement_ref: string | null
   signed_tx: string | null
   broadcast_nonce: number | null
+  coordinator_ref: string | null
+  coordinator_state: string | null
   failure_reason: string | null
   attempt_count: number
   submitted_at: string | null
@@ -39,6 +41,8 @@ function toBookingSettlementEffectRow(row: unknown): BookingSettlementEffectRow 
     recipient_address: requiredString(row, "recipient_address"),
     settlement_ref: stringOrNull(rowValue(row, "settlement_ref")),
     signed_tx: stringOrNull(rowValue(row, "signed_tx")),
+    coordinator_ref: stringOrNull(rowValue(row, "coordinator_ref")),
+    coordinator_state: stringOrNull(rowValue(row, "coordinator_state")),
     broadcast_nonce: rowValue(row, "broadcast_nonce") != null ? requiredNumber(row, "broadcast_nonce") : null,
     failure_reason: stringOrNull(rowValue(row, "failure_reason")),
     attempt_count: requiredNumber(row, "attempt_count"),
@@ -78,6 +82,7 @@ export async function getBookingSettlementEffectByIdempotencyKey(input: {
     sql: `
       SELECT booking_settlement_effect_id, community_id, booking_id, effect_kind, idempotency_key,
              status, amount_cents, recipient_address, settlement_ref, signed_tx, broadcast_nonce,
+             coordinator_ref, coordinator_state,
              failure_reason, attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM booking_settlement_effects
       WHERE idempotency_key = ?1
@@ -256,6 +261,32 @@ export async function recordBookingSettlementEffectSubmission(input: {
   if ((result.rowsAffected ?? 0) !== 1 && row.signed_tx !== input.signedTx) {
     throw conflictError("Booking settlement submission could not be recorded (conflicting signed transaction)")
   }
+  return row
+}
+
+// Mirror the wallet-scoped coordinator (DO) outcome onto the booking-scoped ledger row. The DO
+// owns the authoritative signed tx; here we only record the coordinator pointer + tx hash + nonce +
+// coordinator state. Status is NOT changed (confirm does that) and signed_tx stays NULL (DO-owned),
+// so terminal coordinator failures never become eligible for the failed -> retry path.
+export async function mirrorBookingSettlementCoordinatorEffect(input: {
+  client: DbExecutor
+  idempotencyKey: string
+  coordinatorRef: string
+  coordinatorState: string
+  settlementRef: string | null
+  nonce: number | null
+  now: string
+}): Promise<BookingSettlementEffectRow> {
+  await input.client.execute({
+    sql: `
+      UPDATE booking_settlement_effects
+      SET coordinator_ref = ?2, coordinator_state = ?3, settlement_ref = ?4, broadcast_nonce = ?5, updated_at = ?6
+      WHERE idempotency_key = ?1
+    `,
+    args: [input.idempotencyKey, input.coordinatorRef, input.coordinatorState, input.settlementRef, input.nonce, input.now],
+  })
+  const row = await getBookingSettlementEffectByIdempotencyKey({ client: input.client, idempotencyKey: input.idempotencyKey })
+  if (!row) throw new Error("booking_settlement_effect_missing_after_coordinator_mirror")
   return row
 }
 
