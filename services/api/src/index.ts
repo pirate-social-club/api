@@ -46,6 +46,7 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
+import { isBookingSettlementCronEnabled, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
@@ -596,6 +597,22 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
+  // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
+  if (!isBookingSettlementCronEnabled(env)) return
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
+    // One structured summary for EVERY enabled run, including zero-work runs.
+    console.info("[booking-settlements] swept", JSON.stringify(summary))
+  } catch (error) {
+    console.error("[booking-settlements] sweep failed", error)
+    captureScheduledError(env, error, "booking_settlement_reconciliation")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
 async function reconcileScheduledCommunityMembershipProjections(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
@@ -669,6 +686,7 @@ const handler: ExportedHandler<Env> = {
             { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
             { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
             { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
+            { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
           ]
     ).map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
     // Rotate the start order each minute so a deadline-trimmed tail never starves

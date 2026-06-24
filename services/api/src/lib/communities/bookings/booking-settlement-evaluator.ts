@@ -88,6 +88,7 @@ export async function resolveDueBooking(input: {
   bookingId: string
   nowUtc: string
   config?: AttendanceConfig
+  confirmPollMs?: number[]
 }): Promise<ResolveDueResult> {
   const booking = await loadDueBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
   if (!booking || !RESOLVABLE_STATES.has(booking.status)) return { outcome: "skipped", acted: false }
@@ -107,6 +108,7 @@ export async function resolveDueBooking(input: {
     communityId: input.communityId,
     bookingId: input.bookingId,
     nowUtc: input.nowUtc,
+    confirmPollMs: input.confirmPollMs,
   }
 
   // Drive the outcome through the existing lifecycle services, supplying the party whose action the

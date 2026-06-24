@@ -200,6 +200,9 @@ export type Env = {
   SCHEDULED_CRON_LOCK?: DurableObjectNamespace
   // Wallet-scoped serial signer/nonce authority for booking operator USDC settlement.
   OPERATOR_SIGNING_COORDINATOR?: DurableObjectNamespace
+  // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
+  // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
+  BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string
