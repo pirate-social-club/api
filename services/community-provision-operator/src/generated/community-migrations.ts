@@ -4153,4 +4153,30 @@ CREATE INDEX idx_booking_attendance_heartbeats_session
 `,
     checksum: "03761307e1d738dce33d5294d949ca5e8e605548b9ca3c344abf617b58a9e9b4",
   },
+  {
+    name: "1103_booking_settlement_durable_submission.sql",
+    sql: `-- Slice D5 Finding 2: durable submission for booking settlement effects.
+-- The operator signs the USDC transfer and persists the raw signed transaction (and its nonce)
+-- BEFORE broadcasting. A crash in the broadcast window is then recoverable: a retry re-broadcasts
+-- the identical signed tx, which is idempotent by nonce (the network mines at most one), so money
+-- is never moved twice and the ledger is never permanently stuck without a reference.
+ALTER TABLE booking_settlement_effects ADD COLUMN signed_tx TEXT;
+ALTER TABLE booking_settlement_effects ADD COLUMN broadcast_nonce INTEGER;
+`,
+    checksum: "30268004897c560b16fcfa3e01c94ccafd252c962ec06bad3236212dfeb521ed",
+  },
+  {
+    name: "1104_booking_settlement_coordinator_mirror.sql",
+    sql: `-- Slice D5 Finding 2 (DO coordinator): the wallet-scoped operator signing coordinator (a Durable
+-- Object) owns the authoritative signed transaction + nonce. The community booking_settlement_effects
+-- row becomes a booking-scoped MIRROR that points at the coordinator record and reflects its state.
+-- coordinator_ref is the coordinator effect identity. coordinator_state mirrors the coordinator
+-- outcome (broadcast/confirmed/replaced/failed_onchain) WITHOUT overloading signed_tx (which stays
+-- owned by the DO) or the row status (so terminal coordinator failures are never eligible for the
+-- failed -> retry path).
+ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_ref TEXT;
+ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_state TEXT;
+`,
+    checksum: "c615b132b35e32dc904e95036cf888f7c154dc811fc358b4d8f98d2dbd884725",
+  },
 ] as const;
