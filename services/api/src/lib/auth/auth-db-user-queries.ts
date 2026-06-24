@@ -22,8 +22,18 @@ import {
 } from "./auth-db-rows"
 import { deriveOnboardingStatus } from "./auth-db-onboarding-queries"
 import { firstRow } from "./auth-db-query-helpers"
-import { listIdentityWallets, resolveSelectedIdentityWallet } from "./upstream-wallets"
+import { listIdentityWallets, resolveExplicitSelectedIdentityWallet } from "./upstream-wallets"
 import type { UpstreamIdentity } from "../../types"
+
+const ETHEREUM_MAINNET_NAMESPACE = "eip155:1"
+
+type PrimaryInitRow = {
+  wallet_attachment_id: string
+  chain_namespace: string
+  wallet_address_normalized: string
+  attachment_kind: string
+  is_primary: number
+}
 
 export {
   deriveOnboardingStatus,
@@ -398,6 +408,24 @@ export async function reconcileWalletAttachments(
 
   for (const wallet of identityWallets) {
     if (knownByAddress.has(`${wallet.chainNamespace}:${wallet.walletAddressNormalized}`)) {
+      // Known wallet: never re-insert, but safely PROMOTE a row that was previously
+      // misclassified as external when trusted Privy metadata now confirms it is embedded.
+      // The attachment_kind='external' guard makes this strictly an upgrade — an already
+      // embedded/delegated row is never downgraded.
+      if (wallet.attachmentKind === "embedded") {
+        await executor.execute({
+          sql: `
+            UPDATE wallet_attachments
+            SET attachment_kind = 'embedded', updated_at = ?4
+            WHERE user_id = ?1
+              AND chain_namespace = ?2
+              AND wallet_address_normalized = ?3
+              AND status = 'active'
+              AND attachment_kind = 'external'
+          `,
+          args: [input.userId, wallet.chainNamespace, wallet.walletAddressNormalized, input.updatedAt],
+        })
+      }
       continue
     }
 
@@ -418,7 +446,7 @@ export async function reconcileWalletAttachments(
           detached_at,
           created_at,
           updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'external', 0, 'active', ?8, NULL, ?8, ?8)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, 0, 'active', ?8, NULL, ?8, ?8)
       `,
       args: [
         makeId("wal"),
@@ -429,22 +457,74 @@ export async function reconcileWalletAttachments(
         input.identity.provider,
         input.identity.providerSubject,
         input.updatedAt,
+        wallet.attachmentKind,
       ],
     })
   }
+}
 
-  const activeRows = await listActiveWalletAttachmentRows(executor, input.userId)
-  const selectedWallet = resolveSelectedIdentityWallet(input.identity)
-  const desiredPrimaryRow =
-    (selectedWallet
-      ? activeRows.find((row) => (
-        row.chain_namespace === selectedWallet.chainNamespace
-          && row.wallet_address_normalized === selectedWallet.walletAddressNormalized
+// Initialize the user's identity (primary) wallet exactly once, and never replace an existing
+// one. Authentication and refresh may discover wallets via reconcileWalletAttachments, but the
+// identity wallet is set here only when the user has none, and is otherwise changed solely by
+// explicit user action (PUT /users/me/identity-wallet). For now `primary_wallet_attachment_id
+// IS NULL` means "not initialized yet"; clearing a primary is not supported.
+export async function initializePrimaryWalletIfNeeded(
+  executor: DbExecutor,
+  input: {
+    userId: string
+    identity: UpstreamIdentity
+    updatedAt: string
+  },
+): Promise<void> {
+  const userRow = await getUserRow(executor, input.userId)
+  if (!userRow) {
+    return
+  }
+
+  // Legacy guard: if a primary pointer already exists, treat it as the source of truth and
+  // realign any disagreeing is_primary flags (idempotent — affects 0 rows when consistent).
+  if (userRow.primary_wallet_attachment_id) {
+    await repairPrimaryFlagToPointer(executor, input.userId, userRow.primary_wallet_attachment_id, input.updatedAt)
+    return
+  }
+
+  const initRows = await listPrimaryInitRows(executor, input.userId)
+  if (initRows.length === 0) {
+    return
+  }
+
+  const explicit = resolveExplicitSelectedIdentityWallet(input.identity)
+  const candidate =
+    (explicit
+      ? initRows.find((row) => (
+        row.chain_namespace === explicit.chainNamespace
+          && row.wallet_address_normalized === explicit.walletAddressNormalized
       ))
       : null)
-    ?? activeRows.find((row) => row.is_primary === 1)
-    ?? activeRows[0]
+    ?? pickEmbeddedInitRow(initRows)
     ?? null
+
+  if (!candidate) {
+    // External-only Privy users legitimately have no identity wallet until they pick one.
+    return
+  }
+
+  // Race-safe claim: only the writer that flips the NULL pointer to non-NULL is the winner.
+  const claim = await executor.execute({
+    sql: `
+      UPDATE users
+      SET primary_wallet_attachment_id = ?2,
+          updated_at = ?3
+      WHERE user_id = ?1
+        AND primary_wallet_attachment_id IS NULL
+    `,
+    args: [input.userId, candidate.wallet_attachment_id, input.updatedAt],
+  })
+
+  if ((claim.rowsAffected ?? 0) !== 1) {
+    // A concurrent exchange already initialized the primary; do not diverge.
+    return
+  }
 
   await executor.execute({
     sql: `
@@ -458,28 +538,137 @@ export async function reconcileWalletAttachments(
     args: [input.userId, input.updatedAt],
   })
 
-  if (desiredPrimaryRow) {
-    await executor.execute({
-      sql: `
-        UPDATE wallet_attachments
-        SET is_primary = 1,
-            updated_at = ?3
-        WHERE user_id = ?1
-          AND wallet_attachment_id = ?2
-          AND status = 'active'
-      `,
-      args: [input.userId, desiredPrimaryRow.wallet_attachment_id, input.updatedAt],
-    })
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 1,
+          updated_at = ?3
+      WHERE user_id = ?1
+        AND wallet_attachment_id = ?2
+        AND status = 'active'
+    `,
+    args: [input.userId, candidate.wallet_attachment_id, input.updatedAt],
+  })
+}
+
+export type SetIdentityWalletResult = "ok" | "not_found" | "not_active"
+
+// Explicitly set the user's identity (primary) wallet to one of their own active attachments.
+// Unlike initialization, this is an intentional user action and may change an existing primary.
+export async function setIdentityWalletAttachment(
+  executor: DbExecutor,
+  input: { userId: string; walletAttachmentId: string; updatedAt: string },
+): Promise<SetIdentityWalletResult> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT user_id, status
+      FROM wallet_attachments
+      WHERE wallet_attachment_id = ?1
+      LIMIT 1
+    `,
+    args: [input.walletAttachmentId],
+  })
+  if (!row) {
+    return "not_found"
+  }
+  const record = row as Record<string, unknown>
+  // Treat a wallet owned by another user as not-found so attachment existence is not leaked.
+  if (String(record.user_id) !== input.userId) {
+    return "not_found"
+  }
+  if (String(record.status) !== "active") {
+    return "not_active"
   }
 
   await executor.execute({
     sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 0, updated_at = ?2
+      WHERE user_id = ?1 AND status = 'active' AND is_primary = 1
+    `,
+    args: [input.userId, input.updatedAt],
+  })
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 1, updated_at = ?3
+      WHERE user_id = ?1 AND wallet_attachment_id = ?2 AND status = 'active'
+    `,
+    args: [input.userId, input.walletAttachmentId, input.updatedAt],
+  })
+  await executor.execute({
+    sql: `
       UPDATE users
-      SET primary_wallet_attachment_id = ?2,
-          updated_at = ?3
+      SET primary_wallet_attachment_id = ?2, updated_at = ?3
       WHERE user_id = ?1
     `,
-    args: [input.userId, desiredPrimaryRow?.wallet_attachment_id ?? null, input.updatedAt],
+    args: [input.userId, input.walletAttachmentId, input.updatedAt],
+  })
+  return "ok"
+}
+
+async function listPrimaryInitRows(executor: DbExecutor, userId: string): Promise<PrimaryInitRow[]> {
+  const result = await executor.execute({
+    sql: `
+      SELECT wallet_attachment_id, chain_namespace, wallet_address_normalized, attachment_kind, is_primary
+      FROM wallet_attachments
+      WHERE user_id = ?1
+        AND status = 'active'
+      ORDER BY attached_at ASC, wallet_attachment_id ASC
+    `,
+    args: [userId],
+  })
+
+  return result.rows.map((row) => {
+    const record = row as Record<string, unknown>
+    return {
+      wallet_attachment_id: String(record.wallet_attachment_id),
+      chain_namespace: String(record.chain_namespace),
+      wallet_address_normalized: String(record.wallet_address_normalized),
+      attachment_kind: String(record.attachment_kind),
+      is_primary: Number(record.is_primary),
+    }
+  })
+}
+
+// Embedded-first: oldest active embedded EVM attachment (rows already ordered by attached_at,
+// then wallet_attachment_id, so provider ordering cannot affect the result).
+function pickEmbeddedInitRow(initRows: PrimaryInitRow[]): PrimaryInitRow | null {
+  return initRows.find((row) => (
+    row.attachment_kind === "embedded" && row.chain_namespace === ETHEREUM_MAINNET_NAMESPACE
+  )) ?? null
+}
+
+async function repairPrimaryFlagToPointer(
+  executor: DbExecutor,
+  userId: string,
+  primaryWalletAttachmentId: string,
+  updatedAt: string,
+): Promise<void> {
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 0,
+          updated_at = ?3
+      WHERE user_id = ?1
+        AND status = 'active'
+        AND is_primary = 1
+        AND wallet_attachment_id <> ?2
+    `,
+    args: [userId, primaryWalletAttachmentId, updatedAt],
+  })
+
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 1,
+          updated_at = ?3
+      WHERE user_id = ?1
+        AND status = 'active'
+        AND is_primary = 0
+        AND wallet_attachment_id = ?2
+    `,
+    args: [userId, primaryWalletAttachmentId, updatedAt],
   })
 }
 

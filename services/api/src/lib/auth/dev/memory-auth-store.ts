@@ -3,7 +3,7 @@ import { buildDefaultVerificationCapabilities } from "../../verification/verific
 import { makeId, nowIso } from "../../helpers"
 import { normalizeIdentityCountryAlpha2 } from "../../identity/country-codes"
 import { generateHandleCandidate } from "../handle-generator"
-import { listIdentityWallets, resolveSelectedIdentityWallet } from "../upstream-wallets"
+import { listIdentityWallets, pickEmbeddedEvmIdentityWallet, resolveExplicitSelectedIdentityWallet } from "../upstream-wallets"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import type {
   GlobalHandle,
@@ -194,22 +194,54 @@ export function getPrimaryWalletAddress(record: Pick<MemoryAuthRecord, "user" | 
   )?.wallet_address ?? null
 }
 
+// Mirror of the DB initializePrimaryWalletIfNeeded policy: an explicit selection
+// (e.g. JWT selected_wallet_address) wins, otherwise embedded-first; never an arbitrary
+// ordering fallback. Returns the attachment id to mark primary, or null.
+function chooseInitialPrimaryAttachmentId(
+  attachments: MemoryWalletAttachment[],
+  identity: UpstreamIdentity,
+): string | null {
+  const explicit = resolveExplicitSelectedIdentityWallet(identity)
+  if (explicit) {
+    const match = attachments.find((attachment) => (
+      attachment.chain_namespace === explicit.chainNamespace
+        && attachment.wallet_address === explicit.walletAddress
+    ))
+    if (match) {
+      return match.wallet_attachment_id
+    }
+  }
+
+  const embedded = pickEmbeddedEvmIdentityWallet(identity)
+  if (embedded) {
+    const match = attachments.find((attachment) => (
+      attachment.chain_namespace === embedded.chainNamespace
+        && attachment.wallet_address === embedded.walletAddress
+    ))
+    if (match) {
+      return match.wallet_attachment_id
+    }
+  }
+
+  return null
+}
+
 function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
   const timestamp = nowIso()
   const userId = makeId("usr")
   const identityWallets = listIdentityWallets(identity)
-  const selectedWallet = resolveSelectedIdentityWallet(identity)
-  const primaryWalletAddress = selectedWallet?.walletAddress ?? null
-  const walletAttachments = identityWallets.map((wallet) => ({
+  const walletAttachments: MemoryWalletAttachment[] = identityWallets.map((wallet) => ({
     wallet_attachment_id: makeId("wal"),
     chain_namespace: wallet.chainNamespace,
     wallet_address: wallet.walletAddress,
-    is_primary: selectedWallet != null
-      && selectedWallet.chainNamespace === wallet.chainNamespace
-      && selectedWallet.walletAddressNormalized === wallet.walletAddressNormalized,
+    is_primary: false,
   }))
-  const primaryWalletAttachmentId =
-    walletAttachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id ?? null
+  const primaryWalletAttachmentId = chooseInitialPrimaryAttachmentId(walletAttachments, identity)
+  for (const attachment of walletAttachments) {
+    attachment.is_primary = attachment.wallet_attachment_id === primaryWalletAttachmentId
+  }
+  const primaryWalletAddress =
+    walletAttachments.find((attachment) => attachment.is_primary)?.wallet_address ?? null
   const candidate = generateHandleCandidate()
   const globalHandle = {
     global_handle_id: makeId("ghl"),
@@ -291,7 +323,11 @@ function buildNewRecord(identity: UpstreamIdentity): MemoryAuthRecord {
   }
 }
 
-function mergeWallets(existing: MemoryWalletAttachment[], identity: UpstreamIdentity): MemoryWalletAttachment[] {
+function mergeWallets(
+  existing: MemoryWalletAttachment[],
+  identity: UpstreamIdentity,
+  currentPrimaryId: string | null,
+): MemoryWalletAttachment[] {
   const identityWallets = listIdentityWallets(identity)
   const byAddress = new Map(existing.map((attachment) => [
     `${attachment.chain_namespace}:${attachment.wallet_address}`,
@@ -309,15 +345,24 @@ function mergeWallets(existing: MemoryWalletAttachment[], identity: UpstreamIden
     }
   }
 
-  const selectedWallet = resolveSelectedIdentityWallet(identity)
   const attachments = [...byAddress.values()]
-  for (const attachment of attachments) {
-    attachment.is_primary = selectedWallet != null
-      && attachment.chain_namespace === selectedWallet.chainNamespace
-      && attachment.wallet_address === selectedWallet.walletAddress
+
+  // Pointer is the source of truth: if a primary already exists, preserve it (realigning the
+  // flag if a legacy state disagrees). Discovering new wallets must never replace it.
+  if (currentPrimaryId && attachments.some((attachment) => attachment.wallet_attachment_id === currentPrimaryId)) {
+    for (const attachment of attachments) {
+      attachment.is_primary = attachment.wallet_attachment_id === currentPrimaryId
+    }
+    return attachments
   }
-  if (!attachments.some((attachment) => attachment.is_primary) && attachments[0]) {
-    attachments[0].is_primary = true
+  if (attachments.some((attachment) => attachment.is_primary)) {
+    return attachments
+  }
+
+  // No primary yet → initialize once (explicit selection or embedded-first; may stay unset).
+  const initialPrimaryId = chooseInitialPrimaryAttachmentId(attachments, identity)
+  for (const attachment of attachments) {
+    attachment.is_primary = attachment.wallet_attachment_id === initialPrimaryId
   }
   return attachments
 }
@@ -369,7 +414,11 @@ export async function exchangeMemoryIdentity(
   }
 
   const updatedAt = nowIso()
-  record.walletAttachments = mergeWallets(record.walletAttachments, identity)
+  record.walletAttachments = mergeWallets(
+    record.walletAttachments,
+    identity,
+    record.user.primary_wallet_attachment_id ?? null,
+  )
   record.user.primary_wallet_attachment_id =
     record.walletAttachments.find((attachment) => attachment.is_primary)?.wallet_attachment_id ?? null
   record.user.updated_at = updatedAt

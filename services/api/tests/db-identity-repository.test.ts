@@ -1,14 +1,35 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { DatabaseIdentityRepository } from "../src/lib/auth/db-identity-repository"
 import type { Client, InStatement, QueryResult, Transaction } from "../src/lib/sql-client"
-import type { UpstreamIdentity } from "../src/types"
+import type { UpstreamIdentity, UpstreamWalletIdentity } from "../src/types"
 import { createControlPlaneTestClient } from "./helpers"
 
 const WALLET_A = "0x1111111111111111111111111111111111111111"
 const WALLET_B = "0x2222222222222222222222222222222222222222"
+const WALLET_C = "0x3333333333333333333333333333333333333333"
 const BITCOIN_MAINNET_NAMESPACE = "bip122:000000000019d6689c085ae165831e93"
 const BITCOIN_TAPROOT_ADDRESS = "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
 const BITCOIN_TAPROOT_SCRIPT = "5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c"
+
+function embeddedEvmWallet(address: string): UpstreamWalletIdentity {
+  return {
+    chainNamespace: "eip155:1",
+    walletAddress: address,
+    walletAddressNormalized: address,
+    scriptPubkeyHex: null,
+    attachmentKind: "embedded",
+  }
+}
+
+function externalEvmWallet(address: string): UpstreamWalletIdentity {
+  return {
+    chainNamespace: "eip155:1",
+    walletAddress: address,
+    walletAddressNormalized: address,
+    scriptPubkeyHex: null,
+    attachmentKind: "external",
+  }
+}
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -74,7 +95,7 @@ describe("control-plane identity repository", () => {
     expect(session.wallet_attachments).toEqual([])
   })
 
-  test("privy identities persist wallet attachments and can switch the primary wallet", async () => {
+  test("explicit selection initializes the primary once and re-login does not change it", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
     const repo = new DatabaseIdentityRepository(setup.client)
@@ -92,6 +113,9 @@ describe("control-plane identity repository", () => {
     expect(first.user.primary_wallet_attachment).toBe(first.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
     expect(first.profile.primary_wallet_address).toBe(WALLET_A)
 
+    // A later exchange that "requests" a different wallet must NOT move the identity wallet.
+    // Incidental selection during auth can no longer mutate persistent state; only the
+    // explicit identity-wallet endpoint can change it.
     const second = await repo.exchangeIdentity({
       provider: "privy",
       providerSubject: "did:privy:alice",
@@ -102,9 +126,181 @@ describe("control-plane identity repository", () => {
 
     expect(second.user.id).toBe(first.user.id)
     expect(second.wallet_attachments).toHaveLength(2)
-    expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
-    expect(second.user.primary_wallet_attachment).toBe(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_attachment)
-    expect(second.profile.primary_wallet_address).toBe(WALLET_B)
+    expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(second.profile.primary_wallet_address).toBe(WALLET_A)
+  })
+
+  test("new privy user initializes the embedded wallet as primary regardless of ordering", async () => {
+    for (const order of [
+      [externalEvmWallet(WALLET_B), embeddedEvmWallet(WALLET_A)],
+      [embeddedEvmWallet(WALLET_A), externalEvmWallet(WALLET_B)],
+    ]) {
+      const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+      try {
+        const repo = new DatabaseIdentityRepository(setup.client)
+        const session = await repo.exchangeIdentity({
+          provider: "privy",
+          providerSubject: `did:privy:embedded-${order[0]?.attachmentKind}`,
+          providerUserRef: "did:privy:embedded",
+          walletAddresses: [],
+          selectedWalletAddress: null,
+          wallets: order,
+        })
+
+        expect(session.wallet_attachments).toHaveLength(2)
+        expect(session.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+        expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+      } finally {
+        await setup.cleanup()
+      }
+    }
+  })
+
+  test("an embedded wallet present in both wallets and walletAddresses stays embedded (real Privy shape)", async () => {
+    // verifyPrivyAccessProof populates BOTH identity.wallets (rich, embedded) and
+    // identity.walletAddresses (bare strings) with the same embedded address. Dedup must not
+    // downgrade it to external, or embedded-first initialization silently fails.
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:real-shape",
+      providerUserRef: "did:privy:real-shape",
+      walletAddresses: [WALLET_A, WALLET_B],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+
+    expect(session.wallet_attachments).toHaveLength(2)
+    expect(session.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+
+    const kindRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((kindRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("embedded")
+  })
+
+  test("a previously external row is promoted to embedded when trusted metadata confirms it", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    // First exchange records WALLET_A as external (bare address, no embedded metadata yet) and
+    // therefore leaves the user with no identity wallet.
+    const first = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:promote",
+      providerUserRef: "did:privy:promote",
+      walletAddresses: [WALLET_A],
+      selectedWalletAddress: null,
+      wallets: [],
+    })
+    expect(first.user.primary_wallet_attachment).toBeNull()
+    const beforeRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((beforeRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("external")
+
+    // A later exchange now carries embedded metadata for the same address.
+    const second = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:promote",
+      providerUserRef: "did:privy:promote",
+      walletAddresses: [WALLET_A],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+
+    const afterRow = await setup.client.execute({
+      sql: `SELECT attachment_kind FROM wallet_attachments WHERE wallet_address_normalized = ?1 AND status = 'active'`,
+      args: [WALLET_A],
+    })
+    expect(String((afterRow.rows[0] as Record<string, unknown>)?.attachment_kind)).toBe("embedded")
+    // Promotion makes it eligible for embedded-first initialization of the still-unset primary.
+    expect(second.profile.primary_wallet_address).toBe(WALLET_A)
+  })
+
+  test("new privy user with only an external wallet has no primary", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:external-only",
+      providerUserRef: "did:privy:external-only",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [externalEvmWallet(WALLET_B)],
+    })
+
+    expect(session.wallet_attachments).toHaveLength(1)
+    expect(session.wallet_attachments.find((attachment) => attachment.is_primary)).toBeUndefined()
+    expect(session.user.primary_wallet_attachment).toBeNull()
+    expect(session.profile.primary_wallet_address).toBeNull()
+  })
+
+  test("embedded wallet appearing on a later exchange initializes a previously-unset primary", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const first = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:late-embedded",
+      providerUserRef: "did:privy:late-embedded",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [externalEvmWallet(WALLET_B)],
+    })
+    expect(first.user.primary_wallet_attachment).toBeNull()
+
+    const second = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:late-embedded",
+      providerUserRef: "did:privy:late-embedded",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [externalEvmWallet(WALLET_B), embeddedEvmWallet(WALLET_A)],
+    })
+
+    expect(second.user.id).toBe(first.user.id)
+    expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(second.profile.primary_wallet_address).toBe(WALLET_A)
+  })
+
+  test("an existing embedded primary survives re-login and discovery of new wallets", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const first = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:stable",
+      providerUserRef: "did:privy:stable",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+    expect(first.profile.primary_wallet_address).toBe(WALLET_A)
+
+    const second = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:stable",
+      providerUserRef: "did:privy:stable",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A), externalEvmWallet(WALLET_C)],
+    })
+
+    expect(second.wallet_attachments).toHaveLength(2)
+    expect(second.wallet_attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_A)
+    expect(second.profile.primary_wallet_address).toBe(WALLET_A)
   })
 
   test("privy identities persist bitcoin wallets without taking primary from the selected evm wallet", async () => {
@@ -124,6 +320,7 @@ describe("control-plane identity repository", () => {
           walletAddress: BITCOIN_TAPROOT_ADDRESS,
           walletAddressNormalized: BITCOIN_TAPROOT_ADDRESS,
           scriptPubkeyHex: BITCOIN_TAPROOT_SCRIPT,
+          attachmentKind: "external",
         },
       ],
     })
@@ -145,11 +342,12 @@ describe("control-plane identity repository", () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
     const repo = new DatabaseIdentityRepository(setup.client)
-    const bitcoinWallet = {
+    const bitcoinWallet: UpstreamWalletIdentity = {
       chainNamespace: BITCOIN_MAINNET_NAMESPACE,
       walletAddress: BITCOIN_TAPROOT_ADDRESS,
       walletAddressNormalized: BITCOIN_TAPROOT_ADDRESS,
       scriptPubkeyHex: BITCOIN_TAPROOT_SCRIPT,
+      attachmentKind: "external",
     }
 
     const first = await repo.exchangeIdentity({
@@ -179,6 +377,59 @@ describe("control-plane identity repository", () => {
       wallet_address: BITCOIN_TAPROOT_ADDRESS,
       is_primary: true,
     })
+  })
+
+  test("explicit setIdentityWallet switches the primary to a chosen owned active wallet", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:chooser",
+      providerUserRef: "did:privy:chooser",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A), externalEvmWallet(WALLET_B)],
+    })
+    expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+
+    const externalAttachment = session.wallet_attachments.find((attachment) => attachment.wallet_address === WALLET_B)
+    expect(externalAttachment).toBeDefined()
+
+    const user = await repo.setIdentityWallet(session.user.id.replace(/^usr_/, ""), externalAttachment!.wallet_attachment)
+    expect(user?.primary_wallet_attachment_id).toBe(externalAttachment!.wallet_attachment)
+
+    const attachments = await repo.getWalletAttachmentsByUserId(session.user.id.replace(/^usr_/, ""))
+    expect(attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
+  })
+
+  test("setIdentityWallet rejects a wallet not owned by the caller", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const owner = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:owner",
+      providerUserRef: "did:privy:owner",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+    const other = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:other",
+      providerUserRef: "did:privy:other",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_B)],
+    })
+
+    const ownerWalletId = owner.wallet_attachments[0]!.wallet_attachment
+    await expect(
+      repo.setIdentityWallet(other.user.id.replace(/^usr_/, ""), ownerWalletId),
+    ).rejects.toThrow()
   })
 
   test("new provider subjects with an existing wallet resolve to the wallet owner", async () => {

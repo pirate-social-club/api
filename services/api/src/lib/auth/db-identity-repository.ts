@@ -1,5 +1,6 @@
 import type { Client } from "../sql-client"
-import { internalError } from "../errors"
+import { badRequestError, internalError, notFoundError } from "../errors"
+import { auditEventInsert } from "../audit"
 import { generateHandleCandidate } from "./handle-generator"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
 import {
@@ -21,6 +22,8 @@ import {
   listGlobalHandleRowsByIds,
   loadSnapshot,
   reconcileWalletAttachments,
+  initializePrimaryWalletIfNeeded,
+  setIdentityWalletAttachment,
 } from "./auth-db-user-queries"
 import { listIdentityWallets } from "./upstream-wallets"
 import { listCreatedCommunityRowsByCreatorUserId } from "./auth-db-community-queries"
@@ -140,11 +143,13 @@ export class DatabaseIdentityRepository {
       const existing = await findActiveAuthProviderLink(tx, provider, providerSubject)
       if (existing) {
         resolvedUserId = existing.user_id
+        const updatedAt = nowIso()
         await reconcileWalletAttachments(tx, {
           userId: resolvedUserId,
           identity,
-          updatedAt: nowIso(),
+          updatedAt,
         })
+        await initializePrimaryWalletIfNeeded(tx, { userId: resolvedUserId, identity, updatedAt })
       } else {
         const createdAt = nowIso()
         const authProviderLinkId = makeId("apl")
@@ -174,6 +179,7 @@ export class DatabaseIdentityRepository {
             identity,
             updatedAt: createdAt,
           })
+          await initializePrimaryWalletIfNeeded(tx, { userId: existingWalletUserId, identity, updatedAt: createdAt })
 
           resolvedUserId = existingWalletUserId
         } else {
@@ -276,6 +282,7 @@ export class DatabaseIdentityRepository {
             identity,
             updatedAt: createdAt,
           })
+          await initializePrimaryWalletIfNeeded(tx, { userId, identity, updatedAt: createdAt })
 
           resolvedUserId = userId
         }
@@ -352,6 +359,46 @@ export class DatabaseIdentityRepository {
       is_primary: Number((row as Record<string, unknown>).is_primary ?? 0) === 1,
       status: String((row as Record<string, unknown>).status),
     }
+  }
+
+  async setIdentityWallet(userId: string, walletAttachmentId: string): Promise<User | null> {
+    const rawId = normalizeSubmittedPrefixedId("wal", walletAttachmentId)
+    if (!rawId) {
+      throw badRequestError("A valid wallet_attachment_id is required")
+    }
+
+    const tx = await this.client.transaction("write")
+    try {
+      const result = await setIdentityWalletAttachment(tx, {
+        userId,
+        walletAttachmentId: rawId,
+        updatedAt: nowIso(),
+      })
+      if (result === "not_found") {
+        throw notFoundError("Wallet attachment not found")
+      }
+      if (result === "not_active") {
+        throw badRequestError("Wallet attachment is not active")
+      }
+      await tx.execute(auditEventInsert({
+        actorType: "user",
+        actorId: userId,
+        action: "identity_wallet.set",
+        targetType: "wallet_attachment",
+        targetId: rawId,
+        metadata: { wallet_attachment_id: rawId },
+      }))
+      await tx.commit()
+    } catch (error) {
+      try {
+        await tx.rollback()
+      } catch (rollbackError) {
+        console.error("[auth] rollback failed while setting identity wallet", rollbackError)
+      }
+      throw error
+    }
+
+    return this.getUserById(userId)
   }
 
   async getOnboardingStatusByUserId(userId: string): Promise<OnboardingStatus | null> {

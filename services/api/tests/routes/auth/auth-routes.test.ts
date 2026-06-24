@@ -492,6 +492,7 @@ describe("auth routes", () => {
           walletAddress: "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
           walletAddressNormalized: "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
           scriptPubkeyHex: "5120a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c",
+          attachmentKind: "external",
         },
       ],
     }))

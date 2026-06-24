@@ -801,11 +801,14 @@ export type GlobalHandlePaidClaimRequest = {
 
 export type { Env } from "./env"
 
+export type WalletAttachmentKind = "embedded" | "external" | "delegated"
+
 export type UpstreamWalletIdentity = {
   chainNamespace: string
   walletAddress: string
   walletAddressNormalized: string
   scriptPubkeyHex?: string | null
+  attachmentKind: WalletAttachmentKind
 }
 
 export type UpstreamIdentity = {
