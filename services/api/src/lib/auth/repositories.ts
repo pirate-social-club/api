@@ -56,6 +56,7 @@ export interface UserRepository {
   getUserById(userId: string): Promise<User | null>
   getWalletAttachmentsByUserId(userId: string): Promise<WalletAttachmentSummary[]>
   getWalletAttachmentById(walletAttachmentId: string): Promise<WalletAttachmentRecord | null>
+  setIdentityWallet(userId: string, walletAttachmentId: string): Promise<User | null>
   close?(): void | Promise<void>
 }
 

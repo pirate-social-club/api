@@ -310,6 +310,59 @@ describe("control-plane identity repository", () => {
     })
   })
 
+  test("explicit setIdentityWallet switches the primary to a chosen owned active wallet", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const session = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:chooser",
+      providerUserRef: "did:privy:chooser",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A), externalEvmWallet(WALLET_B)],
+    })
+    expect(session.profile.primary_wallet_address).toBe(WALLET_A)
+
+    const externalAttachment = session.wallet_attachments.find((attachment) => attachment.wallet_address === WALLET_B)
+    expect(externalAttachment).toBeDefined()
+
+    const user = await repo.setIdentityWallet(session.user.id.replace(/^usr_/, ""), externalAttachment!.wallet_attachment)
+    expect(user?.primary_wallet_attachment_id).toBe(externalAttachment!.wallet_attachment)
+
+    const attachments = await repo.getWalletAttachmentsByUserId(session.user.id.replace(/^usr_/, ""))
+    expect(attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
+  })
+
+  test("setIdentityWallet rejects a wallet not owned by the caller", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const repo = new DatabaseIdentityRepository(setup.client)
+
+    const owner = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:owner",
+      providerUserRef: "did:privy:owner",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_A)],
+    })
+    const other = await repo.exchangeIdentity({
+      provider: "privy",
+      providerSubject: "did:privy:other",
+      providerUserRef: "did:privy:other",
+      walletAddresses: [],
+      selectedWalletAddress: null,
+      wallets: [embeddedEvmWallet(WALLET_B)],
+    })
+
+    const ownerWalletId = owner.wallet_attachments[0]!.wallet_attachment
+    await expect(
+      repo.setIdentityWallet(other.user.id.replace(/^usr_/, ""), ownerWalletId),
+    ).rejects.toThrow()
+  })
+
   test("new provider subjects with an existing wallet resolve to the wallet owner", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup

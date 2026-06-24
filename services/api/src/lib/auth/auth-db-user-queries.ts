@@ -533,6 +533,62 @@ export async function initializePrimaryWalletIfNeeded(
   })
 }
 
+export type SetIdentityWalletResult = "ok" | "not_found" | "not_active"
+
+// Explicitly set the user's identity (primary) wallet to one of their own active attachments.
+// Unlike initialization, this is an intentional user action and may change an existing primary.
+export async function setIdentityWalletAttachment(
+  executor: DbExecutor,
+  input: { userId: string; walletAttachmentId: string; updatedAt: string },
+): Promise<SetIdentityWalletResult> {
+  const row = await firstRow(executor, {
+    sql: `
+      SELECT user_id, status
+      FROM wallet_attachments
+      WHERE wallet_attachment_id = ?1
+      LIMIT 1
+    `,
+    args: [input.walletAttachmentId],
+  })
+  if (!row) {
+    return "not_found"
+  }
+  const record = row as Record<string, unknown>
+  // Treat a wallet owned by another user as not-found so attachment existence is not leaked.
+  if (String(record.user_id) !== input.userId) {
+    return "not_found"
+  }
+  if (String(record.status) !== "active") {
+    return "not_active"
+  }
+
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 0, updated_at = ?2
+      WHERE user_id = ?1 AND status = 'active' AND is_primary = 1
+    `,
+    args: [input.userId, input.updatedAt],
+  })
+  await executor.execute({
+    sql: `
+      UPDATE wallet_attachments
+      SET is_primary = 1, updated_at = ?3
+      WHERE user_id = ?1 AND wallet_attachment_id = ?2 AND status = 'active'
+    `,
+    args: [input.userId, input.walletAttachmentId, input.updatedAt],
+  })
+  await executor.execute({
+    sql: `
+      UPDATE users
+      SET primary_wallet_attachment_id = ?2, updated_at = ?3
+      WHERE user_id = ?1
+    `,
+    args: [input.userId, input.walletAttachmentId, input.updatedAt],
+  })
+  return "ok"
+}
+
 async function listPrimaryInitRows(executor: DbExecutor, userId: string): Promise<PrimaryInitRow[]> {
   const result = await executor.execute({
     sql: `
