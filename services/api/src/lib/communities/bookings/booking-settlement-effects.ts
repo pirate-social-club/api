@@ -198,6 +198,10 @@ export async function beginBookingSettlementEffectAttempt(input: {
   return { action: "created", row: created }
 }
 
+const VALID_COORDINATOR_STATES = new Set([
+  "reserving", "prepared", "broadcast", "confirmed", "failed_preparation", "reconciliation_required", "replaced", "failed_onchain",
+])
+
 // Mirror the wallet-scoped coordinator (DO) outcome onto the booking-scoped ledger row. The DO
 // owns the authoritative signed tx; here we only record the coordinator pointer + tx hash + nonce +
 // coordinator state. Status is NOT changed (confirm does that) and signed_tx stays NULL (DO-owned),
@@ -211,6 +215,11 @@ export async function mirrorBookingSettlementCoordinatorEffect(input: {
   nonce: number | null
   now: string
 }): Promise<BookingSettlementEffectRow> {
+  // Validate the incoming coordinator state — an unknown value must never reach storage (the
+  // transition predicate's `coordinator_state IS NULL` branch would otherwise admit anything).
+  if (!VALID_COORDINATOR_STATES.has(input.coordinatorState)) {
+    throw conflictError(`Unknown coordinator state: ${input.coordinatorState}`)
+  }
   // Concurrency-safe mirror. The WHERE enforces the invariants atomically:
   //  - never touch a confirmed ledger row;
   //  - coordinator_ref is immutable once set;
@@ -234,7 +243,8 @@ export async function mirrorBookingSettlementCoordinatorEffect(input: {
         AND (
           coordinator_state IS NULL
           OR coordinator_state = ?3
-          OR (coordinator_state = 'reserving' AND ?3 = 'prepared')
+          OR (coordinator_state = 'reserving' AND ?3 IN ('prepared', 'failed_preparation'))
+          OR (coordinator_state = 'failed_preparation' AND ?3 = 'prepared')
           OR (coordinator_state = 'prepared' AND ?3 IN ('broadcast', 'reconciliation_required'))
           OR (coordinator_state = 'reconciliation_required' AND ?3 IN ('broadcast', 'replaced', 'failed_onchain', 'confirmed'))
           OR (coordinator_state = 'broadcast' AND ?3 IN ('reconciliation_required', 'replaced', 'failed_onchain', 'confirmed'))
