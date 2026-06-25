@@ -4,8 +4,7 @@ import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { bookingLockUsesAdvisory } from "../../../src/lib/communities/bookings/booking-hold-service"
-import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
-import { badRequestError } from "../../../src/lib/errors"
+import { setBookingPaymentVerifierForTests, setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { addCommunityMember, completeUniqueHumanVerification, exchangeJwt, requestJson } from "./community-routes-test-helpers"
 
@@ -17,20 +16,14 @@ let verifierCalls = 0
 beforeEach(() => {
   resetRuntimeCaches()
   verifierCalls = 0
-  // Default: funding verification succeeds, echoing the requested gross amount.
-  setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
+  // Default: booking payment verification succeeds, echoing the expected sender from the intent.
+  setBookingPaymentVerifierForTests(async (input) => {
     verifierCalls += 1
-    return {
-      txRef: input.fundingTxRef,
-      fromAddress: input.buyerAddress,
-      toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
-      tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
-      chainRef: "eip155:84532",
-    }
+    return { kind: "verified", senderAddress: input.expected.senderAddress, txRef: input.fundingTxRef }
   })
 })
 afterEach(async () => {
+  setBookingPaymentVerifierForTests(null)
   setCommunityCommerceBuyerFundingVerifierForTests(null)
   if (cleanup) { await cleanup(); cleanup = null }
 })
@@ -625,11 +618,11 @@ describe("community bookings — quote + confirm (Slice C)", () => {
     await insertWalletAttachment(ctx.client, host.userId, "wal_booker")
     const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
 
-    setCommunityCommerceBuyerFundingVerifierForTests(async () => {
-      throw badRequestError("Funding transaction did not deliver enough USDC to the checkout operator")
-    })
+    // A definitive mismatch (no matching transfer) is a terminal rejection — no booking, hold intact.
+    setBookingPaymentVerifierForTests(async () => ({ kind: "rejected", reason: "no_matching_transfer" }))
     const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xfake", "wal_booker")
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(409)
+    expect((await json(res) as { error: string }).error).toBe("payment_rejected")
     // No booking written.
     expect(await communityScalar(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, "SELECT COUNT(*) FROM bookings WHERE hold_id = ?1", [holdId])).toBe(0)
     // Hold still active and its lock still a (non-permanent) hold-lock.
@@ -718,5 +711,133 @@ describe("community bookings — quote + confirm (Slice C)", () => {
     const repair = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xfunding-ok", "wal_booker")
     expect(repair.status).toBe(200)
     expect((await lockForHold(ctx.client, holdId))?.expires_at_utc).toBeNull()
+  })
+})
+
+describe("community bookings — payment intent (Slice C hardening)", () => {
+  async function readIntent(root: string, communityId: string, holdId: string): Promise<Record<string, unknown> | null> {
+    const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+    try {
+      const r = await c.execute({ sql: `SELECT * FROM booking_payment_intents WHERE payment_intent_id = ?1`, args: [`bpi_${holdId}`] })
+      return r.rows[0] ? (r.rows[0] as Record<string, unknown>) : null
+    } finally { c.close() }
+  }
+  async function setIntent(root: string, communityId: string, holdId: string, fields: { status?: string; claimed_tx_ref?: string; verified_sender_address?: string }): Promise<void> {
+    const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+    try {
+      await c.execute({
+        sql: `UPDATE booking_payment_intents SET status = COALESCE(?2, status), claimed_tx_ref = COALESCE(?3, claimed_tx_ref),
+                verified_sender_address = COALESCE(?4, verified_sender_address), updated_at = ?5 WHERE payment_intent_id = ?1`,
+        args: [`bpi_${holdId}`, fields.status ?? null, fields.claimed_tx_ref ?? null, fields.verified_sender_address ?? null, new Date().toISOString()],
+      })
+    } finally { c.close() }
+  }
+  async function prep() {
+    const { ctx, communityId, host } = await setupHost()
+    const { dateStr, weekday } = bookableDay()
+    await seedProfile(ctx.client, { hostUserId: host.userId, basePriceCents: 5000 })
+    await seedRule(ctx.client, { hostUserId: host.userId, weekday })
+    await insertWalletAttachment(ctx.client, host.userId, "wal_booker")
+    return { ctx, communityId, host, dateStr }
+  }
+
+  test("quote returns persisted payment instructions (deposit address only, no payout snapshot)", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    const body = await json(await postQuote(ctx.env, communityId, holdId, host.accessToken)) as { quote: { payment: Record<string, unknown> } }
+    const p = body.quote.payment
+    expect(p.amount_atomic).toBe("50000000") // 5000 cents → 50 USDC at 6 decimals
+    expect(p.token_decimals).toBe(6)
+    expect(typeof p.recipient_address).toBe("string")
+    expect(p.payment_intent_id).toBe(`bpi_${holdId}`)
+    expect(JSON.stringify(p)).not.toContain("payout") // never expose payout snapshots/coordinator internals
+    expect(JSON.stringify(p)).not.toContain("private")
+  })
+
+  test("re-quoting an active hold returns the same immutable intent", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    const a = await json(await postQuote(ctx.env, communityId, holdId, host.accessToken)) as { quote: { payment: { payment_intent_id: string; amount_atomic: string } } }
+    const b = await json(await postQuote(ctx.env, communityId, holdId, host.accessToken)) as { quote: { payment: { payment_intent_id: string; amount_atomic: string } } }
+    expect(b.quote.payment.payment_intent_id).toBe(a.quote.payment.payment_intent_id)
+    expect(b.quote.payment.amount_atomic).toBe(a.quote.payment.amount_atomic)
+  })
+
+  test("pending verification is resumable and settles on a later retry", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    setBookingPaymentVerifierForTests(async () => ({ kind: "pending" }))
+    const first = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xpend", "wal_booker")
+    expect(first.status).toBe(409)
+    expect((await json(first) as { error: string }).error).toBe("payment_pending")
+    expect(String((await readIntent(root, communityId, holdId))?.status)).toBe("verification_failed")
+    expect(String((await readIntent(root, communityId, holdId))?.claimed_tx_ref)).toBe("0xpend") // hash retained
+
+    setBookingPaymentVerifierForTests(async (i) => ({ kind: "verified", senderAddress: i.expected.senderAddress, txRef: i.fundingTxRef }))
+    const retry = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xpend", "wal_booker")
+    expect(retry.status).toBe(201)
+    expect(String((await readIntent(root, communityId, holdId))?.status)).toBe("consumed")
+  })
+
+  test("definitive rejection is terminal and is never re-verified", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    setBookingPaymentVerifierForTests(async () => ({ kind: "rejected", reason: "no_matching_transfer" }))
+    expect((await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xbad", "wal_booker")).status).toBe(409)
+    expect(String((await readIntent(root, communityId, holdId))?.status)).toBe("verification_rejected")
+    verifierCalls = 0
+    setBookingPaymentVerifierForTests(async (i) => ({ kind: "verified", senderAddress: i.expected.senderAddress, txRef: i.fundingTxRef }))
+    const retry = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xbad", "wal_booker")
+    expect((await json(retry) as { error: string }).error).toBe("payment_rejected")
+    expect(verifierCalls).toBe(0) // terminal: no re-verification, no new booking
+    expect(await communityScalar(root, communityId, "SELECT COUNT(*) FROM bookings WHERE hold_id = ?1", [holdId])).toBe(0)
+  })
+
+  test("a reused transaction hash across holds is rejected", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const holdA = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    const holdB = await createActiveHold(ctx, communityId, host, `${dateStr}T10:00:00Z`, `${dateStr}T10:30:00Z`)
+    expect((await postConfirm(ctx.env, communityId, holdA, host.accessToken, "0xshared", "wal_booker")).status).toBe(201)
+    const reuse = await postConfirm(ctx.env, communityId, holdB, host.accessToken, "0xshared", "wal_booker")
+    expect((await json(reuse) as { error: string }).error).toBe("transaction_already_used")
+  })
+
+  test("crash after verification resumes into finalization without another chain call", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    await postQuote(ctx.env, communityId, holdId, host.accessToken) // creates the active intent
+    // Simulate a crash AFTER verified but BEFORE finalization: durable verified, no booking yet.
+    await setIntent(root, communityId, holdId, { status: "verified", claimed_tx_ref: "0xcrash", verified_sender_address: "0x7000000000000000000000000000000000000007" })
+    verifierCalls = 0
+    const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xcrash", "wal_booker")
+    expect(res.status).toBe(201)
+    expect(verifierCalls).toBe(0) // resumed from verified — no RPC, no re-pay
+    expect(await communityScalar(root, communityId, "SELECT status FROM bookings WHERE hold_id = ?1", [holdId])).toBe("confirmed")
+    expect(String((await readIntent(root, communityId, holdId))?.status)).toBe("consumed")
+  })
+
+  test("concurrent confirmations create exactly one booking, verified once", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    const [a, b] = await Promise.all([
+      postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xrace", "wal_booker"),
+      postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xrace", "wal_booker"),
+    ])
+    expect([a.status, b.status].filter((s) => s === 201 || s === 200).length).toBeGreaterThanOrEqual(1)
+    expect(await communityScalar(root, communityId, "SELECT COUNT(*) FROM bookings WHERE hold_id = ?1", [holdId])).toBe(1)
+    expect(verifierCalls).toBeLessThanOrEqual(1) // only the reservation winner verifies
+  })
+
+  test("replaying a confirmed booking with a different tx hash is rejected", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    expect((await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_booker")).status).toBe(201)
+    expect((await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_booker")).status).toBe(200) // same tx → idempotent
+    const mismatch = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xdifferent", "wal_booker")
+    expect((await json(mismatch) as { error: string }).error).toBe("replay_mismatch")
   })
 })
