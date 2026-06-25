@@ -96,6 +96,54 @@ describe("booking settlement cron — orchestration", () => {
   })
 })
 
+async function captureConsoleError<T>(fn: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = []
+  const orig = console.error
+  console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")) }
+  try {
+    const result = await fn()
+    return { result, lines }
+  } finally {
+    console.error = orig
+  }
+}
+
+describe("booking settlement cron — sanitized failure logging", () => {
+  test("a coordinator/RPC-style error logs a sanitized code + incident id, NEVER the raw message", async () => {
+    const repo = fakeRepo(["c1"])
+    const secret = "tx 0xdeadbeef to https://rpc.example/secret?key=SUPERSECRET"
+    const { lines } = await captureConsoleError(() => sweepDueBookingSettlements({
+      env: envWith("true"), communityRepository: repo, processCommunity: async () => { throw new Error(secret) },
+    }))
+    const line = lines.find((l) => l.includes("[booking-settlements] failure")) ?? ""
+    expect(line).not.toContain("SUPERSECRET")
+    expect(line).not.toContain("0xdeadbeef")
+    expect(line).toContain('"code":"unknown:Error"')
+    expect(line).toMatch(/"incidentId":"[0-9a-f-]{36}"/)
+  })
+
+  test("a known guard error logs its approved stable code (no incident id, no raw message)", async () => {
+    const repo = fakeRepo(["c1"])
+    const { lines } = await captureConsoleError(() => sweepDueBookingSettlements({
+      env: envWith("true"), communityRepository: repo, processCommunity: async () => { throw new Error("booking_refund_destination_missing") },
+    }))
+    const line = lines.find((l) => l.includes("[booking-settlements] failure")) ?? ""
+    expect(line).toContain('"code":"booking_refund_destination_missing"')
+    expect(line).toContain('"incidentId":null')
+  })
+})
+
+describe("booking settlement cron — fatal enumeration", () => {
+  test("a failing listActiveCommunities returns a structured FATAL summary (never throws), sanitized", async () => {
+    const repo = { listActiveCommunities: async () => { throw new Error("control plane down at https://db/secret-token") } } as unknown as SweepBookingSettlementsInput["communityRepository"]
+    const { result: summary, lines } = await captureConsoleError(() => sweepDueBookingSettlements({ env: envWith("true"), communityRepository: repo }))
+    expect(summary.enabled).toBe(true)
+    expect(summary.fatal).toBe(true)
+    expect(summary.errors).toBeGreaterThanOrEqual(1)
+    expect(lines.join("")).not.toContain("secret-token") // fatal log is sanitized too
+  })
+})
+
 describe("community rotation (selectScheduledCommunityJobPollIds)", () => {
   test("covers all communities across successive minute buckets (no persistent tail starvation)", () => {
     const communities = Array.from({ length: 10 }, (_v, i) => ({ community_id: `c${i}`, created_at: new Date(1_700_000_000_000 + i).toISOString() }))

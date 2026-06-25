@@ -34,18 +34,41 @@ export interface BookingSettlementSweepSummary {
   skipped: number
   errors: number
   deadlineReached: boolean
+  fatal: boolean
 }
 
-function emptySummary(enabled: boolean): BookingSettlementSweepSummary {
-  return { enabled, communitiesScanned: 0, checkedDue: 0, checkedResume: 0, initiated: 0, resumed: 0, settled: 0, pending: 0, ambiguous: 0, terminal: 0, skipped: 0, errors: 0, deadlineReached: false }
+export function emptyBookingSettlementSummary(enabled: boolean): BookingSettlementSweepSummary {
+  return { enabled, communitiesScanned: 0, checkedDue: 0, checkedResume: 0, initiated: 0, resumed: 0, settled: 0, pending: 0, ambiguous: 0, terminal: 0, skipped: 0, errors: 0, deadlineReached: false, fatal: false }
 }
 
-// Log a failure with stable identifiers ONLY. The thrown messages here are controlled strings
-// (e.g. "...confirmation pending (retryable)", "booking_refund_destination_missing"); never log raw
-// objects, wallet addresses, signed transactions, or secrets.
+// Approved stable codes for KNOWN booking settlement failures (these are deterministic guards, not
+// coordinator/RPC payloads). Anything else is treated as unknown and never has its message logged.
+const KNOWN_SETTLEMENT_ERROR_CODES = new Set<string>([
+  "booking_refund_destination_missing",
+  "booking_payout_destination_missing",
+  "booking_settlement_intent_missing_refund_decision",
+  "booking_settlement_intent_refund_out_of_range",
+])
+
+// Reduce an error to a SAFE, stable code. Never returns raw messages/objects — RPC/provider/
+// coordinator errors can embed transaction payloads, URLs, or addresses. Unknown errors yield the
+// error class name + a generated incident id (a correlation token, not the detail).
+function sanitizeSettlementError(error: unknown): { code: string; incidentId: string | null } {
+  const kind = bookingSettlementErrorKind(error)
+  if (kind) return { code: `coordinator_${kind}`, incidentId: null } // pending / terminal
+  const message = (error as { message?: unknown })?.message
+  if (typeof message === "string") {
+    if (KNOWN_SETTLEMENT_ERROR_CODES.has(message)) return { code: message, incidentId: null }
+    if (message.startsWith("booking_settlement_unknown_intent_state")) return { code: "booking_settlement_unknown_intent_state", incidentId: null }
+  }
+  const name = (error as { constructor?: { name?: string } })?.constructor?.name ?? "Error"
+  return { code: `unknown:${name}`, incidentId: crypto.randomUUID() }
+}
+
+// Log a failure with stable identifiers + a sanitized code ONLY — never raw messages/objects.
 function logSettlementFailure(scope: string, communityId: string, bookingId: string | null, error: unknown): void {
-  const message = String((error as { message?: unknown })?.message ?? error).slice(0, 200)
-  console.error("[booking-settlements] failure", JSON.stringify({ scope, communityId, bookingId, message }))
+  const { code, incidentId } = sanitizeSettlementError(error)
+  console.error("[booking-settlements] failure", JSON.stringify({ scope, communityId, bookingId, code, incidentId }))
 }
 
 export interface ProcessCommunityInput {
@@ -80,7 +103,7 @@ export interface SweepBookingSettlementsInput {
 export async function sweepDueBookingSettlements(input: SweepBookingSettlementsInput): Promise<BookingSettlementSweepSummary> {
   const now = input.now ?? (() => Date.now())
   const enabled = isBookingSettlementCronEnabled(input.env)
-  const summary = emptySummary(enabled)
+  const summary = emptyBookingSettlementSummary(enabled)
   if (!enabled) return summary // disabled: no enumeration, no side effects
 
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 50))
@@ -90,23 +113,31 @@ export async function sweepDueBookingSettlements(input: SweepBookingSettlementsI
   const shouldStop = (): boolean => now() - start >= deadlineMs
   const process = input.processCommunity ?? processCommunityBookingSettlements
 
-  // Fair rotation across ticks using the existing scheduler utility (newest kept + remainder rotated).
-  const communities = await input.communityRepository.listActiveCommunities()
-  const communityIds = selectScheduledCommunityJobPollIds(communities, maxCommunities, now())
+  try {
+    // Fair rotation across ticks using the existing scheduler utility (newest kept + remainder rotated).
+    const communities = await input.communityRepository.listActiveCommunities()
+    const communityIds = selectScheduledCommunityJobPollIds(communities, maxCommunities, now())
 
-  for (const communityId of communityIds) {
-    if (shouldStop()) { summary.deadlineReached = true; break } // stop STARTING new communities
-    try {
-      await process({
-        env: input.env, communityRepository: input.communityRepository, communityId,
-        nowUtc: new Date(now()).toISOString(), maxBookings, confirmPollMs: CRON_CONFIRM_POLL_MS, summary, shouldStop,
-      })
-      summary.communitiesScanned += 1
-    } catch (error) {
-      // A failed community must not stop later communities.
-      summary.errors += 1
-      logSettlementFailure("community", communityId, null, error)
+    for (const communityId of communityIds) {
+      if (shouldStop()) { summary.deadlineReached = true; break } // stop STARTING new communities
+      try {
+        await process({
+          env: input.env, communityRepository: input.communityRepository, communityId,
+          nowUtc: new Date(now()).toISOString(), maxBookings, confirmPollMs: CRON_CONFIRM_POLL_MS, summary, shouldStop,
+        })
+        summary.communitiesScanned += 1
+      } catch (error) {
+        // A failed community must not stop later communities.
+        summary.errors += 1
+        logSettlementFailure("community", communityId, null, error)
+      }
     }
+  } catch (error) {
+    // Fatal: enumeration (or another top-level step) failed. Still return a structured summary so the
+    // caller always emits one; classify it fatal and count the error.
+    summary.errors += 1
+    summary.fatal = true
+    logSettlementFailure("fatal", "-", null, error)
   }
   return summary
 }

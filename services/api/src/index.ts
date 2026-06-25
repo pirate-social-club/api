@@ -46,7 +46,7 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
-import { isBookingSettlementCronEnabled, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
+import { emptyBookingSettlementSummary, isBookingSettlementCronEnabled, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
@@ -601,14 +601,20 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
   if (!isBookingSettlementCronEnabled(env)) return
   const communityRepository = getCommunityRepository(env)
+  let summary = emptyBookingSettlementSummary(true)
   try {
-    const summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
-    // One structured summary for EVERY enabled run, including zero-work runs.
-    console.info("[booking-settlements] swept", JSON.stringify(summary))
+    summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
+    // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
+    // generic marker (no raw message/object reaches Sentry from coordinator/RPC paths).
+    if (summary.fatal) captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
   } catch (error) {
-    console.error("[booking-settlements] sweep failed", error)
+    // Defense: an unexpected throw past the sweep still yields a fatal summary (no raw error logged).
+    summary.errors += 1
+    summary.fatal = true
     captureScheduledError(env, error, "booking_settlement_reconciliation")
   } finally {
+    // One structured summary for EVERY enabled run — including zero-work AND fatal runs.
+    console.info("[booking-settlements] swept", JSON.stringify(summary))
     await communityRepository.close?.()
   }
 }
