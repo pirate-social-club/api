@@ -722,13 +722,14 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
       return r.rows[0] ? (r.rows[0] as Record<string, unknown>) : null
     } finally { c.close() }
   }
-  async function setIntent(root: string, communityId: string, holdId: string, fields: { status?: string; claimed_tx_ref?: string; verified_sender_address?: string }): Promise<void> {
+  async function setIntent(root: string, communityId: string, holdId: string, fields: { status?: string; claimed_tx_ref?: string; verified_sender_address?: string; consumed_wallet_attachment_id?: string }): Promise<void> {
     const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
     try {
       await c.execute({
         sql: `UPDATE booking_payment_intents SET status = COALESCE(?2, status), claimed_tx_ref = COALESCE(?3, claimed_tx_ref),
-                verified_sender_address = COALESCE(?4, verified_sender_address), updated_at = ?5 WHERE payment_intent_id = ?1`,
-        args: [`bpi_${holdId}`, fields.status ?? null, fields.claimed_tx_ref ?? null, fields.verified_sender_address ?? null, new Date().toISOString()],
+                verified_sender_address = COALESCE(?4, verified_sender_address),
+                consumed_wallet_attachment_id = COALESCE(?6, consumed_wallet_attachment_id), updated_at = ?5 WHERE payment_intent_id = ?1`,
+        args: [`bpi_${holdId}`, fields.status ?? null, fields.claimed_tx_ref ?? null, fields.verified_sender_address ?? null, new Date().toISOString(), fields.consumed_wallet_attachment_id ?? null],
       })
     } finally { c.close() }
   }
@@ -809,8 +810,9 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
     const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
     const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
     await postQuote(ctx.env, communityId, holdId, host.accessToken) // creates the active intent
-    // Simulate a crash AFTER verified but BEFORE finalization: durable verified, no booking yet.
-    await setIntent(root, communityId, holdId, { status: "verified", claimed_tx_ref: "0xcrash", verified_sender_address: "0x7000000000000000000000000000000000000007" })
+    // Simulate a crash AFTER verified but BEFORE finalization: durable verified (evidence recorded,
+    // wallet attachment + sender captured at reserve/verify), no booking yet.
+    await setIntent(root, communityId, holdId, { status: "verified", claimed_tx_ref: "0xcrash", verified_sender_address: "0x7000000000000000000000000000000000000007", consumed_wallet_attachment_id: "wal_booker" })
     verifierCalls = 0
     const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xcrash", "wal_booker")
     expect(res.status).toBe(201)
@@ -839,5 +841,16 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
     expect((await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_booker")).status).toBe(200) // same tx → idempotent
     const mismatch = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xdifferent", "wal_booker")
     expect((await json(mismatch) as { error: string }).error).toBe("replay_mismatch")
+  })
+
+  test("replaying a confirmed booking with a DIFFERENT wallet attachment is rejected", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    // A second attachment owned by the same booker, but a different address than the one that paid.
+    await insertWalletAttachment(ctx.client, host.userId, "wal_other", "0x9000000000000000000000000000000000000009")
+    expect((await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_booker")).status).toBe(201)
+    // Same tx + booker, but a different (valid, owned) attachment must NOT replay the booking.
+    const wrongAttachment = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_other")
+    expect((await json(wrongAttachment) as { error: string }).error).toBe("replay_mismatch")
   })
 })

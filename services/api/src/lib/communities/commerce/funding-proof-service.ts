@@ -206,6 +206,32 @@ export type BookingPaymentVerification =
 let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expected: BookingPaymentExpectation }) => Promise<BookingPaymentVerification>) | null = null
 export function setBookingPaymentVerifierForTests(fn: typeof testBookingPaymentVerifier): void { testBookingPaymentVerifier = fn }
 
+// Pure receipt evaluation (no RPC) so the matching/amount rules are directly unit-testable.
+interface MinimalReceipt { status: number; logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string>; data: string }> }
+export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, expected: BookingPaymentExpectation, txRef: string): BookingPaymentVerification {
+  if (!receipt) return { kind: "pending" } // not found yet
+  if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
+  const expectedToken = getAddress(expected.tokenAddress)
+  const expectedRecipientTopic = zeroPadValue(getAddress(expected.recipientAddress), 32).toLowerCase()
+  const expectedSenderTopic = zeroPadValue(getAddress(expected.senderAddress), 32).toLowerCase()
+  for (const log of receipt.logs) {
+    if (getAddress(log.address) !== expectedToken) continue
+    const [topic0, fromTopic, toTopic] = log.topics
+    if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
+    if (String(toTopic).toLowerCase() !== expectedRecipientTopic) continue
+    if (String(fromTopic).toLowerCase() !== expectedSenderTopic) continue
+    const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
+    const amount = parsed?.args.value as bigint | undefined
+    // EXACT amount — neither underpayment nor overpayment satisfies the intent (a larger payment
+    // intended for something else must not confirm this booking).
+    if (amount == null || amount !== expected.amountAtomic) continue
+    const sender = topicAddress(String(fromTopic))
+    if (sender == null) continue
+    return { kind: "verified", senderAddress: getAddress(sender), txRef }
+  }
+  return { kind: "rejected", reason: "no_matching_transfer" }
+}
+
 export async function classifyBookingPaymentReceipt(input: {
   env: Env
   fundingTxRef: string // normalized by the caller
@@ -220,25 +246,7 @@ export async function classifyBookingPaymentReceipt(input: {
     if (isTransactionWaitTimeout(error)) return { kind: "pending" }
     return { kind: "pending" } // transient RPC error — resumable
   }
-  if (!receipt) return { kind: "pending" } // not found yet
-  if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
-  const expectedToken = getAddress(input.expected.tokenAddress)
-  const expectedRecipientTopic = zeroPadValue(getAddress(input.expected.recipientAddress), 32).toLowerCase()
-  const expectedSenderTopic = zeroPadValue(getAddress(input.expected.senderAddress), 32).toLowerCase()
-  for (const log of receipt.logs) {
-    if (getAddress(log.address) !== expectedToken) continue
-    const [topic0, fromTopic, toTopic] = log.topics
-    if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
-    if (String(toTopic).toLowerCase() !== expectedRecipientTopic) continue
-    if (String(fromTopic).toLowerCase() !== expectedSenderTopic) continue
-    const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
-    const amount = parsed?.args.value as bigint | undefined
-    if (amount == null || amount < input.expected.amountAtomic) continue
-    const sender = topicAddress(String(fromTopic))
-    if (sender == null) continue
-    return { kind: "verified", senderAddress: getAddress(sender), txRef: input.fundingTxRef }
-  }
-  return { kind: "rejected", reason: "no_matching_transfer" }
+  return evaluateBookingPaymentReceipt(receipt as MinimalReceipt | null, input.expected, input.fundingTxRef)
 }
 
 export async function verifyPirateCheckoutUsdcFunding(input: {
