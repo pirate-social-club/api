@@ -118,6 +118,14 @@ function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
     membership_mode: "gated",
+    // NOTE: karaoke_enabled is not carried on the control-plane CommunityRow — it
+    // lives only in the per-community DB. This fallback is used ONLY when the full
+    // preview computation times out, so it cannot know the real value and defaults
+    // to false. Consequence: on a (rare, transient) preview timeout the Sing button
+    // is briefly suppressed even for karaoke-enabled communities. Do not treat this
+    // false as authoritative for capability gating; the authoritative value comes
+    // from buildCommunityPreview reading the per-community `karaoke_enabled` column.
+    // A durable fix would carry karaoke_enabled on the control-plane row.
     karaoke_enabled: false,
     allow_anonymous_identity: false,
     anonymous_identity_scope: null,
