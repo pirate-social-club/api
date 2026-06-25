@@ -427,7 +427,8 @@ async function buildCommunityPreview(input: {
     sql: `
       SELECT display_name, description, avatar_ref, banner_ref, membership_mode,
              allow_anonymous_identity, anonymous_identity_scope,
-             donation_policy_mode, donation_partner_id, settings_json
+             donation_policy_mode, donation_partner_id, settings_json,
+             karaoke_enabled
       FROM communities
       WHERE community_id = ?1
       LIMIT 1

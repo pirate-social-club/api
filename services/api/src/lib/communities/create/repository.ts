@@ -192,7 +192,7 @@ export async function loadCommunityLocalSnapshot(
       sql: `
         SELECT community_id, display_name, description, avatar_ref, banner_ref, status, membership_mode, default_age_gate_policy,
                allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_id, donation_partner_status,
-               settings_json,
+               settings_json, karaoke_enabled,
                governance_mode, created_by_user_id, created_at, updated_at
         FROM communities
         WHERE community_id = ?1
