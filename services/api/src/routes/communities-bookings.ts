@@ -6,6 +6,7 @@ import { confirmBookingHold, quoteBookingHold } from "../lib/communities/booking
 import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
 import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
+import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -46,6 +47,27 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       viewer_timezone: result.viewerTimezone,
       slots: result.slots,
     }, 200)
+  })
+
+  // Read: list the caller's own bookings within a community, as host or booker (party-authorized:
+  // only the caller's rows are returned). Optional status filter (comma-separated). Authoritative
+  // source for booking management — never trust browser-local cache for this.
+  communities.get("/:communityId/bookings", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const url = new URL(c.req.url)
+    const role: BookingViewerRole = url.searchParams.get("role") === "host" ? "host" : "booker"
+    const statusParam = url.searchParams.get("status")
+    const statuses = statusParam ? statusParam.split(",").map((s) => s.trim()).filter(Boolean) : undefined
+    const data = await listBookingsForUser({ env: c.env, communityRepository, communityId, actorUserId: actor.userId, role, statuses })
+    return c.json({ object: "list", data, has_more: false }, 200)
+  })
+
+  // Read: retrieve a single booking — only if the caller is a party (host or booker), else 404.
+  communities.get("/:communityId/bookings/:bookingId", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const booking = await getBookingForParty({ env: c.env, communityRepository, communityId, bookingId: c.req.param("bookingId"), actorUserId: actor.userId })
+    if (!booking) return c.json({ error: "not_found" }, 404)
+    return c.json({ booking }, 200)
   })
 
   // Slice B: create a short-lived hold on a slot. Acquires the cross-community control-plane
