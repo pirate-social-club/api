@@ -37,6 +37,10 @@ interface BookingOperatorEffectContext {
   communityRepository: CommunityRepository
   communityId: string
   nowUtc: string
+  // Explicit confirmation-polling policy threaded through the call stack (NOT a mutable global):
+  // the interactive path omits it (full default poll); the cron passes [] (one confirm attempt,
+  // then treat as pending and resume on a later tick) so one tx can't consume the cron budget.
+  confirmPollMs?: number[]
 }
 
 // Coordinator seam: the wallet-scoped Durable Object is the nonce/signing/broadcast/chain authority.
@@ -77,6 +81,23 @@ function effectKind(effect: BookingOperatorEffect): BookingSettlementEffectKind 
   return effect.kind === "refund" ? "booking_refund" : "booking_payout"
 }
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)) }
+
+// Tag the two non-success settlement throws with a stable kind so callers (the settlement cron)
+// classify them without brittle message matching. "pending" = broadcast but not yet confirmed
+// (resumable on a later tick); "terminal" = coordinator replaced/failed_onchain (never re-spend).
+const BOOKING_SETTLEMENT_ERROR_KIND = Symbol.for("pirate.bookingSettlementErrorKind")
+type BookingSettlementErrorKind = "pending" | "terminal"
+function settlementError(message: string, kind: BookingSettlementErrorKind): Error {
+  const error = conflictError(message) as Error & { [BOOKING_SETTLEMENT_ERROR_KIND]?: BookingSettlementErrorKind }
+  error[BOOKING_SETTLEMENT_ERROR_KIND] = kind
+  return error
+}
+export function bookingSettlementErrorKind(error: unknown): BookingSettlementErrorKind | null {
+  if (error && typeof error === "object" && BOOKING_SETTLEMENT_ERROR_KIND in error) {
+    return (error as { [BOOKING_SETTLEMENT_ERROR_KIND]?: BookingSettlementErrorKind })[BOOKING_SETTLEMENT_ERROR_KIND] ?? null
+  }
+  return null
+}
 
 async function withCommunityWrite<T>(ctx: BookingOperatorEffectContext, fn: (client: Awaited<ReturnType<typeof openCommunityWriteClient>>["client"]) => Promise<T>): Promise<T> {
   const handle = await openCommunityWriteClient(ctx.env, ctx.communityRepository, ctx.communityId)
@@ -129,11 +150,11 @@ export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectCon
   if (s.state === "replaced" || s.state === "failed_onchain") {
     // Terminal: leave the ledger submitted (never the failed -> retry path); the coordinator_state
     // mirror records the terminal reason. Never create another transaction.
-    throw conflictError(`Booking settlement terminal at coordinator (${s.state}); reconciliation required`)
+    throw settlementError(`Booking settlement terminal at coordinator (${s.state}); reconciliation required`, "terminal")
   }
   if (s.state === "reserving" || s.state === "failed_preparation") {
     // Nothing broadcast; retryable. Leave records submitted for a later reconcile.
-    throw conflictError("Booking settlement is not yet broadcast (retryable)")
+    throw settlementError("Booking settlement is not yet broadcast (retryable)", "pending")
   }
   // s.state === "broadcast": poll confirm with bounded backoff.
   if (!s.txHash) throw conflictError("Booking settlement broadcast missing transaction hash")
@@ -144,10 +165,10 @@ export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectCon
     return { txRef: confirmed.txHash ?? s.txHash }
   }
   if (confirmed.state === "failed_onchain" || confirmed.state === "replaced") {
-    throw conflictError(`Booking settlement terminal at coordinator (${confirmed.state}); reconciliation required`)
+    throw settlementError(`Booking settlement terminal at coordinator (${confirmed.state}); reconciliation required`, "terminal")
   }
   // Confirmation did not complete within the bounded window — retryable, records left recoverable.
-  throw conflictError("Booking settlement confirmation pending (retryable)")
+  throw settlementError("Booking settlement confirmation pending (retryable)", "pending")
 }
 
 async function mirrorCoordinator(ctx: BookingOperatorEffectContext, effect: BookingOperatorEffect, s: OperatorSettleResult): Promise<void> {
@@ -162,7 +183,8 @@ async function ledgerConfirm(ctx: BookingOperatorEffectContext, effect: BookingO
 }
 
 async function pollConfirm(ctx: BookingOperatorEffectContext, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
-  const plan = confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS
+  // Explicit per-call policy wins; the test global is only a fallback; otherwise the full default.
+  const plan = ctx.confirmPollMs ?? confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS
   // confirm() returns the chain state (pending → state stays 'broadcast'); only genuine errors
   // (missing record / hash mismatch / immutable mismatch / RPC failure) throw — those are NOT
   // retryable and propagate so the operation fails loudly rather than masquerading as "pending".

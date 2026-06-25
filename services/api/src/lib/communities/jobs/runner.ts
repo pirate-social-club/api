@@ -40,9 +40,10 @@ function createdAtMs(community: { created_at?: string | null }): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function selectScheduledCommunityJobPollIds(
+export function selectScheduledCommunityJobPollIds(
   communities: Array<{ community_id: string; created_at?: string | null }>,
   maxCommunities: number,
+  nowMs: number = Date.now(),
 ): string[] {
   if (communities.length <= maxCommunities) {
     return communities.map((community) => community.community_id)
@@ -64,7 +65,7 @@ function selectScheduledCommunityJobPollIds(
     return Array.from(selected)
   }
 
-  const minuteBucket = Math.floor(Date.now() / 60_000)
+  const minuteBucket = Math.floor(nowMs / 60_000)
   const start = remaining.length === 0 ? 0 : (minuteBucket * rotatingCount) % remaining.length
   for (let index = 0; index < rotatingCount && index < remaining.length; index += 1) {
     selected.add(remaining[(start + index) % remaining.length]!.community_id)

@@ -176,6 +176,9 @@ interface SettlementContext {
   communityRepository: CommunityRepository
   communityId: string
   nowUtc: string
+  // Explicit confirmation-poll policy threaded to the custody adapter (not a global). Omitted on
+  // the interactive path (full default poll); the settlement cron passes [] (one confirm, then resume).
+  confirmPollMs?: number[]
 }
 
 function requireSettlementAddress(address: string | null, code: string): string {
@@ -252,9 +255,10 @@ export interface LifecycleInput {
   bookingId: string
   actorUserId: string
   nowUtc: string
+  confirmPollMs?: number[]
 }
 function ctxOf(input: LifecycleInput): SettlementContext {
-  return { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, nowUtc: input.nowUtc }
+  return { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, nowUtc: input.nowUtc, confirmPollMs: input.confirmPollMs }
 }
 
 export type LifecycleResult =
@@ -382,4 +386,55 @@ export async function noShowBooking(input: LifecycleInput): Promise<LifecycleRes
 
   const settled = await executeSettlement(ctxOf(input), booking, "live", intentState, refundCents)
   return { ok: true, already: false, booking: settled }
+}
+
+// Every unfinished intent state (reserved + maybe broadcast, not yet finalized to settled/refunded).
+const UNFINISHED_INTENT_STATES = new Set<string>([
+  "completed", "no_show_booker", "no_show_host", "cancelled_by_host", "cancelled_by_booker",
+])
+
+export type ReconcileBookingSettlementResult =
+  | { outcome: "skipped" }
+  | { outcome: "resumed"; booking: BookingLifecycleSnapshot }
+
+/**
+ * Resume an unfinished settlement (a prior attempt reserved the intent + maybe broadcast but never
+ * finalized — e.g. a confirmation timeout or a crash). No actor: the financial decision is
+ * RECONSTRUCTED STRICTLY from persisted booking data (intent state + persisted refund_cents +
+ * destination snapshots) and never recomputed. Inconsistent/incomplete intent records fail closed.
+ * Idempotent: re-runs the same idempotency-keyed effects (coordinator + ledger dedupe) then finalizes.
+ */
+export async function reconcileBookingSettlement(input: {
+  env: Env
+  communityRepository: CommunityRepository
+  communityId: string
+  bookingId: string
+  nowUtc: string
+  confirmPollMs?: number[]
+}): Promise<ReconcileBookingSettlementResult> {
+  const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
+  // Resume ONLY exact unfinished intent states; anything else (final, pre-intent, missing) is skipped.
+  if (!booking || !UNFINISHED_INTENT_STATES.has(booking.status)) return { outcome: "skipped" }
+
+  // Reject incomplete/inconsistent intent records instead of guessing a financial decision.
+  if (!FINALIZE[booking.status]) throw new Error(`booking_settlement_unknown_intent_state:${booking.status}`)
+  if (booking.refund_cents == null) throw new Error("booking_settlement_intent_missing_refund_decision")
+  if (!Number.isInteger(booking.refund_cents) || booking.refund_cents < 0 || booking.refund_cents > booking.gross_cents) {
+    throw new Error("booking_settlement_intent_refund_out_of_range")
+  }
+  const refundCents = booking.refund_cents
+  const payoutCents = retainedHostPayout(booking.gross_cents, refundCents, booking.platform_fee_bps)
+  if (refundCents > 0 && !booking.funding_wallet_address) throw new Error("booking_refund_destination_missing")
+  if (payoutCents > 0 && !booking.host_payout_wallet_address) throw new Error("booking_payout_destination_missing")
+
+  // The booking is already in its intent state, so executeSettlement skips Phase A (needsReserve =
+  // status === fromState is false) and re-runs Phase B/C from persisted data. fromState is only the
+  // (now-unmatched) reserve guard.
+  const fromState: BookingState = CANCELLED_STATES.has(booking.status) ? "confirmed" : "live"
+  const ctx: SettlementContext = {
+    env: input.env, communityRepository: input.communityRepository, communityId: input.communityId,
+    nowUtc: input.nowUtc, confirmPollMs: input.confirmPollMs,
+  }
+  const settled = await executeSettlement(ctx, booking, fromState, booking.status as BookingState, refundCents)
+  return { outcome: "resumed", booking: settled }
 }
