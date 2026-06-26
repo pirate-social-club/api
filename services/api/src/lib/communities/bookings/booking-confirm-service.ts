@@ -1,11 +1,24 @@
 import { computeAllocation, type BookingPolicy } from "@pirate/bookings-domain"
+import { getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import type { UserRepository } from "../../auth/repositories"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { resolveWalletAttachmentAddress } from "../commerce/access"
-import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
+import { classifyBookingPaymentReceipt } from "../commerce/funding-proof-service"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import {
+  createOrGetPaymentIntent,
+  expirePaymentIntentIfDue,
+  loadPaymentIntent,
+  markPaymentIntentRejected,
+  markPaymentIntentVerificationFailed,
+  markPaymentIntentVerified,
+  normalizeTxRef,
+  paymentIntentIdForHold,
+  reservePaymentIntentForVerification,
+  type PaymentIntentRow,
+} from "./booking-payment-intent-service"
 
 type CommunityRepository = Parameters<typeof openCommunityReadClient>[1]
 
@@ -160,9 +173,34 @@ async function makeBookingLockPermanent(env: Env, input: {
   } catch { /* slot already guarded by another active lock */ }
 }
 
+// Fee allocation from the host profile, computed at quote time and snapshotted on the intent.
+async function computeFeeSnapshot(env: Env, hostUserId: string, priceCents: number): Promise<{ platformFeeBps: number; platformFeeCents: number; hostPayoutCents: number }> {
+  const platformFeeBps = await loadPlatformFeeBps(env, hostUserId)
+  const allocation = computeAllocation(priceCents, feePolicy(platformFeeBps))
+  return {
+    platformFeeBps,
+    platformFeeCents: allocation.legs.find((l) => l.recipientType === "platform_fee")?.amountCents ?? 0,
+    hostPayoutCents: allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0,
+  }
+}
+
+export interface PaymentInstructions {
+  payment_intent_id: string
+  version: number
+  chain_id: number
+  token_address: string
+  token_decimals: number
+  token_symbol: string
+  recipient_address: string
+  amount_atomic: string
+  gross_cents: number
+  quote_expires_at: string
+  hold_expires_at: string
+  wallet_attachment_required: boolean
+}
 export type QuoteBookingHoldResult =
   | { ok: false; reason: "hold_not_found" | "hold_expired" }
-  | { ok: true; quote: { hold_id: string; gross_cents: number; platform_fee_bps: number; platform_fee_cents: number; host_payout_cents: number; expires_at_utc: string } }
+  | { ok: true; quote: { hold_id: string; gross_cents: number; platform_fee_bps: number; platform_fee_cents: number; host_payout_cents: number; expires_at_utc: string; payment: PaymentInstructions } }
 
 export async function quoteBookingHold(input: {
   env: Env; communityRepository: CommunityRepository; communityId: string; holdId: string; nowUtc: string
@@ -171,26 +209,61 @@ export async function quoteBookingHold(input: {
   if (!hold) return { ok: false, reason: "hold_not_found" }
   if (hold.expires_at_utc <= input.nowUtc || hold.status !== "active") return { ok: false, reason: "hold_expired" }
 
-  const platformFeeBps = await loadPlatformFeeBps(input.env, hold.host_user_id)
-  const allocation = computeAllocation(hold.price_cents, feePolicy(platformFeeBps))
-  const fee = allocation.legs.find((l) => l.recipientType === "platform_fee")?.amountCents ?? 0
-  const host = allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0
+  // Persist the immutable payment intent (durable; replay-validated) WITH the fee allocation snapshot
+  // computed from the host profile now. Return ONLY payment instructions + the PERSISTED allocation —
+  // never payout snapshots/coordinator internals; a re-quote echoes the original snapshot, not a
+  // recomputation, so what the booker accepted is authoritative.
+  const snap = await computeFeeSnapshot(input.env, hold.host_user_id, hold.price_cents)
+  const intent = await createOrGetPaymentIntent({
+    env: input.env, communityRepository: input.communityRepository, communityId: input.communityId,
+    hold: { hold_id: hold.hold_id, price_cents: hold.price_cents, expires_at_utc: hold.expires_at_utc }, nowUtc: input.nowUtc,
+    platformFeeBps: snap.platformFeeBps, platformFeeCents: snap.platformFeeCents, hostPayoutCents: snap.hostPayoutCents,
+  })
   return {
     ok: true,
     quote: {
-      hold_id: hold.hold_id,
-      gross_cents: hold.price_cents,
-      platform_fee_bps: platformFeeBps,
-      platform_fee_cents: fee,
-      host_payout_cents: host,
+      hold_id: hold.hold_id, gross_cents: hold.price_cents, platform_fee_bps: intent.platform_fee_bps ?? snap.platformFeeBps,
+      platform_fee_cents: intent.platform_fee_cents ?? snap.platformFeeCents, host_payout_cents: intent.host_payout_cents ?? snap.hostPayoutCents,
       expires_at_utc: hold.expires_at_utc,
+      payment: {
+        payment_intent_id: intent.payment_intent_id, version: intent.version, chain_id: intent.chain_id,
+        token_address: intent.token_address, token_decimals: intent.token_decimals, token_symbol: intent.token_symbol,
+        recipient_address: intent.recipient_address, amount_atomic: intent.amount_atomic, gross_cents: intent.gross_cents,
+        quote_expires_at: intent.quote_expires_at, hold_expires_at: intent.hold_expires_at,
+        wallet_attachment_required: intent.wallet_attachment_required === 1,
+      },
     },
   }
 }
 
+const VERIFICATION_CLAIM_TTL_MS = 60_000
+
 export type ConfirmBookingResult =
-  | { ok: false; reason: "hold_not_found" | "hold_not_active" | "hold_expired" | "host_payout_unconfigured" }
+  | { ok: false; reason: "hold_not_found" | "hold_not_active" | "hold_expired" | "host_payout_unconfigured" | "payment_pending" | "payment_rejected" | "transaction_already_used" | "verification_in_progress" | "replay_mismatch" | "wallet_attachment_invalid" | "finalization_conflict" }
   | { ok: true; already: boolean; booking: BookingSnapshot }
+
+function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  try { return getAddress(a) === getAddress(b) } catch { return false }
+}
+
+// The consumed-replay invariant: an existing booking may only be returned when the persisted intent
+// (verified/consumed), the supplied attachment + its verified sender, the hold, and the funding tx all
+// match. Same predicates protect a different-attachment replay from succeeding.
+function replayMatches(p: {
+  intent: PaymentIntentRow | null; existing: BookingSnapshot; hold: HoldRow
+  normTx: string; walletAttachmentId: string; buyerAddress: string; bookerUserId: string
+}): boolean {
+  const i = p.intent
+  if (!i || (i.status !== "verified" && i.status !== "consumed")) return false
+  if (i.hold_id !== p.hold.hold_id) return false
+  if ((i.claimed_tx_ref ?? "") !== p.normTx) return false
+  if ((i.consumed_wallet_attachment_id ?? "") !== p.walletAttachmentId) return false
+  if (!sameAddress(i.verified_sender_address, p.buyerAddress)) return false
+  if (p.existing.booker_user_id !== p.bookerUserId || p.existing.hold_id !== p.hold.hold_id) return false
+  if ((p.existing.funding_tx_ref ?? "").toLowerCase() !== p.normTx) return false
+  return true
+}
 
 export async function confirmBookingHold(input: {
   env: Env
@@ -203,111 +276,176 @@ export async function confirmBookingHold(input: {
   walletAttachmentId: string
   nowUtc: string
 }): Promise<ConfirmBookingResult> {
-  // 1) Read hold + any existing booking BEFORE any write (the D1 write tx forbids reads inside).
   const hold = await loadHold(input.env, input.communityRepository, input.communityId, input.holdId)
   if (!hold) return { ok: false, reason: "hold_not_found" }
-  // Ownership: only the hold's original booker may confirm it (and only they may retrieve the
-  // resulting booking on the idempotent path). Non-owners get an indistinguishable 404.
+  // Ownership: only the hold's original booker may confirm (indistinguishable 404 otherwise).
   if (hold.booker_user_id !== input.bookerUserId) return { ok: false, reason: "hold_not_found" }
+  const intentId = paymentIntentIdForHold(hold.hold_id)
+  const normTx = normalizeTxRef(input.fundingTxRef)
 
+  // Resolve + validate the supplied wallet attachment up front: it must belong to the booker. Its
+  // address is the expected on-chain sender and (on replay) must equal the intent's verified sender.
+  let buyerAddress: string
+  try {
+    buyerAddress = await resolveWalletAttachmentAddress({ userRepository: input.userRepository, userId: input.bookerUserId, walletAttachmentId: input.walletAttachmentId })
+  } catch {
+    return { ok: false, reason: "wallet_attachment_invalid" }
+  }
+  const fin = { ...input, buyerAddress, normTx }
+
+  // Idempotent consumed-replay: load the intent FIRST and require the full match (intent status +
+  // identity, same tx + attachment, attachment still owned by booker, address == verified sender,
+  // booking fields match hold/intent/booker/tx). A mismatch (e.g. a different attachment) is rejected.
   const existing = await loadBookingByHold(input.env, input.communityRepository, input.communityId, input.holdId)
   if (existing) {
-    // Idempotent: a booking already exists for this hold — return it, do NOT re-verify or re-charge.
-    // Self-repair the lock in case a prior confirm failed to clear its expiry.
-    await makeBookingLockPermanent(input.env, {
-      holdId: hold.hold_id, bookingId: existing.booking_id, hostUserId: hold.host_user_id,
-      slotStartUtc: hold.slot_start_utc, slotEndUtc: hold.slot_end_utc, communityId: input.communityId, nowUtc: input.nowUtc,
-    })
+    const replayIntent = await loadPaymentIntent(input.env, input.communityRepository, input.communityId, intentId)
+    if (!replayMatches({ intent: replayIntent, existing, hold, normTx, walletAttachmentId: input.walletAttachmentId, buyerAddress, bookerUserId: input.bookerUserId })) {
+      return { ok: false, reason: "replay_mismatch" }
+    }
+    await makeBookingLockPermanent(input.env, { holdId: hold.hold_id, bookingId: existing.booking_id, hostUserId: hold.host_user_id, slotStartUtc: hold.slot_start_utc, slotEndUtc: hold.slot_end_utc, communityId: input.communityId, nowUtc: input.nowUtc })
     return { ok: true, already: true, booking: existing }
   }
+
+  // Ensure the durable intent exists (idempotent + replay-validated; fee snapshot set on first create),
+  // then expire it if its window passed.
+  const snap = await computeFeeSnapshot(input.env, hold.host_user_id, hold.price_cents)
+  await createOrGetPaymentIntent({ env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, hold: { hold_id: hold.hold_id, price_cents: hold.price_cents, expires_at_utc: hold.expires_at_utc }, nowUtc: input.nowUtc, platformFeeBps: snap.platformFeeBps, platformFeeCents: snap.platformFeeCents, hostPayoutCents: snap.hostPayoutCents })
+  await expirePaymentIntentIfDue({ env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, intentId, nowUtc: input.nowUtc })
+  let intent = await loadPaymentIntent(input.env, input.communityRepository, input.communityId, intentId)
+  if (!intent) throw new Error("payment_intent_missing")
+
+  if (intent.status === "consumed") return finalizeFromVerifiedIntent(fin, hold, intent)
+  if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" }
+  if (intent.status === "expired") return { ok: false, reason: "hold_expired" }
+  // Resume a durable verified intent DIRECTLY into finalization — no further chain call or payment.
+  if (intent.status === "verified") return finalizeFromVerifiedIntent(fin, hold, intent)
+
   if (hold.status !== "active") return { ok: false, reason: "hold_not_active" }
   if (hold.expires_at_utc <= input.nowUtc) return { ok: false, reason: "hold_expired" }
 
-  // 2) Verify the on-chain USDC receipt for the hold's gross amount (PR0 verifier; throws on
-  // mismatch → no booking written). Reuses the generalized arbitrary-amount entry point.
-  const buyerAddress = await resolveWalletAttachmentAddress({
-    userRepository: input.userRepository,
-    userId: input.bookerUserId,
-    walletAttachmentId: input.walletAttachmentId,
+  // CAS reserve the intent for verification (reserves the normalized tx; one concurrent confirm wins).
+  const claimToken = crypto.randomUUID()
+  const reserved = await reservePaymentIntentForVerification({
+    env: input.env, communityRepository: input.communityRepository, communityId: input.communityId,
+    intentId, claimToken, claimExpiresAt: new Date(Date.parse(input.nowUtc) + VERIFICATION_CLAIM_TTL_MS).toISOString(),
+    normalizedTxRef: normTx, walletAttachmentId: input.walletAttachmentId, nowUtc: input.nowUtc,
   })
-  const receipt = await verifyPirateCheckoutUsdcFunding({
-    env: input.env,
-    quoteId: `booking_hold:${input.holdId}`,
-    amountUsd: hold.price_cents / 100,
-    buyerAddress,
-    fundingTxRef: input.fundingTxRef,
-  })
+  if (!reserved.ok) {
+    if (reserved.reason === "reused_tx") return { ok: false, reason: "transaction_already_used" }
+    const cur = await loadPaymentIntent(input.env, input.communityRepository, input.communityId, intentId)
+    if (cur?.status === "consumed" || cur?.status === "verified") return finalizeFromVerifiedIntent(fin, hold, cur)
+    if (cur?.status === "verification_rejected") return { ok: false, reason: "payment_rejected" }
+    return { ok: false, reason: "verification_in_progress" }
+  }
 
+  // Verify the tx against the PERSISTED intent (explicit expected values; classified outcome).
+  const outcome = await classifyBookingPaymentReceipt({
+    env: input.env, fundingTxRef: normTx,
+    expected: { chainId: intent.chain_id, tokenAddress: intent.token_address, recipientAddress: intent.recipient_address, amountAtomic: BigInt(intent.amount_atomic), senderAddress: buyerAddress },
+  })
+  const claimArgs = { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, intentId, claimToken, nowUtc: input.nowUtc }
+  if (outcome.kind === "pending") { await markPaymentIntentVerificationFailed(claimArgs); return { ok: false, reason: "payment_pending" } }
+  if (outcome.kind === "rejected") { await markPaymentIntentRejected(claimArgs); return { ok: false, reason: "payment_rejected" } }
+  // verified → durable verified state (records evidence) BEFORE any booking write.
+  const transitioned = await markPaymentIntentVerified({ ...claimArgs, verifiedSenderAddress: outcome.senderAddress })
+  if (!transitioned) {
+    const cur = await loadPaymentIntent(input.env, input.communityRepository, input.communityId, intentId)
+    if (cur?.status === "verified" || cur?.status === "consumed") return finalizeFromVerifiedIntent(fin, hold, cur)
+    return { ok: false, reason: "verification_in_progress" }
+  }
+  intent = await loadPaymentIntent(input.env, input.communityRepository, input.communityId, intentId)
+  if (!intent) throw new Error("payment_intent_missing_after_verify")
+  return finalizeFromVerifiedIntent(fin, hold, intent)
+}
+
+// Atomic finalization from a durable verified (or already-consumed) intent. Validates the supplied
+// identifiers against the intent first (esp. the resume path), then in ONE DB transaction creates the
+// booking (stable id) gated on the intent STILL being verified/consumed for THIS hold + claimed tx +
+// attachment + sender AND the hold still valid, consumes the hold, and CAS verified -> consumed. A
+// rollback leaves the intent verified (never partially consumed) so a crash resumes here WITHOUT
+// another chain call. Idempotent on replay; the post-commit row assertion catches a failed predicate.
+async function finalizeFromVerifiedIntent(
+  input: { env: Env; communityRepository: CommunityRepository; communityId: string; holdId: string; bookerUserId: string; walletAttachmentId: string; buyerAddress: string; normTx: string; nowUtc: string },
+  hold: HoldRow,
+  intent: PaymentIntentRow,
+): Promise<ConfirmBookingResult> {
+  // The supplied tx + attachment + sender must match this intent (guards the resume-from-verified path
+  // and a different-attachment replay before any write).
+  if (intent.hold_id !== hold.hold_id) return { ok: false, reason: "replay_mismatch" }
+  if ((intent.claimed_tx_ref ?? "") !== input.normTx) return { ok: false, reason: "replay_mismatch" }
+  if ((intent.consumed_wallet_attachment_id ?? "") !== input.walletAttachmentId) return { ok: false, reason: "replay_mismatch" }
+  if (!sameAddress(intent.verified_sender_address, input.buyerAddress)) return { ok: false, reason: "replay_mismatch" }
+
+  // Payout wallet is resolved live (current destination); the fee ALLOCATION is the durable snapshot
+  // the booker accepted at quote time — never recomputed from the mutable profile after payment.
   const settlement = await loadHostSettlement(input.env, hold.host_user_id)
   if (!settlement.payoutWalletAddress) return { ok: false, reason: "host_payout_unconfigured" }
-  const allocation = computeAllocation(hold.price_cents, feePolicy(settlement.platformFeeBps))
-  const feeCents = allocation.legs.find((l) => l.recipientType === "platform_fee")?.amountCents ?? 0
-  const hostCents = allocation.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0
-  const platformFeeBps = settlement.platformFeeBps
-  // Durable destination snapshots: refund returns to the verified payer; payout goes to the
-  // host payout wallet captured here (never re-resolved later).
-  const fundingWalletAddress = receipt.fromAddress ?? buyerAddress
-  const bookingId = `bkg_${crypto.randomUUID()}`
+  const platformFeeBps = intent.platform_fee_bps ?? settlement.platformFeeBps
+  const fallback = computeAllocation(hold.price_cents, feePolicy(platformFeeBps))
+  const feeCents = intent.platform_fee_cents ?? (fallback.legs.find((l) => l.recipientType === "platform_fee")?.amountCents ?? 0)
+  const hostCents = intent.host_payout_cents ?? (fallback.legs.find((l) => l.recipientType === "host")?.amountCents ?? 0)
+  const fundingTxRef = intent.claimed_tx_ref ?? ""
+  const fundingWalletAddress = intent.verified_sender_address ?? ""
+  const consumedWallet = intent.consumed_wallet_attachment_id ?? ""
+  // Stable, deterministic booking id so finalization replay can never create a second booking.
+  const bookingId = `bkg_${hold.hold_id}`
 
-  // 3) D1 write tx: create the confirmed booking + consume the hold. The bookings(hold_id)
-  // partial-unique index is the idempotency/race backstop — a concurrent confirm loses here.
   const write = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const tx = await write.client.transaction("write")
     try {
+      // INSERT only if the intent STILL matches this hold + tx + attachment + sender (TOCTOU guard)
+      // AND the hold is still valid (active for first finalize, consumed for replay).
       await tx.execute({
-        sql: `INSERT INTO bookings (
+        sql: `INSERT OR IGNORE INTO bookings (
                 booking_id, community_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
                 gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status,
                 funding_tx_ref, funding_wallet_address, host_payout_wallet_address, live_room_id, confirmed_at, created_at, updated_at
-              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'confirmed', ?12, ?13, ?14, NULL, ?15, ?15, ?15)`,
+              )
+              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'confirmed', ?12, ?13, ?14, NULL, ?15, ?15, ?15
+              WHERE EXISTS (SELECT 1 FROM booking_payment_intents
+                            WHERE payment_intent_id = ?16 AND status = 'verified'
+                              AND hold_id = ?3 AND claimed_tx_ref = ?12 AND consumed_wallet_attachment_id = ?17
+                              AND verified_sender_address = ?13)
+                AND EXISTS (SELECT 1 FROM booking_holds WHERE hold_id = ?3 AND status = 'active')`,
         args: [bookingId, input.communityId, hold.hold_id, hold.host_user_id, input.bookerUserId,
           hold.slot_start_utc, hold.slot_end_utc, hold.price_cents, platformFeeBps, feeCents, hostCents,
-          receipt.txRef, fundingWalletAddress, settlement.payoutWalletAddress, input.nowUtc],
+          fundingTxRef, fundingWalletAddress, settlement.payoutWalletAddress, input.nowUtc, intent.payment_intent_id, consumedWallet],
       })
+      // Consume the hold only once a booking exists for it.
       await tx.execute({
-        sql: `UPDATE booking_holds SET status = 'consumed', updated_at = ?2 WHERE hold_id = ?1`,
+        sql: `UPDATE booking_holds SET status = 'consumed', updated_at = ?2
+              WHERE hold_id = ?1 AND status = 'active' AND EXISTS (SELECT 1 FROM bookings WHERE hold_id = ?1)`,
         args: [hold.hold_id, input.nowUtc],
+      })
+      // CAS verified -> consumed only once the booking exists (keeps the intent verified if the insert
+      // predicate failed, so finalization stays resumable). Idempotent.
+      await tx.execute({
+        sql: `UPDATE booking_payment_intents SET status = 'consumed', consumed_at = ?2, updated_at = ?2
+              WHERE payment_intent_id = ?1 AND status = 'verified' AND EXISTS (SELECT 1 FROM bookings WHERE hold_id = ?3)`,
+        args: [intent.payment_intent_id, input.nowUtc, hold.hold_id],
       })
       await tx.commit()
     } catch (error) {
-      try { await tx.rollback() } catch { /* already settled */ }
-      // Concurrent confirm likely won the hold_id unique index → return the existing booking.
-      const raced = await loadBookingByHold(input.env, input.communityRepository, input.communityId, input.holdId)
-      if (raced) return { ok: true, already: true, booking: raced }
+      try { await tx.rollback() } catch { /* noop */ }
       throw error
     } finally {
-      write.close()
+      await write.close()
     }
   } catch (error) {
+    // Rollback left the intent verified — surface so the caller/cron resumes finalization (no re-pay).
     throw error
   }
 
-  // 4) Make the cross-community lock permanent (clear expiry + attach booking_id) so the Slice B
-  // reclaim can never free a confirmed/paid slot. Self-repairing: re-establishes the lock if it
-  // was somehow released. Done AFTER the booking exists (the hold's expiry is still future, so
-  // reclaim can't fire in the interim).
-  await makeBookingLockPermanent(input.env, {
-    holdId: hold.hold_id, bookingId, hostUserId: hold.host_user_id,
-    slotStartUtc: hold.slot_start_utc, slotEndUtc: hold.slot_end_utc, communityId: input.communityId, nowUtc: input.nowUtc,
-  })
-
-  return {
-    ok: true,
-    already: false,
-    booking: {
-      booking_id: bookingId,
-      community_id: input.communityId,
-      hold_id: hold.hold_id,
-      host_user_id: hold.host_user_id,
-      booker_user_id: input.bookerUserId,
-      slot_start_utc: hold.slot_start_utc,
-      slot_end_utc: hold.slot_end_utc,
-      gross_cents: hold.price_cents,
-      platform_fee_cents: feeCents,
-      host_payout_cents: hostCents,
-      status: "confirmed",
-      funding_tx_ref: receipt.txRef,
-    },
+  // Post-commit assertion. No booking means the insert predicate failed — the hold was not active
+  // (e.g. a consumed intent with no matching booking is inconsistent state, never a recoverable first
+  // finalization): FAIL CLOSED, creating nothing. A present-but-mismatched booking is corruption.
+  const booking = await loadBookingByHold(input.env, input.communityRepository, input.communityId, input.holdId)
+  if (!booking) return { ok: false, reason: "finalization_conflict" }
+  if (booking.hold_id !== hold.hold_id || booking.booker_user_id !== input.bookerUserId
+    || (booking.funding_tx_ref ?? "").toLowerCase() !== input.normTx) {
+    throw new Error("booking_finalize_assertion_failed")
   }
+  await makeBookingLockPermanent(input.env, { holdId: hold.hold_id, bookingId: booking.booking_id, hostUserId: hold.host_user_id, slotStartUtc: hold.slot_start_utc, slotEndUtc: hold.slot_end_utc, communityId: input.communityId, nowUtc: input.nowUtc })
+  return { ok: true, already: intent.status === "consumed", booking }
 }

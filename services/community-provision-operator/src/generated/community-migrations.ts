@@ -4420,4 +4420,16 @@ CREATE UNIQUE INDEX idx_booking_payment_intents_claimed_tx ON booking_payment_in
 `,
     checksum: "d2fee57b0754cfde03da24983552b80a8e306a924b7534fce0eff8f3f2f00eb8",
   },
+  {
+    name: "1107_booking_payment_intent_fee_snapshot.sql",
+    sql: `-- Snapshot the fee allocation durably on the payment intent so finalization persists the exact
+-- allocation the booker accepted at quote time, never recomputed from the mutable host platform_fee_bps
+-- after payment. A profile fee change between quote and confirmation can no longer alter the booking.
+-- Additive nullable columns (ADD COLUMN, no recreation). Populated at intent creation (quote time).
+ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_bps INTEGER;
+ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_cents INTEGER;
+ALTER TABLE booking_payment_intents ADD COLUMN host_payout_cents INTEGER;
+`,
+    checksum: "643c13dc4bb79f2dfed70b4693a0760e39cdf94a65fc8483a2bd0cbfa7606f9f",
+  },
 ] as const;

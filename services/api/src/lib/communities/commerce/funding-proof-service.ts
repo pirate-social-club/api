@@ -188,6 +188,67 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   return matched
 }
 
+// --- Booking payment-intent verification: validates a funding tx against EXPLICIT expected values
+// (snapshotted on the persisted payment intent), never env/quote, and returns a CLASSIFIED outcome
+// instead of throwing — so the confirmation state machine branches on kind, not on message text.
+export interface BookingPaymentExpectation {
+  chainId: number
+  tokenAddress: string
+  recipientAddress: string
+  amountAtomic: bigint
+  senderAddress: string
+}
+export type BookingPaymentVerification =
+  | { kind: "verified"; senderAddress: string; txRef: string }
+  | { kind: "pending" } // not yet mined / transient RPC — resumable, never clears the claimed hash
+  | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
+
+let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expected: BookingPaymentExpectation }) => Promise<BookingPaymentVerification>) | null = null
+export function setBookingPaymentVerifierForTests(fn: typeof testBookingPaymentVerifier): void { testBookingPaymentVerifier = fn }
+
+// Pure receipt evaluation (no RPC) so the matching/amount rules are directly unit-testable.
+interface MinimalReceipt { status: number; logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string>; data: string }> }
+export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, expected: BookingPaymentExpectation, txRef: string): BookingPaymentVerification {
+  if (!receipt) return { kind: "pending" } // not found yet
+  if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
+  const expectedToken = getAddress(expected.tokenAddress)
+  const expectedRecipientTopic = zeroPadValue(getAddress(expected.recipientAddress), 32).toLowerCase()
+  const expectedSenderTopic = zeroPadValue(getAddress(expected.senderAddress), 32).toLowerCase()
+  for (const log of receipt.logs) {
+    if (getAddress(log.address) !== expectedToken) continue
+    const [topic0, fromTopic, toTopic] = log.topics
+    if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
+    if (String(toTopic).toLowerCase() !== expectedRecipientTopic) continue
+    if (String(fromTopic).toLowerCase() !== expectedSenderTopic) continue
+    const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
+    const amount = parsed?.args.value as bigint | undefined
+    // EXACT amount — neither underpayment nor overpayment satisfies the intent (a larger payment
+    // intended for something else must not confirm this booking).
+    if (amount == null || amount !== expected.amountAtomic) continue
+    const sender = topicAddress(String(fromTopic))
+    if (sender == null) continue
+    return { kind: "verified", senderAddress: getAddress(sender), txRef }
+  }
+  return { kind: "rejected", reason: "no_matching_transfer" }
+}
+
+export async function classifyBookingPaymentReceipt(input: {
+  env: Env
+  fundingTxRef: string // normalized by the caller
+  expected: BookingPaymentExpectation
+}): Promise<BookingPaymentVerification> {
+  if (testBookingPaymentVerifier) return testBookingPaymentVerifier(input)
+  const provider = new JsonRpcProvider(resolvePirateCheckoutRpcUrl(input.env), input.expected.chainId)
+  let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
+  try {
+    receipt = await provider.waitForTransaction(input.fundingTxRef, 1, resolvePirateCheckoutTxWaitTimeoutMs(input.env))
+  } catch (error) {
+    if (isTransactionWaitTimeout(error)) return { kind: "pending" }
+    return { kind: "pending" } // transient RPC error — resumable
+  }
+  return evaluateBookingPaymentReceipt(receipt as MinimalReceipt | null, input.expected, input.fundingTxRef)
+}
+
 export async function verifyPirateCheckoutUsdcFunding(input: {
   env: Env
   quoteId: string
