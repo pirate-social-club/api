@@ -934,6 +934,7 @@ describe("CloudflareKaraokeEffectRunner", () => {
         strongestLines: [],
         timingScore: null,
         timingTrend: "on_time" as const,
+        uncertainLineCount: 0,
         weakestLines: [],
       },
     };
@@ -986,6 +987,7 @@ describe("CloudflareKaraokeEffectRunner", () => {
         strongestLines: [],
         timingScore: null,
         timingTrend: "on_time" as const,
+        uncertainLineCount: 0,
         weakestLines: [],
       },
     };
