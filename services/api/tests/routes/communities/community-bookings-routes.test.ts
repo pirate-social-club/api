@@ -733,10 +733,14 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
       })
     } finally { c.close() }
   }
+  async function setHoldStatus(root: string, communityId: string, holdId: string, status: string): Promise<void> {
+    const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+    try { await c.execute({ sql: `UPDATE booking_holds SET status = ?2 WHERE hold_id = ?1`, args: [holdId, status] }) } finally { c.close() }
+  }
   async function prep() {
     const { ctx, communityId, host } = await setupHost()
     const { dateStr, weekday } = bookableDay()
-    await seedProfile(ctx.client, { hostUserId: host.userId, basePriceCents: 5000 })
+    await seedProfile(ctx.client, { hostUserId: host.userId, basePriceCents: 5000, platformFeeBps: 1000 })
     await seedRule(ctx.client, { hostUserId: host.userId, weekday })
     await insertWalletAttachment(ctx.client, host.userId, "wal_booker")
     return { ctx, communityId, host, dateStr }
@@ -852,5 +856,38 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
     // Same tx + booker, but a different (valid, owned) attachment must NOT replay the booking.
     const wrongAttachment = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xorig", "wal_other")
     expect((await json(wrongAttachment) as { error: string }).error).toBe("replay_mismatch")
+  })
+
+  test("consumed intent + consumed hold + no booking → fails closed, creates nothing", async () => {
+    const { ctx, communityId, host, dateStr } = await prep()
+    const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    await postQuote(ctx.env, communityId, holdId, host.accessToken) // creates the active intent
+    // Inconsistent state: intent consumed + hold consumed, but no booking exists (consumed by another
+    // path). This must NEVER produce a booking — a consumed hold without its booking is not a first
+    // finalization.
+    await setIntent(root, communityId, holdId, { status: "consumed", claimed_tx_ref: "0xghost", verified_sender_address: "0x7000000000000000000000000000000000000007", consumed_wallet_attachment_id: "wal_booker" })
+    await setHoldStatus(root, communityId, holdId, "consumed")
+    const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xghost", "wal_booker")
+    expect(res.status).toBe(409)
+    expect((await json(res) as { error: string }).error).toBe("finalization_conflict")
+    expect(await communityScalar(root, communityId, "SELECT COUNT(*) FROM bookings WHERE hold_id = ?1", [holdId])).toBe(0)
+  })
+
+  test("a fee-profile change between quote and confirmation does not alter the persisted allocation", async () => {
+    const { ctx, communityId, host, dateStr } = await prep() // platform_fee_bps 1000
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+    // Quote at 1000 bps → fee 500 / host 4500, snapshotted on the intent.
+    const q = await json(await postQuote(ctx.env, communityId, holdId, host.accessToken)) as { quote: { platform_fee_cents: number; host_payout_cents: number } }
+    expect(q.quote.platform_fee_cents).toBe(500)
+    expect(q.quote.host_payout_cents).toBe(4500)
+    // Host raises their platform fee AFTER the booker accepted the quote.
+    await ctx.client.execute({ sql: "UPDATE booking_profiles SET platform_fee_bps = 2000 WHERE host_user_id = ?1", args: [host.userId] })
+    // Confirmation must persist the ACCEPTED snapshot (500 / 4500), not the new 2000 bps (1000 / 4000).
+    const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xfee", "wal_booker")
+    expect(res.status).toBe(201)
+    const body = await json(res) as { booking: { platform_fee_cents: number; host_payout_cents: number } }
+    expect(body.booking.platform_fee_cents).toBe(500)
+    expect(body.booking.host_payout_cents).toBe(4500)
   })
 })

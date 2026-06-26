@@ -28,6 +28,10 @@ export interface PaymentIntentRow {
   quote_expires_at: string
   hold_expires_at: string
   wallet_attachment_required: number
+  // Fee allocation snapshotted at quote time (1107) — finalization uses these, never the mutable profile.
+  platform_fee_bps: number | null
+  platform_fee_cents: number | null
+  host_payout_cents: number | null
   status: PaymentIntentStatus
   verification_claim_token: string | null
   verification_claim_expires_at: string | null
@@ -57,12 +61,15 @@ export function normalizeTxRef(txRef: string): string { return txRef.trim().toLo
 
 const COLS = `payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
   recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at, wallet_attachment_required,
+  platform_fee_bps, platform_fee_cents, host_payout_cents,
   status, verification_claim_token, verification_claim_expires_at, claimed_tx_ref, verified_sender_address,
   verified_at, consumed_wallet_attachment_id, consumed_at, created_at, updated_at`
 
 function toRow(r: Record<string, unknown>): PaymentIntentRow {
   const s = (v: unknown) => (v == null ? null : String(v))
+  const n = (v: unknown) => (v == null ? null : Number(v))
   return {
+    platform_fee_bps: n(r.platform_fee_bps), platform_fee_cents: n(r.platform_fee_cents), host_payout_cents: n(r.host_payout_cents),
     payment_intent_id: String(r.payment_intent_id), hold_id: String(r.hold_id), version: Number(r.version),
     chain_id: Number(r.chain_id), token_address: String(r.token_address), token_decimals: Number(r.token_decimals),
     token_symbol: String(r.token_symbol), recipient_address: String(r.recipient_address), amount_atomic: String(r.amount_atomic),
@@ -103,6 +110,9 @@ function deriveIntent(env: Env, hold: HoldForIntent): Pick<PaymentIntentRow, "ch
  */
 export async function createOrGetPaymentIntent(input: {
   env: Env; communityRepository: CommunityRepository; communityId: string; hold: HoldForIntent; nowUtc: string
+  // Fee allocation computed from the host profile at FIRST quote — snapshotted; an existing intent
+  // keeps its original snapshot (these are intentionally NOT part of replay-validation).
+  platformFeeBps: number; platformFeeCents: number; hostPayoutCents: number
 }): Promise<PaymentIntentRow> {
   const id = paymentIntentIdForHold(input.hold.hold_id)
   const d = deriveIntent(input.env, input.hold)
@@ -112,10 +122,12 @@ export async function createOrGetPaymentIntent(input: {
       sql: `INSERT OR IGNORE INTO booking_payment_intents (
               payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
               recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
-              wallet_attachment_required, status, created_at, updated_at
-            ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 1, 'active', ?11, ?11)`,
+              wallet_attachment_required, platform_fee_bps, platform_fee_cents, host_payout_cents,
+              status, created_at, updated_at
+            ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 1, ?12, ?13, ?14, 'active', ?11, ?11)`,
       args: [id, input.hold.hold_id, d.chain_id, d.token_address, d.token_decimals, d.token_symbol,
-        d.recipient_address, d.amount_atomic, d.gross_cents, input.hold.expires_at_utc, input.nowUtc],
+        d.recipient_address, d.amount_atomic, d.gross_cents, input.hold.expires_at_utc, input.nowUtc,
+        input.platformFeeBps, input.platformFeeCents, input.hostPayoutCents],
     })
   } finally { await write.close() }
 
