@@ -30,6 +30,10 @@
       {
         "name": "KARAOKE_SESSION_RUNTIME",
         "class_name": "KaraokeSessionRuntimeDO"
+      },
+      {
+        "name": "OPERATOR_SIGNING_COORDINATOR",
+        "class_name": "OperatorSigningCoordinatorDO"
       }
     ]
   },
@@ -45,6 +49,10 @@
     {
       "tag": "v1_karaoke_session_runtime",
       "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+    },
+    {
+      "tag": "v1_operator_signing_coordinator",
+      "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
     }
   ],
   "vars": {
@@ -105,6 +113,10 @@
           {
             "name": "KARAOKE_SESSION_RUNTIME",
             "class_name": "KaraokeSessionRuntimeDO"
+          },
+          {
+            "name": "OPERATOR_SIGNING_COORDINATOR",
+            "class_name": "OperatorSigningCoordinatorDO"
           }
         ]
       },
@@ -120,6 +132,10 @@
         {
           "tag": "v1_karaoke_session_runtime",
           "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+        },
+        {
+          "tag": "v1_operator_signing_coordinator",
+          "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
         }
       ],
       "services": [
@@ -197,6 +213,10 @@
           {
             "name": "KARAOKE_SESSION_RUNTIME",
             "class_name": "KaraokeSessionRuntimeDO"
+          },
+          {
+            "name": "OPERATOR_SIGNING_COORDINATOR",
+            "class_name": "OperatorSigningCoordinatorDO"
           }
         ]
       },
@@ -212,6 +232,10 @@
         {
           "tag": "v1_karaoke_session_runtime",
           "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+        },
+        {
+          "tag": "v1_operator_signing_coordinator",
+          "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
         }
       ],
       "services": [
@@ -287,6 +311,10 @@
           {
             "name": "KARAOKE_SESSION_RUNTIME",
             "class_name": "KaraokeSessionRuntimeDO"
+          },
+          {
+            "name": "OPERATOR_SIGNING_COORDINATOR",
+            "class_name": "OperatorSigningCoordinatorDO"
           }
         ]
       },
@@ -302,6 +330,10 @@
         {
           "tag": "v1_karaoke_session_runtime",
           "new_sqlite_classes": ["KaraokeSessionRuntimeDO"]
+        },
+        {
+          "tag": "v1_operator_signing_coordinator",
+          "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
         }
       ],
       "services": [
