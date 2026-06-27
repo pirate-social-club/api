@@ -29,6 +29,9 @@ on:
 
 permissions:
   contents: read
+  # Read-only: pull @pirate-social-club/karaoke-runtime from GitHub Packages.
+  # Publishing stays exclusively in web CI (packages: write).
+  packages: read
 
 jobs:
   api:
@@ -140,34 +143,12 @@ jobs:
         working-directory: services/zkpassport-verifier-container
         run: bun run test
 
-      - name: Check out web repo for cross-repo file deps
-        # services/api depends on @pirate-social-club/karaoke-runtime via
-        # file:../../../web/packages/karaoke-runtime — CI must mirror the
-        # workspace layout (web as a sibling) so the file: path resolves.
-        #
-        # PINNED to a SHA, not the mutable `release/karaoke-web` branch. That branch drifts
-        # independently of this repo: commit cd4b93fb added a required `uncertainLineCount` field to
-        # KaraokeSessionSummary, which breaks `tsgo` against the (un-updated) api karaoke test in
-        # tests/lib/karaoke/session-do.test.ts — a time-dependent failure with no change in this repo.
-        # de5eafa2 is the last commit on release/karaoke-web before cd4b93fb (last type-compatible
-        # with the current api karaoke test).
-        # UPDATE PROCEDURE: when the api karaoke test is updated to the newer karaoke-runtime type
-        # (uncertainLineCount), bump this SHA to the matching release/karaoke-web commit, ideally
-        # landing both changes together.
-        uses: actions/checkout@v4
-        with:
-          repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
-          path: .cross-repo/web
-
-      - name: Link web repo for cross-repo file deps
+      - name: Link core repo for cross-repo file deps
+        # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
+        # core repo is checked out at $GITHUB_WORKSPACE/core, so link it as a sibling too.
+        # (The web checkout/symlink for @pirate-social-club/karaoke-runtime is gone — that
+        # dependency now resolves from GitHub Packages, not a sibling file: path.)
         run: |
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
-          # api package.json pins @pirate-social-club/karaoke-runtime at file:../../../web-karaoke-rel/...
-          # (release worktree name), so mirror the web checkout under that name too.
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web-karaoke-rel"
-          # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
-          # core repo is checked out at $GITHUB_WORKSPACE/core, so link it as a sibling too.
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
 
       - name: Install song preview container dependencies
@@ -188,6 +169,10 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        # @pirate-social-club/karaoke-runtime resolves from GitHub Packages via the
+        # committed services/api/.npmrc (token interpolated from this env, never stored).
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
         run: bun install --frozen-lockfile
 
       - name: Audit API dependencies

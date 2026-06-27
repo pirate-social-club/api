@@ -160,6 +160,33 @@ rtk bun run coverage
 
 The current coverage command does not enforce thresholds. Use it to inspect drift before adding policy gates.
 
+## GitHub Packages auth (`@pirate-social-club/karaoke-runtime`)
+
+The API depends on `@pirate-social-club/karaoke-runtime` — a **private** package on the
+GitHub Packages npm registry (published from `pirate-social-club/web`). `services/api/.npmrc`
+points the `@pirate-social-club` scope at GitHub Packages and reads the token from the
+`NODE_AUTH_TOKEN` environment variable (interpolation only — **no token is ever committed**):
+
+```
+@pirate-social-club:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+Any environment that runs `bun install` for `services/api` must provide a token with
+`read:packages` for an account that is a member of the `pirate-social-club` org (and the
+package must grant the consuming repo/account access):
+
+- **Local dev:** export a read-only token before installing, e.g.
+  `gh auth refresh -h github.com -s read:packages` then `export NODE_AUTH_TOKEN="$(gh auth token)"`,
+  or use a classic PAT scoped to `read:packages`. Then `bun install`.
+- **Manual production deploy:** export the same `NODE_AUTH_TOKEN` (a `read:packages` token) in
+  the deploy shell so `bun install` resolves the package before `wrangler deploy` bundles it.
+- **CI:** handled automatically — `api-ci.yml` sets `permissions: packages: read` and passes
+  `NODE_AUTH_TOKEN` (falling back to `github.token`). Publishing is **never** done here; it
+  lives exclusively in web CI with `packages: write`.
+
+Never print, persist, or commit the token.
+
 ## Local Dev
 
 Memory mode:

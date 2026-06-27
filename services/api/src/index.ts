@@ -62,6 +62,7 @@ import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/schedule
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
+import { KARAOKE_RUNTIME_BUILD } from "@pirate-social-club/karaoke-runtime/build"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
 import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
 import type { Env } from "./env"
@@ -119,6 +120,9 @@ async function buildVersionPayload(env: Env) {
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
+    // Provenance of the published @pirate-social-club/karaoke-runtime the worker
+    // bundled (version + gitSha), shipped in the package's build-info.json.
+    karaoke_runtime: { version: KARAOKE_RUNTIME_BUILD.version, git_sha: KARAOKE_RUNTIME_BUILD.gitSha },
     operator: await getCommunityProvisionOperatorVersion(env),
   }
 }
