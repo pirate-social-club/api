@@ -29,6 +29,9 @@ on:
 
 permissions:
   contents: read
+  # Read-only: pull @pirate-social-club/karaoke-runtime from GitHub Packages.
+  # Publishing stays exclusively in web CI (packages: write).
+  packages: read
 
 jobs:
   api:
@@ -188,6 +191,10 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        # @pirate-social-club/karaoke-runtime resolves from GitHub Packages via the
+        # committed services/api/.npmrc (token interpolated from this env, never stored).
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || github.token }}
         run: bun install --frozen-lockfile
 
       - name: Audit API dependencies

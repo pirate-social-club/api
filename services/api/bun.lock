@@ -11,10 +11,10 @@
         "@neondatabase/serverless": "^1.1.0",
         "@noble/curves": "^1.9.7",
         "@noble/hashes": "^1.8.0",
+        "@pirate-social-club/karaoke-runtime": "0.1.0",
         "@pirate/api-contracts": "file:../contracts",
         "@pirate/api-shared": "file:../shared",
         "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
-        "@pirate-social-club/karaoke-runtime": "file:../../../web-karaoke-rel/packages/karaoke-runtime",
         "@privy-io/node": "^0.11.0",
         "@selfxyz/core": "^1.2.0-beta.1",
         "@sentry/cloudflare": "^10.51.0",
@@ -463,13 +463,13 @@
 
     "@peculiar/x509": ["@peculiar/x509@1.14.3", "", { "dependencies": { "@peculiar/asn1-cms": "^2.6.0", "@peculiar/asn1-csr": "^2.6.0", "@peculiar/asn1-ecc": "^2.6.0", "@peculiar/asn1-pkcs9": "^2.6.0", "@peculiar/asn1-rsa": "^2.6.0", "@peculiar/asn1-schema": "^2.6.0", "@peculiar/asn1-x509": "^2.6.0", "pvtsutils": "^1.3.6", "reflect-metadata": "^0.2.2", "tslib": "^2.8.1", "tsyringe": "^4.10.0" } }, "sha512-C2Xj8FZ0uHWeCXXqX5B4/gVFQmtSkiuOolzAgutjTfseNOHT3pUjljDZsTSxXFGgio54bCzVFqmEOUrIVk8RDA=="],
 
+    "@pirate-social-club/karaoke-runtime": ["@pirate-social-club/karaoke-runtime@0.1.0", "https://npm.pkg.github.com/download/@pirate-social-club/karaoke-runtime/0.1.0/9f59f82f94137d857fcd332093205e9d6ed23cc9", {}, "sha512-l3xs6natIu21aCNjikbYWi/3KMkHbwnRPU2cOUrtkqtxVSqN2Ay49qibwghecgRz7cxsqgSTT64G71cOEBvvDQ=="],
+
     "@pirate/api-contracts": ["@pirate/api-contracts@file:../contracts", { "devDependencies": { "typescript": "^5.8.3" } }],
 
     "@pirate/api-shared": ["@pirate/api-shared@file:../shared", { "devDependencies": { "@types/node": "^24.5.2", "@typescript/native-preview": "^7.0.0-dev.20260421.2", "typescript": "^5.8.3" } }],
 
     "@pirate/bookings-domain": ["@pirate/bookings-domain@file:../../../core/packages/bookings-domain", { "devDependencies": { "@types/bun": "latest" } }],
-
-    "@pirate-social-club/karaoke-runtime": ["@pirate-social-club/karaoke-runtime@file:../../../web-karaoke-rel/packages/karaoke-runtime", { "devDependencies": { "@types/bun": "latest" } }],
 
     "@poppinss/colors": ["@poppinss/colors@4.1.6", "", { "dependencies": { "kleur": "^4.1.5" } }, "sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg=="],
 
@@ -1360,8 +1360,6 @@
     "@pirate/api-shared/@types/node": ["@types/node@24.12.2", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-A1sre26ke7HDIuY/M23nd9gfB+nrmhtYyMINbjI1zHJxYteKR6qSMX56FsmjMcDb3SMcjJg5BiRRgOCC/yBD0g=="],
 
     "@pirate/bookings-domain/@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
-
-    "@pirate-social-club/karaoke-runtime/@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
     "@selfxyz/common/node-forge": ["node-forge@github:remicolin/forge#17a11a6", {}, "remicolin-forge-17a11a6", "sha512-mXcNtmfJmVYxAeA3EmAcx2gUAj5NHRc+oTwogkQBq5nMfWmRzIVkPDFhh6sC9NVtTl4RATiZX0NzpYzgyjiCzg=="],
 

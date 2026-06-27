@@ -60,7 +60,7 @@
     "@pirate/api-contracts": "file:../contracts",
     "@pirate/api-shared": "file:../shared",
     "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
-    "@pirate-social-club/karaoke-runtime": "file:../../../web-karaoke-rel/packages/karaoke-runtime",
+    "@pirate-social-club/karaoke-runtime": "0.1.0",
     "@privy-io/node": "^0.11.0",
     "@selfxyz/core": "^1.2.0-beta.1",
     "@sentry/cloudflare": "^10.51.0",
