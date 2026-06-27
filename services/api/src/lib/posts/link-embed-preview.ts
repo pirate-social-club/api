@@ -1,36 +1,9 @@
 import { detectSupportedEmbedTarget } from "./embed-url-detection"
 import { fetchLinkPreviewMetadata } from "./link-preview-fetcher"
+import { decodeHtmlEntities } from "./link-text"
 
 const X_OEMBED_TIMEOUT_MS = 8_000
 const YOUTUBE_OEMBED_TIMEOUT_MS = 8_000
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/giu, (match, entity: string) => {
-    const normalized = entity.toLowerCase()
-    if (normalized.startsWith("#x")) {
-      const codePoint = Number.parseInt(normalized.slice(2), 16)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    if (normalized.startsWith("#")) {
-      const codePoint = Number.parseInt(normalized.slice(1), 10)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    switch (normalized) {
-      case "amp":
-        return "&"
-      case "apos":
-        return "'"
-      case "gt":
-        return ">"
-      case "lt":
-        return "<"
-      case "quot":
-        return '"'
-      default:
-        return match
-    }
-  })
-}
 
 function stripTags(value: string): string {
   return decodeHtmlEntities(value.replace(/<[^>]*>/gu, " "))

@@ -1,6 +1,7 @@
 import { executeFirst } from "../../db-helpers"
 import { makeId } from "../../helpers"
 import type { Client } from "../../sql-client"
+import { LINK_ENRICHMENT_FIELD_LIMITS, clampLinkText } from "../link-text"
 import { toLinkEnrichmentRecord } from "./repository-rows"
 import type {
   LinkEnrichmentProvider,
@@ -65,6 +66,13 @@ export async function upsertLinkEnrichment(input: {
   now: string
 }): Promise<LinkEnrichmentRecord> {
   const enrichmentId = makeId("len")
+  // Persistence-boundary backstop: callers are expected to have decoded entities
+  // already (decoding is non-idempotent and lives at the source). Here we only
+  // enforce the storage length/whitespace invariant, which is idempotent and so
+  // safe to apply unconditionally — no provider write can exceed the caps.
+  const title = clampLinkText(input.title, LINK_ENRICHMENT_FIELD_LIMITS.title)
+  const description = clampLinkText(input.description, LINK_ENRICHMENT_FIELD_LIMITS.description)
+  const publisher = clampLinkText(input.publisher, LINK_ENRICHMENT_FIELD_LIMITS.publisher)
   await input.client.execute({
     sql: `
       INSERT INTO link_enrichments (
@@ -103,10 +111,10 @@ export async function upsertLinkEnrichment(input: {
       input.canonicalUrl,
       input.provider,
       input.status,
-      input.title,
-      input.description,
+      title,
+      description,
       input.sourceLanguage ?? null,
-      input.publisher,
+      publisher,
       input.publishedAt,
       input.imageUrl,
       input.markdown,

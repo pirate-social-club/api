@@ -14,6 +14,7 @@ import { normalizeLinkUrl } from "./url-normalization"
 import {
   materializeLinkEnrichmentForPost,
 } from "./post-materialization"
+import { normalizeLinkMetadataText } from "../link-text"
 
 function detectLinkMetadataSourceLanguage(input: {
   title?: string | null
@@ -84,19 +85,24 @@ export async function hydrateGenericLinkEnrichment(input: {
         has_description: Boolean(firecrawl.description),
         has_publisher: Boolean(firecrawl.publisher),
       })
+      // Firecrawl returns raw HTML-encoded metadata. Decode + clamp it once,
+      // here, through the shared normalizer (native metadata is already
+      // normalized by the preview fetcher). upsertLinkEnrichment applies an
+      // idempotent length backstop, so the storage invariant holds regardless.
+      const firecrawlText = normalizeLinkMetadataText(firecrawl)
       const record = await upsertLinkEnrichment({
         client: input.controlPlaneClient,
         normalizedUrl,
         canonicalUrl: firecrawl.canonicalUrl ?? normalizedUrl,
         provider: "firecrawl",
         status: "ready",
-        title: firecrawl.title,
-        description: firecrawl.description,
+        title: firecrawlText.title,
+        description: firecrawlText.description,
         sourceLanguage: detectLinkMetadataSourceLanguage({
-          title: firecrawl.title,
-          description: firecrawl.description,
+          title: firecrawlText.title,
+          description: firecrawlText.description,
         }),
-        publisher: firecrawl.publisher,
+        publisher: firecrawlText.publisher,
         publishedAt: firecrawl.publishedAt,
         imageUrl: firecrawl.imageUrl,
         markdown: firecrawl.markdown,
@@ -170,6 +176,8 @@ export async function hydrateGenericLinkEnrichment(input: {
     has_image_url: Boolean(metadata.imageUrl),
   })
 
+  // metadata.title is already decoded + clamped by fetchLinkPreviewMetadata
+  // (its single normalization pass); do not decode it again here.
   if (normalizedUrl && input.controlPlaneClient) {
     const record = await upsertLinkEnrichment({
       client: input.controlPlaneClient,
