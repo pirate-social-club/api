@@ -3,7 +3,7 @@ import {
   encodeKaraokeBinaryFrame,
   type KaraokeScoringPolicy,
   type ScorableKaraokeLine,
-} from "@pirate/karaoke-runtime"
+} from "@pirate-social-club/karaoke-runtime"
 import { SELF, env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { describe, expect, it } from "vitest"
 

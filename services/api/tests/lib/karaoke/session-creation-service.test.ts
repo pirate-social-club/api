@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { SongKaraokePayload } from "@pirate/api-contracts"
-import type { KaraokeScoringPolicy } from "@pirate/karaoke-runtime"
+import type { KaraokeScoringPolicy } from "@pirate-social-club/karaoke-runtime"
 import { HttpError } from "../../../src/lib/errors"
 import {
   createKaraokeSession,

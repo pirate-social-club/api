@@ -1,4 +1,4 @@
-import type { KaraokeScoringPolicy, KaraokeStreamingSttAdapter } from "@pirate/karaoke-runtime"
+import type { KaraokeScoringPolicy, KaraokeStreamingSttAdapter } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../env"
 import { ElevenLabsKaraokeSttAdapter } from "./elevenlabs-stt-adapter"

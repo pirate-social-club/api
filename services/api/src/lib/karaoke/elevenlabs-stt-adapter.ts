@@ -2,7 +2,7 @@ import type {
   KaraokeClientBinaryFrame,
   KaraokeRecognizedWord,
   KaraokeSttAdapterMessage,
-} from "@pirate/karaoke-runtime"
+} from "@pirate-social-club/karaoke-runtime"
 
 import { KaraokeSttEventEmitter } from "./stt-event-emitter"
 

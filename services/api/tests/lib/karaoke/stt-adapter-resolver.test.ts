@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { KaraokeScoringPolicy } from "@pirate/karaoke-runtime"
+import type { KaraokeScoringPolicy } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../../src/env"
 import { ElevenLabsKaraokeSttAdapter } from "../../../src/lib/karaoke/elevenlabs-stt-adapter"

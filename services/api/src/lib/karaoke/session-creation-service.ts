@@ -5,7 +5,7 @@ import {
   type KaraokeScoringPolicy,
   type PublicKaraokeScoringPolicy,
   type ScorableKaraokeLine,
-} from "@pirate/karaoke-runtime"
+} from "@pirate-social-club/karaoke-runtime"
 import type { SongKaraokePayload } from "@pirate/api-contracts"
 import { HttpError } from "../errors"
 import {

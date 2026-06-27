@@ -6,7 +6,7 @@ import {
   type KaraokeStreamingSttEvent,
   type KaraokeTransportError,
   type KaraokeTransportEnvelope,
-} from "@pirate/karaoke-runtime";
+} from "@pirate-social-club/karaoke-runtime";
 
 export interface OutboxRow {
   eventId: string;

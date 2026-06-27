@@ -3,7 +3,7 @@ import {
   KARAOKE_TRANSPORT_PROTOCOL_VERSION,
   type KaraokeClientBinaryFrame,
   type KaraokeSttAdapterMessage,
-} from "@pirate/karaoke-runtime"
+} from "@pirate-social-club/karaoke-runtime"
 
 import {
   ElevenLabsKaraokeSttAdapter,
