@@ -109,6 +109,8 @@ export async function resolveDueBooking(input: {
     bookingId: input.bookingId,
     nowUtc: input.nowUtc,
     confirmPollMs: input.confirmPollMs,
+    // Unattended settlement of an already-past session — bypasses the user-facing schedule windows.
+    system: true,
   }
 
   // Drive the outcome through the existing lifecycle services, supplying the party whose action the

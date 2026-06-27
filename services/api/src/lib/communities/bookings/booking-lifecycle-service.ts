@@ -256,14 +256,27 @@ export interface LifecycleInput {
   actorUserId: string
   nowUtc: string
   confirmPollMs?: number[]
+  // The unattended settlement evaluator (D4) drives the same transitions for ALREADY-PAST sessions
+  // based on recorded attendance, so it bypasses the user-facing schedule windows. Never set this on
+  // a request-initiated call.
+  system?: boolean
 }
 function ctxOf(input: LifecycleInput): SettlementContext {
   return { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, nowUtc: input.nowUtc, confirmPollMs: input.confirmPollMs }
 }
 
 export type LifecycleResult =
-  | { ok: false; reason: "not_found" | "illegal_transition" }
+  | { ok: false; reason: "not_found" | "illegal_transition" | "outside_start_window" | "too_early_to_complete" | "too_early_for_no_show" }
   | { ok: true; already: boolean; booking: BookingLifecycleSnapshot }
+
+// Server-enforced schedule bounds on the payout-relevant lifecycle transitions (the web gate is not
+// authoritative — direct API callers must be bound too). A session may only START from 5 minutes
+// before its slot until the slot end; it may only be COMPLETED once its scheduled start has arrived
+// (so a host cannot start-and-instantly-settle early); a NO-SHOW may only be reported after a grace
+// period past the scheduled start.
+const SESSION_START_LEAD_MS = 5 * 60_000
+const NO_SHOW_GRACE_MS = 10 * 60_000
+function epochMs(iso: string): number { return Date.parse(iso) }
 
 type CancelBy = "host" | "booker"
 export type CancelBookingResult =
@@ -279,6 +292,11 @@ export async function startBookingSession(input: LifecycleInput): Promise<Lifecy
   }
   if (booking.status === "live") {
     return { ok: true, already: true, booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId) }
+  }
+  // Schedule bound: cannot start before the join window opens or after the slot has ended.
+  const startNow = epochMs(input.nowUtc)
+  if (!input.system && (startNow < epochMs(booking.slot_start_utc) - SESSION_START_LEAD_MS || startNow >= epochMs(booking.slot_end_utc))) {
+    return { ok: false, reason: "outside_start_window" }
   }
   if (!canTransition(booking.status as BookingState, "SESSION_STARTED")) {
     return { ok: false, reason: "illegal_transition" }
@@ -339,6 +357,8 @@ export async function completeBooking(input: LifecycleInput): Promise<LifecycleR
   }
   let refundCents = booking.refund_cents ?? 0
   if (booking.status !== "completed") {
+    // Schedule bound: cannot complete (and pay the host) before the scheduled start has arrived.
+    if (!input.system && epochMs(input.nowUtc) < epochMs(booking.slot_start_utc)) return { ok: false, reason: "too_early_to_complete" }
     if (!canTransition(booking.status as BookingState, "SESSION_ENDED")) return { ok: false, reason: "illegal_transition" }
     const policy = lifecyclePolicy(booking.platform_fee_bps)
     refundCents = resolveRefund({
@@ -375,6 +395,8 @@ export async function noShowBooking(input: LifecycleInput): Promise<LifecycleRes
     intentState = booking.status as BookingState
     refundCents = booking.refund_cents ?? 0
   } else {
+    // Schedule bound: a no-show can only be reported after the grace period past the scheduled start.
+    if (!input.system && epochMs(input.nowUtc) < epochMs(booking.slot_start_utc) + NO_SHOW_GRACE_MS) return { ok: false, reason: "too_early_for_no_show" }
     if (!canTransition(booking.status as BookingState, event)) return { ok: false, reason: "illegal_transition" }
     intentState = applyTransition(booking.status as BookingState, event)
     const policy = lifecyclePolicy(booking.platform_fee_bps)
