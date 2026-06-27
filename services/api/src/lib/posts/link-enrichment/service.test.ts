@@ -384,4 +384,44 @@ describe("hydrateGenericLinkEnrichment", () => {
       },
     ])
   })
+
+  test("decodes HTML entities in Firecrawl title, description, and publisher at the storage seam", async () => {
+    const controlPlaneClient = await createControlPlaneClient()
+    const communityClient = await createCommunityClient()
+
+    await hydrateGenericLinkEnrichment({
+      env: {
+        FIRECRAWL_API_KEY: "fc-test",
+      },
+      controlPlaneClient,
+      communityClient,
+      communityId: "cmt_firecrawl",
+      postId: "pst_firecrawl",
+      url: "https://daysofpalestine.ps/ben-and-jerry",
+      checkedAt: "2026-05-02T09:00:00.000Z",
+      fetcher: (async () => new Response(JSON.stringify({
+        success: true,
+        data: {
+          markdown: "# Story",
+          metadata: {
+            ogTitle: "&#8220;Mmm&#8230;Tastes like genocide&#8221; Israel&#8217;s Ben &#038; Jerry",
+            ogDescription: "Ben &amp; Jerry&#8217;s new flavour &mdash; near Gaza",
+            ogSiteName: "Days of Palestine &amp; News",
+            ogImage: "https://cdn.example.com/flavour.jpg",
+            statusCode: 200,
+          },
+        },
+      }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+    })
+
+    const rows = await controlPlaneClient.execute("SELECT title, description, publisher FROM link_enrichments")
+    expect(rows.rows[0]?.title).toBe("“Mmm…Tastes like genocide” Israel’s Ben & Jerry")
+    expect(rows.rows[0]?.description).toBe("Ben & Jerry’s new flavour — near Gaza")
+    expect(rows.rows[0]?.publisher).toBe("Days of Palestine & News")
+
+    const postRows = await communityClient.execute("SELECT link_og_title FROM posts WHERE post_id = 'pst_firecrawl'")
+    expect(postRows.rows[0]?.link_og_title).toBe("“Mmm…Tastes like genocide” Israel’s Ben & Jerry")
+  })
 })

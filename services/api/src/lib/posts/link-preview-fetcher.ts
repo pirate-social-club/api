@@ -1,3 +1,5 @@
+import { normalizeLinkTitle } from "./link-text"
+
 export type LinkPreviewMetadata = {
   imageUrl: string | null
   title: string | null
@@ -37,39 +39,8 @@ function normalizePreviewUrl(value: string | null | undefined, baseUrl: string):
   }
 }
 
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/giu, (match, entity: string) => {
-    const normalized = entity.toLowerCase()
-    if (normalized.startsWith("#x")) {
-      const codePoint = Number.parseInt(normalized.slice(2), 16)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    if (normalized.startsWith("#")) {
-      const codePoint = Number.parseInt(normalized.slice(1), 10)
-      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match
-    }
-    switch (normalized) {
-      case "amp":
-        return "&"
-      case "apos":
-        return "'"
-      case "gt":
-        return ">"
-      case "lt":
-        return "<"
-      case "quot":
-        return '"'
-      default:
-        return match
-    }
-  })
-}
-
 function normalizePreviewTitle(value: string | null | undefined): string | null {
-  const trimmed = decodeHtmlEntities(String(value ?? ""))
-    .replace(/\s+/gu, " ")
-    .trim()
-  return trimmed ? trimmed.slice(0, 300) : null
+  return normalizeLinkTitle(value)
 }
 
 function getMetaImagePriority(name: string | null | undefined): number {
