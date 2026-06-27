@@ -10,6 +10,8 @@ import {
   exchangeJwt,
   requestJson,
 } from "./community-routes-test-helpers"
+import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
+import { badRequestError } from "../../../src/lib/errors"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -34,10 +36,19 @@ const routedCheckoutQuoteFields = {
 beforeEach(() => {
   resetRuntimeCaches()
   originalFetch = globalThis.fetch
+  setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
+    txRef: input.fundingTxRef,
+    fromAddress: input.buyerAddress,
+    toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
+    tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    chainRef: "eip155:84532",
+  }))
 })
 
 afterEach(async () => {
   globalThis.fetch = originalFetch
+  setCommunityCommerceBuyerFundingVerifierForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -220,6 +231,35 @@ async function createTestCommunity(input: {
   expect(response.status).toBe(202)
   const body = await json(response) as { community: { id: string } }
   return body.community.id.replace(/^com_/, "")
+}
+
+async function insertTestWalletAttachment(input: {
+  client: Awaited<ReturnType<typeof createRouteTestContext>>["client"]
+  userId: string
+  walletAttachmentId: string
+  walletAddress?: string
+}): Promise<void> {
+  const now = new Date().toISOString()
+  const address = input.walletAddress ?? "0x7000000000000000000000000000000000000007"
+  await input.client.execute({
+    sql: `
+      INSERT INTO wallet_attachments (
+        wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
+        source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, 'eip155', ?3, ?4,
+        'test', ?5, 'external', 0, 'active', ?6, NULL, ?6, ?6
+      )
+    `,
+    args: [
+      input.walletAttachmentId,
+      input.userId,
+      address.toLowerCase(),
+      address,
+      `test|${input.userId}|${input.walletAttachmentId}`,
+      now,
+    ],
+  })
 }
 
 function readySoloRoomBody() {
@@ -681,6 +721,12 @@ describe("community live-room routes", () => {
     )
     expect(publicViewerAttachBeforePurchase.status).toBe(402)
 
+    await insertTestWalletAttachment({
+      client: ctx.client,
+      userId: owner.userId,
+      walletAttachmentId: "wal_live_room_ticket",
+    })
+
     const viewerAttachBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       {
@@ -745,6 +791,100 @@ describe("community live-room routes", () => {
     expect(viewerAttachAfterPurchaseBody.access.purchase_entitlement).toBe(purchaseBody.purchase_entitlement)
     expect(viewerAttachAfterPurchaseBody.runtime.seat).toBe("viewer")
     expect(viewerAttachAfterPurchaseBody.agora.configured).toBe(false)
+  })
+
+  test("paid live-room ticket rejects settlement when funding proof fails", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-ticket-funding-reject-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.access_mode = "paid"
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body,
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string }
+
+    const listingCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/listings`,
+      {
+        live_room: room.id,
+        price_cents: 1200,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(listingCreate.status).toBe(201)
+    const listingBody = await json(listingCreate) as { id: string }
+
+    const quoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(quoteCreate.status).toBe(201)
+    const quoteBody = await json(quoteCreate) as { id: string }
+
+    // Override the funding verifier to reject — simulates an unverified/fake funding tx.
+    setCommunityCommerceBuyerFundingVerifierForTests(async () => {
+      throw badRequestError("Funding transaction did not deliver enough USDC to the checkout operator")
+    })
+
+    await insertTestWalletAttachment({
+      client: ctx.client,
+      userId: owner.userId,
+      walletAttachmentId: "wal_live_room_ticket_reject",
+    })
+
+    const rejectedSettlement = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: quoteBody.id,
+        settlement_wallet_attachment: "wal_live_room_ticket_reject",
+        funding_tx_ref: "0xfake-funding",
+        settlement_tx_ref: "tx-fake-settlement",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(rejectedSettlement.status).toBe(400)
+    const rejectBody = await json(rejectedSettlement) as { code: string; message: string }
+    expect(rejectBody.message).toContain("Funding transaction did not deliver enough USDC")
+
+    // Restore the default verifier for subsequent tests.
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
+      txRef: input.fundingTxRef,
+      fromAddress: input.buyerAddress,
+      toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
+      tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+      chainRef: "eip155:84532",
+    }))
+
+    // Verify no entitlement was granted — the viewer still can't attach.
+    const viewerAttachAfterRejection = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(viewerAttachAfterRejection.status).toBe(402)
   })
 
   test("free live-room viewer attach returns Agora subscriber credentials", async () => {
