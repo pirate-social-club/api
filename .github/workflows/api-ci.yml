@@ -157,7 +157,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pirate-social-club/web
-          ref: 6adcb45fcd76d2626baebb039672d29cfe505f59
+          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
