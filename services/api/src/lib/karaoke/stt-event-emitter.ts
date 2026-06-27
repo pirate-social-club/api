@@ -4,7 +4,7 @@ import {
   type KaraokeSttAdapterMessage,
   type KaraokeSttCommitAck,
   type KaraokeStreamingSttEvent,
-} from "@pirate/karaoke-runtime"
+} from "@pirate-social-club/karaoke-runtime"
 
 export type KaraokeSttEmit = (message: KaraokeSttAdapterMessage) => Promise<void>
 

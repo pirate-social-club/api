@@ -6,7 +6,7 @@ import {
   type KaraokeSttCommitAck,
   type KaraokeStreamingSttAdapter,
   type KaraokeStreamingSttEvent,
-} from "@pirate/karaoke-runtime";
+} from "@pirate-social-club/karaoke-runtime";
 
 export type FakeSttMessageHandler = (message: KaraokeSttAdapterMessage) => Promise<void>;
 

@@ -7,7 +7,7 @@ import {
   type KaraokeServerEvent,
   type StoredKaraokeSessionSnapshot,
   type ScorableKaraokeLine,
-} from "@pirate/karaoke-runtime";
+} from "@pirate-social-club/karaoke-runtime";
 import type { Env } from "../../../src/env";
 import {
   CloudflareKaraokeEffectRunner,

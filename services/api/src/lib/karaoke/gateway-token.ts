@@ -1,4 +1,4 @@
-import { KARAOKE_TRANSPORT_PROTOCOL_VERSION } from "@pirate/karaoke-runtime"
+import { KARAOKE_TRANSPORT_PROTOCOL_VERSION } from "@pirate-social-club/karaoke-runtime"
 
 export const KARAOKE_GATEWAY_TOKEN_VERSION = 1 as const
 export const KARAOKE_GATEWAY_TOKEN_TTL_SECONDS = 60 as const

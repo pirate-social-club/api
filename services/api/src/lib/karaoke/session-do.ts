@@ -12,7 +12,7 @@ import {
   type KaraokeStreamingSttAdapter,
   type ScorableKaraokeLine,
   type StoredKaraokeSessionSnapshot,
-} from "@pirate/karaoke-runtime";
+} from "@pirate-social-club/karaoke-runtime";
 
 import type { Env } from "../../env";
 import {

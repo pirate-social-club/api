@@ -14,7 +14,7 @@ import {
 import type { CommunityRow } from "../auth/auth-db-rows"
 import type { Client } from "../sql-client"
 import type { Env } from "../../types"
-import type { KaraokeScoringPolicy } from "@pirate/karaoke-runtime"
+import type { KaraokeScoringPolicy } from "@pirate-social-club/karaoke-runtime"
 
 type CommunityKaraokePolicyRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 

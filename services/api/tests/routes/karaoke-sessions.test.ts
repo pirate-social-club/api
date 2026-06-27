@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { KARAOKE_TRANSPORT_PROTOCOL_VERSION } from "@pirate/karaoke-runtime"
+import { KARAOKE_TRANSPORT_PROTOCOL_VERSION } from "@pirate-social-club/karaoke-runtime"
 import type { Env } from "../../src/env"
 import {
   issueKaraokeGatewayToken,

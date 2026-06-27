@@ -141,7 +141,7 @@ jobs:
         run: bun run test
 
       - name: Check out web repo for cross-repo file deps
-        # services/api depends on @pirate/karaoke-runtime via
+        # services/api depends on @pirate-social-club/karaoke-runtime via
         # file:../../../web/packages/karaoke-runtime — CI must mirror the
         # workspace layout (web as a sibling) so the file: path resolves.
         #
@@ -157,13 +157,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pirate-social-club/web
-          ref: de5eafa2017d296580063397be2b2786f89dd5a2
+          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
         run: |
           ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
-          # api package.json pins @pirate/karaoke-runtime at file:../../../web-karaoke-rel/...
+          # api package.json pins @pirate-social-club/karaoke-runtime at file:../../../web-karaoke-rel/...
           # (release worktree name), so mirror the web checkout under that name too.
           ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web-karaoke-rel"
           # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
