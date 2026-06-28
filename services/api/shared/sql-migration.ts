@@ -111,8 +111,23 @@ const SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS = [
   `,
 ]
 
+// Drop leading blank / `--` comment lines so statement-type detection sees the real SQL. The
+// splitter glues a file's leading comment block onto its first statement; without this, a
+// skippable Postgres-only statement (e.g. `ALTER TABLE ... OWNER TO`) preceded by comments would
+// fail the prefix checks and leak through to SQLite.
+function stripLeadingComments(statement: string): string {
+  const lines = statement.split("\n")
+  let i = 0
+  while (i < lines.length) {
+    const trimmed = lines[i].trim()
+    if (trimmed === "" || trimmed.startsWith("--")) i += 1
+    else break
+  }
+  return lines.slice(i).join("\n")
+}
+
 export function toSqliteCompatibleStatements(statement: string): string[] {
-  const normalized = statement.trim().replace(/\s+/g, " ").toUpperCase()
+  const normalized = stripLeadingComments(statement).trim().replace(/\s+/g, " ").toUpperCase()
 
   if (isSqlCommentOnly(statement)) {
     return []
@@ -123,6 +138,12 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   if (normalized.startsWith("GRANT ")) {
+    return []
+  }
+
+  // Postgres-only ownership reassignment (roles do not exist in SQLite). Same category as GRANT:
+  // irrelevant to the SQLite test mirror, so skip it (e.g. migration 0122's ALTER TABLE ... OWNER TO).
+  if (normalized.startsWith("ALTER TABLE") && normalized.includes(" OWNER TO ")) {
     return []
   }
 

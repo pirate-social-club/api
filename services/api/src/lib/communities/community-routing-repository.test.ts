@@ -3,6 +3,8 @@ import { createClient, type Client } from "@libsql/client"
 import {
   findStuckD1ProvisioningBindings,
   getCommunityDatabaseRoutingRow,
+  isSettlementEligibleRoute,
+  listSettlementEligibleCommunities,
   upsertD1CommunityRoutingRow,
   upsertTursoCommunityRoutingRow,
 } from "./community-routing-repository"
@@ -215,4 +217,51 @@ test("findStuckD1ProvisioningBindings returns only d1 provisioning rows past the
     shardWorkerId: "shard-1",
     region: "weur",
   })
+})
+
+test("isSettlementEligibleRoute: only ready, non-decommissioned D1 routes are eligible", () => {
+  // eligible
+  expect(isSettlementEligibleRoute({ backend: "d1", provisioning_state: "ready", decommissioned_at: null })).toBe(true)
+  // ineligible — non-d1 backend (Turso)
+  expect(isSettlementEligibleRoute({ backend: "turso", provisioning_state: "ready", decommissioned_at: null })).toBe(false)
+  // ineligible — decommissioned (either signal)
+  expect(isSettlementEligibleRoute({ backend: "d1", provisioning_state: "decommissioned", decommissioned_at: null })).toBe(false)
+  expect(isSettlementEligibleRoute({ backend: "d1", provisioning_state: "ready", decommissioned_at: "2026-06-27T00:00:00Z" })).toBe(false)
+  // ineligible — not yet ready / degraded
+  expect(isSettlementEligibleRoute({ backend: "d1", provisioning_state: "provisioning", decommissioned_at: null })).toBe(false)
+  expect(isSettlementEligibleRoute({ backend: "d1", provisioning_state: "degraded", decommissioned_at: null })).toBe(false)
+  // ineligible — unsupported/unknown backend is excluded by the allowlist, never assumed D1
+  expect(isSettlementEligibleRoute({ backend: "experimental" as never, provisioning_state: "ready", decommissioned_at: null })).toBe(false)
+})
+
+test("listSettlementEligibleCommunities returns only ready non-decommissioned D1, oldest-first", async () => {
+  // eligible D1 (ready) — newest of the two eligible
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1_ready_b", shardWorkerId: "shard-1", bindingName: "DB_CMTY_B", region: "weur", now: "2026-06-20T00:00:00Z",
+  })
+  // eligible D1 (ready) — oldest, should sort first
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1_ready_a", shardWorkerId: "shard-1", bindingName: "DB_CMTY_A", region: "weur", now: "2026-06-19T00:00:00Z",
+  })
+  // ineligible — decommissioned Turso (the staging-leftover shape: live DB gone)
+  await upsertTursoCommunityRoutingRow(cp, {
+    communityId: "cmty_turso", tursoDatabaseBindingId: "cdb_t", now: "2026-06-18T00:00:00Z",
+  })
+  // ineligible — a D1 route explicitly decommissioned
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1_decom", shardWorkerId: "shard-1", bindingName: "DB_CMTY_D", region: "weur", now: "2026-06-17T00:00:00Z",
+  })
+  await cp.execute("UPDATE community_database_routing SET provisioning_state = 'decommissioned', decommissioned_at = '2026-06-21T00:00:00Z' WHERE community_id = 'cmty_d1_decom'")
+  // ineligible — D1 still provisioning (no usable binding yet)
+  await upsertD1CommunityRoutingRow(cp, {
+    communityId: "cmty_d1_prov", shardWorkerId: "shard-1", bindingName: "DB_CMTY_P", region: "weur", now: "2026-06-16T00:00:00Z", provisioningState: "provisioning",
+  })
+
+  const eligible = await listSettlementEligibleCommunities(cp)
+  expect(eligible.map((c) => c.community_id)).toEqual(["cmty_d1_ready_a", "cmty_d1_ready_b"])
+  expect(eligible[0].created_at).toBe("2026-06-19T00:00:00Z")
+
+  // limit is honoured
+  const limited = await listSettlementEligibleCommunities(cp, { limit: 1 })
+  expect(limited.map((c) => c.community_id)).toEqual(["cmty_d1_ready_a"])
 })

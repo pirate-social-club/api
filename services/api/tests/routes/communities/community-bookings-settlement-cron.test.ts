@@ -46,6 +46,20 @@ async function setup() {
   const booker = await exchangeJwt(ctx.env, "set-booker")
   await completeUniqueHumanVerification(ctx.env, booker.accessToken)
   const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+  // The settlement cron now enumerates from authoritative routing state (ready, non-decommissioned
+  // D1) rather than the generic active-community list. Force a ready-D1 routing row so this
+  // community is settlement-eligible regardless of what local provisioning seeds.
+  const cp = ctx.client
+  const nowIso = new Date().toISOString()
+  await cp.execute({
+    sql: `INSERT INTO community_database_routing
+            (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+          VALUES (?1, 'd1', 'ready', 'community-d1-shard-test', 'DB_CMTY_TEST', 'enam', ?2, ?2)
+          ON CONFLICT (community_id) DO UPDATE SET
+            backend = 'd1', provisioning_state = 'ready', decommissioned_at = NULL, turso_database_binding_id = NULL,
+            shard_worker_id = 'community-d1-shard-test', binding_name = 'DB_CMTY_TEST', region = 'enam', updated_at = ?2`,
+    args: [communityId, nowIso],
+  })
   return { ctx, communityId, root, hostId: host.userId, bookerId: booker.userId }
 }
 
