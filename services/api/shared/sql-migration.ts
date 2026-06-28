@@ -2,6 +2,8 @@ export function splitSqlStatements(sql: string): string[] {
   const statements: string[] = []
   let current = ""
   let inSingleQuote = false
+  let inLineComment = false
+  let inBlockComment = false
   let inTrigger = false
   let dollarQuoteTag: string | null = null
 
@@ -9,6 +11,24 @@ export function splitSqlStatements(sql: string): string[] {
     const char = sql[index]
     const next = sql[index + 1]
     current += char
+
+    // Inside a `--` line comment: consume to end of line. A ';' or apostrophe here must NOT
+    // split the statement or toggle quote state — Postgres ignores comment content, and the
+    // SQLite test mirror must match (e.g. migration 0122's "(superuser); the ..." comment).
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false
+      continue
+    }
+    // Inside a `/* */` block comment: consume to the closing delimiter.
+    if (inBlockComment) {
+      if (char === "/" && sql[index - 1] === "*") inBlockComment = false
+      continue
+    }
+    // A comment starts only outside string / dollar-quote context (a '--' inside a literal is data).
+    if (!inSingleQuote && !dollarQuoteTag) {
+      if (char === "-" && next === "-") { inLineComment = true; current += next; index += 1; continue }
+      if (char === "/" && next === "*") { inBlockComment = true; current += next; index += 1; continue }
+    }
 
     if (!inSingleQuote && char === "$") {
       const remainder = sql.slice(index)
