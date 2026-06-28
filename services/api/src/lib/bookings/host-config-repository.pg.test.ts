@@ -169,11 +169,23 @@ describe.skipIf(!RUN)("bookings host-config repository (real Postgres)", () => {
     await probe.end();
   });
 
-  test("transaction-bound repository reads consistently inside a caller-owned tx", async () => {
+  test("getHostConfiguration is a single snapshot-consistent statement", async () => {
+    // A lone SELECT sees one MVCC snapshot under READ COMMITTED, so the aggregate is internally
+    // consistent without any caller-owned isolation level.
+    const repo = createBookingHostConfigRepository(makeExecutor(repoDb));
+    const cfg = await repo.getHostConfiguration("host1");
+    expect(cfg!.availabilityRules.map((r) => r.ruleId)).toEqual(["r_a", "r_b", "r_c"]);
+    expect(cfg!.availabilityExceptions.map((e) => e.exceptionId)).toEqual(["e_early", "e_late"]);
+    expect(cfg!.priceRules.map((p) => p.priceRuleId)).toEqual(["p_hi_a", "p_hi_b", "p_lo"]);
+  });
+
+  test("transaction-bound repository reads within a caller-owned tx (binding, not isolation)", async () => {
+    // Demonstrates the tx-bound factory uses the caller's transaction; it does NOT assert cross-statement
+    // consistency for the per-table list methods (that is the caller's isolation level to choose).
     await repoDb.begin(async (tx: { unsafe(sql: string, args?: unknown[]): Promise<unknown> }) => {
       const repo = createBookingHostConfigTxRepository(makeExecutor(tx));
-      const cfg = await repo.getHostConfiguration("host1");
-      expect(cfg!.priceRules.map((p) => p.priceRuleId)).toEqual(["p_hi_a", "p_hi_b", "p_lo"]);
+      expect((await repo.getProfile("host1"))!.hostUserId).toBe("host1");
+      expect((await repo.listPriceRules("host1")).map((p) => p.priceRuleId)).toEqual(["p_hi_a", "p_hi_b", "p_lo"]);
     });
   });
 });

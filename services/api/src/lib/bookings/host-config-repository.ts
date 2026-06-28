@@ -146,15 +146,43 @@ async function listPriceRules(exec: BookingSqlExecutor, hostUserId: string): Pro
   return res.rows.map(decodePriceRule);
 }
 
+function asJsonObject(value: unknown): QueryResultRow {
+  const v = typeof value === "string" ? JSON.parse(value) : value;
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new TypeError("expected a JSON object");
+  return v as QueryResultRow;
+}
+function asJsonArray(value: unknown): QueryResultRow[] {
+  const v = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(v)) throw new TypeError("expected a JSON array");
+  return v as QueryResultRow[];
+}
+
+// Single-statement aggregate: a lone SELECT is snapshot-consistent under READ COMMITTED, so the profile
+// and its rules/exceptions/prices are all read at one instant without requiring a caller-owned isolation
+// level. to_jsonb renders TIME/TIMESTAMPTZ/SMALLINT[] in decoder-compatible forms, so the same row
+// decoders apply. Deterministic ordering matches the per-table list methods.
 async function getHostConfiguration(exec: BookingSqlExecutor, hostUserId: string): Promise<HostConfiguration | null> {
-  const profile = await getProfile(exec, hostUserId);
-  if (!profile) return null;
-  // Sequential on purpose: the request-scoped pool is max:1, so concurrent queries on one executor
-  // would contend on a single connection.
-  const availabilityRules = await listAvailabilityRules(exec, hostUserId);
-  const availabilityExceptions = await listAvailabilityExceptions(exec, hostUserId);
-  const priceRules = await listPriceRules(exec, hostUserId);
-  return { profile, availabilityRules, availabilityExceptions, priceRules };
+  const res = await exec.execute({
+    sql:
+      `SELECT
+         to_jsonb(p) AS profile,
+         COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.created_at ASC, r.rule_id ASC)
+                   FROM bookings.availability_rules r WHERE r.host_user_id = p.host_user_id), '[]'::jsonb) AS rules,
+         COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.start_utc ASC, e.exception_id ASC)
+                   FROM bookings.availability_exceptions e WHERE e.host_user_id = p.host_user_id), '[]'::jsonb) AS exceptions,
+         COALESCE((SELECT jsonb_agg(to_jsonb(pr) ORDER BY pr.priority DESC, pr.price_rule_id ASC)
+                   FROM bookings.price_rules pr WHERE pr.host_user_id = p.host_user_id), '[]'::jsonb) AS prices
+       FROM bookings.profiles p WHERE p.host_user_id = ?1`,
+    args: [hostUserId],
+  });
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    profile: decodeProfile(asJsonObject(row.profile)),
+    availabilityRules: asJsonArray(row.rules).map(decodeAvailabilityRule),
+    availabilityExceptions: asJsonArray(row.exceptions).map(decodeAvailabilityException),
+    priceRules: asJsonArray(row.prices).map(decodePriceRule),
+  };
 }
 
 // --- factories ---------------------------------------------------------------------------------------
