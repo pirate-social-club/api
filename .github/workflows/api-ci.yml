@@ -31,6 +31,45 @@ permissions:
   contents: read
 
 jobs:
+  bookings-repository:
+    # Real-Postgres test for the global bookings repository (host-config read slice): provisions
+    # PostgreSQL 17 and applies the CANONICAL core b0001 before exercising the repository.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out core migration source
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/core
+          path: core
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Run bookings repository real-Postgres tests
+        working-directory: services/api
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+          BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+        run: bun test src/lib/bookings/host-config-repository.pg.test.ts
+
   api:
     runs-on: ubuntu-latest
 
