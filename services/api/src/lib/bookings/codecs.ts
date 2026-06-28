@@ -24,6 +24,8 @@ function positiveUint256(label: string, raw: unknown): string {
   else if (typeof raw === "string") s = raw;
   else throw new TypeError(`${label}: expected a positive integer string/bigint, got ${typeof raw}`);
   if (!DIGITS_ONLY.test(s)) throw new TypeError(`${label}: digits only, no sign/decimal — got ${s}`);
+  // uint256 max is 78 digits; reject clearly-oversized input before BigInt parses it.
+  if (s.length > 78) throw new RangeError(`${label}: amount exceeds uint256 max (>${78} digits)`);
   const n = BigInt(s);
   if (n <= 0n) throw new RangeError(`${label}: amount must be positive, got ${s}`);
   if (n > UINT256_MAX) throw new RangeError(`${label}: amount exceeds uint256 max, got ${s}`);
@@ -40,6 +42,19 @@ export function atomicToArg(value: string): string {
   return positiveUint256("atomicToArg", value);
 }
 
+// Shared SEMANTIC validator for an ISO-ish "YYYY-MM-DD[T ]HH:MM:SS…" string: checks calendar date and
+// clock ranges BEFORE any Date parsing, because new Date() rolls over invalid values (Feb 30 -> Mar 2,
+// 24:00:00 -> next day) instead of returning NaN. Used by both isoUtcFromRow and isoUtcToArg.
+function assertValidTimestamp(label: string, value: string): void {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/u);
+  if (!m) throw new TypeError(`${label}: malformed timestamp ${value}`);
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]), h = Number(m[4]), mi = Number(m[5]), s = Number(m[6]);
+  if (mo < 1 || mo > 12) throw new TypeError(`${label}: month out of range in ${value}`);
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (d < 1 || d > daysInMonth) throw new TypeError(`${label}: day out of range in ${value}`);
+  if (h > 23 || mi > 59 || s > 59) throw new TypeError(`${label}: time out of range in ${value}`);
+}
+
 /** TIMESTAMPTZ from a row -> canonical ISO-8601 UTC string (always UTC, locale-independent). */
 export function isoUtcFromRow(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
@@ -49,16 +64,8 @@ export function isoUtcFromRow(value: unknown): string {
     if (!/(?:Z|[+-]\d{2}(?::?\d{2})?)$/u.test(value)) {
       throw new TypeError(`isoUtcFromRow: timezone-less timestamp rejected (no Z/offset): ${value}`);
     }
-    // Explicit calendar-date validation: new Date() ROLLS OVER an invalid day (Feb 30 -> Mar 2) instead
-    // of returning NaN, so check month/day against the real days-in-month before parsing.
-    const dm = value.match(/^(\d{4})-(\d{2})-(\d{2})/u);
-    if (!dm) throw new TypeError(`isoUtcFromRow: malformed date ${value}`);
-    const yy = Number(dm[1]), mm = Number(dm[2]), dd = Number(dm[3]);
-    if (mm < 1 || mm > 12 || dd < 1 || dd > new Date(Date.UTC(yy, mm, 0)).getUTCDate()) {
-      throw new TypeError(`isoUtcFromRow: invalid calendar date ${value}`);
-    }
-    // Postgres may render "2026-07-01 09:00:00+00"; normalize the space and a minutes-less offset
-    // ("+00" -> "+00:00") into strict ISO so Date rejects invalid times (NaN), then re-emit ...Z.
+    assertValidTimestamp("isoUtcFromRow", value);
+    // Normalize the space separator and a minutes-less offset ("+00" -> "+00:00"), then re-emit ...Z.
     const normalized = (value.includes("T") ? value : value.replace(" ", "T")).replace(/([+-]\d{2})$/u, "$1:00");
     const d = new Date(normalized);
     if (Number.isNaN(d.getTime())) throw new TypeError(`isoUtcFromRow: unparseable/invalid timestamp ${value}`);
@@ -72,11 +79,12 @@ export function isoUtcFromRowNullable(value: unknown): string | null {
   return value === null || value === undefined ? null : isoUtcFromRow(value);
 }
 
-/** TIMESTAMPTZ to a query arg — requires a canonical ISO-8601 UTC string (the API's wire form). */
+/** TIMESTAMPTZ to a query arg — requires a canonical ISO-8601 UTC string that is also semantically valid. */
 export function isoUtcToArg(value: string): string {
   if (typeof value !== "string" || !ISO_UTC.test(value)) {
     throw new TypeError(`isoUtcToArg: expected canonical ISO-8601 UTC (…Z), got ${String(value)}`);
   }
+  assertValidTimestamp("isoUtcToArg", value);
   return value;
 }
 

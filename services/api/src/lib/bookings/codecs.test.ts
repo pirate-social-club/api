@@ -99,11 +99,26 @@ describe("bookings codecs — silent-coercion regressions", () => {
     expect(timeToArg("23:59:59")).toBe("23:59:59");
   });
 
-  test("isoUtcFromRow rejects timezone-less and semantically invalid dates", () => {
+  test("isoUtcFromRow rejects timezone-less, invalid dates, and rollover times", () => {
     expect(() => isoUtcFromRow("2026-07-01 09:00:00")).toThrow();
     expect(() => isoUtcFromRow("2026-07-01T09:00:00")).toThrow();
     expect(() => isoUtcFromRow("2026-13-01T00:00:00Z")).toThrow();
     expect(() => isoUtcFromRow("2026-02-30T00:00:00Z")).toThrow();
+    expect(() => isoUtcFromRow("2026-07-01T24:00:00Z")).toThrow(); // clock rollover
+    expect(() => isoUtcFromRow("2026-07-01T12:60:00Z")).toThrow();
+    expect(() => isoUtcFromRow("2026-07-01T12:00:60Z")).toThrow();
+  });
+
+  test("isoUtcToArg rejects shape-valid but semantically invalid timestamps", () => {
+    expect(isoUtcToArg("2026-07-01T09:00:00Z")).toBe("2026-07-01T09:00:00Z");
+    expect(() => isoUtcToArg("2026-02-30T00:00:00Z")).toThrow();
+    expect(() => isoUtcToArg("2026-13-01T00:00:00Z")).toThrow();
+    expect(() => isoUtcToArg("2026-01-01T99:99:99Z")).toThrow();
+    expect(() => isoUtcToArg("2026-07-01T24:00:00Z")).toThrow();
+  });
+
+  test("atomicToArg rejects strings longer than 78 digits before BigInt", () => {
+    expect(() => atomicToArg("9".repeat(79))).toThrow();
   });
 
   test("weekdayArrayFromRow rejects null/empty/whitespace elements (no coercion to weekday 0)", () => {
