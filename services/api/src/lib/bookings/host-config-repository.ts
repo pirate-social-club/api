@@ -101,13 +101,15 @@ function decodePriceRule(row: QueryResultRow): PriceRule {
 const PROFILE_COLUMNS =
   "host_user_id, display_headline, bio, topics, intro_video_ref, host_timezone, base_price_cents, " +
   "default_slot_duration_seconds, platform_fee_bps, payout_wallet_address, is_published, created_at, updated_at";
+// TIME columns are cast to ::text for a portable "HH:MM:SS" representation: node-postgres returns TIME as
+// a string, but some drivers hand back an unparsed binary value, so we pin the wire form explicitly.
 const RULE_COLUMNS =
-  "rule_id, host_user_id, by_weekday, start_local, end_local, slot_duration_seconds, effective_from_utc, " +
-  "effective_until_utc, created_at, updated_at";
+  "rule_id, host_user_id, by_weekday, start_local::text AS start_local, end_local::text AS end_local, " +
+  "slot_duration_seconds, effective_from_utc, effective_until_utc, created_at, updated_at";
 const EXCEPTION_COLUMNS = "exception_id, host_user_id, kind, start_utc, end_utc, created_at";
 const PRICE_RULE_COLUMNS =
-  "price_rule_id, host_user_id, match_weekday, match_local_start, match_local_end, match_duration_seconds, " +
-  "price_cents, priority, created_at, updated_at";
+  "price_rule_id, host_user_id, match_weekday, match_local_start::text AS match_local_start, " +
+  "match_local_end::text AS match_local_end, match_duration_seconds, price_cents, priority, created_at, updated_at";
 
 // --- read methods (deterministic ordering) -----------------------------------------------------------
 
