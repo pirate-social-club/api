@@ -63,3 +63,62 @@ describe("bookings codecs", () => {
     expect(textFromRowNullable("x")).toBe("x");
   });
 });
+
+describe("bookings codecs — silent-coercion regressions", () => {
+  test("intFromRow rejects null, empty, boolean, non-canonical, and unsafe integers", () => {
+    expect(() => intFromRow(null)).toThrow();
+    expect(() => intFromRow("")).toThrow();
+    expect(() => intFromRow(true)).toThrow();
+    expect(() => intFromRow("1.5")).toThrow();
+    expect(() => intFromRow(2 ** 53)).toThrow();
+    expect(intFromRow(0)).toBe(0);
+    expect(intFromRow(-5)).toBe(-5);
+  });
+
+  test("boolFromRow throws on non-boolean values", () => {
+    expect(() => boolFromRow("garbage")).toThrow();
+    expect(() => boolFromRow(null)).toThrow();
+    expect(() => boolFromRow(2)).toThrow();
+  });
+
+  test("atomic amounts reject zero, negative, and uint256 overflow; canonicalize", () => {
+    expect(() => atomicFromRow(-1n)).toThrow();
+    expect(() => atomicFromRow(0n)).toThrow();
+    expect(() => atomicToArg("0")).toThrow();
+    expect(() => atomicToArg("-1")).toThrow();
+    const overMax = (115792089237316195423570985008687907853269984665640564039457584007913129639935n + 1n).toString();
+    expect(() => atomicToArg(overMax)).toThrow();
+    expect(atomicFromRow("007")).toBe("7");
+  });
+
+  test("time codecs reject out-of-range components", () => {
+    expect(() => timeToArg("99:99:99")).toThrow();
+    expect(() => timeToArg("24:00")).toThrow();
+    expect(() => timeToArg("12:60")).toThrow();
+    expect(() => timeFromRow("10:00:60")).toThrow();
+    expect(timeToArg("23:59:59")).toBe("23:59:59");
+  });
+
+  test("isoUtcFromRow rejects timezone-less and semantically invalid dates", () => {
+    expect(() => isoUtcFromRow("2026-07-01 09:00:00")).toThrow();
+    expect(() => isoUtcFromRow("2026-07-01T09:00:00")).toThrow();
+    expect(() => isoUtcFromRow("2026-13-01T00:00:00Z")).toThrow();
+    expect(() => isoUtcFromRow("2026-02-30T00:00:00Z")).toThrow();
+  });
+
+  test("weekdayArrayFromRow rejects null/empty/whitespace elements (no coercion to weekday 0)", () => {
+    expect(() => weekdayArrayFromRow([null])).toThrow();
+    expect(() => weekdayArrayFromRow([""])).toThrow();
+    expect(() => weekdayArrayFromRow([" "])).toThrow();
+    expect(() => weekdayArrayFromRow([false])).toThrow();
+    expect(weekdayArrayFromRow([0])).toEqual([0]);
+  });
+
+  test("timestamp codec is locale-independent under a non-UTC TZ (subprocess)", async () => {
+    const probe = `${import.meta.dir}/codecs.tz-probe.ts`;
+    const proc = Bun.spawn(["bun", "run", probe], { env: { ...process.env, TZ: "America/New_York" }, stdout: "pipe", stderr: "pipe" });
+    const err = await new Response(proc.stderr).text();
+    await proc.exited;
+    expect(proc.exitCode, err).toBe(0);
+  });
+});
