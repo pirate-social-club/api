@@ -131,8 +131,8 @@ describe.skipIf(!RUN)("global booking hold service (real Postgres)", () => {
       sourceCommunityId: "community_discovery_a",
       hostUserId: "host_hold_service_create",
       bookerUserId: "booker_hold_service_create",
-      slotStartUtc: "2026-07-01T10:00:00Z",
-      slotEndUtc: "2026-07-01T10:30:00Z",
+      slotStartUtc: "2026-07-01T10:00:00.000Z",
+      slotEndUtc: "2026-07-01T10:30:00.000Z",
       nowUtc: "2026-06-10T09:00:00Z",
     });
 

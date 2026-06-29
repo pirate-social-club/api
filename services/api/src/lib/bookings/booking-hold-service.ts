@@ -135,6 +135,12 @@ function buildReadPolicy(platformFeeBps: number): ResolveSlotsInput["policy"] {
   };
 }
 
+function sameInstant(a: string, b: string): boolean {
+  const left = Date.parse(a);
+  const right = Date.parse(b);
+  return Number.isFinite(left) && left === right;
+}
+
 function toDomainRules(profile: BookingProfile, rules: AvailabilityRule[]): DomainAvailabilityRule[] {
   return rules.map((rule) => ({
     hostTimezone: profile.hostTimezone,
@@ -255,7 +261,9 @@ export async function createGlobalBookingHold(
   });
   if (!availability.bookable) return { ok: false, reason: "slot_unavailable" };
   const slot = availability.slots.find((candidate) =>
-    candidate.startUtc === input.slotStartUtc && candidate.endUtc === input.slotEndUtc && candidate.available
+    sameInstant(candidate.startUtc, input.slotStartUtc)
+    && sameInstant(candidate.endUtc, input.slotEndUtc)
+    && candidate.available
   );
   if (!slot) return { ok: false, reason: "slot_unavailable" };
 
