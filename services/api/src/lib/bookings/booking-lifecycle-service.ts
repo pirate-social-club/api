@@ -25,11 +25,12 @@ interface BookingLifecycleSnapshot {
 }
 
 type AgoraBlock = {
-  provider: "agora";
+  app_id: string | null;
   channel: string;
   uid: number;
-  token: string;
-  expires_at: string;
+  token: string | null;
+  token_expires_at: number | null;
+  configured: boolean;
 };
 
 type AgoraBuilder = (input: { env: Env; channel: string; uid: number }) => AgoraBlock;

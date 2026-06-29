@@ -4,7 +4,7 @@
 // calculation, custody effects, Agora token minting, and settlement policy stay in higher layers.
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
 import { BOOKING_COLUMNS, decodeBooking } from "./booking-row";
-import { intFromRow, intFromRowNullable, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg, textFromRow, textFromRowNullable } from "./codecs";
+import { intFromRowNullable, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg, textFromRow, textFromRowNullable } from "./codecs";
 import type { AttendanceHeartbeat, AttendanceParty, AttendanceSession, Booking, HostSlotLock } from "./types";
 
 export interface BookingLifecycleSqlExecutor {

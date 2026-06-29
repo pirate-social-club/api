@@ -223,11 +223,12 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
   test("attaches session attendance, stores derived channel once, and accepts identity-bound heartbeat", async () => {
     await seedBooking({ bookingId: "bkg_lifecycle_service_attach", status: "live" });
     setGlobalBookingAgoraBuilderForTests(({ channel, uid }) => ({
-      provider: "agora",
+      app_id: "app_test",
       channel,
       uid,
       token: `token:${channel}:${uid}`,
-      expires_at: "2026-07-01T11:00:00Z",
+      token_expires_at: 1_783_000_000,
+      configured: true,
     }));
 
     const attached = await attachGlobalBookingSession({
@@ -372,11 +373,12 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
   test("rejects attach for non-parties and terminal bookings", async () => {
     await seedBooking({ bookingId: "bkg_lifecycle_service_done", status: "completed" });
     setGlobalBookingAgoraBuilderForTests(({ channel, uid }) => ({
-      provider: "agora",
+      app_id: "app_test",
       channel,
       uid,
       token: "unused",
-      expires_at: "2026-07-01T11:00:00Z",
+      token_expires_at: 1_783_000_000,
+      configured: true,
     }));
 
     expect(await attachGlobalBookingSession({
