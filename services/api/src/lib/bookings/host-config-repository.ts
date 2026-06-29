@@ -163,16 +163,18 @@ function asJsonArray(value: unknown): QueryResultRow[] {
 // decoders apply. Deterministic ordering matches the per-table list methods.
 async function getHostConfiguration(exec: BookingSqlExecutor, hostUserId: string): Promise<HostConfiguration | null> {
   const res = await exec.execute({
+    // to_jsonb is applied over EXPLICIT projected subqueries (reusing the per-table column lists), so the
+    // aggregate honors the "no SELECT *" rule while staying a single snapshot-consistent statement.
     sql:
       `SELECT
          to_jsonb(p) AS profile,
          COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.created_at ASC, r.rule_id ASC)
-                   FROM bookings.availability_rules r WHERE r.host_user_id = p.host_user_id), '[]'::jsonb) AS rules,
+                   FROM (SELECT ${RULE_COLUMNS} FROM bookings.availability_rules WHERE host_user_id = p.host_user_id) r), '[]'::jsonb) AS rules,
          COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.start_utc ASC, e.exception_id ASC)
-                   FROM bookings.availability_exceptions e WHERE e.host_user_id = p.host_user_id), '[]'::jsonb) AS exceptions,
+                   FROM (SELECT ${EXCEPTION_COLUMNS} FROM bookings.availability_exceptions WHERE host_user_id = p.host_user_id) e), '[]'::jsonb) AS exceptions,
          COALESCE((SELECT jsonb_agg(to_jsonb(pr) ORDER BY pr.priority DESC, pr.price_rule_id ASC)
-                   FROM bookings.price_rules pr WHERE pr.host_user_id = p.host_user_id), '[]'::jsonb) AS prices
-       FROM bookings.profiles p WHERE p.host_user_id = ?1`,
+                   FROM (SELECT ${PRICE_RULE_COLUMNS} FROM bookings.price_rules WHERE host_user_id = p.host_user_id) pr), '[]'::jsonb) AS prices
+       FROM (SELECT ${PROFILE_COLUMNS} FROM bookings.profiles WHERE host_user_id = ?1) p`,
     args: [hostUserId],
   });
   const row = res.rows[0];
