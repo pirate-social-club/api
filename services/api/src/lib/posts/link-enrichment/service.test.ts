@@ -107,7 +107,7 @@ describe("hydrateGenericLinkEnrichment", () => {
       postId: "pst_firecrawl",
       url: "https://example.com/story?utm_campaign=launch",
       checkedAt: "2026-05-02T09:00:00.000Z",
-      fetcher: (async (input) => {
+      fetcher: (async (input: RequestInfo | URL) => {
         calls.push(String(input))
         return new Response(`
           <html>
@@ -119,7 +119,7 @@ describe("hydrateGenericLinkEnrichment", () => {
         `, {
           headers: { "content-type": "text/html" },
         })
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(calls).toEqual(["https://example.com/story?utm_campaign=launch"])
@@ -149,7 +149,7 @@ describe("hydrateGenericLinkEnrichment", () => {
       postId: "pst_firecrawl",
       url: "https://example.com/firecrawl-fails",
       checkedAt: "2026-05-02T09:00:00.000Z",
-      fetcher: (async (input) => {
+      fetcher: (async (input: RequestInfo | URL) => {
         calls.push(String(input))
         if (String(input) === "https://api.firecrawl.dev/v2/scrape") {
           return new Response(JSON.stringify({ success: false, error: "blocked" }), {
@@ -166,7 +166,7 @@ describe("hydrateGenericLinkEnrichment", () => {
         `, {
           headers: { "content-type": "text/html" },
         })
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(calls).toEqual([
@@ -215,7 +215,7 @@ describe("hydrateGenericLinkEnrichment", () => {
       checkedAt: "2026-05-02T09:00:00.000Z",
       fetcher: (() => {
         throw new Error("fetch should not be called for cache hits")
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(result).toBe("https://cdn.example.com/cached.jpg")
@@ -274,7 +274,7 @@ describe("hydrateGenericLinkEnrichment", () => {
       checkedAt: "2026-05-02T09:00:00.000Z",
       fetcher: (() => {
         throw new Error("fetch should not be called for cache hits")
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     const postRows = await communityClient.execute("SELECT link_enrichment_snapshot_json FROM posts WHERE post_id = 'pst_firecrawl'")
@@ -310,7 +310,7 @@ describe("hydrateGenericLinkEnrichment", () => {
       postId: "pst_firecrawl",
       url: "https://Reuters.com/world/story?utm_source=feed#section",
       checkedAt: "2026-05-02T09:00:00.000Z",
-      fetcher: (async (input, init) => {
+      fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
         expect(String(input)).toBe("https://api.firecrawl.dev/v2/scrape")
         expect(init?.method).toBe("POST")
         expect((init?.headers as Record<string, string>).authorization).toBe("Bearer fc-test")
@@ -332,7 +332,7 @@ describe("hydrateGenericLinkEnrichment", () => {
         }), {
           headers: { "content-type": "application/json" },
         })
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(result).toBe("https://cdn.example.com/story.jpg")
@@ -413,7 +413,7 @@ describe("hydrateGenericLinkEnrichment", () => {
         },
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })
 
     const rows = await controlPlaneClient.execute("SELECT title, description, publisher FROM link_enrichments")

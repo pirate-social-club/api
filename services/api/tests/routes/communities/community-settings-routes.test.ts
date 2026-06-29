@@ -23,7 +23,7 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
   const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
   env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
   env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
-  globalThis.fetch = (async (input, init) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://hns-verifier.test")) {
       if (url.includes("/inspect-public?")) {

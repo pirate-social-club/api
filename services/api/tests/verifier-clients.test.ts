@@ -144,7 +144,7 @@ describe("inspectSpacesNamespace", () => {
 
   test("canonicalizes emoji labels before calling the verifier", async () => {
     let capturedUrl: string | null = null
-    await withMockedFetch(() => (async (input) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL) => {
       capturedUrl = typeof input === "string" ? input : input.toString()
       return new Response(JSON.stringify({
         root_exists: true,
@@ -154,7 +154,7 @@ describe("inspectSpacesNamespace", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await inspectSpacesNamespace(env, "@☠️")
       expect(result.rootExists).toBe(true)
       expect(capturedUrl).toBe("http://spaces-verifier.test/inspect?root_label=xn--h4h")
@@ -166,7 +166,7 @@ describe("inspectSpacesNamespace", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await inspectSpacesNamespace(env, "@🏴‍☠️")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -185,7 +185,7 @@ describe("inspectSpacesNamespace", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await inspectSpacesNamespace(env, "@xn--238746723487")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -205,7 +205,7 @@ describe("inspectSpacesNamespace", () => {
     }), {
       status: 500,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch, async () => {
+    })), async () => {
       try {
         await inspectSpacesNamespace(env, "@pirate")
         throw new Error("expected inspectSpacesNamespace to reject")
@@ -224,7 +224,7 @@ describe("inspectSpacesNamespace", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await inspectSpacesNamespace({
           ENVIRONMENT: "production",
@@ -252,7 +252,7 @@ describe("verifySpacesFabricPublish", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await verifySpacesFabricPublish(env, {
           rootLabel: "bad.root",
@@ -282,7 +282,7 @@ describe("verifySpacesFabricPublish", () => {
     }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch, async () => {
+    })), async () => {
       try {
         await verifySpacesFabricPublish(env, {
           rootLabel: "pirate",
@@ -353,7 +353,7 @@ describe("inspectHnsRoot", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await inspectHnsRoot({
           HNS_VERIFIER_BASE_URL: "http://hns.test",
@@ -376,7 +376,7 @@ describe("inspectHnsRoot", () => {
     await withMockedFetch((originalFetch) => ((...args: Parameters<typeof fetch>) => {
       called = true
       return originalFetch(...args)
-    }) as typeof fetch, async () => {
+    }), async () => {
       try {
         await inspectHnsRoot({
           ENVIRONMENT: "production",
@@ -399,7 +399,7 @@ describe("inspectHnsRoot", () => {
     await withMockedFetch(() => (async () => new Response("<!doctype html><title>wrong server</title>", {
       status: 404,
       headers: { "content-type": "text/html; charset=utf-8" },
-    })) as typeof fetch, async () => {
+    })), async () => {
       try {
         await inspectHnsRoot({
           HNS_VERIFIER_BASE_URL: "http://hns.test",
@@ -424,14 +424,14 @@ describe("inspectHnsRoot", () => {
 
   test("inspection uses public resolver endpoint", async () => {
     let requestedPath = ""
-    await withMockedFetch(() => (async (input) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL) => {
       const url = urlFromFetchInput(input)
       requestedPath = `${url.pathname}?${url.searchParams.toString()}`
       return Response.json({
         pirate_dns_authority_verified: true,
         observation_provider: "web3dns_json_doh",
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await inspectHnsRoot({
         HNS_VERIFIER_BASE_URL: "http://hns.test",
       } as any, {
@@ -444,7 +444,7 @@ describe("inspectHnsRoot", () => {
 
   test("allows underscores in HNS root labels", async () => {
     let requestedPath = ""
-    await withMockedFetch(() => (async (input) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL) => {
       const url = urlFromFetchInput(input)
       requestedPath = `${url.pathname}?${url.searchParams.toString()}`
       return Response.json({
@@ -452,7 +452,7 @@ describe("inspectHnsRoot", () => {
         pirate_dns_authority_verified: true,
         observation_provider: "web3dns_json_doh",
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await inspectHnsRoot({
         HNS_VERIFIER_BASE_URL: "http://hns.test",
       } as any, {
@@ -467,14 +467,14 @@ describe("inspectHnsRoot", () => {
 describe("verifyHnsTxtRecord", () => {
   test("TXT verification uses public resolver endpoint", async () => {
     let requestedPath = ""
-    await withMockedFetch(() => (async (input) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL) => {
       const url = urlFromFetchInput(input)
       requestedPath = url.pathname
       return Response.json({
         verified: true,
         observation_provider: "web3dns_json_doh",
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await verifyHnsTxtRecord({
         HNS_VERIFIER_BASE_URL: "http://hns.test",
       } as any, {
@@ -498,7 +498,7 @@ describe("ensureHnsZone", () => {
     let capturedBody: unknown = null
     let capturedAuthorization: string | null = null
 
-    await withMockedFetch(() => (async (input, init) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL, init?: RequestInit) => {
       capturedUrl = typeof input === "string" ? input : input.toString()
       capturedBody = init?.body ? JSON.parse(String(init.body)) : null
       capturedAuthorization = new Headers(init?.headers).get("authorization")
@@ -512,7 +512,7 @@ describe("ensureHnsZone", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await ensureHnsZone(env, {
         rootLabel: "xn--pokmon-dva",
       })

@@ -66,7 +66,7 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       await enqueuePostTranslationJob({ env, repo, communityId, postId, locale: "es" })
 
       const processed = await processNextCommunityJob({
@@ -211,7 +211,7 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -327,7 +327,7 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       await enqueuePostTranslationJob({ env, repo, communityId, postId, locale: "ar" })
 
       const processed = await processNextCommunityJob({
@@ -439,7 +439,7 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const jobId = await enqueueCommentTranslationJob({
         env,
         repo,
@@ -541,7 +541,7 @@ describe("community-job-runner translation", () => {
       setupDb.close()
     }
 
-    await withMockedFetch(() => (async (_input, init) => {
+    await withMockedFetch(() => (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const payload = JSON.parse(String(init?.body ?? "{}")) as {
         messages?: Array<{ role?: string; content?: string }>
       }
@@ -569,7 +569,7 @@ describe("community-job-runner translation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       await enqueueCommunityTextTranslationJob({
         env,
         repo,

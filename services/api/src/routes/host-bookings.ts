@@ -1,23 +1,8 @@
 import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { authenticateAdminOrUser } from "../lib/auth-middleware"
-import {
-  createAvailabilityException,
-  createAvailabilityRule,
-  createPriceRule,
-  deleteAvailabilityException,
-  deleteAvailabilityRule,
-  deletePriceRule,
-  getBookingProfile,
-  listAvailabilityExceptions,
-  listAvailabilityRules,
-  listPriceRules,
-  setProfilePublished,
-  updateAvailabilityException,
-  updateAvailabilityRule,
-  updatePriceRule,
-  upsertBookingProfile,
-} from "../lib/communities/bookings/host-authoring-service"
+import * as globalHostAuthoring from "../lib/bookings/host-authoring-service"
+import * as legacyHostAuthoring from "../lib/communities/bookings/host-authoring-service"
 import {
   emptyBookingProfileResponse,
   serializeAvailabilityException,
@@ -37,9 +22,18 @@ function errStatus(reason: string): 400 | 404 | 409 {
   return 400
 }
 
+function hasPostgresControlPlane(env: AuthenticatedEnv["Bindings"]): boolean {
+  return /^(postgres|postgresql):\/\//iu.test(String(env.CONTROL_PLANE_DATABASE_URL ?? "").trim())
+}
+
+function hostAuthoringService(env: AuthenticatedEnv["Bindings"]): typeof globalHostAuthoring | typeof legacyHostAuthoring {
+  return hasPostgresControlPlane(env) ? globalHostAuthoring : legacyHostAuthoring
+}
+
 hostBookings.get("/me/profile", async (c) => {
   const actor = c.get("actor")
-  const profile = await getBookingProfile(c.env, actor.userId)
+  const service = hostAuthoringService(c.env)
+  const profile = await service.getBookingProfile(c.env, actor.userId)
   if (!profile) {
     return c.json(emptyBookingProfileResponse(actor.userId), 200)
   }
@@ -74,7 +68,12 @@ hostBookings.post("/me/profile", async (c) => {
   if (body.platform_fee_bps !== undefined) input.platform_fee_bps = body.platform_fee_bps
   if (body.payout_wallet_address !== undefined) input.payout_wallet_address = body.payout_wallet_address
 
-  const result = await upsertBookingProfile(c.env, actor.userId, input as Parameters<typeof upsertBookingProfile>[2])
+  const service = hostAuthoringService(c.env)
+  const result = await service.upsertBookingProfile(
+    c.env,
+    actor.userId,
+    input as Parameters<typeof service.upsertBookingProfile>[2],
+  )
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -83,7 +82,8 @@ hostBookings.post("/me/profile", async (c) => {
 
 hostBookings.post("/me/profile/publish", async (c) => {
   const actor = c.get("actor")
-  const result = await setProfilePublished(c.env, actor.userId, true)
+  const service = hostAuthoringService(c.env)
+  const result = await service.setProfilePublished(c.env, actor.userId, true)
   if (!result.ok) {
     return c.json({ error: result.reason }, errStatus(result.reason))
   }
@@ -92,7 +92,8 @@ hostBookings.post("/me/profile/publish", async (c) => {
 
 hostBookings.post("/me/profile/unpublish", async (c) => {
   const actor = c.get("actor")
-  const result = await setProfilePublished(c.env, actor.userId, false)
+  const service = hostAuthoringService(c.env)
+  const result = await service.setProfilePublished(c.env, actor.userId, false)
   if (!result.ok) {
     return c.json({ error: result.reason }, errStatus(result.reason))
   }
@@ -101,7 +102,8 @@ hostBookings.post("/me/profile/unpublish", async (c) => {
 
 hostBookings.get("/me/availability-rules", async (c) => {
   const actor = c.get("actor")
-  const rules = await listAvailabilityRules(c.env, actor.userId)
+  const service = hostAuthoringService(c.env)
+  const rules = await service.listAvailabilityRules(c.env, actor.userId)
   return c.json({ object: "list", data: rules.map(serializeAvailabilityRule), has_more: false }, 200)
 })
 
@@ -128,7 +130,8 @@ hostBookings.post("/me/availability-rules", async (c) => {
     ...(body.effective_until_utc !== undefined ? { effective_until_utc: body.effective_until_utc } : {}),
   }
 
-  const result = await createAvailabilityRule(c.env, actor.userId, input as never)
+  const service = hostAuthoringService(c.env)
+  const result = await service.createAvailabilityRule(c.env, actor.userId, input as never)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -151,7 +154,8 @@ hostBookings.post("/me/availability-rules/:ruleId", async (c) => {
   if (body.effective_from_utc !== undefined) input.effective_from_utc = body.effective_from_utc
   if (body.effective_until_utc !== undefined) input.effective_until_utc = body.effective_until_utc
 
-  const result = await updateAvailabilityRule(c.env, actor.userId, ruleId, input as never)
+  const service = hostAuthoringService(c.env)
+  const result = await service.updateAvailabilityRule(c.env, actor.userId, ruleId, input as never)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -161,7 +165,8 @@ hostBookings.post("/me/availability-rules/:ruleId", async (c) => {
 hostBookings.delete("/me/availability-rules/:ruleId", async (c) => {
   const actor = c.get("actor")
   const ruleId = c.req.param("ruleId")
-  const deleted = await deleteAvailabilityRule(c.env, actor.userId, ruleId)
+  const service = hostAuthoringService(c.env)
+  const deleted = await service.deleteAvailabilityRule(c.env, actor.userId, ruleId)
   if (!deleted) {
     return c.json({ error: "not_found" }, 404)
   }
@@ -170,7 +175,8 @@ hostBookings.delete("/me/availability-rules/:ruleId", async (c) => {
 
 hostBookings.get("/me/availability-exceptions", async (c) => {
   const actor = c.get("actor")
-  const exceptions = await listAvailabilityExceptions(c.env, actor.userId)
+  const service = hostAuthoringService(c.env)
+  const exceptions = await service.listAvailabilityExceptions(c.env, actor.userId)
   return c.json({ object: "list", data: exceptions.map(serializeAvailabilityException), has_more: false }, 200)
 })
 
@@ -191,7 +197,8 @@ hostBookings.post("/me/availability-exceptions", async (c) => {
     end_utc: body.end_utc,
   }
 
-  const result = await createAvailabilityException(c.env, actor.userId, input as never)
+  const service = hostAuthoringService(c.env)
+  const result = await service.createAvailabilityException(c.env, actor.userId, input as never)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -211,7 +218,8 @@ hostBookings.post("/me/availability-exceptions/:exceptionId", async (c) => {
   if (body.start_utc !== undefined) input.start_utc = body.start_utc
   if (body.end_utc !== undefined) input.end_utc = body.end_utc
 
-  const result = await updateAvailabilityException(c.env, actor.userId, exceptionId, input as never)
+  const service = hostAuthoringService(c.env)
+  const result = await service.updateAvailabilityException(c.env, actor.userId, exceptionId, input as never)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -221,7 +229,8 @@ hostBookings.post("/me/availability-exceptions/:exceptionId", async (c) => {
 hostBookings.delete("/me/availability-exceptions/:exceptionId", async (c) => {
   const actor = c.get("actor")
   const exceptionId = c.req.param("exceptionId")
-  const deleted = await deleteAvailabilityException(c.env, actor.userId, exceptionId)
+  const service = hostAuthoringService(c.env)
+  const deleted = await service.deleteAvailabilityException(c.env, actor.userId, exceptionId)
   if (!deleted) {
     return c.json({ error: "not_found" }, 404)
   }
@@ -230,7 +239,8 @@ hostBookings.delete("/me/availability-exceptions/:exceptionId", async (c) => {
 
 hostBookings.get("/me/price-rules", async (c) => {
   const actor = c.get("actor")
-  const rules = await listPriceRules(c.env, actor.userId)
+  const service = hostAuthoringService(c.env)
+  const rules = await service.listPriceRules(c.env, actor.userId)
   return c.json({ object: "list", data: rules.map(serializePriceRule), has_more: false }, 200)
 })
 
@@ -264,7 +274,8 @@ hostBookings.post("/me/price-rules", async (c) => {
     price_cents: body.price_cents,
   }
 
-  const result = await createPriceRule(c.env, actor.userId, input as never, priority)
+  const service = hostAuthoringService(c.env)
+  const result = await service.createPriceRule(c.env, actor.userId, input as never, priority)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -293,7 +304,8 @@ hostBookings.post("/me/price-rules/:priceRuleId", async (c) => {
   }
   if (body.priority !== undefined) input.priority = body.priority
 
-  const result = await updatePriceRule(c.env, actor.userId, priceRuleId, input as never)
+  const service = hostAuthoringService(c.env)
+  const result = await service.updatePriceRule(c.env, actor.userId, priceRuleId, input as never)
   if (!result.ok) {
     return c.json({ error: result.reason, ...(result.fields ? { fields: result.fields } : {}) }, errStatus(result.reason))
   }
@@ -303,7 +315,8 @@ hostBookings.post("/me/price-rules/:priceRuleId", async (c) => {
 hostBookings.delete("/me/price-rules/:priceRuleId", async (c) => {
   const actor = c.get("actor")
   const priceRuleId = c.req.param("priceRuleId")
-  const deleted = await deletePriceRule(c.env, actor.userId, priceRuleId)
+  const service = hostAuthoringService(c.env)
+  const deleted = await service.deletePriceRule(c.env, actor.userId, priceRuleId)
   if (!deleted) {
     return c.json({ error: "not_found" }, 404)
   }

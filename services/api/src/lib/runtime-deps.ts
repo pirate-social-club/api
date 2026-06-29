@@ -35,6 +35,21 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
 }
 
+// Structural pool shape the Postgres adapter depends on, so a test can substitute a non-Neon pool.
+type PostgresPoolLike = PostgresQueryable & {
+  connect: () => Promise<PostgresQueryable & { release: () => void }>
+  end: () => Promise<void>
+}
+
+// Test-only seam: override how the request-scoped CONTROL-PLANE Postgres pool is built. Default (null)
+// constructs today's Neon pool unchanged. This affects only the Postgres path, never libSQL, and must
+// never be set in production.
+type ControlPlanePostgresPoolFactory = (url: string) => PostgresPoolLike
+let controlPlanePostgresPoolFactoryForTests: ControlPlanePostgresPoolFactory | null = null
+export function setControlPlanePostgresPoolFactoryForTests(factory: ControlPlanePostgresPoolFactory | null): void {
+  controlPlanePostgresPoolFactoryForTests = factory
+}
+
 const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
 const LIBSQL_BUSY_RETRY_DELAY_MS = 50
 
@@ -287,7 +302,7 @@ class PostgresTransactionAdapter implements Transaction {
 }
 
 class PostgresClientAdapter implements Client {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: PostgresPoolLike) {}
 
   async execute(statement: InStatement | string): Promise<QueryResult> {
     return await executePostgresStatement(this.pool, statement)
@@ -403,19 +418,25 @@ function getRequestScopedPostgresClient(url: string): Client | null {
     return null
   }
 
-  configureLocalNeonForUrl(url)
+  // The test seam substitutes the pool and bypasses Neon entirely; the production path is unchanged.
+  if (!controlPlanePostgresPoolFactoryForTests) {
+    configureLocalNeonForUrl(url)
+  }
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
     // max: 1 — one connection per request is sufficient.
     // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
     // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
-    client = new PostgresClientAdapter(new Pool({
-      connectionString: normalizePostgresConnectionStringForDriver(url),
-      max: 1,
-      connectionTimeoutMillis: 5_000,
-      idleTimeoutMillis: 30_000,
-    }))
+    const pool: PostgresPoolLike = controlPlanePostgresPoolFactoryForTests
+      ? controlPlanePostgresPoolFactoryForTests(url)
+      : (new Pool({
+          connectionString: normalizePostgresConnectionStringForDriver(url),
+          max: 1,
+          connectionTimeoutMillis: 5_000,
+          idleTimeoutMillis: 30_000,
+        }) as unknown as PostgresPoolLike)
+    client = new PostgresClientAdapter(pool)
     store.clients.set(cacheKey, client)
   }
   return new RequestScopedClientAdapter(client)

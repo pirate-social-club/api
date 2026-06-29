@@ -4,6 +4,7 @@ import { captureException, withSentry } from "@sentry/cloudflare"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
+import bookings from "./routes/bookings"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import communityMedia from "./routes/community-media"
@@ -47,6 +48,7 @@ import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } f
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { emptyBookingSettlementSummary, isBookingSettlementCronEnabled, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
+import { emptyGlobalBookingSettlementSummary, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
@@ -214,6 +216,7 @@ app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
+app.route("/bookings", bookings)
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
 app.route("/community-media", communityMedia)
@@ -600,12 +603,15 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
 async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
   if (!isBookingSettlementCronEnabled(env)) return
+  let globalSummary = emptyGlobalBookingSettlementSummary(true)
   const communityRepository = getCommunityRepository(env)
   let summary = emptyBookingSettlementSummary(true)
   try {
+    globalSummary = await sweepGlobalBookingSettlements({ env, client: getControlPlaneClient(env), maxBookings: 100, deadlineMs: 20_000 })
     summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
     // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
     // generic marker (no raw message/object reaches Sentry from coordinator/RPC paths).
+    if (globalSummary.fatal) captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
     if (summary.fatal) captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
   } catch (error) {
     // Defense: an unexpected throw past the sweep still yields a fatal summary (no raw error logged).
@@ -614,6 +620,7 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
     captureScheduledError(env, error, "booking_settlement_reconciliation")
   } finally {
     // One structured summary for EVERY enabled run — including zero-work AND fatal runs.
+    console.info("[global-booking-settlements] swept", JSON.stringify(globalSummary))
     console.info("[booking-settlements] swept", JSON.stringify(summary))
     await communityRepository.close?.()
   }

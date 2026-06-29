@@ -34,7 +34,7 @@ describe("ClawKey provider requests", () => {
         status: 201,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch, async () => {
+    }), async () => {
       const provider = getClawkeyProvider({ CLAWKEY_API_URL: "https://api.ag9.ai/v1" } as any)
       const started = await provider.startRegistration({
         deviceId: "dev_123",

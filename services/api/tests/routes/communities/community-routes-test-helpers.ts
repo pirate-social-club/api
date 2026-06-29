@@ -49,7 +49,7 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
   const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
   env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
   env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
-  globalThis.fetch = (async (input, init) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://hns-verifier.test")) {
       if (url.includes("/inspect-public?")) {
@@ -143,7 +143,7 @@ export async function prepareVerifiedSpacesNamespace(env: Env, accessToken: stri
   const originalFetch = globalThis.fetch
   const originalSpacesVerifierBaseUrl = env.SPACES_VERIFIER_BASE_URL
   env.SPACES_VERIFIER_BASE_URL = "http://spaces-verifier.test"
-  globalThis.fetch = (async (input, init) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://spaces-verifier.test/inspect?")) {
       return new Response(JSON.stringify({

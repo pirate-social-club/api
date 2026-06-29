@@ -303,7 +303,7 @@ describe("community routes", () => {
     }
 
     const originalFetch = globalThis.fetch
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://spaces-verifier.test/inspect?")) {
         return new Response(JSON.stringify({

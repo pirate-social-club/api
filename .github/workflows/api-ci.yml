@@ -31,8 +31,96 @@ permissions:
   contents: read
 
 jobs:
+  bookings-repository:
+    # Real-Postgres tests for the global bookings repositories: provisions
+    # PostgreSQL 17 and applies the CANONICAL core b0001 before exercising the repository.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out core migration source
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/core
+          path: core
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Run bookings repository real-Postgres tests
+        working-directory: services/api
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+          BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+        run: |
+          echo "::group::host-config repository PG"
+          timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::hold repository PG"
+          timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking hold service PG"
+          timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking read service PG"
+          timeout 120s bun test src/lib/bookings/booking-read-service.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::payment-intent repository PG"
+          timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking finalization repository PG"
+          timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking lifecycle repository PG"
+          timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking lifecycle service PG"
+          timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking settlement cron PG"
+          timeout 120s bun test src/lib/bookings/booking-settlement-cron.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::settlement effect repository PG"
+          timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
+          echo "::endgroup::"
+          echo "::group::booking confirm service PG"
+          timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          echo "::endgroup::"
+
   api:
     runs-on: ubuntu-latest
+
+    services:
+      # For the bookings production-path test (withRequestControlPlaneClients -> getControlPlaneClient ->
+      # real PostgresClientAdapter/PostgresTransactionAdapter), which runs in this full-install job.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Check out repository
@@ -202,6 +290,16 @@ jobs:
       - name: Run API tests
         working-directory: services/api
         run: bun run test
+
+      - name: Run bookings production-path real-Postgres test
+        # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
+        # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
+        if: success() || failure()
+        working-directory: services/api
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+          BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+        run: bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
 
       - name: Run API coverage report
         working-directory: services/api

@@ -9,6 +9,7 @@ import {
   listParts,
 } from "../../../src/lib/storage/filebase-multipart"
 import { HttpError } from "../../../src/lib/errors"
+import { mockFetch } from "../../helpers"
 
 const env = {
   FILEBASE_S3_ACCESS_KEY: "AKIAIOSFODNN7EXAMPLE",
@@ -22,11 +23,11 @@ const originalFetch = globalThis.fetch
 
 function installFetch(handler: (request: Request) => Response | Promise<Response>): Request[] {
   const requests: Request[] = []
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mockFetch(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init)
     requests.push(request)
     return await handler(request)
-  }
+  })
   return requests
 }
 

@@ -110,7 +110,7 @@ describe("song artifact routes", () => {
   test("allows an unverified community owner to upload and bundle song artifacts", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
@@ -320,7 +320,7 @@ describe("song artifact routes", () => {
   test("allows an unverified member to publish a song with ALTCHA when the gate policy is OR", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
@@ -536,7 +536,7 @@ describe("song artifact routes", () => {
   testWithTimeout("generates a server-side preview crop and uses it for locked song publication", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
@@ -841,7 +841,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     let acrCloudCatalogCallCount = 0
     let elevenLabsCallCount = 0
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         openRouterCallCount += 1
@@ -1624,7 +1624,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
   test("allows a remix submit when the same bytes were already registered as an original", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
@@ -1890,7 +1890,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
   test("allows song publication when ACRCloud is not configured in local dev", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
 
       if (!request.url.startsWith("https://s3.filebase.test/")) {

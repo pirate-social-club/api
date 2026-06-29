@@ -19,7 +19,7 @@ async function withMockedOpenRouterContent<T>(content: unknown, run: () => Promi
   }), {
     status: 200,
     headers: { "content-type": "application/json" },
-  })) as typeof fetch, run)
+  })) as unknown as typeof fetch, run)
 }
 
 describe("requestContentTranslation", () => {
@@ -52,7 +52,7 @@ describe("requestContentTranslation", () => {
 
   test("uses an adaptive completion budget for long source text", async () => {
     let requestPayload: Record<string, unknown> | null = null
-    await withMockedFetch(() => (async (_input, init) => {
+    await withMockedFetch(() => (async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestPayload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
       return new Response(JSON.stringify({
         choices: [
@@ -73,7 +73,7 @@ describe("requestContentTranslation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       await requestContentTranslation({
         env,
         sourceLanguage: "ja",
@@ -102,7 +102,7 @@ describe("requestContentTranslation", () => {
 
   test("retries malformed provider JSON once with the max completion budget", async () => {
     const maxCompletionTokens: unknown[] = []
-    await withMockedFetch(() => (async (_input, init) => {
+    await withMockedFetch(() => (async (_input: RequestInfo | URL, init?: RequestInit) => {
       const payload = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>
       maxCompletionTokens.push(payload.max_completion_tokens)
       const content = maxCompletionTokens.length === 1
@@ -127,7 +127,7 @@ describe("requestContentTranslation", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await requestContentTranslation({
         env,
         sourceLanguage: "ja",

@@ -45,7 +45,7 @@ describe("song artifact catalog sync routes", () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     let acrCloudCatalogCallCount = 0
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
@@ -259,7 +259,7 @@ describe("song artifact catalog sync routes", () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
     let acrCloudCatalogCallCount = 0
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({

@@ -229,7 +229,7 @@ describe("Very provider adapter", () => {
     } as any
     const provider = getVeryProvider(env)
 
-    await withMockedFetch(() => (async (input, init) => {
+    await withMockedFetch(() => (async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("https://very.example.com/api/v1/verify")
       expect(init?.method).toBe("POST")
       const headers = new Headers(init?.headers)
@@ -249,7 +249,7 @@ describe("Very provider adapter", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch, async () => {
+    }), async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "very-upstream-ref-123",
         providerPayloadRef: "proof-payload-123",
@@ -290,7 +290,7 @@ describe("Very provider adapter", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch, async () => {
+    }), async () => {
       for (const response of responses) {
         const outcome = await provider.getSessionOutcome({
           upstreamSessionRef: "very-upstream-ref-123",
@@ -462,13 +462,13 @@ describe("Very provider development fallback", () => {
     } as any
     const provider = getVeryProvider(env)
     let requestedUrl = ""
-    await withMockedFetch(() => (async (url) => {
+    await withMockedFetch(() => (async (url: RequestInfo | URL) => {
       requestedUrl = String(url)
       return new Response(JSON.stringify({ status: "valid" }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch, async () => {
+    }), async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "local-ref",
         providerPayloadRef: "some-proof",
@@ -504,7 +504,7 @@ describe("Very provider development fallback", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof globalThis.fetch, async () => {
+    }), async () => {
       const outcome = await provider.getSessionOutcome({
         upstreamSessionRef: "prod-ref",
         providerPayloadRef: "prod-proof",

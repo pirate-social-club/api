@@ -50,7 +50,7 @@ afterEach(async () => {
 describe("profile media routes", () => {
   test("uploads cover media to Filebase and serves it back through the public route", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
@@ -136,7 +136,7 @@ describe("profile media routes", () => {
 
   test("rejects unsupported media types before any bucket write", async () => {
     let filebaseCalled = false
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url.startsWith("https://s3.filebase.test/")) {
         filebaseCalled = true

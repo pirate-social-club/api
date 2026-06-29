@@ -462,7 +462,7 @@ describe("community assistant routes", () => {
     expect(missing.status).toBe(400)
     const originalFetch = globalThis.fetch
     const openRouterRequests: Array<{ authorization: string | null; url: string }> = []
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       openRouterRequests.push({
         authorization: request.headers.get("authorization"),

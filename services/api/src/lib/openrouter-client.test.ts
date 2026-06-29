@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
+import { mockFetch } from "../test-helpers/fetch"
 import { requestOpenRouterChatCompletion } from "./openrouter-client"
 
 describe("requestOpenRouterChatCompletion", () => {
   test("retries transient empty OpenRouter JSON responses", async () => {
     let calls = 0
-    const fetcher: typeof fetch = async () => {
+    const fetcher = mockFetch(async () => {
       calls += 1
       if (calls === 1) {
         return new Response("", {
@@ -17,7 +18,7 @@ describe("requestOpenRouterChatCompletion", () => {
           message: { content: "OK" },
         }],
       })
-    }
+    })
 
     const result = await requestOpenRouterChatCompletion({
       apiKey: "sk-or-test",
@@ -32,19 +33,19 @@ describe("requestOpenRouterChatCompletion", () => {
 
   test("includes response details when OpenRouter returns invalid JSON", async () => {
     let calls = 0
-    const fetcher: typeof fetch = async () => new Response("<html>timeout</html>", {
+    const fetcher = mockFetch(async () => new Response("<html>timeout</html>", {
         headers: { "content-type": "text/html" },
         status: 200,
-      })
+      }))
 
     await expect(requestOpenRouterChatCompletion({
       apiKey: "sk-or-test",
       body: { model: "openrouter/free", messages: [] },
       errorLabel: "community assistant",
-      fetcher: async (...args) => {
+      fetcher: mockFetch(async (...args) => {
         calls += 1
         return fetcher(...args)
-      },
+      }),
     })).rejects.toThrow(
       "OpenRouter community assistant response was not valid JSON (http_200, content-type text/html, body <html>timeout</html>)",
     )

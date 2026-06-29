@@ -20,7 +20,7 @@ describe("story metadata publisher", () => {
           "x-amz-meta-cid": "bafystorymetadatacid",
         },
       })
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     const result = await publishStoryJsonMetadata({
       env: {

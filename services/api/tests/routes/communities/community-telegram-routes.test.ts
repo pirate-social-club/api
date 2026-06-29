@@ -106,7 +106,7 @@ function telegramCommunityBotWebhook(input: {
 
 function installTelegramApiMock(handler: (request: Request) => unknown | Promise<unknown>): Request[] {
   const requests: Request[] = []
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init)
     requests.push(request)
     const payload = await handler(request)
@@ -129,7 +129,7 @@ type TelegramAndOpenRouterMock = {
 function installTelegramAndOpenRouterMock(responseContent: string): TelegramAndOpenRouterMock {
   const openRouterCalls: TelegramAndOpenRouterMock["openRouterCalls"] = []
   const telegramRequests: Request[] = []
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init)
     if (request.url === "https://openrouter.test/api/v1/chat/completions") {
       openRouterCalls.push({
@@ -2470,7 +2470,7 @@ describe("community Telegram routes", () => {
     })
 
     const telegramRequests: Request[] = []
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return new Response("<html>timeout</html>", {
@@ -2743,7 +2743,7 @@ describe("community Telegram routes", () => {
     const openRouterCalls: Request[] = []
     const elevenLabsTtsCalls: Request[] = []
     const telegramRequests: Request[] = []
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         openRouterCalls.push(request)
@@ -2867,7 +2867,7 @@ describe("community Telegram routes", () => {
     const elevenLabsSttCalls: Request[] = []
     const elevenLabsTtsCalls: Request[] = []
     const telegramRequests: Request[] = []
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         openRouterCalls.push({

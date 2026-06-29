@@ -41,7 +41,7 @@ function installMultipartFilebaseMock(input: {
   const completeBodies: string[] = []
   const abortUrls: string[] = []
 
-  globalThis.fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
     if (!request.url.startsWith("https://s3.filebase.test/")) {
       return await originalFetch(request)

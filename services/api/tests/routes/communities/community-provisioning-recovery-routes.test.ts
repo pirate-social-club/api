@@ -154,14 +154,14 @@ membership_mode: "request",
       },
     })
 
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
 
       return originalFetch(input as never, init)
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     try {
       const ctx = await createRouteTestContext({
@@ -267,14 +267,14 @@ membership_mode: "request",
       },
     })
 
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
       if (requestUrl.includes(".turso.io")) {
         return new Response("remote db unavailable in test", { status: 503 })
       }
 
       return originalFetch(input as never, init)
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     try {
       const ctx = await createRouteTestContext({

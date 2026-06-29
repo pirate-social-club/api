@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test"
+import { mockFetch } from "../../test-helpers/fetch"
 import { resolveComposerLinkPreview } from "./link-embed-preview"
 
 describe("resolveComposerLinkPreview", () => {
   test("returns generic link preview for non-embed URLs", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://example.com/article",
-      fetcher: async () => new Response(`
+      fetcher: mockFetch(async () => new Response(`
         <meta property="og:title" content="Article Title">
         <meta property="og:image" content="https://example.com/image.jpg">
-      `, { headers: { "content-type": "text/html" } }),
+      `, { headers: { "content-type": "text/html" } })),
     })
 
     expect(result).toMatchObject({
@@ -22,7 +23,7 @@ describe("resolveComposerLinkPreview", () => {
   test("returns null when generic link has no metadata", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://example.com/empty",
-      fetcher: async () => new Response("<html></html>", { headers: { "content-type": "text/html" } }),
+      fetcher: mockFetch(async () => new Response("<html></html>", { headers: { "content-type": "text/html" } })),
     })
 
     expect(result).toBeNull()
@@ -31,7 +32,7 @@ describe("resolveComposerLinkPreview", () => {
   test("returns embed preview for X posts", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://x.com/assalrad/status/2051291091685757231",
-      fetcher: async (input) => {
+      fetcher: mockFetch(async (input) => {
         const url = input instanceof Request ? input.url : String(input)
         if (url.includes("publish.x.com/oembed")) {
           return new Response(JSON.stringify({
@@ -45,7 +46,7 @@ describe("resolveComposerLinkPreview", () => {
           <meta property="og:title" content="X Post">
           <meta property="og:image" content="https://pic.x.com/media.jpg">
         `, { headers: { "content-type": "text/html" } })
-      },
+      }),
     })
 
     expect(result).toMatchObject({
@@ -65,7 +66,7 @@ describe("resolveComposerLinkPreview", () => {
   test("returns unavailable X embed when oembed fails but fallback works", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://x.com/user/status/123",
-      fetcher: async (input) => {
+      fetcher: mockFetch(async (input) => {
         const url = input instanceof Request ? input.url : String(input)
         if (url.includes("publish.x.com/oembed")) {
           return new Response("Not found", { status: 404 })
@@ -73,7 +74,7 @@ describe("resolveComposerLinkPreview", () => {
         return new Response(`
           <meta property="og:title" content="Fallback Title">
         `, { headers: { "content-type": "text/html" } })
-      },
+      }),
     })
 
     expect(result).toMatchObject({
@@ -90,7 +91,7 @@ describe("resolveComposerLinkPreview", () => {
   test("returns embed preview for YouTube videos", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      fetcher: async (input) => {
+      fetcher: mockFetch(async (input) => {
         const url = input instanceof Request ? input.url : String(input)
         if (url.includes("youtube.com/oembed")) {
           return new Response(JSON.stringify({
@@ -104,7 +105,7 @@ describe("resolveComposerLinkPreview", () => {
           }), { headers: { "content-type": "application/json", "cache-control": "max-age=7200" } })
         }
         return new Response("", { status: 404 })
-      },
+      }),
     })
 
     expect(result).toMatchObject({
@@ -123,10 +124,10 @@ describe("resolveComposerLinkPreview", () => {
   test("returns generic link preview for Kalshi URLs", async () => {
     const result = await resolveComposerLinkPreview({
       url: "https://kalshi.com/markets/us-election",
-      fetcher: async () => new Response(`
+      fetcher: mockFetch(async () => new Response(`
         <meta property="og:title" content="Election Market">
         <meta property="og:image" content="https://kalshi.com/image.jpg">
-      `, { headers: { "content-type": "text/html" } }),
+      `, { headers: { "content-type": "text/html" } })),
     })
 
     expect(result).toMatchObject({

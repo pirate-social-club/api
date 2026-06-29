@@ -52,23 +52,48 @@ export interface PriceRuleResponse {
   updated: number
 }
 
-type Row = Record<string, unknown>
+type RowRecord = Record<string, unknown>
 
-export function serializeBookingProfile(row: Row): BookingProfileResponse {
+function asRecord(row: object): RowRecord {
+  return row as RowRecord
+}
+
+function rowValue(row: object, snakeName: string, camelName: string): unknown {
+  const record = asRecord(row)
+  return record[snakeName] ?? record[camelName]
+}
+
+function isNullishField(row: object, snakeName: string, camelName: string): boolean {
+  const record = asRecord(row)
+  return record[snakeName] == null && record[camelName] == null
+}
+
+function parseArrayField<T>(row: object, snakeName: string, camelName: string): T[] | null {
+  const value = rowValue(row, snakeName, camelName)
+  if (value === null || value === undefined) return null
+  return Array.isArray(value) ? value as T[] : parseJsonArray<T>(value)
+}
+
+export function serializeBookingProfile(row: object): BookingProfileResponse {
+  const record = asRecord(row)
   return {
     object: "booking_profile",
-    host: String(row.host_user_id),
-    display_headline: row.display_headline == null ? null : String(row.display_headline),
-    bio: row.bio == null ? null : String(row.bio),
-    topics: parseJsonArray<string>(row.topics_json),
-    intro_video_ref: row.intro_video_ref == null ? null : String(row.intro_video_ref),
-    host_timezone: String(row.host_timezone),
-    base_price_cents: asNumber(row.base_price_cents),
-    default_slot_duration_seconds: asNumber(row.default_slot_duration_seconds),
-    platform_fee_bps: asNumber(row.platform_fee_bps),
-    is_published: isTruthyFlag(row.is_published),
-    created: unixSeconds(String(row.created_at)),
-    updated: unixSeconds(String(row.updated_at)),
+    host: String(rowValue(row, "host_user_id", "hostUserId")),
+    display_headline: isNullishField(row, "display_headline", "displayHeadline")
+      ? null
+      : String(rowValue(row, "display_headline", "displayHeadline")),
+    bio: record.bio == null ? null : String(record.bio),
+    topics: parseArrayField<string>(row, "topics_json", "topics"),
+    intro_video_ref: isNullishField(row, "intro_video_ref", "introVideoRef")
+      ? null
+      : String(rowValue(row, "intro_video_ref", "introVideoRef")),
+    host_timezone: String(rowValue(row, "host_timezone", "hostTimezone")),
+    base_price_cents: asNumber(rowValue(row, "base_price_cents", "basePriceCents")),
+    default_slot_duration_seconds: asNumber(rowValue(row, "default_slot_duration_seconds", "defaultSlotDurationSeconds")),
+    platform_fee_bps: asNumber(rowValue(row, "platform_fee_bps", "platformFeeBps")),
+    is_published: isTruthyFlag(rowValue(row, "is_published", "isPublished")),
+    created: unixSeconds(String(rowValue(row, "created_at", "createdAt"))),
+    updated: unixSeconds(String(rowValue(row, "updated_at", "updatedAt"))),
   }
 }
 
@@ -76,48 +101,49 @@ export function emptyBookingProfileResponse(hostUserId: string): { object: "book
   return { object: "booking_profile", exists: false, host: hostUserId }
 }
 
-export function serializeAvailabilityRule(row: Row): AvailabilityRuleResponse {
+export function serializeAvailabilityRule(row: object): AvailabilityRuleResponse {
+  const effectiveFrom = rowValue(row, "effective_from_utc", "effectiveFromUtc")
+  const effectiveUntil = rowValue(row, "effective_until_utc", "effectiveUntilUtc")
   return {
     object: "availability_rule",
-    id: String(row.rule_id),
-    by_weekday: parseJsonArray<number>(row.by_weekday_json) ?? [],
-    start_local: String(row.start_local),
-    end_local: String(row.end_local),
-    slot_duration_seconds: asNumber(row.slot_duration_seconds),
-    effective_from: nullableUnixSeconds(
-      row.effective_from_utc == null ? null : String(row.effective_from_utc),
-    ),
-    effective_until: nullableUnixSeconds(
-      row.effective_until_utc == null ? null : String(row.effective_until_utc),
-    ),
-    created: unixSeconds(String(row.created_at)),
-    updated: unixSeconds(String(row.updated_at)),
+    id: String(rowValue(row, "rule_id", "ruleId")),
+    by_weekday: parseArrayField<number>(row, "by_weekday_json", "byWeekday") ?? [],
+    start_local: String(rowValue(row, "start_local", "startLocal")),
+    end_local: String(rowValue(row, "end_local", "endLocal")),
+    slot_duration_seconds: asNumber(rowValue(row, "slot_duration_seconds", "slotDurationSeconds")),
+    effective_from: nullableUnixSeconds(effectiveFrom == null ? null : String(effectiveFrom)),
+    effective_until: nullableUnixSeconds(effectiveUntil == null ? null : String(effectiveUntil)),
+    created: unixSeconds(String(rowValue(row, "created_at", "createdAt"))),
+    updated: unixSeconds(String(rowValue(row, "updated_at", "updatedAt"))),
   }
 }
 
-export function serializeAvailabilityException(row: Row): AvailabilityExceptionResponse {
+export function serializeAvailabilityException(row: object): AvailabilityExceptionResponse {
+  const record = asRecord(row)
   return {
     object: "availability_exception",
-    id: String(row.exception_id),
-    kind: row.kind === "open" ? "open" : "block",
-    start: unixSeconds(String(row.start_utc)),
-    end: unixSeconds(String(row.end_utc)),
-    created: unixSeconds(String(row.created_at)),
+    id: String(rowValue(row, "exception_id", "exceptionId")),
+    kind: record.kind === "open" ? "open" : "block",
+    start: unixSeconds(String(rowValue(row, "start_utc", "startUtc"))),
+    end: unixSeconds(String(rowValue(row, "end_utc", "endUtc"))),
+    created: unixSeconds(String(rowValue(row, "created_at", "createdAt"))),
   }
 }
 
-export function serializePriceRule(row: Row): PriceRuleResponse {
+export function serializePriceRule(row: object): PriceRuleResponse {
+  const matchLocalStart = rowValue(row, "match_local_start", "matchLocalStart")
+  const matchLocalEnd = rowValue(row, "match_local_end", "matchLocalEnd")
+  const matchDurationSeconds = rowValue(row, "match_duration_seconds", "matchDurationSeconds")
   return {
     object: "price_rule",
-    id: String(row.price_rule_id),
-    match_weekday: parseJsonArray<number>(row.match_weekday_json),
-    match_local_start: row.match_local_start == null ? null : String(row.match_local_start),
-    match_local_end: row.match_local_end == null ? null : String(row.match_local_end),
-    match_duration_seconds:
-      row.match_duration_seconds == null ? null : asNumber(row.match_duration_seconds),
-    price_cents: asNumber(row.price_cents),
-    priority: asNumber(row.priority),
-    created: unixSeconds(String(row.created_at)),
-    updated: unixSeconds(String(row.updated_at)),
+    id: String(rowValue(row, "price_rule_id", "priceRuleId")),
+    match_weekday: parseArrayField<number>(row, "match_weekday_json", "matchWeekday"),
+    match_local_start: matchLocalStart == null ? null : String(matchLocalStart),
+    match_local_end: matchLocalEnd == null ? null : String(matchLocalEnd),
+    match_duration_seconds: matchDurationSeconds == null ? null : asNumber(matchDurationSeconds),
+    price_cents: asNumber(rowValue(row, "price_cents", "priceCents")),
+    priority: asNumber(rowValue(row, "priority", "priority")),
+    created: unixSeconds(String(rowValue(row, "created_at", "createdAt"))),
+    updated: unixSeconds(String(rowValue(row, "updated_at", "updatedAt"))),
   }
 }

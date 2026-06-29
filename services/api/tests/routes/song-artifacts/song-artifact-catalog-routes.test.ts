@@ -901,7 +901,7 @@ describe("song artifact catalog routes", () => {
   test("requires derivative references when ACRCloud custom bucket returns a match", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
       if (request.url === "https://openrouter.test/api/v1/chat/completions") {
         return Response.json({
