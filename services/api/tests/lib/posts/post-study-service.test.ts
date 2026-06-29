@@ -639,4 +639,86 @@ describe("post study service", () => {
     const localizations = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'ready'")
     expect(Number(localizations.rows[0]?.count ?? 0)).toBe(0)
   })
+
+  test("lazy generation regenerates stale unavailable localizations", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await exec(`
+      INSERT INTO song_study_unit_localization (
+        id, unit_id, target_language, localization_version, status,
+        max_attempts, created_at, updated_at
+      )
+      VALUES ('sul_1_es_stale', 'stu_1', 'es', 0, 'unavailable', 1, ?1, ?1)
+    `, [NOW])
+    await exec(`
+      UPDATE song_study_unit_localization
+      SET localization_version = 0,
+          status = 'unavailable',
+          question = NULL,
+          translation_text = NULL,
+          options_json = NULL,
+          correct_option_id = NULL,
+          explanation_text = NULL,
+          generated_at = NULL
+      WHERE target_language = 'es'
+    `)
+
+    const payload = await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    translation: "Me perdí en las olas de medianoche",
+                    explanation: "Esta opción conserva el sentido de perderse.",
+                    distractors: [
+                      "Me encontré junto a las olas de medianoche",
+                      "Me perdí en las luces de medianoche",
+                      "Me perdí en las olas de la mañana",
+                    ],
+                  },
+                  {
+                    line_id: "line_002",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta opción expresa cercanía hasta la mañana.",
+                    distractors: [
+                      "Déjame ir antes del amanecer",
+                      "Abrázame fuerte hasta la noche",
+                      "Llámame fuerte hasta la mañana",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    }))
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.some((exercise) => exercise.type === "translation_choice")).toBe(true)
+    const rows = await client!.execute(`
+      SELECT COUNT(*) AS ready_count, MIN(localization_version) AS min_version
+      FROM song_study_unit_localization
+      WHERE target_language = 'es' AND status = 'ready'
+    `)
+    expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
+    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(1)
+  })
 })

@@ -18,6 +18,10 @@ type ExerciseType = "say_it_back" | "translation_choice"
 type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
 
+const STUDY_UNIT_GENERATION_VERSION = 1
+const STUDY_LOCALIZATION_GENERATION_VERSION = 1
+const FSRS_PARAMS_VERSION = 1
+
 type StudyPost = {
   access_mode: "public" | "locked" | null
   asset_id: string | null
@@ -269,7 +273,10 @@ async function getLatestPack(input: {
   if (unitCount <= 0) return null
   const localizationSummary = await executeFirst(input.client, {
     sql: `
-      SELECT MAX(generated_at) AS generated_at,
+      SELECT COUNT(*) AS localization_count,
+             MAX(generated_at) AS generated_at,
+             MIN(localization_version) AS min_localization_version,
+             MAX(localization_version) AS max_localization_version,
              SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
              SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing_count
       FROM song_study_unit_localization
@@ -280,12 +287,20 @@ async function getLatestPack(input: {
     `,
     args: [input.targetLanguage, input.postId],
   }) as Record<string, unknown> | null
+  const localizationCount = Number(localizationSummary?.localization_count ?? 0)
+  const minLocalizationVersion = Number(localizationSummary?.min_localization_version ?? 0)
+  if (localizationCount < unitCount || minLocalizationVersion < STUDY_LOCALIZATION_GENERATION_VERSION) {
+    return null
+  }
   const processingCount = Number(localizationSummary?.processing_count ?? 0)
   return {
     generated_at: readString(localizationSummary?.generated_at),
     source_language: readString(unitSummary?.source_language),
     status: processingCount > 0 ? "processing" : "ready",
-    study_pack_version: Number(unitSummary?.unit_version ?? 1),
+    study_pack_version: Math.max(
+      Number(unitSummary?.unit_version ?? STUDY_UNIT_GENERATION_VERSION),
+      Number(localizationSummary?.max_localization_version ?? STUDY_LOCALIZATION_GENERATION_VERSION),
+    ),
     target_language: input.targetLanguage,
     unavailable_reason: null,
   }
@@ -494,7 +509,7 @@ async function ensureStudyUnits(client: Client, post: StudyPost): Promise<StudyU
           reference_text, say_it_back_status, unit_version, max_attempts,
           created_at, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'ready', 1, 2, ?7, ?7)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'ready', ?7, 2, ?8, ?8)
       `,
       args: [
         makeId("stu"),
@@ -503,6 +518,7 @@ async function ensureStudyUnits(client: Client, post: StudyPost): Promise<StudyU
         line.lineIndex,
         post.source_language,
         line.text,
+        STUDY_UNIT_GENERATION_VERSION,
         now,
       ],
     })
@@ -547,18 +563,49 @@ async function createReadyStudyPack(input: {
   }
 
   const now = nowIso()
+  const existingLocalizationRows = await input.client.execute({
+    sql: `
+      SELECT unit_id, localization_version, status
+      FROM song_study_unit_localization
+      WHERE target_language = ?1
+        AND unit_id IN (${units.map(() => "?").join(", ")})
+    `,
+    args: [input.targetLanguage, ...units.map((unit) => unit.id)],
+  })
+  const existingLocalizations = new Map(existingLocalizationRows.rows.map((row) => [
+    readString(row.unit_id) ?? "",
+    {
+      localization_version: Number(row.localization_version ?? 0),
+      status: readString(row.status),
+    },
+  ]))
   for (const unit of units) {
     const generatedLine = generatedLines.get(unit.line_id)
     if (!generatedLine || generatedLine.distractors.length < 3) {
+      const existing = existingLocalizations.get(unit.id)
+      if (existing?.status === "ready") {
+        continue
+      }
       await input.client.execute({
         sql: `
-          INSERT OR IGNORE INTO song_study_unit_localization (
+          INSERT INTO song_study_unit_localization (
             id, unit_id, target_language, localization_version, status,
             max_attempts, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, 1, 'unavailable', 1, ?4, ?4)
+          VALUES (?1, ?2, ?3, ?4, 'unavailable', 1, ?5, ?5)
+          ON CONFLICT(unit_id, target_language) DO UPDATE SET
+            localization_version = excluded.localization_version,
+            status = 'unavailable',
+            question = NULL,
+            translation_text = NULL,
+            options_json = NULL,
+            correct_option_id = NULL,
+            explanation_text = NULL,
+            max_attempts = excluded.max_attempts,
+            generated_at = NULL,
+            updated_at = excluded.updated_at
         `,
-        args: [makeId("sul"), unit.id, input.targetLanguage, now],
+        args: [makeId("sul"), unit.id, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
       })
       continue
     }
@@ -568,17 +615,29 @@ async function createReadyStudyPack(input: {
     })
     await input.client.execute({
       sql: `
-        INSERT OR IGNORE INTO song_study_unit_localization (
+        INSERT INTO song_study_unit_localization (
           id, unit_id, target_language, localization_version, status,
           question, translation_text, options_json, correct_option_id,
           explanation_text, max_attempts, generated_at, created_at, updated_at
         )
-        VALUES (?1, ?2, ?3, 1, 'ready', 'Choose the best translation.', ?4, ?5, ?6, ?7, 1, ?8, ?8, ?8)
+        VALUES (?1, ?2, ?3, ?4, 'ready', 'Choose the best translation.', ?5, ?6, ?7, ?8, 1, ?9, ?9, ?9)
+        ON CONFLICT(unit_id, target_language) DO UPDATE SET
+          localization_version = excluded.localization_version,
+          status = 'ready',
+          question = excluded.question,
+          translation_text = excluded.translation_text,
+          options_json = excluded.options_json,
+          correct_option_id = excluded.correct_option_id,
+          explanation_text = excluded.explanation_text,
+          max_attempts = excluded.max_attempts,
+          generated_at = excluded.generated_at,
+          updated_at = excluded.updated_at
       `,
       args: [
         makeId("sul"),
         unit.id,
         input.targetLanguage,
+        STUDY_LOCALIZATION_GENERATION_VERSION,
         generatedLine.translation,
         JSON.stringify(options),
         correctOptionId,
@@ -592,7 +651,7 @@ async function createReadyStudyPack(input: {
     generated_at: now,
     source_language: input.post.source_language,
     status: "ready",
-    study_pack_version: 1,
+    study_pack_version: Math.max(STUDY_UNIT_GENERATION_VERSION, STUDY_LOCALIZATION_GENERATION_VERSION),
     target_language: input.targetLanguage,
     unavailable_reason: null,
   }
@@ -907,7 +966,7 @@ async function upsertReviewState(input: {
         state, stability, difficulty, due_at, last_reviewed_at,
         reps, lapses, fsrs_params_version, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, 1, ?12)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13)
       ON CONFLICT(user_id, post_id, line_id, exercise_type, target_language)
       DO UPDATE SET
         state = excluded.state,
@@ -932,6 +991,7 @@ async function upsertReviewState(input: {
       input.now,
       input.now,
       input.outcome === "correct" ? 0 : 1,
+      FSRS_PARAMS_VERSION,
       input.now,
     ],
   })
