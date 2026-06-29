@@ -185,6 +185,18 @@ jobs:
           repository: pirate-social-club/core
           path: core
 
+      - name: Select matching core branch when available
+        working-directory: core
+        run: |
+          core_ref="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [ -n "$core_ref" ] && git ls-remote --exit-code origin "refs/heads/${core_ref}" >/dev/null 2>&1; then
+            git fetch --depth=1 origin "refs/heads/${core_ref}:refs/remotes/origin/${core_ref}"
+            git checkout --detach "refs/remotes/origin/${core_ref}"
+            echo "Using core branch ${core_ref} for cross-repo checks."
+          else
+            echo "Using default core branch for cross-repo checks."
+          fi
+
       - name: Install community provision operator dependencies
         working-directory: services/community-provision-operator
         run: bun install --frozen-lockfile
