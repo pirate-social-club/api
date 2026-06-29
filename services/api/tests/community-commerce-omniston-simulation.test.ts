@@ -9,6 +9,7 @@ import {
   MOCK_OMNISTON_BASE_PREFIX,
   createSimulatedOmnistonAcquisitionResolver,
   isMockOmnistonBaseTxRef,
+  mapSimulatedSymbiosisStatusToRoute,
   mapSimulatedOmnistonRouteToAcquisition,
   type SimulatedOmnistonClient,
   type SimulatedOmnistonRoute,
@@ -48,6 +49,30 @@ describe("simulated Omniston route -> acquisition mapping", () => {
     expect(result.sourceCorrelation.sourceTxRef).toBe("ton-source-1")
   })
 
+  test("Symbiosis-shaped success maps through provider-generated payload attribution", () => {
+    const route = mapSimulatedSymbiosisStatusToRoute({
+      routeRef: ROUTE,
+      status: {
+        status: { code: 0, text: "Success" },
+        txIn: {
+          hash: "ton-source-symbiosis",
+          chainId: 85918,
+          tokenAmount: { amount: "1000000" },
+        },
+        tx: {
+          hash: "base-native-usdc-delivery",
+          chainId: 8453,
+          tokenAmount: { amount: "3000000" },
+        },
+      },
+    })
+    const result = mapSimulatedOmnistonRouteToAcquisition(route, ACQUIRE, EXPECT)
+    expect(result.status).toBe("confirmed")
+    if (result.status !== "confirmed") throw new Error("unreachable")
+    expect(result.baseUsdcTxRef).toBe(`${MOCK_OMNISTON_BASE_PREFIX}base-native-usdc-delivery`)
+    expect(result.sourceCorrelation.sourceTxRef).toBe("ton-source-symbiosis")
+  })
+
   test("pending or missing route stays pending", () => {
     expect(mapSimulatedOmnistonRouteToAcquisition(null, ACQUIRE, EXPECT).status).toBe("pending")
     expect(mapSimulatedOmnistonRouteToAcquisition(deliveredRoute({ status: "pending", destinationTxRef: null }), ACQUIRE, EXPECT).status).toBe("pending")
@@ -67,6 +92,36 @@ describe("simulated Omniston route -> acquisition mapping", () => {
       if (result.status !== "failed") throw new Error("unreachable")
       expect(result.refundable).toBe(true)
     }
+  })
+
+  test("provider-generated payload route still requires a source tx for attribution", () => {
+    const result = mapSimulatedOmnistonRouteToAcquisition(
+      deliveredRoute({ sourcePayloadMode: "provider_generated", sourcePayload: null, sourceTxRef: null }),
+      ACQUIRE,
+      EXPECT,
+    )
+    expect(result.status).toBe("failed")
+    if (result.status !== "failed") throw new Error("unreachable")
+    expect(result.reason).toMatch(/source transaction/i)
+    expect(result.refundable).toBe(true)
+  })
+
+  test("Symbiosis-shaped pending and failure statuses do not bind a receipt", () => {
+    expect(mapSimulatedSymbiosisStatusToRoute({ routeRef: ROUTE, status: null })).toBeNull()
+    const pending = mapSimulatedSymbiosisStatusToRoute({
+      routeRef: ROUTE,
+      status: { status: { code: 1, text: "Pending" }, txIn: { hash: "ton-pending" } },
+    })
+    expect(mapSimulatedOmnistonRouteToAcquisition(pending, ACQUIRE, EXPECT).status).toBe("pending")
+
+    const failed = mapSimulatedSymbiosisStatusToRoute({
+      routeRef: ROUTE,
+      status: { status: { code: 3, text: "Reverted" }, txIn: { hash: "ton-reverted" } },
+    })
+    const result = mapSimulatedOmnistonRouteToAcquisition(failed, ACQUIRE, EXPECT)
+    expect(result.status).toBe("failed")
+    if (result.status !== "failed") throw new Error("unreachable")
+    expect(result.refundable).toBe(true)
   })
 
   test("resolver looks up by routeRef and rejects a missing route ref", async () => {

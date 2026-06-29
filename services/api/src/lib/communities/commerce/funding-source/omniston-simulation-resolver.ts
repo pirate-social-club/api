@@ -22,10 +22,25 @@ export type SimulatedOmnistonRouteStatus =
 export type SimulatedOmnistonRoute = {
   routeRef: string
   sourceTxRef?: string | null
+  sourcePayloadMode?: "pirate_memo" | "provider_generated"
   sourcePayload?: string | null
   destinationTxRef?: string | null
   deliveredBaseUsdcAtomic?: string | null
   status: SimulatedOmnistonRouteStatus
+}
+
+export type SimulatedSymbiosisTxStatus = {
+  status?: { code?: number | null; text?: string | null } | null
+  tx?: {
+    hash?: string | null
+    chainId?: number | null
+    tokenAmount?: { amount?: string | null } | null
+  } | null
+  txIn?: {
+    hash?: string | null
+    chainId?: number | null
+    tokenAmount?: { amount?: string | null } | null
+  } | null
 }
 
 export type SimulatedOmnistonClient = {
@@ -57,6 +72,50 @@ function sourceCorrelation(route: SimulatedOmnistonRoute | null, input: FundingS
   }
 }
 
+export function mapSimulatedSymbiosisStatusToRoute(input: {
+  routeRef: string
+  status: SimulatedSymbiosisTxStatus | null
+}): SimulatedOmnistonRoute | null {
+  const status = input.status
+  if (!status) return null
+
+  const sourceTxRef = status.txIn?.hash?.trim() || null
+  const destinationTxRef = status.tx?.hash?.trim() || null
+  const deliveredBaseUsdcAtomic = status.tx?.tokenAmount?.amount?.trim() || null
+  const code = status.status?.code
+
+  if (code === 0) {
+    return {
+      routeRef: input.routeRef,
+      sourceTxRef,
+      sourcePayloadMode: "provider_generated",
+      destinationTxRef,
+      deliveredBaseUsdcAtomic,
+      status: "delivered",
+    }
+  }
+
+  if (code === 2 || code === 3) {
+    return {
+      routeRef: input.routeRef,
+      sourceTxRef,
+      sourcePayloadMode: "provider_generated",
+      destinationTxRef,
+      deliveredBaseUsdcAtomic,
+      status: "failed",
+    }
+  }
+
+  return {
+    routeRef: input.routeRef,
+    sourceTxRef,
+    sourcePayloadMode: "provider_generated",
+    destinationTxRef,
+    deliveredBaseUsdcAtomic,
+    status: "pending",
+  }
+}
+
 export function mapSimulatedOmnistonRouteToAcquisition(
   route: SimulatedOmnistonRoute | null,
   input: FundingSourceAcquireInput,
@@ -77,11 +136,16 @@ export function mapSimulatedOmnistonRouteToAcquisition(
     }
   }
 
-  const payloadOk = (route.sourcePayload ?? "").trim() === expectedTonPayload(expectations.spendIntentId)
+  const payloadMode = route.sourcePayloadMode ?? "pirate_memo"
+  const payloadOk = payloadMode === "provider_generated"
+    ? Boolean(route.sourceTxRef?.trim())
+    : (route.sourcePayload ?? "").trim() === expectedTonPayload(expectations.spendIntentId)
   if (!payloadOk) {
     return {
       status: "failed",
-      reason: "simulated Omniston source payload does not reference the spend intent",
+      reason: payloadMode === "provider_generated"
+        ? "simulated Omniston route is missing the source transaction"
+        : "simulated Omniston source payload does not reference the spend intent",
       refundable: true,
       sourceCorrelation: correlation,
     }

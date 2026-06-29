@@ -136,6 +136,33 @@ describe("simulated Omniston dev routes", () => {
     })
   })
 
+  test("confirm route accepts provider-generated payload simulation evidence", async () => {
+    const { deps, calls } = confirmDeps()
+    await handleConfirmSimulatedOmnistonFunding({
+      env: {} as never,
+      body: body({
+        route_ref: "route_1",
+        min_base_usdc_atomic: "3000000",
+        simulated_route: {
+          route_ref: "route_1",
+          source_tx_ref: "ton-source-symbiosis",
+          source_payload_mode: "provider_generated",
+          destination_tx_ref: "base-delivery-1",
+          delivered_base_usdc_atomic: "3000000",
+          status: "delivered",
+        },
+      }),
+      now: NOW,
+    }, deps)
+    expect(calls.simulatedRoute).toMatchObject({
+      routeRef: "route_1",
+      sourceTxRef: "ton-source-symbiosis",
+      sourcePayloadMode: "provider_generated",
+      destinationTxRef: "base-delivery-1",
+      status: "delivered",
+    })
+  })
+
   test("non-owner simulation access is not found", async () => {
     const { deps } = confirmDeps({ authedTelegramUserId: "tg_OTHER" })
     await expect(
@@ -159,5 +186,20 @@ describe("simulated Omniston dev routes", () => {
         now: NOW,
       }, deps),
     ).rejects.toThrow(/simulated_route.status/i)
+    await expect(
+      handleConfirmSimulatedOmnistonFunding({
+        env: {} as never,
+        body: body({
+          route_ref: "route_1",
+          min_base_usdc_atomic: "3000000",
+          simulated_route: {
+            route_ref: "route_1",
+            status: "delivered",
+            source_payload_mode: "custom",
+          },
+        }),
+        now: NOW,
+      }, deps),
+    ).rejects.toThrow(/source_payload_mode/i)
   })
 })

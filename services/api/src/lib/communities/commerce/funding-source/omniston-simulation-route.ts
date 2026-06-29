@@ -78,9 +78,22 @@ function parseSimulatedRoute(value: Record<string, unknown> | null): SimulatedOm
   if (!routeRef) {
     throw badRequestError("simulated_route.route_ref is required")
   }
+  const rawSourcePayloadMode = bodyString(value, "source_payload_mode")
+  if (
+    rawSourcePayloadMode
+    && rawSourcePayloadMode !== "pirate_memo"
+    && rawSourcePayloadMode !== "provider_generated"
+  ) {
+    throw badRequestError("simulated_route.source_payload_mode is invalid")
+  }
+  let sourcePayloadMode: SimulatedOmnistonRoute["sourcePayloadMode"]
+  if (rawSourcePayloadMode === "pirate_memo" || rawSourcePayloadMode === "provider_generated") {
+    sourcePayloadMode = rawSourcePayloadMode
+  }
   return {
     routeRef,
     sourceTxRef: bodyString(value, "source_tx_ref") || null,
+    sourcePayloadMode,
     sourcePayload: bodyString(value, "source_payload") || null,
     destinationTxRef: bodyString(value, "destination_tx_ref") || null,
     deliveredBaseUsdcAtomic: bodyString(value, "delivered_base_usdc_atomic") || null,
