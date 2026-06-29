@@ -106,6 +106,7 @@ function toListingRow(row: unknown): ListingRow {
     community_id: requiredString(row, "community_id"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
+    replay_asset_id: stringOrNull(row, "replay_asset_id"),
     listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
     status: requiredString(row, "status") as CommunityListing["status"],
     price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
@@ -311,7 +312,7 @@ export async function getListingRowById(
 ): Promise<ListingRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+      SELECT listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
              regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
              created_by_user_id, created_at, updated_at
       FROM listings
@@ -334,7 +335,7 @@ export async function getListingRowByAssetId(
 ): Promise<ListingRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+      SELECT listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
              regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
              created_by_user_id, created_at, updated_at
       FROM listings
@@ -355,7 +356,7 @@ export async function getListingRowByLiveRoomId(
 ): Promise<ListingRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+      SELECT listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
              regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
              created_by_user_id, created_at, updated_at
       FROM listings
@@ -365,6 +366,27 @@ export async function getListingRowByLiveRoomId(
       LIMIT 1
     `,
     args: [communityId, liveRoomId],
+  })
+  return row ? toListingRow(row) : null
+}
+
+export async function getListingRowByReplayAssetId(
+  client: CommerceExecutor,
+  communityId: string,
+  replayAssetId: string,
+): Promise<ListingRow | null> {
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
+             regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
+             created_by_user_id, created_at, updated_at
+      FROM listings
+      WHERE community_id = ?1
+        AND replay_asset_id = ?2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [communityId, replayAssetId],
   })
   return row ? toListingRow(row) : null
 }
@@ -383,7 +405,7 @@ export async function listListingRows(
   const limitArgIndex = input.after ? 4 : 2
   const result = await client.execute({
     sql: `
-      SELECT listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+      SELECT listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
              regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
              created_by_user_id, created_at, updated_at
       FROM listings
@@ -466,7 +488,7 @@ export async function getPurchaseQuoteRow(
       SELECT quote_id, community_id, listing_id,
              COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
              buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-             asset_id, live_room_id, base_price_usd,
+             asset_id, live_room_id, replay_asset_id, base_price_usd,
              pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
              route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
              destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
@@ -492,6 +514,7 @@ export async function getPurchaseQuoteRow(
     buyer_chain_ref: stringOrNull(row, "buyer_chain_ref"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
+    replay_asset_id: stringOrNull(row, "replay_asset_id"),
     base_price_usd: Number(numberOrNull(row, "base_price_usd") ?? 0),
     pricing_tier: stringOrNull(row, "pricing_tier"),
     final_price_usd: Number(numberOrNull(row, "final_price_usd") ?? 0),
@@ -594,7 +617,7 @@ export async function listPurchaseRows(
   const limitArgIndex = input.after ? 5 : 3
   const result = await client.execute({
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
+      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id,
              COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
              buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
@@ -617,6 +640,7 @@ export async function listPurchaseRows(
     listing_id: requiredString(row, "listing_id"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
+    replay_asset_id: stringOrNull(row, "replay_asset_id"),
     buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseRow["buyer_kind"],
     buyer_user_id: stringOrNull(row, "buyer_user_id"),
     buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),
@@ -645,7 +669,7 @@ export async function getPurchaseRow(
 ): Promise<PurchaseRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id,
+      SELECT purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id,
              COALESCE(buyer_kind, 'user') AS buyer_kind, buyer_user_id,
              buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
              settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_mode, settlement_chain,
@@ -664,6 +688,7 @@ export async function getPurchaseRow(
     listing_id: requiredString(row, "listing_id"),
     asset_id: stringOrNull(row, "asset_id"),
     live_room_id: stringOrNull(row, "live_room_id"),
+    replay_asset_id: stringOrNull(row, "replay_asset_id"),
     buyer_kind: (stringOrNull(row, "buyer_kind") ?? "user") as PurchaseRow["buyer_kind"],
     buyer_user_id: stringOrNull(row, "buyer_user_id"),
     buyer_wallet_address: stringOrNull(row, "buyer_wallet_address"),

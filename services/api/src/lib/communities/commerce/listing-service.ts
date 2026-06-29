@@ -19,6 +19,7 @@ import {
   getAssetRow,
   getListingRowByAssetId,
   getListingRowByLiveRoomId,
+  getListingRowByReplayAssetId,
   getListingRowById,
   listListingRows,
   parseListingPolicy,
@@ -32,6 +33,7 @@ import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
+  getReplayAssetListingTarget,
   getLiveRoomListingTarget,
   resolveRequestedListingTarget,
 } from "./listing-targets"
@@ -222,6 +224,7 @@ type PreparedCommunityListingWrite = {
   createdAt: string
   assetId: string | null
   liveRoomId: string | null
+  replayAssetId: string | null
   status: CreateCommunityListingRequest["status"]
   priceUsd: number
   regionalPricingPolicyJson: string
@@ -256,6 +259,7 @@ export async function prepareCommunityListingWrite(input: {
   const creatingLiveRoomInTx = input.liveRoomTarget === "create-in-tx"
   let assetId: string | null = null
   let liveRoomId: string | null = null
+  let replayAssetId: string | null = null
   let assetKind: ListingAssetKind | "live_room" | null = null
   if (creatingLiveRoomInTx) {
     assetKind = "live_room"
@@ -263,6 +267,7 @@ export async function prepareCommunityListingWrite(input: {
     const target = resolveRequestedListingTarget(input.body)
     assetId = target.assetId
     liveRoomId = target.liveRoomId
+    replayAssetId = target.replayAssetId
   }
 
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
@@ -299,6 +304,18 @@ export async function prepareCommunityListingWrite(input: {
     if (await getListingRowByLiveRoomId(input.client, input.communityId, liveRoomId)) {
       throw badRequestError("Live room already has a listing")
     }
+  } else if (replayAssetId) {
+    assetKind = "live_room"
+    const replayAsset = await getReplayAssetListingTarget(input.client, input.communityId, replayAssetId)
+    if (!replayAsset) {
+      throw notFoundError("Replay asset not found")
+    }
+    if (replayAsset.host_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
+      throw notFoundError("Replay asset not found")
+    }
+    if (await getListingRowByReplayAssetId(input.client, input.communityId, replayAssetId)) {
+      throw badRequestError("Replay asset already has a listing")
+    }
   }
   await assertRegionalPricingEnabledIfRequested({
     env: input.env,
@@ -326,6 +343,7 @@ export async function prepareCommunityListingWrite(input: {
     createdAt: nowIso(),
     assetId,
     liveRoomId,
+    replayAssetId,
     status: input.body.status,
     priceUsd: centsToUsd(input.body.price_cents),
     regionalPricingPolicyJson: JSON.stringify({
@@ -353,12 +371,12 @@ export async function insertCommunityListingRow(
   await client.execute({
     sql: `
       INSERT INTO listings (
-        listing_id, community_id, asset_id, live_room_id, listing_mode, status, price_usd,
+        listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
         regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
         created_by_user_id, created_at, updated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, 'fixed_price', ?5, ?6,
-        ?7, ?8, ?9, ?10, ?11, ?11
+        ?1, ?2, ?3, ?4, ?5, 'fixed_price', ?6, ?7,
+        ?8, ?9, ?10, ?11, ?12, ?12
       )
     `,
     args: [
@@ -366,6 +384,7 @@ export async function insertCommunityListingRow(
       communityId,
       prepared.assetId,
       liveRoomIdOverride ?? prepared.liveRoomId,
+      prepared.replayAssetId,
       prepared.status,
       prepared.priceUsd,
       prepared.regionalPricingPolicyJson,

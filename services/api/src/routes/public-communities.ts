@@ -16,7 +16,9 @@ import {
   type PublicWalletProof,
 } from "../lib/communities/commerce/public-wallet-proof"
 import {
+  fetchPublicLiveRoomReplayContent,
   getPublicLiveRoomAccess,
+  getPublicLiveRoomReplayAccess,
   publicViewerAttachLiveRoom,
   publicViewerRenewLiveRoom,
   type LiveRoomViewerRenewRequest,
@@ -481,6 +483,29 @@ publicCommunities.get("/:communityId/live-rooms/:liveRoomId/access", async (c) =
     communityRepository,
   })
   return c.json(access, 200)
+})
+
+publicCommunities.get("/:communityId/live-rooms/:liveRoomId/replay/access", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  const access = await getPublicLiveRoomReplayAccess({
+    env: c.env,
+    communityId,
+    liveRoomId: c.req.param("liveRoomId"),
+    communityRepository,
+  })
+  return c.json(access, 200)
+})
+
+publicCommunities.get("/:communityId/live-rooms/:liveRoomId/replay/content", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const communityId = await resolveCommunityId(communityRepository, c.req.param("communityId"))
+  return await fetchPublicLiveRoomReplayContent({
+    env: c.env,
+    communityId,
+    liveRoomId: c.req.param("liveRoomId"),
+    communityRepository,
+  })
 })
 
 publicCommunities.post("/:communityId/live-rooms/:liveRoomId/viewer_attach", async (c) => {

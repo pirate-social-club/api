@@ -81,7 +81,7 @@ export function assertExecutableQuoteAllocationSnapshot(
   }
 
   let totalShareBps = 0
-  let creatorLegCount = 0
+  let payableLegCount = 0
 
   for (const allocation of snapshot) {
     if (!Number.isInteger(allocation.waterfall_position)) {
@@ -93,13 +93,13 @@ export function assertExecutableQuoteAllocationSnapshot(
     if (!Number.isFinite(allocation.amount_usd) || allocation.amount_usd < 0) {
       throw badRequestError("Purchase quote allocation snapshot is invalid")
     }
-    if (allocation.recipient_type === "creator") {
-      creatorLegCount += 1
+    if (allocation.recipient_type === "creator" || allocation.recipient_type === "performer") {
+      payableLegCount += 1
     }
     totalShareBps += allocation.share_bps
   }
 
-  if (creatorLegCount !== 1 || totalShareBps !== TOTAL_SHARE_BPS) {
+  if (payableLegCount < 1 || totalShareBps !== TOTAL_SHARE_BPS) {
     throw badRequestError("Purchase quote allocation snapshot is invalid")
   }
 

@@ -1,4 +1,4 @@
-import { eligibilityFailed, notFoundError } from "../../errors"
+import { badRequestError, eligibilityFailed, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { decodePublicId } from "../../public-ids"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
@@ -36,6 +36,7 @@ import {
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
   assertValidDonationSharePct,
+  roundUsd,
   resolveBestVerifiedRegionalPrice,
   resolveAllocationSettlementAmountAtomic,
   resolvePurchaseSettlementMode,
@@ -53,6 +54,11 @@ import {
   userBuyer,
 } from "./buyer-identity"
 import type { PurchaseQuoteRow } from "./row-types"
+import type { QuoteAllocationSnapshot } from "./row-types"
+import {
+  getLiveRoomReplayAssetById,
+  listLiveRoomReplayAllocations,
+} from "../live-rooms/replay-assets"
 import type {
   CommunityPurchaseQuote,
   CommunityPurchaseQuotePreflight,
@@ -62,6 +68,64 @@ import type {
   CommunityPurchaseSettlementFailureRequest,
   Env,
 } from "../../../types"
+
+function resolveReplayQuoteAllocationSnapshot(input: {
+  finalPriceUsd: number
+  replayAllocations: Awaited<ReturnType<typeof listLiveRoomReplayAllocations>>
+  listingPolicy: {
+    donationPartnerId: string | null
+    donationSharePct: number | null
+  }
+}): QuoteAllocationSnapshot[] {
+  const charitySharePct = Number.isInteger(input.listingPolicy.donationSharePct)
+    ? Math.max(0, Math.min(100, input.listingPolicy.donationSharePct ?? 0))
+    : 0
+  const charityShareBps = charitySharePct * 100
+  const charityRecipientRef = input.listingPolicy.donationPartnerId?.trim() || null
+  const charityAmountUsd = charityShareBps > 0 && charityRecipientRef
+    ? roundUsd(input.finalPriceUsd * (charityShareBps / 10_000))
+    : 0
+  const payableAmountUsd = roundUsd(input.finalPriceUsd - charityAmountUsd)
+  const approvedReplayAllocations = input.replayAllocations.filter((allocation) => allocation.approval_status === "approved")
+  const replayShareBps = approvedReplayAllocations.reduce((sum, allocation) => sum + allocation.share_bps, 0)
+  if (approvedReplayAllocations.length === 0 || replayShareBps !== 10_000) {
+    throw badRequestError("Replay allocations must be approved and sum to 100% before paid replay can be sold")
+  }
+
+  const allocations: QuoteAllocationSnapshot[] = []
+  if (charityAmountUsd > 0 && charityRecipientRef) {
+    allocations.push({
+      recipient_type: "charity",
+      recipient_ref: charityRecipientRef,
+      waterfall_position: 60,
+      share_bps: charityShareBps,
+      amount_usd: charityAmountUsd,
+      settlement_strategy: "provider_payout",
+    })
+  }
+  let allocatedUsd = 0
+  let allocatedBps = charityShareBps
+  approvedReplayAllocations.forEach((allocation, index) => {
+    const isLast = index === approvedReplayAllocations.length - 1
+    const amountUsd = isLast
+      ? roundUsd(payableAmountUsd - allocatedUsd)
+      : roundUsd(payableAmountUsd * (allocation.share_bps / 10_000))
+    const shareBps = isLast
+      ? 10_000 - allocatedBps
+      : Math.round((10_000 - charityShareBps) * (allocation.share_bps / 10_000))
+    allocatedUsd = roundUsd(allocatedUsd + amountUsd)
+    allocatedBps += shareBps
+    allocations.push({
+      recipient_type: "performer",
+      recipient_ref: allocation.participant_user_id ?? allocation.external_party_ref,
+      waterfall_position: 70 + index,
+      share_bps: shareBps,
+      amount_usd: amountUsd,
+      settlement_strategy: "story_payout",
+    })
+  })
+  return allocations
+}
 
 export async function preflightCommunityPurchaseQuote(input: {
   env: Env
@@ -179,6 +243,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       throw notFoundError("Listing not found")
     }
     let settlementMode = resolvePurchaseSettlementMode({})
+    let replayAllocationSnapshot: QuoteAllocationSnapshot[] | null = null
     if (listing.asset_id?.trim()) {
       const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
       if (!asset) {
@@ -198,6 +263,23 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
         storyIpId: asset.story_ip_id,
       })
+    } else if (listing.replay_asset_id?.trim()) {
+      const replayAsset = await getLiveRoomReplayAssetById({
+        client: db.client,
+        communityId: input.communityId,
+        replayAssetId: listing.replay_asset_id,
+      })
+      if (
+        !replayAsset
+        || replayAsset.publication_status !== "published"
+        || replayAsset.access_mode !== "paid"
+        || replayAsset.locked_delivery_status !== "ready"
+      ) {
+        throw notFoundError("Listing not found")
+      }
+      if (input.publicBuyer) {
+        throw notFoundError("Listing not found")
+      }
     } else if (input.publicBuyer) {
       throw notFoundError("Listing not found")
     }
@@ -273,8 +355,19 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       assertValidDonationSharePct(listingPolicy.donationSharePct)
     }
 
+    if (listing.replay_asset_id?.trim()) {
+      replayAllocationSnapshot = resolveReplayQuoteAllocationSnapshot({
+        finalPriceUsd: resolvedPrice.finalPriceUsd,
+        replayAllocations: await listLiveRoomReplayAllocations({
+          client: db.client,
+          communityId: input.communityId,
+          replayAssetId: listing.replay_asset_id,
+        }),
+        listingPolicy,
+      })
+    }
     const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
-      resolveQuoteAllocationSnapshot({
+      replayAllocationSnapshot ?? resolveQuoteAllocationSnapshot({
         finalPriceUsd: resolvedPrice.finalPriceUsd,
         listingPolicy,
       }),
@@ -305,7 +398,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         INSERT INTO purchase_quotes (
           quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-          asset_id, live_room_id, base_price_usd,
+          asset_id, live_room_id, replay_asset_id, base_price_usd,
           pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
           route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
           destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
@@ -316,12 +409,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5,
           ?6, ?7, ?8,
-          ?9, ?10, ?11,
-          ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22, ?23, ?24,
-          ?25, ?26, ?27, ?28, ?29, ?30,
-          ?31, ?32, ?33, ?34, 'active', ?35, ?36,
-          NULL, NULL, ?35, ?35
+          ?9, ?10, ?11, ?12,
+          ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+          ?20, ?21, ?22, ?23, ?24, ?25,
+          ?26, ?27, ?28, ?29, ?30, ?31,
+          ?32, ?33, ?34, ?35, 'active', ?36, ?37,
+          NULL, NULL, ?36, ?36
         )
       `,
       args: [
@@ -335,6 +428,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         buyerFields.buyer_chain_ref,
         listing.asset_id,
         listing.live_room_id,
+        listing.replay_asset_id,
         listing.price_usd,
         resolvedPrice.pricingTier,
         resolvedPrice.finalPriceUsd,

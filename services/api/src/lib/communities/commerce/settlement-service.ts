@@ -241,17 +241,17 @@ async function finalizeLocalPurchaseSettlement(input: {
     await tx.execute({
       sql: `
         INSERT INTO purchases (
-          purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_kind, buyer_user_id,
+          purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id, buyer_kind, buyer_user_id,
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
           settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
           settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
           donation_amount_usd, donation_settlement_ref, vinyl_release_provider, vinyl_release_url, created_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-          ?8, ?9, ?10,
-          ?11, ?12, ?13, ?14,
-          ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22, ?23, ?24
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+          ?9, ?10, ?11,
+          ?12, ?13, ?14, ?15,
+          ?16, ?17, ?18, ?19,
+          ?20, ?21, ?22, ?23, ?24, ?25
         )
         ON CONFLICT(purchase_id) DO NOTHING
       `,
@@ -261,6 +261,7 @@ async function finalizeLocalPurchaseSettlement(input: {
         input.quote.listing_id,
         input.quote.asset_id,
         input.quote.live_room_id,
+        input.quote.replay_asset_id,
         buyerFields.buyer_kind,
         buyerFields.buyer_user_id,
         buyerFields.buyer_wallet_address,

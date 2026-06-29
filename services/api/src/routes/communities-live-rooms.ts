@@ -5,14 +5,21 @@ import {
   cancelLiveRoom,
   createLiveRoom,
   endLiveRoom,
+  fetchLiveRoomReplayContent,
   getLiveRoom,
   getLiveRoomAccess,
+  getLiveRoomRecordingDraft,
+  getLiveRoomReplayAccess,
   guestAttachLiveRoom,
   hostAttachLiveRoom,
+  publishLiveRoomReplayDraft,
   publishLiveRoom,
   revokeLiveRoomGuestInvite,
+  updateLiveRoomReplayDraft,
   viewerAttachLiveRoom,
   viewerRenewLiveRoom,
+  type PublishLiveRoomReplayDraftRequest,
+  type UpdateLiveRoomReplayDraftRequest,
 } from "../lib/communities/live-rooms/service"
 import type {
   CreateLiveRoomRequest,
@@ -72,6 +79,86 @@ export function registerCommunityLiveRoomRoutes(communities: Hono<AuthenticatedE
       communityRepository,
     })
     return c.json(access, 200)
+  })
+
+  communities.get("/:communityId/live-rooms/:liveRoomId/recording-draft", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const draft = await getLiveRoomRecordingDraft({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      communityRepository,
+    })
+    return c.json(draft, 200)
+  })
+
+  communities.get("/:communityId/live-rooms/:liveRoomId/replay-draft", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const draft = await getLiveRoomRecordingDraft({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      communityRepository,
+    })
+    return c.json(draft, 200)
+  })
+
+  communities.patch("/:communityId/live-rooms/:liveRoomId/replay-draft", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    requireScope(actor, "live_room:manage")
+    const body = await requireJsonBody<UpdateLiveRoomReplayDraftRequest>(c, "Invalid replay draft payload")
+    const draft = await updateLiveRoomReplayDraft({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      body,
+      communityRepository,
+    })
+    return c.json(draft, 200)
+  })
+
+  communities.post("/:communityId/live-rooms/:liveRoomId/replay-draft/publish", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    requireScope(actor, "live_room:manage")
+    const body = await requireJsonBody<PublishLiveRoomReplayDraftRequest>(c, "Invalid replay publish payload")
+    const draft = await publishLiveRoomReplayDraft({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      body,
+      communityRepository,
+      userRepository,
+    })
+    return c.json(draft, 200)
+  })
+
+  communities.get("/:communityId/live-rooms/:liveRoomId/replay/access", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const access = await getLiveRoomReplayAccess({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      communityRepository,
+      userRepository,
+    })
+    return c.json(access, 200)
+  })
+
+  communities.get("/:communityId/live-rooms/:liveRoomId/replay/content", async (c) => {
+    const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    return await fetchLiveRoomReplayContent({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      liveRoomId: c.req.param("liveRoomId"),
+      communityRepository,
+      userRepository,
+    })
   })
 
   communities.post("/:communityId/live-rooms/:liveRoomId/viewer_attach", async (c) => {
