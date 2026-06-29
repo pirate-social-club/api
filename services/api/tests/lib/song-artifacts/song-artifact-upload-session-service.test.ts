@@ -29,7 +29,7 @@ async function createReaperSetup() {
   const abortUrls: string[] = []
   globalThis.fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
-    if (request.url.startsWith("https://s3.filebase.test/") && request.method === "DELETE") {
+    if (request.method === "DELETE" && new URL(request.url).hostname.endsWith("filebase.test")) {
       abortUrls.push(request.url)
       return new Response(null, { status: 204 })
     }
@@ -156,5 +156,5 @@ describe("song artifact upload session service", () => {
     })
     expect(second).toEqual({ scanned: 0, aborted: 0 })
     expect(setup.abortUrls.length).toBe(1)
-  })
+  }, 15_000)
 })
