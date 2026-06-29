@@ -127,6 +127,28 @@ export interface Booking {
   updatedAt: string;
 }
 
+export type AttendanceParty = "host" | "booker";
+
+export interface AttendanceSession {
+  sessionId: string;
+  bookingId: string;
+  party: AttendanceParty;
+  userId: string;
+  agoraUid: number | null;
+  attachedAt: string;
+  lastSeenAt: string;
+  endedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AttendanceHeartbeat {
+  heartbeatId: string;
+  sessionId: string;
+  bookingId: string;
+  seenAt: string;
+}
+
 export type PaymentIntentStatus =
   | "active"
   | "verifying"

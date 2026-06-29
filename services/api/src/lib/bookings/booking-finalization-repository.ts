@@ -3,9 +3,10 @@
 // Finalization is a durable CAS: from a verified payment intent and active hold, create the booking,
 // consume the hold, consume the intent, and make the slot lock permanent. Callers provide an explicit
 // executor/transaction; this module never opens clients or starts transactions.
-import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
-import { intFromRow, intFromRowNullable, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg, textFromRow, textFromRowNullable } from "./codecs";
-import type { Booking, BookingStatus } from "./types";
+import type { InStatement, QueryResult } from "../sql-client";
+import { BOOKING_COLUMNS, decodeBooking } from "./booking-row";
+import { isoUtcToArg } from "./codecs";
+import type { Booking } from "./types";
 
 export interface BookingFinalizationSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
@@ -36,66 +37,6 @@ function textToArg(label: string, value: string): string {
   return value;
 }
 
-function decodeBookingStatus(value: unknown): BookingStatus {
-  const status = textFromRow(value);
-  if (
-    status !== "hold" &&
-    status !== "quoted" &&
-    status !== "pending_payment" &&
-    status !== "confirmed" &&
-    status !== "live" &&
-    status !== "completed" &&
-    status !== "settled" &&
-    status !== "expired_hold" &&
-    status !== "cancelled_before_payment" &&
-    status !== "cancelled_by_host" &&
-    status !== "cancelled_by_booker" &&
-    status !== "no_show_host" &&
-    status !== "no_show_booker" &&
-    status !== "refunded" &&
-    status !== "disputed"
-  ) {
-    throw new TypeError(`decodeBookingStatus: bad status ${status}`);
-  }
-  return status;
-}
-
-function decodeBooking(row: QueryResultRow): Booking {
-  return {
-    bookingId: textFromRow(row.booking_id),
-    holdId: textFromRowNullable(row.hold_id),
-    hostUserId: textFromRow(row.host_user_id),
-    bookerUserId: textFromRow(row.booker_user_id),
-    slotStartUtc: isoUtcFromRow(row.slot_start_utc),
-    slotEndUtc: isoUtcFromRow(row.slot_end_utc),
-    grossCents: intFromRow(row.gross_cents),
-    platformFeeBps: intFromRow(row.platform_fee_bps),
-    platformFeeCents: intFromRow(row.platform_fee_cents),
-    hostPayoutCents: intFromRow(row.host_payout_cents),
-    refundCents: intFromRowNullable(row.refund_cents),
-    status: decodeBookingStatus(row.status),
-    fundingTxRef: textFromRowNullable(row.funding_tx_ref),
-    payoutTxRef: textFromRowNullable(row.payout_tx_ref),
-    refundTxRef: textFromRowNullable(row.refund_tx_ref),
-    fundingWalletAddress: textFromRowNullable(row.funding_wallet_address),
-    hostPayoutWalletAddress: textFromRowNullable(row.host_payout_wallet_address),
-    liveRoomId: textFromRowNullable(row.live_room_id),
-    sourceCommunityId: textFromRowNullable(row.source_community_id),
-    confirmedAt: isoUtcFromRowNullable(row.confirmed_at),
-    completedAt: isoUtcFromRowNullable(row.completed_at),
-    settledAt: isoUtcFromRowNullable(row.settled_at),
-    cancelledAt: isoUtcFromRowNullable(row.cancelled_at),
-    createdAt: isoUtcFromRow(row.created_at),
-    updatedAt: isoUtcFromRow(row.updated_at),
-  };
-}
-
-const COLUMNS =
-  "booking_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc, gross_cents, " +
-  "platform_fee_bps, platform_fee_cents, host_payout_cents, refund_cents, status, funding_tx_ref, " +
-  "payout_tx_ref, refund_tx_ref, funding_wallet_address, host_payout_wallet_address, live_room_id, " +
-  "source_community_id, confirmed_at, completed_at, settled_at, cancelled_at, created_at, updated_at";
-
 function bookingMatches(input: Required<FinalizeBookingInput>, booking: Booking): boolean {
   return (
     booking.bookingId === input.bookingId &&
@@ -116,7 +57,7 @@ function normalizeInput(input: FinalizeBookingInput): Required<FinalizeBookingIn
 
 async function getBooking(exec: BookingFinalizationSqlExecutor, bookingId: string): Promise<Booking | null> {
   const res = await exec.execute({
-    sql: `SELECT ${COLUMNS} FROM bookings.bookings WHERE booking_id = ?1`,
+    sql: `SELECT ${BOOKING_COLUMNS} FROM bookings.bookings WHERE booking_id = ?1`,
     args: [textToArg("bookingId", bookingId)],
   });
   return res.rows[0] ? decodeBooking(res.rows[0]) : null;
@@ -124,7 +65,7 @@ async function getBooking(exec: BookingFinalizationSqlExecutor, bookingId: strin
 
 async function getBookingByHold(exec: BookingFinalizationSqlExecutor, holdId: string): Promise<Booking | null> {
   const res = await exec.execute({
-    sql: `SELECT ${COLUMNS} FROM bookings.bookings WHERE hold_id = ?1`,
+    sql: `SELECT ${BOOKING_COLUMNS} FROM bookings.bookings WHERE hold_id = ?1`,
     args: [textToArg("holdId", holdId)],
   });
   return res.rows[0] ? decodeBooking(res.rows[0]) : null;
@@ -159,12 +100,12 @@ async function finalizeBookingFromVerifiedPaymentIntent(
               AND pi.consumed_wallet_attachment_id = ?6
               AND lower(pi.verified_sender_address) = lower(?7)
             ON CONFLICT (booking_id) DO NOTHING
-            RETURNING ${COLUMNS}
+            RETURNING ${BOOKING_COLUMNS}
           ),
           selected AS (
-            SELECT true AS inserted_now, ${COLUMNS} FROM inserted
+            SELECT true AS inserted_now, ${BOOKING_COLUMNS} FROM inserted
             UNION ALL
-            SELECT false AS inserted_now, ${COLUMNS} FROM bookings.bookings
+            SELECT false AS inserted_now, ${BOOKING_COLUMNS} FROM bookings.bookings
             WHERE booking_id = ?1
               AND hold_id = ?2
               AND booker_user_id = ?4
@@ -200,7 +141,7 @@ async function finalizeBookingFromVerifiedPaymentIntent(
             WHERE l.hold_id = ?2 AND l.status = 'active' AND EXISTS (SELECT 1 FROM selected)
             RETURNING l.lock_id
           )
-          SELECT selected.inserted_now, selected.${COLUMNS.replaceAll(", ", ", selected.")}
+          SELECT selected.inserted_now, selected.${BOOKING_COLUMNS.replaceAll(", ", ", selected.")}
           FROM selected
           LIMIT 1`,
     args: [

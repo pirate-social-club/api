@@ -81,6 +81,9 @@ jobs:
           echo "::group::booking finalization repository PG"
           timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
           echo "::endgroup::"
+          echo "::group::booking lifecycle repository PG"
+          timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          echo "::endgroup::"
 
   api:
     runs-on: ubuntu-latest
