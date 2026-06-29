@@ -847,9 +847,38 @@ function normalizeForStudy(value: string): string {
     .trim()
 }
 
+const IGNORED_RECALL_TOKENS = new Set(["a", "an", "the"])
+
+function expandEnglishContractions(value: string): string {
+  return value
+    .replace(/\b(can)'t\b/giu, "$1 not")
+    .replace(/\b(won)'t\b/giu, "will not")
+    .replace(/\b(i)'m\b/giu, "$1 am")
+    .replace(/\b([a-z]+)'re\b/giu, "$1 are")
+    .replace(/\b([a-z]+)'ve\b/giu, "$1 have")
+    .replace(/\b([a-z]+)'ll\b/giu, "$1 will")
+    .replace(/\b([a-z]+)'d\b/giu, "$1 would")
+    .replace(/\b([a-z]+)'s\b/giu, "$1 is")
+}
+
+function normalizeRecallToken(token: string): string {
+  const compact = token.replace(/'/gu, "")
+  if (compact.length > 4 && compact.endsWith("ies")) return `${compact.slice(0, -3)}y`
+  if (compact.length > 4 && /(ches|shes|xes|zes|ses)$/u.test(compact)) return compact.slice(0, -2)
+  if (compact.length > 3 && compact.endsWith("s")) return compact.slice(0, -1)
+  return compact
+}
+
+function recallTokens(value: string): string[] {
+  return normalizeForStudy(expandEnglishContractions(value))
+    .split(" ")
+    .map(normalizeRecallToken)
+    .filter((token) => token && !IGNORED_RECALL_TOKENS.has(token))
+}
+
 function tokenDiff(reference: string, transcript: string): { matched: string[]; missing: string[]; extra: string[] } {
-  const referenceTokens = normalizeForStudy(reference).split(" ").filter(Boolean)
-  const transcriptTokens = normalizeForStudy(transcript).split(" ").filter(Boolean)
+  const referenceTokens = recallTokens(reference)
+  const transcriptTokens = recallTokens(transcript)
   const remaining = [...transcriptTokens]
   const matched: string[] = []
   const missing: string[] = []
@@ -863,6 +892,43 @@ function tokenDiff(reference: string, transcript: string): { matched: string[]; 
     }
   }
   return { matched, missing, extra: remaining }
+}
+
+function tokenEditDistance(left: string[], right: string[]): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index)
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    let diagonal = previous[0]
+    previous[0] = leftIndex
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const old = previous[rightIndex]
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1
+      previous[rightIndex] = Math.min(
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + 1,
+        diagonal + cost,
+      )
+      diagonal = old
+    }
+  }
+  return previous[right.length] ?? 0
+}
+
+function gradeSayItBack(input: {
+  attemptNumber: number
+  reference: string
+  transcript: string
+}): { correct: boolean; feedback: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
+  const referenceTokens = recallTokens(input.reference)
+  const transcriptTokens = recallTokens(input.transcript)
+  const distance = tokenEditDistance(referenceTokens, transcriptTokens)
+  const maxLength = Math.max(referenceTokens.length, transcriptTokens.length, 1)
+  const nearMiss = distance > 0 && distance <= Math.max(1, Math.floor(maxLength * 0.25))
+  const correct = distance === 0
+  return {
+    correct,
+    feedback: tokenDiff(input.reference, input.transcript),
+    rating: correct ? fsrsRatingFor("correct", input.attemptNumber) : nearMiss ? "hard" : "again",
+  }
 }
 
 function fsrsRatingFor(outcome: AttemptOutcome, attemptNumber: number): FsrsRating {
@@ -950,15 +1016,17 @@ async function hasAttemptNumber(client: ReadClient, userId: string, exerciseId: 
 }
 
 async function upsertReviewState(input: {
-  attemptNumber: number
   client: Pick<ReadClient, "execute">
   exercise: Awaited<ReturnType<typeof getExerciseForAttempt>> & {}
   now: string
-  outcome: AttemptOutcome
+  rating: FsrsRating
   userId: string
 }): Promise<FsrsRating> {
-  const rating = fsrsRatingFor(input.outcome, input.attemptNumber)
-  const state = input.outcome === "correct" ? "review" : "learning"
+  const rating = input.rating
+  const remembered = rating !== "again"
+  const stability = rating === "again" ? 0.5 : rating === "hard" ? 1 : rating === "easy" ? 3 : 2
+  const difficulty = rating === "again" ? 8 : rating === "hard" ? 6 : rating === "easy" ? 3 : 4
+  const state = remembered ? "review" : "learning"
   await input.client.execute({
     sql: `
       INSERT INTO song_study_review_state (
@@ -986,11 +1054,11 @@ async function upsertReviewState(input: {
       input.exercise.exercise_type,
       input.exercise.review_language,
       state,
-      input.outcome === "correct" ? 2 : 0.5,
-      input.outcome === "correct" ? 4 : 8,
+      stability,
+      difficulty,
       input.now,
       input.now,
-      input.outcome === "correct" ? 0 : 1,
+      remembered ? 0 : 1,
       FSRS_PARAMS_VERSION,
       input.now,
     ],
@@ -1056,6 +1124,7 @@ export async function submitPostStudyAttempt(input: {
     let selectedOptionId: string | null = null
     let transcript: string | null = null
     let feedback: SongStudyAttemptResult["feedback"] | undefined
+    let rating: FsrsRating | null = null
     if (type === "translation_choice") {
       selectedOptionId = readRequiredString(input.body.selected_option_id, "selected_option_id")
       if (readString(input.body.transcript)) throw badRequestError("transcript is only valid for say_it_back")
@@ -1064,21 +1133,23 @@ export async function submitPostStudyAttempt(input: {
       transcript = readRequiredString(input.body.transcript, "transcript")
       if (readString(input.body.selected_option_id)) throw badRequestError("selected_option_id is only valid for translation_choice")
       const reference = exercise.reference_text || exercise.prompt_text
-      correct = normalizeForStudy(transcript) === normalizeForStudy(reference)
-      feedback = tokenDiff(reference, transcript)
+      const grade = gradeSayItBack({ attemptNumber, reference, transcript })
+      correct = grade.correct
+      feedback = grade.feedback
+      rating = grade.rating
     }
     const outcome: AttemptOutcome = correct
       ? "correct"
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
+    rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
     const now = nowIso()
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
-      const rating = await upsertReviewState({
-        attemptNumber,
+      const reviewRating = await upsertReviewState({
         client: tx,
         exercise,
         now,
-        outcome,
+        rating,
         userId: input.actor.userId,
       })
       await tx.execute({
@@ -1105,11 +1176,11 @@ export async function submitPostStudyAttempt(input: {
           transcript,
           outcome,
           feedback ? JSON.stringify(feedback) : null,
-          rating,
+          reviewRating,
           now,
         ],
       })
-      return rating
+      return reviewRating
     })
     return {
       attempts_remaining: attemptsRemaining,

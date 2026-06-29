@@ -401,10 +401,66 @@ describe("post study service", () => {
     })
 
     expect(result.outcome).toBe("incorrect")
+    expect(result.next_review_hint).toBe("hard")
     expect(result.feedback?.missing).toContain("lost")
 
     const row = await client!.execute("SELECT transcript FROM song_study_attempt LIMIT 1")
     expect(row.rows[0]?.transcript).toBe("I was in the midnight waves")
+    const state = await client!.execute("SELECT state, lapses FROM song_study_review_state LIMIT 1")
+    expect(state.rows[0]).toMatchObject({ lapses: 0, state: "review" })
+  })
+
+  test("say-it-back accepts common article and plural recall variants", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-say-tolerant",
+        transcript: "I was lost in midnight wave",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("correct")
+    expect(result.next_review_hint).toBe("good")
+    expect(result.feedback).toEqual({
+      extra: [],
+      matched: ["i", "was", "lost", "in", "midnight", "wave"],
+      missing: [],
+    })
+  })
+
+  test("say-it-back keeps clearly wrong recall on again", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-say-wrong",
+        transcript: "blue road",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("incorrect")
+    expect(result.next_review_hint).toBe("again")
+    const state = await client!.execute("SELECT state, lapses FROM song_study_review_state LIMIT 1")
+    expect(state.rows[0]).toMatchObject({ lapses: 1, state: "learning" })
   })
 
   test("say-it-back review state is shared across target languages", async () => {
