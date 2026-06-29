@@ -1899,6 +1899,12 @@ export type LocalizedPostResponse = {
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
+  study_capability?: {
+    status: "ready" | "locked" | "processing" | "unavailable";
+    exercise_count?: number | null;
+    source_language?: string | null;
+    target_language?: string | null;
+  } | null;
   asset_story?: {
     story_ip: string | null;
     story_royalty_registration_status: "none" | "pending" | "registered" | "failed";

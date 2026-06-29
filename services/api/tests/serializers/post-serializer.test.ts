@@ -162,6 +162,25 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
     })
   })
 
+  test("localized post serializer exposes study capability summary", () => {
+    const response = makeLocalizedResponse(makeLinkPost({ post_type: "song" }), "en")
+    response.study_capability = {
+      status: "ready",
+      exercise_count: 12,
+      source_language: "en",
+      target_language: "es",
+    }
+
+    const result = serializeLocalizedPostResponse(response)
+
+    expect(result.study_capability).toEqual({
+      status: "ready",
+      exercise_count: 12,
+      source_language: "en",
+      target_language: "es",
+    })
+  })
+
   test("home_feed surface keeps only resolved locale and source language translations", () => {
     const response = makeLocalizedResponse(makeLinkPost(), "es")
     const result = serializeLocalizedPostResponse(response, { surface: "home_feed" })

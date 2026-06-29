@@ -1,5 +1,6 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
+import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
@@ -297,6 +298,62 @@ async function getAuthorCommunityRole(input: {
   return null
 }
 
+async function canStudyLockedSongPost(input: {
+  executor: DbExecutor
+  post: Post
+  viewerUserId: string | null | undefined
+}): Promise<boolean> {
+  if (input.post.author_user_id && input.viewerUserId === input.post.author_user_id) {
+    return true
+  }
+  if (!input.viewerUserId || !input.post.asset_id) {
+    return false
+  }
+  const entitlement = await getActiveEntitlementForBuyer(
+    input.executor,
+    input.post.community_id,
+    input.viewerUserId,
+    input.post.asset_id,
+  )
+  return Boolean(entitlement)
+}
+
+async function buildStudyCapability(input: {
+  executor: DbExecutor
+  post: Post
+  viewerUserId: string | null | undefined
+}): Promise<LocalizedPostResponse["study_capability"]> {
+  if (input.post.post_type !== "song") {
+    return null
+  }
+
+  const sourceLyrics = String(input.post.lyrics ?? "").trim()
+  const base = {
+    source_language: stringValue(input.post.source_language),
+    target_language: null,
+  }
+
+  if (!sourceLyrics) {
+    return {
+      ...base,
+      status: "unavailable",
+    }
+  }
+
+  if ((input.post.access_mode ?? "public") === "locked") {
+    const entitled = await canStudyLockedSongPost(input)
+    return {
+      ...base,
+      status: entitled ? "ready" : "locked",
+    }
+  }
+
+  return {
+    ...base,
+    status: "ready",
+  }
+}
+
 type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {
   preview?: {
     question?: string | null
@@ -440,6 +497,11 @@ export async function buildLocalizedPostResponse(input: {
   const response: LocalizedPostResponse = {
     post,
     song_presentation: songPresentation,
+    study_capability: await buildStudyCapability({
+      executor: input.executor,
+      post: input.post,
+      viewerUserId: input.viewerUserId,
+    }),
     author_community_role: await getAuthorCommunityRole({
       executor: input.executor,
       post: input.post,
