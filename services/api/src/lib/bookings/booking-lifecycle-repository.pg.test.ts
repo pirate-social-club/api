@@ -151,6 +151,40 @@ describe.skipIf(!RUN)("bookings lifecycle repository (real Postgres)", () => {
     expect(await repo.releaseBookingSlotLock("bkg_lifecycle_settle", "2026-07-01T11:04:00Z")).toBeNull();
   });
 
+  test("flags confirmed or live bookings as disputed with status CAS", async () => {
+    await seedBooking({ bookingId: "bkg_lifecycle_disputed_confirmed", status: "confirmed" });
+    await seedBooking({ bookingId: "bkg_lifecycle_disputed_live", status: "live" });
+    await seedBooking({ bookingId: "bkg_lifecycle_disputed_done", status: "completed" });
+    const repo = writeRepo();
+
+    const confirmed = await repo.flagBookingSettlementDisputed({
+      bookingId: "bkg_lifecycle_disputed_confirmed",
+      fromStatus: "confirmed",
+      nowUtc: "2026-07-01T11:05:00Z",
+    });
+    expect(confirmed?.status).toBe("disputed");
+    expect(confirmed?.updatedAt).toBe("2026-07-01T11:05:00.000Z");
+
+    const live = await repo.flagBookingSettlementDisputed({
+      bookingId: "bkg_lifecycle_disputed_live",
+      fromStatus: "live",
+      nowUtc: "2026-07-01T11:06:00Z",
+    });
+    expect(live?.status).toBe("disputed");
+    expect(live?.updatedAt).toBe("2026-07-01T11:06:00.000Z");
+
+    expect(await repo.flagBookingSettlementDisputed({
+      bookingId: "bkg_lifecycle_disputed_confirmed",
+      fromStatus: "confirmed",
+      nowUtc: "2026-07-01T11:07:00Z",
+    })).toBeNull();
+    expect(await repo.flagBookingSettlementDisputed({
+      bookingId: "bkg_lifecycle_disputed_done",
+      fromStatus: "live",
+      nowUtc: "2026-07-01T11:07:00Z",
+    })).toBeNull();
+  });
+
   test("cancellation intent finalizes to refunded without settled_at", async () => {
     await seedBooking({ bookingId: "bkg_lifecycle_refund", status: "confirmed" });
     const repo = writeRepo();

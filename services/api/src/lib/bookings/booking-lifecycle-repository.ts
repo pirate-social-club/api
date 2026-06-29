@@ -19,6 +19,12 @@ export interface ReserveBookingSettlementIntentInput {
   nowUtc: string;
 }
 
+export interface FlagBookingSettlementDisputedInput {
+  bookingId: string;
+  fromStatus: "confirmed" | "live";
+  nowUtc: string;
+}
+
 export interface FinalizeBookingSettlementInput {
   bookingId: string;
   fromStatus: "cancelled_by_host" | "cancelled_by_booker" | "completed" | "no_show_host" | "no_show_booker";
@@ -201,6 +207,25 @@ async function reserveBookingSettlementIntent(
       fromStatusToArg(input.fromStatus),
       settlementIntentStatusToArg(input.toStatus),
       intToArg("refundCents", input.refundCents),
+      isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodeBooking(res.rows[0]) : null;
+}
+
+async function flagBookingSettlementDisputed(
+  exec: BookingLifecycleSqlExecutor,
+  input: FlagBookingSettlementDisputedInput,
+): Promise<Booking | null> {
+  const res = await exec.execute({
+    sql: `UPDATE bookings.bookings
+          SET status = 'disputed',
+              updated_at = ?3::timestamptz
+          WHERE booking_id = ?1 AND status = ?2
+          RETURNING ${BOOKING_COLUMNS}`,
+    args: [
+      textToArg("bookingId", input.bookingId),
+      fromStatusToArg(input.fromStatus),
       isoUtcToArg(input.nowUtc),
     ],
   });
@@ -400,6 +425,7 @@ export interface BookingLifecycleRepository {
 export interface BookingLifecycleWriteRepository extends BookingLifecycleRepository {
   startBookingSession(bookingId: string, updatedAt: string): Promise<Booking | null>;
   reserveBookingSettlementIntent(input: ReserveBookingSettlementIntentInput): Promise<Booking | null>;
+  flagBookingSettlementDisputed(input: FlagBookingSettlementDisputedInput): Promise<Booking | null>;
   finalizeBookingSettlement(input: FinalizeBookingSettlementInput): Promise<Booking | null>;
   releaseBookingSlotLock(bookingId: string, updatedAt: string): Promise<HostSlotLock | null>;
   attachAttendanceSession(input: AttachAttendanceSessionInput): Promise<AttendanceSession | null>;
@@ -422,6 +448,7 @@ function buildWriteRepository(executor: BookingLifecycleSqlExecutor): BookingLif
     ...buildRepository(executor),
     startBookingSession: (bookingId, updatedAt) => startBookingSession(executor, bookingId, updatedAt),
     reserveBookingSettlementIntent: (input) => reserveBookingSettlementIntent(executor, input),
+    flagBookingSettlementDisputed: (input) => flagBookingSettlementDisputed(executor, input),
     finalizeBookingSettlement: (input) => finalizeBookingSettlement(executor, input),
     releaseBookingSlotLock: (bookingId, updatedAt) => releaseBookingSlotLock(executor, bookingId, updatedAt),
     attachAttendanceSession: (input) => attachAttendanceSession(executor, input),

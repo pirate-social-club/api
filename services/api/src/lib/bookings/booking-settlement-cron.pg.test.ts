@@ -234,4 +234,55 @@ describe.skipIf(!RUN)("global booking settlement cron (real Postgres)", () => {
       ORDER BY booking_id`) as Record<string, unknown>[];
     expect(locks.map((row) => row.status)).toEqual(["released", "released", "released"]);
   });
+
+  test("flags ambiguous due bookings as disputed without moving money and does not reselect them", async () => {
+    installFakes();
+    await seedBooking({ bookingId: "bkg_cron_ambiguous", status: "confirmed" });
+
+    const first = await sweepGlobalBookingSettlements({
+      env: { BOOKINGS_SETTLEMENT_CRON_ENABLED: "true" } as Env,
+      client: makeClient(repoDb),
+      now: () => Date.parse("2026-07-01T11:05:00Z"),
+    });
+    expect(first).toMatchObject({
+      enabled: true,
+      checkedDue: 1,
+      checkedResume: 0,
+      initiated: 0,
+      resumed: 0,
+      settled: 0,
+      ambiguous: 1,
+      errors: 0,
+      fatal: false,
+    });
+
+    const bookings = await repoDb.unsafe(`SELECT status, payout_tx_ref, refund_tx_ref FROM bookings.bookings
+      WHERE booking_id = $1`, ["bkg_cron_ambiguous"]) as Record<string, unknown>[];
+    expect(bookings).toEqual([{
+      status: "disputed",
+      payout_tx_ref: null,
+      refund_tx_ref: null,
+    }]);
+
+    const effects = await repoDb.unsafe(`SELECT effect_kind FROM bookings.settlement_effects
+      WHERE booking_id = $1`, ["bkg_cron_ambiguous"]) as Record<string, unknown>[];
+    expect(effects).toEqual([]);
+
+    const second = await sweepGlobalBookingSettlements({
+      env: { BOOKINGS_SETTLEMENT_CRON_ENABLED: "true" } as Env,
+      client: makeClient(repoDb),
+      now: () => Date.parse("2026-07-01T11:06:00Z"),
+    });
+    expect(second).toMatchObject({
+      enabled: true,
+      checkedDue: 0,
+      checkedResume: 0,
+      initiated: 0,
+      resumed: 0,
+      settled: 0,
+      ambiguous: 0,
+      errors: 0,
+      fatal: false,
+    });
+  });
 });

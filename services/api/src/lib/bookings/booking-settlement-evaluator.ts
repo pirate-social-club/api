@@ -5,6 +5,7 @@ import {
   evaluateAttendance,
 } from "../communities/bookings/booking-attendance-evaluator";
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
+import { createBookingLifecycleWriteRepository } from "./booking-lifecycle-repository";
 import { completeGlobalBooking, noShowGlobalBooking, startGlobalBookingSession } from "./booking-lifecycle-service";
 import type { SettlementEffectSqlExecutor } from "./settlement-effect-repository";
 
@@ -81,6 +82,7 @@ async function loadAttendanceSamples(exec: GlobalBookingSettlementSqlExecutor, b
 export interface ResolveGlobalDueBookingResult {
   outcome: AttendanceOutcome | "skipped";
   acted: boolean;
+  flagged?: boolean;
 }
 
 export async function resolveGlobalDueBooking(input: {
@@ -126,7 +128,15 @@ export async function resolveGlobalDueBooking(input: {
       await noShowGlobalBooking({ ...base, actorUserId: booking.bookerUserId });
       return { outcome: "no_show_host", acted: true };
     default:
-      return { outcome: "ambiguous", acted: false };
+      return {
+        outcome: "ambiguous",
+        acted: false,
+        flagged: Boolean(await createBookingLifecycleWriteRepository(input.executor).flagBookingSettlementDisputed({
+          bookingId: input.bookingId,
+          fromStatus: booking.status as "confirmed" | "live",
+          nowUtc: input.nowUtc,
+        })),
+      };
   }
 }
 
