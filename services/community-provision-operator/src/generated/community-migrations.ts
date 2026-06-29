@@ -4619,11 +4619,4 @@ PRAGMA foreign_keys = ON;
 `,
     checksum: "72f709732cfcc33cc746a7f17d693e51bc35b4600998e487c0178f2162160fcf",
   },
-  {
-    name: "1115_community_study_enabled.sql",
-    sql: `ALTER TABLE communities
-  ADD COLUMN study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1));
-`,
-    checksum: "03cb33f7b405fecee4948ecbde416cbf57acec55e955f0674f049bcfe20a1b00",
-  },
 ] as const;
