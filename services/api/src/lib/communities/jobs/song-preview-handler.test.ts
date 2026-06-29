@@ -71,7 +71,7 @@ describe("runSongPreviewGenerate", () => {
         body: JSON.parse(await request.text()) as unknown,
       })
       return Response.json({ storage_ref: "https://gateway.example/ipfs/preview" })
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     const result = await runSongPreviewGenerate({
       env: {
@@ -105,7 +105,7 @@ describe("runSongPreviewGenerate", () => {
       const request = _input instanceof Request ? _input : new Request(_input, init)
       requestBody = JSON.parse(await request.text()) as unknown
       return Response.json({ storage_ref: "storage-ref" })
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     await runSongPreviewGenerate({
       env: {
@@ -193,7 +193,7 @@ describe("runSongPreviewGenerate", () => {
     const updates = capturePreviewFailureUpdates()
     globalThis.fetch = (async (): Promise<Response> => {
       return Response.json({ code: "preview_generation_failed" }, { status: 502 })
-    }) as typeof globalThis.fetch
+    }) as unknown as typeof fetch
 
     await expect(runSongPreviewGenerate({
       env: {

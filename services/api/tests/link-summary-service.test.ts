@@ -113,7 +113,7 @@ describe("link summary materialization", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("ready:https://example.com/story")
@@ -160,7 +160,7 @@ describe("link summary materialization", () => {
       controlPlaneClient,
       normalizedUrl: "https://example.com/retry",
       now: "2026-05-02T10:00:00.000Z",
-      fetcher: (async () => new Response("Unauthorized", { status: 401 })) as typeof fetch,
+      fetcher: (async () => new Response("Unauthorized", { status: 401 })) as unknown as typeof fetch,
     })).rejects.toThrow("OpenRouter link summary request failed with http_401")
 
     const rows = await controlPlaneClient.execute("SELECT summary_json, summary_status, error, summarized_at FROM link_enrichments")
@@ -212,7 +212,7 @@ describe("link summary materialization", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("failed:OpenRouter link summary response schema mismatch: invalid summary_paragraph")
@@ -272,7 +272,7 @@ describe("link summary materialization", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("ready:https://example.com/story:ar")
@@ -334,7 +334,7 @@ describe("link summary materialization", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("ready:https://example.ma/story:en")
@@ -372,7 +372,7 @@ describe("link summary materialization", () => {
       now: "2026-05-02T10:00:00.000Z",
       fetcher: (() => {
         throw new Error("summary provider should not be called without markdown")
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("unavailable:no_markdown")
@@ -412,7 +412,7 @@ describe("link summary materialization", () => {
       now: "2026-05-02T10:00:00.000Z",
       fetcher: (() => {
         throw new Error("summary provider should not be called for ready summaries")
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(result.resultRef).toBe("skipped:summary_ready")
@@ -519,7 +519,7 @@ describe("link summary materialization", () => {
       ],
     }), {
       headers: { "content-type": "application/json" },
-    })) as typeof fetch, async () => {
+    })), async () => {
       const resultRef = await runCommunityJob({
         env,
         communityRepository: repo,
@@ -649,7 +649,7 @@ describe("link summary materialization", () => {
       ],
     }), {
       headers: { "content-type": "application/json" },
-    })) as typeof fetch, async () => {
+    })), async () => {
       const resultRef = await runCommunityJob({
         env,
         communityRepository: repo,

@@ -245,7 +245,7 @@ async function withMockedOpenRouter<T>(
 ): Promise<T> {
   const originalFetch = globalThis.fetch
   const calls: OpenRouterCall[] = []
-  globalThis.fetch = (async (requestInput, init) => {
+  globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(requestInput, init)
     if (request.url !== "https://openrouter.test/api/v1/chat/completions") {
       return originalFetch(request)
@@ -282,7 +282,7 @@ async function withMockedOpenRouterResponses<T>(
 ): Promise<T> {
   const originalFetch = globalThis.fetch
   const calls: OpenRouterCall[] = []
-  globalThis.fetch = (async (requestInput, init) => {
+  globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(requestInput, init)
     if (request.url !== "https://openrouter.test/api/v1/chat/completions") {
       return originalFetch(request)

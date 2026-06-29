@@ -1,6 +1,6 @@
 import { app } from "../../../src/index"
 import type { Client } from "@libsql/client"
-import { json } from "../../helpers"
+import { json, mockFetch } from "../../helpers"
 import { completeUniqueHumanVerification, requestJson } from "./song-artifact-test-helpers"
 import type { Env } from "../../../src/types"
 
@@ -8,7 +8,7 @@ export function installLockedSongFetchMocks(input: {
   originalFetch: typeof fetch
   storedObjects: Map<string, { body: Uint8Array; contentType: string }>
 }): void {
-  globalThis.fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mockFetch(async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
 
     if (request.url === "https://openrouter.test/api/v1/chat/completions") {
@@ -109,7 +109,7 @@ export function installLockedSongFetchMocks(input: {
     }
 
     return new Response("unexpected method", { status: 500 })
-  }
+  })
 }
 
 export async function attachPrimaryWallet(input: {

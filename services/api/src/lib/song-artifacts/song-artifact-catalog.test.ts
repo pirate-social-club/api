@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { mockFetch } from "../../test-helpers/fetch"
 import { syncSongBundleToAcrCloudCatalog } from "./song-artifact-catalog"
 
 const originalFetch = globalThis.fetch
@@ -11,7 +12,7 @@ describe("syncSongBundleToAcrCloudCatalog", () => {
   test("uses the song bundle title for the catalog upload title and filename", async () => {
     const captured: { title?: FormDataEntryValue | null; filename?: string | null } = {}
 
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = mockFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "https://storage.test/song.mp3") {
         return new Response(new Uint8Array([1, 2, 3]), {
@@ -36,7 +37,7 @@ describe("syncSongBundleToAcrCloudCatalog", () => {
       }), {
         headers: { "content-type": "application/json" },
       })
-    }
+    })
 
     const result = await syncSongBundleToAcrCloudCatalog({
       env: {

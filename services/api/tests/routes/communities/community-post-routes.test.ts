@@ -67,7 +67,7 @@ describe("community post routes", () => {
     cleanup = ctx.cleanup
 
     const originalFetch = globalThis.fetch
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = new Request(input, init)
       if (request.url !== "https://openai.test/v1/moderations") {
         return originalFetch(input, init)
@@ -239,7 +239,7 @@ membership_mode: "request",
 
     const moderationInputs: unknown[] = []
     const originalFetch = globalThis.fetch
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = new Request(input, init)
       if (request.url !== "https://openai.test/v1/moderations") {
         return originalFetch(input, init)
@@ -898,7 +898,7 @@ membership_mode: "request",
     cleanup = ctx.cleanup
 
     const originalFetch = globalThis.fetch
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = new Request(input, init)
       if (request.url !== "https://openai.test/v1/moderations") {
         return originalFetch(input, init)

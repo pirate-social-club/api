@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { mockFetch } from "../../test-helpers/fetch"
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client"
 import { startNamespaceVerificationSession } from "./namespace-verification-start"
 
@@ -106,7 +107,7 @@ describe("startNamespaceVerificationSession", () => {
 
   test("starts HNS sessions with nameserver and TXT records before delegation is detected", async () => {
     const calls: string[] = []
-    globalThis.fetch = async (input, init) => {
+    globalThis.fetch = mockFetch(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       calls.push(`${init?.method ?? "GET"} ${url}`)
 
@@ -129,7 +130,7 @@ describe("startNamespaceVerificationSession", () => {
       }
 
       throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`)
-    }
+    })
 
     const client = new PlatformManagedZoneBootstrapClient()
     const session = await startNamespaceVerificationSession(client, {

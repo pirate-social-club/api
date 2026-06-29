@@ -241,12 +241,20 @@ export async function json(response: Response): Promise<unknown> {
   return await response.json()
 }
 
+type FetchMock = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>
+
+export function mockFetch(handler: FetchMock): typeof fetch {
+  return Object.assign(handler, {
+    preconnect: (() => {}) as typeof fetch.preconnect,
+  }) as typeof fetch
+}
+
 export async function withMockedFetch<T>(
-  buildHandler: (originalFetch: typeof fetch) => typeof fetch,
+  buildHandler: (originalFetch: typeof fetch) => FetchMock,
   run: () => Promise<T>,
 ): Promise<T> {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = buildHandler(originalFetch)
+  globalThis.fetch = mockFetch(buildHandler(originalFetch))
   try {
     return await run()
   } finally {

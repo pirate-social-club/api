@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawn } from "bun";
 import {
   atomicFromRow, atomicToArg, boolFromRow, intFromRow, intFromRowNullable, isoUtcFromRow,
   isoUtcFromRowNullable, isoUtcToArg, textFromRowNullable, timeFromRow, timeToArg,
@@ -131,7 +132,7 @@ describe("bookings codecs — silent-coercion regressions", () => {
 
   test("timestamp codec is locale-independent under a non-UTC TZ (subprocess)", async () => {
     const probe = `${import.meta.dir}/codecs.tz-probe.ts`;
-    const proc = Bun.spawn(["bun", "run", probe], { env: { ...process.env, TZ: "America/New_York" }, stdout: "pipe", stderr: "pipe" });
+    const proc = spawn(["bun", "run", probe], { env: { ...process.env, TZ: "America/New_York" }, stdout: "pipe", stderr: "pipe" });
     const err = await new Response(proc.stderr).text();
     await proc.exited;
     expect(proc.exitCode, err).toBe(0);

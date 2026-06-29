@@ -456,7 +456,7 @@ describe("listHomeFeedCommunityViewCounts", () => {
           { day: "2026-05-01", community_id: "cmt_beta", views: 7 },
         ],
       }), { status: 200 })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const counts = await listHomeFeedCommunityViewCounts({
         env: buildTestEnv({
           CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,

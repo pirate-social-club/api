@@ -94,7 +94,7 @@ describe("analytics outbox", () => {
 
     await withMockedFetch(() => (() => {
       throw new Error("network_down")
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await flushAnalyticsOutbox(env, setup.client)
       expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 })
     })

@@ -7,7 +7,7 @@ import {
 } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
 import { createSongArtifactUploadIntent } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { createSongArtifactUploadSession } from "../../../src/lib/song-artifacts/song-artifact-upload-session-repository"
-import { createRouteTestContext, resetRuntimeCaches } from "../../helpers"
+import { createRouteTestContext, mockFetch, resetRuntimeCaches } from "../../helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -27,14 +27,14 @@ afterEach(async () => {
 
 async function createReaperSetup() {
   const abortUrls: string[] = []
-  globalThis.fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = mockFetch(async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
     if (request.url.startsWith("https://s3.filebase.test/") && request.method === "DELETE") {
       abortUrls.push(request.url)
       return new Response(null, { status: 204 })
     }
     return await originalFetch(request)
-  }
+  })
 
   const setup = await createRouteTestContext({
     FILEBASE_S3_ACCESS_KEY: "test-filebase-access",

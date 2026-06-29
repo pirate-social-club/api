@@ -23,7 +23,7 @@ describe("community analytics sync", () => {
       TINYBIRD_READ_TOKEN: "tb_read_test",
     })
 
-    await withMockedFetch(() => (async (url, init) => {
+    await withMockedFetch(() => (async (url: RequestInfo | URL, init?: RequestInit) => {
       expect(String(url)).toContain("https://tinybird.test/v0/pipes/community_health.json")
       expect(String(url)).toContain("environment=staging")
       expect((init?.headers as Record<string, string>).authorization).toBe("Bearer tb_read_test")
@@ -34,7 +34,7 @@ describe("community analytics sync", () => {
           { day: "2026-05-01", community_id: "cmt_beta", views: 4 },
         ],
       }), { status: 200 })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const counts = await fetchTinybirdCommunityViewCounts(env)
       expect(counts.get("cmt_alpha")).toBe(5)
       expect(counts.get("cmt_beta")).toBe(4)
@@ -57,7 +57,7 @@ describe("community analytics sync", () => {
           { day: "2026-05-02", community_id: "cmt_alpha", views: 8 },
         ],
       }), { status: 200 })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await syncCommunityHealthCounts(env, setup.client)
       expect(result).toEqual({ fetched_rows: 2, synced_communities: 1 })
     })
@@ -85,7 +85,7 @@ describe("community analytics sync", () => {
           { day: "2026-05-01", community_id: "cmt_alpha", views: 11 },
         ],
       }), { status: 200 })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await syncCommunityHealthCounts(env, setup.client)
       expect(result).toEqual({ fetched_rows: 1, synced_communities: 1 })
     })
@@ -157,7 +157,7 @@ describe("community analytics sync", () => {
           { day: "2026-05-02", community_id: "cmt_sync_canonical", views: 5 },
         ],
       }), { status: 200 })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const result = await syncCommunityHealthCounts(env, setup.client)
       expect(result).toEqual({ fetched_rows: 2, synced_communities: 1 })
     })

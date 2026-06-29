@@ -72,7 +72,7 @@ describe("community-job-runner labels", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       await enqueuePostLabelJob({
         env,
         repo,

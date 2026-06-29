@@ -16,7 +16,7 @@ describe("requestLinkSummary", () => {
       publisher: "Example News",
       publishedAt: "2026-05-02T09:00:00.000Z",
       markdown: "# Article title\n\nThe article body.",
-      fetcher: (async (input, init) => {
+      fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
         calls.push({
           url: String(input),
           body: JSON.parse(String(init?.body)) as Record<string, unknown>,
@@ -36,7 +36,7 @@ describe("requestLinkSummary", () => {
         }), {
           headers: { "content-type": "application/json" },
         })
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(calls[0]?.url).toBe("https://openrouter.test/v1/chat/completions")
@@ -77,7 +77,7 @@ describe("requestLinkSummary", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })).rejects.toThrow("expected exactly three key_points")
   })
 
@@ -109,7 +109,7 @@ describe("requestLinkSummary", () => {
         ],
       }), {
         headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     })).rejects.toThrow("key_points too long")
   })
 })
@@ -130,7 +130,7 @@ describe("requestLinkSummaryTranslation", () => {
       summaryParagraph: "A neutral paragraph summary.",
       shortSummary: "A short summary.",
       keyPoints: ["Ships seized off Greece", "Israel cites blockade", "Turkey condemns move"],
-      fetcher: (async (input, init) => {
+      fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
         calls.push({
           url: String(input),
           body: JSON.parse(String(init?.body)) as Record<string, unknown>,
@@ -153,7 +153,7 @@ describe("requestLinkSummaryTranslation", () => {
         }), {
           headers: { "content-type": "application/json" },
         })
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
 
     expect(calls[0]?.url).toBe("https://openrouter.test/v1/chat/completions")

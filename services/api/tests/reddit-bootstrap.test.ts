@@ -17,7 +17,7 @@ describe("reddit verification checker", () => {
           description: "",
         },
       },
-    }), { status: 200 })) as typeof globalThis.fetch
+    }), { status: 200 })) as unknown as typeof fetch
 
     const result = await checkRedditVerificationCode({
       env: buildTestEnv(),

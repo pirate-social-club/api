@@ -982,7 +982,7 @@ describe("community-job-runner", () => {
           "content-type": "text/html",
         },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1081,7 +1081,7 @@ describe("community-job-runner", () => {
           "content-type": "text/html",
         },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1210,7 +1210,7 @@ describe("community-job-runner", () => {
           "cache-control": "public, max-age=86400",
         },
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1327,7 +1327,7 @@ describe("community-job-runner", () => {
           ],
         }],
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1430,7 +1430,7 @@ describe("community-job-runner", () => {
           { p: 0.53, t: 1777766400 },
         ],
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1536,7 +1536,7 @@ describe("community-job-runner", () => {
         title: "When will the FDA reclassify BPC-157 to Category 1?",
         volume: 5200000,
       })
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
@@ -1638,7 +1638,7 @@ describe("community-job-runner", () => {
         })
       }
       throw new Error(`unexpected fetch ${requestUrl}`)
-    }) as typeof fetch, async () => {
+    }), async () => {
       const processed = await processNextCommunityJob({
         env,
         communityId,
