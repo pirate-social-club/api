@@ -19,6 +19,10 @@ afterEach(async () => {
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
+  const existing = await client.execute("PRAGMA table_info(song_study_pack)")
+  if (existing.rows.length > 0) {
+    return
+  }
   const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1109_song_study.sql", import.meta.url))
   const raw = await readFile(path, "utf8")
   for (const statement of splitSqlStatements(raw)) {

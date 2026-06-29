@@ -10,7 +10,11 @@ import type { Env } from "../../env"
 // an activeClient configured — i.e. from another test file (e.g. the karaoke
 // policy tests, which reach openCommunityDb through the d1-aware clients).
 import * as realCommunityDbFactory from "../communities/community-db-factory"
+import * as realCommunityCreateRepository from "../communities/create/repository"
+import * as realCommunityCreateShared from "../communities/create/shared"
 const realCommunityDbFactorySnapshot = { ...realCommunityDbFactory }
+const realCommunityCreateRepositorySnapshot = { ...realCommunityCreateRepository }
+const realCommunityCreateSharedSnapshot = { ...realCommunityCreateShared }
 
 type TestClient = ReturnType<typeof createClient>
 
@@ -80,7 +84,7 @@ mock.module(communityDbFactoryModule, communityDbFactoryMock)
 mock.module(communityDbFactoryPath, communityDbFactoryMock)
 mock.module(communityDbFactoryUrl.href, communityDbFactoryMock)
 
-const communityCreateRepositoryMock = () => ({
+const communityCreateRepositoryMock = () => activeClient == null ? realCommunityCreateRepositorySnapshot : ({
   assertPublicV0GateConfiguration: () => {},
   assertUpdateCommunityGatesRequest: () => {},
   assertUpdateCommunityLabelPolicyRequest: () => {},
@@ -144,11 +148,12 @@ const communityCreateRepositoryMock = () => ({
   resolveCommunityProvisionGroupLocation: () => "local",
   resolveProvisioningRetryAction: async () => ({ action: "return_existing" }),
 })
+const communityCreateSharedMock = () => activeClient == null ? realCommunityCreateSharedSnapshot : communityCreateRepositoryMock()
 
 mock.module(communityCreateRepositoryModule, communityCreateRepositoryMock)
 mock.module(communityCreateRepositoryPath, communityCreateRepositoryMock)
-mock.module(communityCreateSharedModule, communityCreateRepositoryMock)
-mock.module(communityCreateSharedPath, communityCreateRepositoryMock)
+mock.module(communityCreateSharedModule, communityCreateSharedMock)
+mock.module(communityCreateSharedPath, communityCreateSharedMock)
 
 const postCreatePreparationMock = () => ({
   preparePostCreate: async (input: { body: Record<string, unknown> }) => {

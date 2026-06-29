@@ -79,6 +79,37 @@ function toCommunityKaraokePolicy(input: {
   }
 }
 
+type CommunityColumnClient = Pick<Client, "execute">
+
+async function hasCommunityColumn(client: CommunityColumnClient, columnName: string): Promise<boolean> {
+  const result = await client.execute("PRAGMA table_info(communities)")
+  return result.rows.some((row) => String(row.name) === columnName)
+}
+
+async function ensureCommunityKaraokePolicyColumns(client: CommunityColumnClient): Promise<void> {
+  const result = await client.execute("PRAGMA table_info(communities)")
+  const columns = new Set(result.rows.map((row) => String(row.name)))
+
+  if (!columns.has("karaoke_enabled")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_enabled IN (0, 1))")
+  }
+  if (!columns.has("karaoke_scoring_enabled")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_scoring_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_scoring_enabled IN (0, 1))")
+  }
+  if (!columns.has("karaoke_stt_provider")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_stt_provider TEXT NOT NULL DEFAULT 'assistant' CHECK (karaoke_stt_provider IN ('assistant', 'elevenlabs', 'mistral', 'openai', 'none'))")
+  }
+  if (!columns.has("karaoke_stt_model")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_stt_model TEXT NOT NULL DEFAULT ''")
+  }
+  if (!columns.has("karaoke_voice_coach_enabled")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_voice_coach_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_voice_coach_enabled IN (0, 1))")
+  }
+  if (!columns.has("karaoke_audio_retention")) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_audio_retention TEXT NOT NULL DEFAULT 'not_stored' CHECK (karaoke_audio_retention = 'not_stored')")
+  }
+}
+
 async function ensureCommunityKaraokePolicyRow(input: {
   client: Client
   community: CommunityRow
@@ -116,6 +147,10 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
 }): Promise<KaraokeScoringPolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
+    if (!await hasCommunityColumn(db.client, "karaoke_scoring_enabled")) {
+      return { kind: "disabled" }
+    }
+
     const result = await db.client.execute({
       sql: `
         SELECT c.karaoke_scoring_enabled, c.karaoke_stt_provider, c.karaoke_stt_model,
@@ -210,6 +245,22 @@ async function readCommunityKaraokePolicy(input: {
 }): Promise<CommunityKaraokePolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
+    if (!await hasCommunityColumn(db.client, "karaoke_enabled")) {
+      const legacy = await db.client.execute({
+        sql: `
+          SELECT updated_at
+          FROM communities
+          WHERE community_id = ?1
+          LIMIT 1
+        `,
+        args: [input.communityId],
+      })
+      return defaultCommunityKaraokePolicy({
+        communityId: input.communityId,
+        updatedAt: typeof legacy.rows[0]?.updated_at === "string" ? legacy.rows[0].updated_at : null,
+      })
+    }
+
     const result = await db.client.execute({
       sql: `
         SELECT karaoke_enabled, karaoke_scoring_enabled, karaoke_stt_provider,
@@ -287,6 +338,7 @@ export async function updateCommunityKaraokePolicy(input: {
       community,
       now,
     })
+    await ensureCommunityKaraokePolicyColumns(db.client)
     await db.client.execute({
       sql: `
         UPDATE communities

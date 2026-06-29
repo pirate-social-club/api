@@ -22,6 +22,11 @@ async function buildCommunityDb(karaokeEnabled: 0 | 1) {
   const client = createClient({ url: `file:${dbPath}` })
   await configureLocalCommunityDbClient(client)
   await ensureCommunityDbSchema(client)
+  const columns = await client.execute("PRAGMA table_info(communities)")
+  const hasKaraokeEnabledColumn = columns.rows.some((row) => String(row.name) === "karaoke_enabled")
+  if (!hasKaraokeEnabledColumn) {
+    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_enabled INTEGER NOT NULL DEFAULT 0")
+  }
   await client.execute({
     sql: `
       INSERT INTO communities (
