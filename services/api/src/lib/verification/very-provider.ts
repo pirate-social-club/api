@@ -300,6 +300,10 @@ function normalizeVerificationIntent(intent: string | null): string {
       return "Community Creation"
     case "community_join":
       return "Community Join"
+    case "post_create":
+      return "Post Create"
+    case "comment_create":
+      return "Comment Create"
     case "post_access_18_plus":
       return "18+ Post Access"
     case "commerce_pricing":
