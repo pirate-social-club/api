@@ -64,6 +64,10 @@ Flags:
                          Override paid replay price, default PIRATE_SMOKE_REPLAY_PRICE_CENTS or --price-cents.
   --recording-hold-ms <n>
                          When publishing a replay, wait this long after host attach before ending; default 20000.
+  --community-id <id>    Reuse an existing provisioned community instead of creating a new one.
+                         Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
+  --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
+  --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
 Required env for staging:
   AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET
@@ -1205,6 +1209,13 @@ async function main(): Promise<void> {
       || readEnv(env, "PIRATE_SMOKE_API_BASE_URL", DEFAULT_STAGING_API_BASE_URL),
   )
   const runId = `${new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(0, 14)}-${Math.random().toString(16).slice(2, 8)}`
+  const existingCommunityId = readArg("--community-id") || readEnv(env, "PIRATE_SMOKE_COMMUNITY_ID") || ""
+  const hostSubject = readArg("--host-subject")
+    || readEnv(env, "PIRATE_SMOKE_HOST_SUBJECT")
+    || `paid-live-smoke-host-${runId}`
+  const buyerSubject = readArg("--buyer-subject")
+    || readEnv(env, "PIRATE_SMOKE_BUYER_SUBJECT")
+    || `paid-live-smoke-buyer-${runId}`
   const priceCents = readPositiveInteger(
     readArg("--price-cents") || readEnv(env, "PIRATE_SMOKE_PRICE_CENTS", "199"),
     "price cents",
@@ -1234,12 +1245,13 @@ async function main(): Promise<void> {
       recording_enabled: recordingEnabled,
       run_id: runId,
       settle_purchase: settle,
+      using_existing_community: Boolean(existingCommunityId),
     })
 
     host = await createSession({
       apiBaseUrl,
       env,
-      subject: `paid-live-smoke-host-${runId}`,
+      subject: hostSubject,
     })
     console.log("[paid-live-smoke] host", {
       user: host.userId,
@@ -1257,7 +1269,7 @@ async function main(): Promise<void> {
       apiBaseUrl,
       env,
       privateKey: buyerPrivateKey,
-      subject: `paid-live-smoke-buyer-${runId}`,
+      subject: buyerSubject,
     })
     console.log("[paid-live-smoke] buyer", {
       user: buyer.userId,
@@ -1268,7 +1280,15 @@ async function main(): Promise<void> {
       await completeUniqueHuman({ apiBaseUrl, session: buyer })
     }
 
-    communityId = await createCommunity({ apiBaseUrl, host, runId })
+    if (existingCommunityId) {
+      communityId = existingCommunityId.replace(/^com_/u, "")
+      console.log("[paid-live-smoke] community", {
+        community: communityId,
+        reused: true,
+      })
+    } else {
+      communityId = await createCommunity({ apiBaseUrl, host, runId })
+    }
     await approveBuyerMembership({ apiBaseUrl, buyer, communityId, host })
 
     const published = await publishPaidLiveRoom({
