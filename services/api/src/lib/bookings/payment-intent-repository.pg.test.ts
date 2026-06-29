@@ -227,14 +227,14 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
   test("verified, rejected, expired, and consumed transitions are claim/status guarded", async () => {
     await seedHold("hold_pi_verified");
     await seedHold("hold_pi_rejected");
-    await seedHold("hold_pi_expired", { expiresAt: "2026-06-10T10:00:00Z" });
+    await seedHold("hold_pi_expired", { expiresAt: "2026-06-10T10:01:00Z" });
     const repo = writeRepo();
 
     const verified = await repo.createOrGetPaymentIntent(inputFor("hold_pi_verified"));
     const rejected = await repo.createOrGetPaymentIntent(inputFor("hold_pi_rejected"));
     const expired = await repo.createOrGetPaymentIntent(inputFor("hold_pi_expired", {
-      quoteExpiresAt: "2026-06-10T10:00:00Z",
-      holdExpiresAt: "2026-06-10T10:00:00Z",
+      quoteExpiresAt: "2026-06-10T10:01:00Z",
+      holdExpiresAt: "2026-06-10T10:01:00Z",
     }));
     if (!verified.ok || !rejected.ok || !expired.ok) throw new Error("expected creates");
 
@@ -279,7 +279,7 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     }))!.status).toBe("verification_rejected");
     expect(await repo.consumePaymentIntent(rejected.intent.paymentIntentId, "hold_pi_rejected", "2026-06-10T10:02:00Z")).toBeNull();
 
-    expect((await repo.expirePaymentIntentIfDue(expired.intent.paymentIntentId, "2026-06-10T10:00:00Z"))!.status).toBe("expired");
+    expect((await repo.expirePaymentIntentIfDue(expired.intent.paymentIntentId, "2026-06-10T10:01:00Z"))!.status).toBe("expired");
     expect(await repo.reservePaymentIntentForVerification({
       paymentIntentId: expired.intent.paymentIntentId,
       claimToken: "claim_expired",
