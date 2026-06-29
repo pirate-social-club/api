@@ -12,9 +12,11 @@ import type { Env } from "../../env"
 import * as realCommunityDbFactory from "../communities/community-db-factory"
 import * as realCommunityCreateRepository from "../communities/create/repository"
 import * as realCommunityCreateShared from "../communities/create/shared"
+import * as realPostCreatePreparation from "./post-create-preparation"
 const realCommunityDbFactorySnapshot = { ...realCommunityDbFactory }
 const realCommunityCreateRepositorySnapshot = { ...realCommunityCreateRepository }
 const realCommunityCreateSharedSnapshot = { ...realCommunityCreateShared }
+const realPostCreatePreparationSnapshot = { ...realPostCreatePreparation }
 
 type TestClient = ReturnType<typeof createClient>
 
@@ -155,7 +157,7 @@ mock.module(communityCreateRepositoryPath, communityCreateRepositoryMock)
 mock.module(communityCreateSharedModule, communityCreateSharedMock)
 mock.module(communityCreateSharedPath, communityCreateSharedMock)
 
-const postCreatePreparationMock = () => ({
+const postCreatePreparationMock = () => activeClient == null ? realPostCreatePreparationSnapshot : ({
   preparePostCreate: async (input: { body: Record<string, unknown> }) => {
     const analysisOverride = {
       analysis_state: "allow",
