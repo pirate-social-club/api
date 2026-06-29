@@ -259,6 +259,9 @@ jobs:
         run: bun run test
 
       - name: Run bookings production-path real-Postgres test
+        # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
+        # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
+        if: success() || failure()
         working-directory: services/api
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
