@@ -179,6 +179,49 @@ Do not enable `omniston_ton` for real users until a bridge is selected, the
 proof extension passes mocked/forked tests, and a separately approved mainnet
 canary plan exists.
 
+### Candidate Snapshot
+
+This snapshot is based on primary provider docs checked on 2026-06-29. It is a
+research gate, not production approval.
+
+| Candidate | Current read | Fit for no-real-money Step 2 |
+| --- | --- | --- |
+| Symbiosis | Documents cross-chain swaps where one side can be TON and exposes a testnet app/API surface. It is the strongest candidate to inspect first because it is closest to the product shape: user pays from TON, route delivers on another chain. | Best provisional candidate for adapter-interface research and fixture design. Still needs proof that a route/order lookup can deterministically resolve TON source tx -> Base USDC delivery tx. |
+| deBridge | Strong cross-chain order/transaction tracking model, but the checked supported-chain docs did not list TON. | Not viable for this TON source path unless TON support is confirmed in current provider docs or by provider support. Keep as a comparison model for order-reference design. |
+| LayerZero | Lists both TON and Base endpoints, but this is messaging/OFT infrastructure, not a turnkey consumer bridge from Telegram Wallet TON-side funds to Base USDC. | Useful background for custom infrastructure, but too large for the immediate product rail. Not selected for Step 2 unless the team chooses to build/operate a custom OFT/bridge path. |
+| STON.fi / Omniston | TON-native swap infrastructure, and STON.fi testnet support is not available for the needed route. It is not by itself the TON -> Base bridge. | Can remain the TON-side swap component in a later design, but Step 2 must not depend on exercising it on testnet or mainnet. |
+
+### Provisional Step 2 Recommendation
+
+Proceed with a Symbiosis-first proof-contract evaluation, while keeping the
+provider name behind an adapter and leaving `omniston_ton` disabled.
+
+Definition of done for this no-real-money evaluation:
+
+- Obtain or confirm the route/order API contract needed to map a TON payment or
+  route id to the exact Base delivery tx hash.
+- Confirm whether destination addresses are caller-selected, and specifically
+  whether per-intent Base destination addresses are possible.
+- Write fixtures for successful delivery, pending delivery, underdelivery, late
+  delivery, cancelled route, replay, mismatched TON source tx, and mismatched
+  Base delivery tx.
+- Implement only provider-neutral adapter interfaces and tests against those
+  fixtures.
+- Keep all on-chain verification independent: provider data may locate txs, but
+  TON and Base tx contents must still be checked from chain data.
+
+If Symbiosis cannot provide the lookup contract or destination controls above,
+Step 2 remains open and no bridge is selected. Do not fall back to real-money
+experiments to answer those questions.
+
+Reference docs:
+
+- Symbiosis cross-chain swaps: https://docs.symbiosis.finance/main-concepts/symbiosis-cross-chain-swaps
+- Symbiosis testnet: https://docs.symbiosis.finance/user-guide/testnet
+- deBridge supported chains: https://docs.debridge.com/the-core-protocol/debridge-infrastructure/supported-chains
+- deBridge transaction tracking: https://docs.debridge.com/the-core-protocol/debridge-infrastructure/transaction-tracking
+- LayerZero deployed contracts/endpoints: https://docs.layerzero.network/v2/deployments/deployed-contracts
+
 ## Step 1 Implementation Checklist
 
 Step 1 is ready to build now because it does not change the financial proof
