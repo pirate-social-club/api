@@ -6,9 +6,14 @@ import { confirmBookingHold, quoteBookingHold } from "../lib/communities/booking
 import { createBookingHold as createCommunityBookingHold } from "../lib/communities/bookings/booking-hold-service"
 import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
-import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
+import {
+  getBookingForParty as getCommunityBookingForParty,
+  listBookingsForUser as listCommunityBookingsForUser,
+  type BookingViewerRole,
+} from "../lib/communities/bookings/booking-read-service"
 import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
 import { createGlobalBookingHold, resolveGlobalBookingAvailability } from "../lib/bookings/booking-hold-service"
+import { getGlobalBookingForParty, listGlobalBookingsForUser } from "../lib/bookings/booking-read-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
@@ -93,14 +98,39 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     const role: BookingViewerRole = url.searchParams.get("role") === "host" ? "host" : "booker"
     const statusParam = url.searchParams.get("status")
     const statuses = statusParam ? statusParam.split(",").map((s) => s.trim()).filter(Boolean) : undefined
-    const data = await listBookingsForUser({ env: c.env, communityRepository, communityId, actorUserId: actor.userId, role, statuses })
+    try {
+      const globalData = await listGlobalBookingsForUser({
+        executor: getControlPlaneClient(c.env),
+        actorUserId: actor.userId,
+        role,
+        sourceCommunityId: communityId,
+        statuses,
+      })
+      if (globalData.length > 0) {
+        return c.json({ object: "list", data: globalData, has_more: false }, 200)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
+    const data = await listCommunityBookingsForUser({ env: c.env, communityRepository, communityId, actorUserId: actor.userId, role, statuses })
     return c.json({ object: "list", data, has_more: false }, 200)
   })
 
   // Read: retrieve a single booking — only if the caller is a party (host or booker), else 404.
   communities.get("/:communityId/bookings/:bookingId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
-    const booking = await getBookingForParty({ env: c.env, communityRepository, communityId, bookingId: c.req.param("bookingId"), actorUserId: actor.userId })
+    const bookingId = c.req.param("bookingId")
+    try {
+      const globalBooking = await getGlobalBookingForParty({
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+      })
+      if (globalBooking) return c.json({ booking: globalBooking }, 200)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
+    const booking = await getCommunityBookingForParty({ env: c.env, communityRepository, communityId, bookingId, actorUserId: actor.userId })
     if (!booking) return c.json({ error: "not_found" }, 404)
     return c.json({ booking }, 200)
   })
