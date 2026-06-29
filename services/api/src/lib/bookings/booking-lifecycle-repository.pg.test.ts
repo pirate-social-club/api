@@ -1,10 +1,9 @@
 // Real-Postgres tests for global booking lifecycle + attendance repository. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core b0001 and validates CAS transitions,
+// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core booking migrations and validates CAS transitions,
 // identity-bound attendance writes, and tx-bound rollback against real constraints.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createBookingLifecycleRepository,
   createBookingLifecycleTxWriteRepository,
@@ -94,7 +93,7 @@ describe.skipIf(!RUN)("bookings lifecycle repository (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);

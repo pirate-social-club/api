@@ -8,7 +8,10 @@ export const BOOKING_COLUMNS =
   "booking_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc, gross_cents, " +
   "platform_fee_bps, platform_fee_cents, host_payout_cents, refund_cents, status, funding_tx_ref, " +
   "payout_tx_ref, refund_tx_ref, funding_wallet_address, host_payout_wallet_address, live_room_id, " +
-  "source_community_id, confirmed_at, completed_at, settled_at, cancelled_at, created_at, updated_at";
+  "source_community_id, confirmed_at, completed_at, settled_at, cancelled_at, settlement_review_status, " +
+  "settlement_review_reason, settlement_review_resolution, settlement_review_opened_at, settlement_review_resolved_at, " +
+  "settlement_review_operator_credential_id, settlement_review_operator_actor_id, settlement_review_note, " +
+  "settlement_review_version, created_at, updated_at";
 
 export function decodeBookingStatus(value: unknown): BookingStatus {
   const status = textFromRow(value);
@@ -32,6 +35,30 @@ export function decodeBookingStatus(value: unknown): BookingStatus {
     throw new TypeError(`decodeBookingStatus: bad status ${status}`);
   }
   return status;
+}
+
+function decodeSettlementReviewStatus(value: unknown): Booking["settlementReviewStatus"] {
+  const status = textFromRowNullable(value);
+  if (status !== null && status !== "pending" && status !== "resolved") {
+    throw new TypeError(`decodeSettlementReviewStatus: bad status ${status}`);
+  }
+  return status;
+}
+
+function decodeSettlementReviewReason(value: unknown): Booking["settlementReviewReason"] {
+  const reason = textFromRowNullable(value);
+  if (reason !== null && reason !== "attendance_ambiguous") {
+    throw new TypeError(`decodeSettlementReviewReason: bad reason ${reason}`);
+  }
+  return reason;
+}
+
+function decodeSettlementReviewResolution(value: unknown): Booking["settlementReviewResolution"] {
+  const resolution = textFromRowNullable(value);
+  if (resolution !== null && resolution !== "completed" && resolution !== "no_show_host" && resolution !== "no_show_booker") {
+    throw new TypeError(`decodeSettlementReviewResolution: bad resolution ${resolution}`);
+  }
+  return resolution;
 }
 
 export function decodeBooking(row: QueryResultRow): Booking {
@@ -59,6 +86,15 @@ export function decodeBooking(row: QueryResultRow): Booking {
     completedAt: isoUtcFromRowNullable(row.completed_at),
     settledAt: isoUtcFromRowNullable(row.settled_at),
     cancelledAt: isoUtcFromRowNullable(row.cancelled_at),
+    settlementReviewStatus: decodeSettlementReviewStatus(row.settlement_review_status),
+    settlementReviewReason: decodeSettlementReviewReason(row.settlement_review_reason),
+    settlementReviewResolution: decodeSettlementReviewResolution(row.settlement_review_resolution),
+    settlementReviewOpenedAt: isoUtcFromRowNullable(row.settlement_review_opened_at),
+    settlementReviewResolvedAt: isoUtcFromRowNullable(row.settlement_review_resolved_at),
+    settlementReviewOperatorCredentialId: textFromRowNullable(row.settlement_review_operator_credential_id),
+    settlementReviewOperatorActorId: textFromRowNullable(row.settlement_review_operator_actor_id),
+    settlementReviewNote: textFromRowNullable(row.settlement_review_note),
+    settlementReviewVersion: intFromRow(row.settlement_review_version),
     createdAt: isoUtcFromRow(row.created_at),
     updatedAt: isoUtcFromRow(row.updated_at),
   };

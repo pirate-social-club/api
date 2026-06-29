@@ -1,10 +1,9 @@
 // Real-Postgres tests for global bookings holds + host slot locks. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core b0001 and exercises the repository through
+// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core booking migrations and exercises the repository through
 // the same lightweight executor shape used by the host-config repository tests.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createBookingHoldRepository, createBookingHoldTxWriteRepository, createBookingHoldWriteRepository,
   type BookingHoldSqlExecutor,
@@ -62,7 +61,7 @@ describe.skipIf(!RUN)("bookings hold repository (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe(`CREATE EXTENSION IF NOT EXISTS btree_gist`);
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);

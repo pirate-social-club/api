@@ -8,12 +8,11 @@
 // Runs only when BOOKINGS_REPO_TEST_ADMIN_URL is set. Isolated DB, full teardown, no credentials printed.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import type { Env } from "../../env";
 import {
   getControlPlaneClient, setControlPlanePostgresPoolFactoryForTests, withRequestControlPlaneClients,
 } from "../runtime-deps";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import { createBookingHostConfigRepository, createBookingHostConfigTxRepository } from "./host-config-repository";
 import {
   createAvailabilityException,
@@ -58,7 +57,7 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe(`CREATE EXTENSION IF NOT EXISTS btree_gist`);
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.unsafe(`INSERT INTO bookings.profiles
       (host_user_id, host_timezone, base_price_cents, default_slot_duration_seconds, platform_fee_bps, is_published, created_at, updated_at)
       VALUES ('host1','America/New_York',5000,1800,1000,true,'2026-06-01T00:00:00Z','2026-06-02T00:00:00Z')`);

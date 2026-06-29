@@ -123,6 +123,15 @@ export interface Booking {
   completedAt: string | null;
   settledAt: string | null;
   cancelledAt: string | null;
+  settlementReviewStatus: "pending" | "resolved" | null;
+  settlementReviewReason: "attendance_ambiguous" | null;
+  settlementReviewResolution: "completed" | "no_show_host" | "no_show_booker" | null;
+  settlementReviewOpenedAt: string | null;
+  settlementReviewResolvedAt: string | null;
+  settlementReviewOperatorCredentialId: string | null;
+  settlementReviewOperatorActorId: string | null;
+  settlementReviewNote: string | null;
+  settlementReviewVersion: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,18 +1,19 @@
 // Real-Postgres tests for global booking lifecycle service behavior that is route-facing:
 // start, terminal settlement, session attach, and heartbeat. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core b0001.
+// BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core booking migrations.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import type { Env } from "../../env";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { BookingLifecycleSqlExecutor } from "./booking-lifecycle-repository";
 import {
   attachGlobalBookingSession,
   cancelGlobalBooking,
   completeGlobalBooking,
   heartbeatGlobalBookingSession,
+  markGlobalBookingSettlementAmbiguous,
   noShowGlobalBooking,
+  resolveGlobalBookingSettlementReview,
   setGlobalBookingAgoraBuilderForTests,
   setGlobalBookingLifecycleDomainForTests,
   setGlobalBookingOperatorEffectExecutorForTests,
@@ -154,7 +155,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);
@@ -368,6 +369,138 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
         settlement_ref: "0xrefund_bkg_lifecycle_service_no_show",
       },
     ]);
+  });
+
+  test("opens and resolves ambiguous settlement reviews with version CAS and replay semantics", async () => {
+    installSettlementFakes();
+    await seedBooking({ bookingId: "bkg_lifecycle_service_review", status: "live", lock: true });
+    await seedBooking({ bookingId: "bkg_lifecycle_service_review_conflict", status: "live" });
+
+    const marked = await markGlobalBookingSettlementAmbiguous({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      nowUtc: "2026-07-01T11:20:00Z",
+    });
+    expect(marked).toEqual({ ok: true, already: false, reviewVersion: 1 });
+
+    expect(await markGlobalBookingSettlementAmbiguous({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      nowUtc: "2026-07-01T11:21:00Z",
+    })).toEqual({ ok: true, already: true, reviewVersion: 1 });
+
+    const pending = await repoDb.unsafe(`SELECT status, settlement_review_status, settlement_review_reason,
+        settlement_review_resolution, settlement_review_version, settlement_review_opened_at::text AS opened_at
+      FROM bookings.bookings
+      WHERE booking_id = $1`, ["bkg_lifecycle_service_review"]) as Record<string, unknown>[];
+    expect(pending[0]).toMatchObject({
+      status: "disputed",
+      settlement_review_status: "pending",
+      settlement_review_reason: "attendance_ambiguous",
+      settlement_review_resolution: null,
+      settlement_review_version: 1,
+      opened_at: "2026-07-01 11:20:00+00",
+    });
+
+    expect(await resolveGlobalBookingSettlementReview({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      resolution: "completed",
+      expectedReviewVersion: 0,
+      operatorCredentialId: "op_cred",
+      operatorActorId: "op_actor",
+      nowUtc: "2026-07-01T11:25:00Z",
+      confirmPollMs: [],
+    })).toEqual({ ok: false, reason: "version_conflict" });
+
+    const resolved = await resolveGlobalBookingSettlementReview({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      resolution: "completed",
+      expectedReviewVersion: 1,
+      operatorCredentialId: "op_cred",
+      operatorActorId: "op_actor",
+      note: "attendance reviewed",
+      nowUtc: "2026-07-01T11:25:00Z",
+      confirmPollMs: [],
+    });
+    expect(resolved).toMatchObject({
+      ok: true,
+      outcome: "resolved",
+      booking: {
+        booking_id: "bkg_lifecycle_service_review",
+        status: "settled",
+        refund_cents: 0,
+        payout_tx_ref: "0xpayout_bkg_lifecycle_service_review",
+      },
+    });
+
+    const review = await repoDb.unsafe(`SELECT status, settlement_review_status, settlement_review_resolution,
+        settlement_review_version, settlement_review_operator_credential_id, settlement_review_operator_actor_id,
+        settlement_review_note, settlement_review_resolved_at::text AS resolved_at
+      FROM bookings.bookings
+      WHERE booking_id = $1`, ["bkg_lifecycle_service_review"]) as Record<string, unknown>[];
+    expect(review[0]).toMatchObject({
+      status: "settled",
+      settlement_review_status: "resolved",
+      settlement_review_resolution: "completed",
+      settlement_review_version: 2,
+      settlement_review_operator_credential_id: "op_cred",
+      settlement_review_operator_actor_id: "op_actor",
+      settlement_review_note: "attendance reviewed",
+      resolved_at: "2026-07-01 11:25:00+00",
+    });
+
+    expect(await resolveGlobalBookingSettlementReview({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      resolution: "completed",
+      expectedReviewVersion: 1,
+      operatorCredentialId: "op_cred",
+      operatorActorId: "op_actor",
+      nowUtc: "2026-07-01T11:26:00Z",
+      confirmPollMs: [],
+    })).toMatchObject({ ok: true, outcome: "replayed" });
+
+    expect(await resolveGlobalBookingSettlementReview({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review",
+      resolution: "no_show_host",
+      expectedReviewVersion: 1,
+      operatorCredentialId: "op_cred",
+      operatorActorId: "op_actor",
+      nowUtc: "2026-07-01T11:26:00Z",
+      confirmPollMs: [],
+    })).toEqual({ ok: false, reason: "resolution_conflict" });
+
+    await markGlobalBookingSettlementAmbiguous({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review_conflict",
+      nowUtc: "2026-07-01T11:30:00Z",
+    });
+    expect(await resolveGlobalBookingSettlementReview({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_review_conflict",
+      resolution: "no_show_host",
+      expectedReviewVersion: 1,
+      operatorCredentialId: "op_cred",
+      operatorActorId: "op_actor",
+      nowUtc: "2026-07-01T11:35:00Z",
+      confirmPollMs: [],
+    })).toMatchObject({
+      ok: true,
+      outcome: "resolved",
+      booking: {
+        status: "refunded",
+        refund_cents: 5000,
+        refund_tx_ref: "0xrefund_bkg_lifecycle_service_review_conflict",
+      },
+    });
   });
 
   test("rejects attach for non-parties and terminal bookings", async () => {

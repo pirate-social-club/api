@@ -1,12 +1,11 @@
 // Real-Postgres test for the host-configuration read/write repository. Runs ONLY when
 // BOOKINGS_REPO_TEST_ADMIN_URL is set (API CI provisions PostgreSQL 17). Applies the CANONICAL core
-// b0001 migration (located via resolveCoreRepoPath — never copies DDL), seeds rows, and exercises the
+// canonical core booking migrations, seeds rows, and exercises the
 // repository through an executor that mirrors PostgresClientAdapter (?N -> $N, {rows}). Isolated DB with
 // full teardown; no credentials printed.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createBookingHostConfigRepository, createBookingHostConfigTxRepository, createBookingHostConfigTxWriteRepository,
   createBookingHostConfigWriteRepository, type BookingSqlExecutor,
@@ -67,9 +66,8 @@ describe.skipIf(!RUN)("bookings host-config repository (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe(`CREATE EXTENSION IF NOT EXISTS btree_gist`);
-    // Apply the CANONICAL core migration (simple-protocol multi-statement); do not copy its DDL.
-    const b0001 = readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8");
-    await db.unsafe(b0001);
+    // Apply the CANONICAL core migrations (simple-protocol multi-statement); do not copy its DDL.
+    await applyCanonicalBookingMigrations(db);
 
     // host1: fully populated; host2: nullable fields null + topics null.
     await db.unsafe(`INSERT INTO bookings.profiles

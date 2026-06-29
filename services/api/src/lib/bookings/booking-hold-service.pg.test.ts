@@ -1,10 +1,9 @@
 // Real-Postgres tests for global booking hold creation. Runs only when BOOKINGS_REPO_TEST_ADMIN_URL is
-// set. Applies canonical core b0001 and injects the slot resolver so this focused job does not require
+// set. Applies canonical core booking migrations and injects the slot resolver so this focused job does not require
 // the full api cross-repo install; production still loads @pirate/bookings-domain by default.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client";
 import {
   createGlobalBookingHold,
@@ -92,7 +91,7 @@ describe.skipIf(!RUN)("global booking hold service (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);

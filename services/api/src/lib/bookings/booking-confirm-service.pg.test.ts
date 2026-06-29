@@ -1,12 +1,11 @@
 // Real-Postgres tests for the global booking quote/confirm service. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core b0001 and drives payment verification
+// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core booking migrations and drives payment verification
 // through the service seam so the durable state machine is tested without RPC.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import type { Env } from "../../env";
 import type { UserRepository } from "../auth/repositories";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   confirmGlobalBookingHold,
   quoteGlobalBookingHold,
@@ -115,7 +114,7 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);

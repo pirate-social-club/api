@@ -40,6 +40,7 @@ type BookingState = Booking["status"];
 type CancelBy = "host" | "booker";
 type SettlementIntentState = "cancelled_by_host" | "cancelled_by_booker" | "completed" | "no_show_host" | "no_show_booker";
 type FinalSettlementState = "settled" | "refunded";
+export type GlobalBookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
 
 export interface GlobalBookingOperatorEffect {
   kind: "payout" | "refund";
@@ -102,6 +103,11 @@ async function executeOperatorEffect(ctx: GlobalSettlementContext, effect: Globa
   if (operatorEffectExecutorForTests) return operatorEffectExecutorForTests(ctx, effect);
   const mod = await import("./booking-custody-adapter");
   return mod.executeGlobalBookingOperatorEffect(ctx, effect);
+}
+
+async function settlementErrorKind(error: unknown): Promise<"pending" | "terminal" | null> {
+  const mod = await import("./booking-custody-adapter");
+  return mod.globalBookingSettlementErrorKind(error);
 }
 
 function randomAgoraUid(): number {
@@ -207,6 +213,26 @@ function finalStateForIntent(intentState: SettlementIntentState): FinalSettlemen
   return intentState === "completed" || intentState === "no_show_booker" ? "settled" : "refunded";
 }
 
+function refundForSettlementReviewResolution(booking: Booking, resolution: GlobalBookingSettlementReviewResolution): number {
+  switch (resolution) {
+    case "completed":
+    case "no_show_booker":
+      return 0;
+    case "no_show_host":
+      return booking.grossCents;
+  }
+}
+
+function resolvedReviewReplayOutcome(
+  booking: Booking,
+  resolution: GlobalBookingSettlementReviewResolution,
+): "replayed" | "resolved_pending" | null {
+  if (booking.settlementReviewResolution !== resolution) return null;
+  if (booking.status === "settled" || booking.status === "refunded") return "replayed";
+  if (UNFINISHED_INTENT_STATES.has(booking.status)) return "resolved_pending";
+  return null;
+}
+
 async function executeSettlement(input: {
   ctx: GlobalSettlementContext;
   booking: Booking;
@@ -271,6 +297,123 @@ async function executeSettlement(input: {
 export type GlobalLifecycleResult =
   | { ok: false; reason: "not_found" | "illegal_transition" | "outside_start_window" | "too_early_to_complete" | "too_early_for_no_show" }
   | { ok: true; already: boolean; booking: BookingLifecycleSnapshot };
+
+export type MarkGlobalBookingSettlementAmbiguousResult =
+  | { ok: false; reason: "not_found" | "not_reviewable" }
+  | { ok: true; already: boolean; reviewVersion: number };
+
+export async function markGlobalBookingSettlementAmbiguous(input: {
+  executor: BookingLifecycleSqlExecutor;
+  bookingId: string;
+  nowUtc: string;
+}): Promise<MarkGlobalBookingSettlementAmbiguousResult> {
+  const repo = createBookingLifecycleWriteRepository(input.executor);
+  const booking = await repo.getBooking(input.bookingId);
+  if (!booking) return { ok: false, reason: "not_found" };
+  if (booking.status === "disputed" && booking.settlementReviewStatus === "pending") {
+    return { ok: true, already: true, reviewVersion: booking.settlementReviewVersion };
+  }
+  if (booking.status !== "confirmed" && booking.status !== "live") {
+    return { ok: false, reason: "not_reviewable" };
+  }
+  const marked = await repo.markBookingSettlementAmbiguous({
+    bookingId: input.bookingId,
+    nowUtc: input.nowUtc,
+  });
+  if (marked) return { ok: true, already: false, reviewVersion: marked.settlementReviewVersion };
+  const latest = await repo.getBooking(input.bookingId);
+  if (latest?.status === "disputed" && latest.settlementReviewStatus === "pending") {
+    return { ok: true, already: true, reviewVersion: latest.settlementReviewVersion };
+  }
+  return { ok: false, reason: "not_reviewable" };
+}
+
+export type ResolveGlobalBookingSettlementReviewResult =
+  | { ok: false; reason: "not_found" | "not_pending_review" | "version_conflict" | "resolution_conflict" | "invalid_resolution" }
+  | { ok: true; outcome: "resolved" | "resolved_pending" | "replayed"; booking: BookingLifecycleSnapshot };
+
+export async function resolveGlobalBookingSettlementReview(input: {
+  env: Env;
+  executor: BookingLifecycleSqlExecutor & SettlementEffectSqlExecutor;
+  bookingId: string;
+  resolution: GlobalBookingSettlementReviewResolution;
+  expectedReviewVersion: number;
+  operatorCredentialId: string;
+  operatorActorId: string;
+  note?: string | null;
+  nowUtc: string;
+  confirmPollMs?: number[];
+}): Promise<ResolveGlobalBookingSettlementReviewResult> {
+  if (
+    input.resolution !== "completed" &&
+    input.resolution !== "no_show_host" &&
+    input.resolution !== "no_show_booker"
+  ) {
+    return { ok: false, reason: "invalid_resolution" };
+  }
+  if (!Number.isInteger(input.expectedReviewVersion) || input.expectedReviewVersion < 0) {
+    return { ok: false, reason: "version_conflict" };
+  }
+
+  const repo = createBookingLifecycleWriteRepository(input.executor);
+  const review = await repo.getBooking(input.bookingId);
+  if (!review) return { ok: false, reason: "not_found" };
+  if (review.settlementReviewStatus === "resolved") {
+    const replayOutcome = resolvedReviewReplayOutcome(review, input.resolution);
+    return replayOutcome
+      ? { ok: true, outcome: replayOutcome, booking: snapshot(review) }
+      : { ok: false, reason: "resolution_conflict" };
+  }
+  if (review.status !== "disputed" || review.settlementReviewStatus !== "pending") {
+    return { ok: false, reason: "not_pending_review" };
+  }
+  if (review.settlementReviewVersion !== input.expectedReviewVersion) {
+    return { ok: false, reason: "version_conflict" };
+  }
+
+  const refundCents = refundForSettlementReviewResolution(review, input.resolution);
+  const reserved = await repo.resolveBookingSettlementReview({
+    bookingId: input.bookingId,
+    resolution: input.resolution,
+    refundCents,
+    expectedReviewVersion: input.expectedReviewVersion,
+    operatorCredentialId: input.operatorCredentialId,
+    operatorActorId: input.operatorActorId,
+    note: input.note ?? null,
+    nowUtc: input.nowUtc,
+  });
+  if (!reserved) {
+    const latest = await repo.getBooking(input.bookingId);
+    if (latest?.settlementReviewStatus === "resolved") {
+      const replayOutcome = resolvedReviewReplayOutcome(latest, input.resolution);
+      return replayOutcome
+        ? { ok: true, outcome: replayOutcome, booking: snapshot(latest) }
+        : { ok: false, reason: "resolution_conflict" };
+    }
+    return { ok: false, reason: "version_conflict" };
+  }
+
+  try {
+    const reconciled = await reconcileGlobalBookingSettlement({
+      executor: input.executor,
+      bookingId: input.bookingId,
+      env: input.env,
+      nowUtc: input.nowUtc,
+      confirmPollMs: input.confirmPollMs,
+    });
+    if (reconciled.outcome === "resumed") {
+      return { ok: true, outcome: "resolved", booking: reconciled.booking };
+    }
+    const latest = await repo.getBooking(input.bookingId);
+    return { ok: true, outcome: "resolved_pending", booking: snapshot(latest ?? reserved) };
+  } catch (error) {
+    if (await settlementErrorKind(error) === "pending") {
+      const latest = await repo.getBooking(input.bookingId);
+      return { ok: true, outcome: "resolved_pending", booking: snapshot(latest ?? reserved) };
+    }
+    throw error;
+  }
+}
 
 export async function startGlobalBookingSession(input: {
   executor: BookingLifecycleSqlExecutor;

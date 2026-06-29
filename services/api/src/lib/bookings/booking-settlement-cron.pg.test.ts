@@ -1,11 +1,10 @@
 // Real-Postgres tests for the global booking settlement cron. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core b0001 and validates due attendance
+// BOOKINGS_REPO_TEST_ADMIN_URL is set. Applies canonical core booking migrations and validates due attendance
 // resolution plus unfinished-intent resume against bookings.* rows.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import type { Env } from "../../env";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { Client, InStatement, QueryResult } from "../sql-client";
 import {
   setGlobalBookingLifecycleDomainForTests,
@@ -156,7 +155,7 @@ describe.skipIf(!RUN)("global booking settlement cron (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${role} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);

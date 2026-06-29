@@ -25,6 +25,22 @@ export interface FlagBookingSettlementDisputedInput {
   nowUtc: string;
 }
 
+export interface MarkBookingSettlementAmbiguousInput {
+  bookingId: string;
+  nowUtc: string;
+}
+
+export interface ResolveBookingSettlementReviewInput {
+  bookingId: string;
+  resolution: "completed" | "no_show_host" | "no_show_booker";
+  refundCents: number;
+  expectedReviewVersion: number;
+  operatorCredentialId: string;
+  operatorActorId: string;
+  note?: string | null;
+  nowUtc: string;
+}
+
 export interface FinalizeBookingSettlementInput {
   bookingId: string;
   fromStatus: "cancelled_by_host" | "cancelled_by_booker" | "completed" | "no_show_host" | "no_show_booker";
@@ -99,6 +115,19 @@ function fromStatusToArg(value: "confirmed" | "live"): "confirmed" | "live" {
 }
 
 function unfinishedStatusToArg(value: FinalizeBookingSettlementInput["fromStatus"]): FinalizeBookingSettlementInput["fromStatus"] {
+  return settlementIntentStatusToArg(value);
+}
+
+function reviewResolutionToArg(value: ResolveBookingSettlementReviewInput["resolution"]): ResolveBookingSettlementReviewInput["resolution"] {
+  if (value !== "completed" && value !== "no_show_host" && value !== "no_show_booker") {
+    throw new TypeError(`reviewResolutionToArg: bad resolution ${String(value)}`);
+  }
+  return value;
+}
+
+function intentStatusForReviewResolution(
+  value: ResolveBookingSettlementReviewInput["resolution"],
+): ReserveBookingSettlementIntentInput["toStatus"] {
   return settlementIntentStatusToArg(value);
 }
 
@@ -220,13 +249,86 @@ async function flagBookingSettlementDisputed(
   const res = await exec.execute({
     sql: `UPDATE bookings.bookings
           SET status = 'disputed',
+              settlement_review_status = 'pending',
+              settlement_review_reason = 'attendance_ambiguous',
+              settlement_review_resolution = NULL,
+              settlement_review_opened_at = COALESCE(settlement_review_opened_at, ?3::timestamptz),
+              settlement_review_resolved_at = NULL,
+              settlement_review_operator_credential_id = NULL,
+              settlement_review_operator_actor_id = NULL,
+              settlement_review_note = NULL,
+              settlement_review_version = settlement_review_version + 1,
               updated_at = ?3::timestamptz
-          WHERE booking_id = ?1 AND status = ?2
+          WHERE booking_id = ?1 AND status = ?2 AND settlement_review_status IS NULL
           RETURNING ${BOOKING_COLUMNS}`,
     args: [
       textToArg("bookingId", input.bookingId),
       fromStatusToArg(input.fromStatus),
       isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodeBooking(res.rows[0]) : null;
+}
+
+async function markBookingSettlementAmbiguous(
+  exec: BookingLifecycleSqlExecutor,
+  input: MarkBookingSettlementAmbiguousInput,
+): Promise<Booking | null> {
+  const res = await exec.execute({
+    sql: `UPDATE bookings.bookings
+          SET status = 'disputed',
+              settlement_review_status = 'pending',
+              settlement_review_reason = 'attendance_ambiguous',
+              settlement_review_resolution = NULL,
+              settlement_review_opened_at = COALESCE(settlement_review_opened_at, ?2::timestamptz),
+              settlement_review_resolved_at = NULL,
+              settlement_review_operator_credential_id = NULL,
+              settlement_review_operator_actor_id = NULL,
+              settlement_review_note = NULL,
+              settlement_review_version = settlement_review_version + 1,
+              updated_at = ?2::timestamptz
+          WHERE booking_id = ?1
+            AND status IN ('confirmed', 'live')
+            AND settlement_review_status IS NULL
+          RETURNING ${BOOKING_COLUMNS}`,
+    args: [
+      textToArg("bookingId", input.bookingId),
+      isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodeBooking(res.rows[0]) : null;
+}
+
+async function resolveBookingSettlementReview(
+  exec: BookingLifecycleSqlExecutor,
+  input: ResolveBookingSettlementReviewInput,
+): Promise<Booking | null> {
+  const res = await exec.execute({
+    sql: `UPDATE bookings.bookings
+          SET status = ?2,
+              refund_cents = ?3,
+              settlement_review_status = 'resolved',
+              settlement_review_resolution = ?2,
+              settlement_review_resolved_at = ?4::timestamptz,
+              settlement_review_operator_credential_id = ?5,
+              settlement_review_operator_actor_id = ?6,
+              settlement_review_note = ?7,
+              settlement_review_version = settlement_review_version + 1,
+              updated_at = ?4::timestamptz
+          WHERE booking_id = ?1
+            AND status = 'disputed'
+            AND settlement_review_status = 'pending'
+            AND settlement_review_version = ?8
+          RETURNING ${BOOKING_COLUMNS}`,
+    args: [
+      textToArg("bookingId", input.bookingId),
+      intentStatusForReviewResolution(reviewResolutionToArg(input.resolution)),
+      intToArg("refundCents", input.refundCents),
+      isoUtcToArg(input.nowUtc),
+      textToArg("operatorCredentialId", input.operatorCredentialId),
+      textToArg("operatorActorId", input.operatorActorId),
+      nullableTextToArg("note", input.note),
+      intToArg("expectedReviewVersion", input.expectedReviewVersion),
     ],
   });
   return res.rows[0] ? decodeBooking(res.rows[0]) : null;
@@ -426,6 +528,8 @@ export interface BookingLifecycleWriteRepository extends BookingLifecycleReposit
   startBookingSession(bookingId: string, updatedAt: string): Promise<Booking | null>;
   reserveBookingSettlementIntent(input: ReserveBookingSettlementIntentInput): Promise<Booking | null>;
   flagBookingSettlementDisputed(input: FlagBookingSettlementDisputedInput): Promise<Booking | null>;
+  markBookingSettlementAmbiguous(input: MarkBookingSettlementAmbiguousInput): Promise<Booking | null>;
+  resolveBookingSettlementReview(input: ResolveBookingSettlementReviewInput): Promise<Booking | null>;
   finalizeBookingSettlement(input: FinalizeBookingSettlementInput): Promise<Booking | null>;
   releaseBookingSlotLock(bookingId: string, updatedAt: string): Promise<HostSlotLock | null>;
   attachAttendanceSession(input: AttachAttendanceSessionInput): Promise<AttendanceSession | null>;
@@ -449,6 +553,8 @@ function buildWriteRepository(executor: BookingLifecycleSqlExecutor): BookingLif
     startBookingSession: (bookingId, updatedAt) => startBookingSession(executor, bookingId, updatedAt),
     reserveBookingSettlementIntent: (input) => reserveBookingSettlementIntent(executor, input),
     flagBookingSettlementDisputed: (input) => flagBookingSettlementDisputed(executor, input),
+    markBookingSettlementAmbiguous: (input) => markBookingSettlementAmbiguous(executor, input),
+    resolveBookingSettlementReview: (input) => resolveBookingSettlementReview(executor, input),
     finalizeBookingSettlement: (input) => finalizeBookingSettlement(executor, input),
     releaseBookingSlotLock: (bookingId, updatedAt) => releaseBookingSlotLock(executor, bookingId, updatedAt),
     attachAttendanceSession: (input) => attachAttendanceSession(executor, input),

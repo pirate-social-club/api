@@ -1,6 +1,11 @@
 import { Hono, type Context } from "hono"
 
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  authenticateOperatorCredential,
+  BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+  requireOperatorScope,
+} from "../lib/operator-credential-auth"
 import { getUserRepository as getRealUserRepository } from "../lib/auth/repositories"
 import {
   confirmGlobalBookingHold as realConfirmGlobalBookingHold,
@@ -16,10 +21,14 @@ import {
   completeGlobalBooking as realCompleteGlobalBooking,
   heartbeatGlobalBookingSession as realHeartbeatGlobalBookingSession,
   noShowGlobalBooking as realNoShowGlobalBooking,
+  resolveGlobalBookingSettlementReview as realResolveGlobalBookingSettlementReview,
   startGlobalBookingSession as realStartGlobalBookingSession,
 } from "../lib/bookings/booking-lifecycle-service"
 import {
+  getGlobalBookingSettlementReview as realGetGlobalBookingSettlementReview,
   getGlobalBookingForParty as realGetGlobalBookingForParty,
+  InvalidBookingSettlementReviewCursorError,
+  listPendingGlobalBookingSettlementReviews as realListPendingGlobalBookingSettlementReviews,
   listGlobalBookingsForUser as realListGlobalBookingsForUser,
   type BookingViewerRole,
 } from "../lib/bookings/booking-read-service"
@@ -27,10 +36,19 @@ import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runti
 import { requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
+const SETTLEMENT_REVIEW_RESOLUTIONS = new Set(["completed", "no_show_host", "no_show_booker"])
 
 const bookings = new Hono<AuthenticatedEnv>()
 
-bookings.use("*", authenticateAdminOrUser)
+function isSettlementReviewOperatorPath(pathname: string): boolean {
+  return pathname.endsWith("/bookings/settlement-review/pending")
+    || /\/bookings\/[^/]+\/settlement-review(?:\/resolve)?$/u.test(pathname)
+}
+
+bookings.use("*", async (c, next) => {
+  if (isSettlementReviewOperatorPath(new URL(c.req.url).pathname)) return next()
+  return authenticateAdminOrUser(c, next)
+})
 
 type BookingContext = Context<AuthenticatedEnv>
 
@@ -43,6 +61,9 @@ export type GlobalBookingRouteServices = {
   confirmGlobalBookingHold: typeof realConfirmGlobalBookingHold
   getGlobalBookingForParty: typeof realGetGlobalBookingForParty
   listGlobalBookingsForUser: typeof realListGlobalBookingsForUser
+  getGlobalBookingSettlementReview: typeof realGetGlobalBookingSettlementReview
+  listPendingGlobalBookingSettlementReviews: typeof realListPendingGlobalBookingSettlementReviews
+  resolveGlobalBookingSettlementReview: typeof realResolveGlobalBookingSettlementReview
   cancelGlobalBooking: typeof realCancelGlobalBooking
   startGlobalBookingSession: typeof realStartGlobalBookingSession
   completeGlobalBooking: typeof realCompleteGlobalBooking
@@ -60,6 +81,9 @@ const realServices: GlobalBookingRouteServices = {
   confirmGlobalBookingHold: realConfirmGlobalBookingHold,
   getGlobalBookingForParty: realGetGlobalBookingForParty,
   listGlobalBookingsForUser: realListGlobalBookingsForUser,
+  getGlobalBookingSettlementReview: realGetGlobalBookingSettlementReview,
+  listPendingGlobalBookingSettlementReviews: realListPendingGlobalBookingSettlementReviews,
+  resolveGlobalBookingSettlementReview: realResolveGlobalBookingSettlementReview,
   cancelGlobalBooking: realCancelGlobalBooking,
   startGlobalBookingSession: realStartGlobalBookingSession,
   completeGlobalBooking: realCompleteGlobalBooking,
@@ -216,6 +240,35 @@ bookings.post("/booking-holds/:holdId/quote", quoteHoldHandler)
 bookings.post("/holds/:holdId/confirm", confirmHoldHandler)
 bookings.post("/booking-holds/:holdId/confirm", confirmHoldHandler)
 
+bookings.get("/settlement-review/pending", async (c) => {
+  const operatorActor = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+  const url = new URL(c.req.url)
+  const limitParam = url.searchParams.get("limit")
+  const limit = limitParam == null ? undefined : Number(limitParam)
+  if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return c.json({ error: "invalid_limit" }, 400)
+  }
+  try {
+    const page = await routeServices().listPendingGlobalBookingSettlementReviews({
+      executor: executor(c),
+      sourceCommunityId: optionalSourceCommunityId(url.searchParams.get("source_community_id")),
+      limit,
+      cursor: url.searchParams.get("cursor"),
+    })
+    return c.json(page, 200)
+  } catch (error) {
+    if (error instanceof InvalidBookingSettlementReviewCursorError) {
+      return c.json({ error: "invalid_cursor" }, 400)
+    }
+    throw error
+  }
+})
+
 bookings.get("/:bookingId", async (c) => {
   const booking = await routeServices().getGlobalBookingForParty({
     executor: executor(c),
@@ -224,6 +277,71 @@ bookings.get("/:bookingId", async (c) => {
   })
   if (!booking) return c.json({ error: "not_found" }, 404)
   return c.json({ booking }, 200)
+})
+
+bookings.get("/:bookingId/settlement-review", async (c) => {
+  const operatorActor = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+  const review = await routeServices().getGlobalBookingSettlementReview({
+    executor: executor(c),
+    bookingId: routeParam(c, "bookingId"),
+  })
+  if (!review) return c.json({ error: "not_found" }, 404)
+  return c.json({ review }, 200)
+})
+
+bookings.post("/:bookingId/settlement-review/resolve", async (c) => {
+  const operatorActor = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+  const body = await requireJsonBody<{
+    resolution?: unknown
+    expected_review_version?: unknown
+    note?: unknown
+  }>(c, "resolution and expected_review_version are required")
+  const resolution = typeof body.resolution === "string" ? body.resolution.trim() : ""
+  if (!SETTLEMENT_REVIEW_RESOLUTIONS.has(resolution)) {
+    return c.json({ error: "invalid_resolution" }, 400)
+  }
+  const expectedReviewVersion = Number(body.expected_review_version)
+  if (!Number.isInteger(expectedReviewVersion) || expectedReviewVersion < 0) {
+    return c.json({ error: "invalid_expected_review_version" }, 400)
+  }
+
+  const result = await routeServices().resolveGlobalBookingSettlementReview({
+    env: c.env,
+    executor: executor(c),
+    bookingId: routeParam(c, "bookingId"),
+    resolution: resolution as "completed" | "no_show_host" | "no_show_booker",
+    expectedReviewVersion,
+    operatorCredentialId: operatorActor.operatorCredentialId,
+    operatorActorId: operatorActor.operatorActorId,
+    note: typeof body.note === "string" ? body.note : null,
+    nowUtc: new Date().toISOString(),
+    confirmPollMs: [],
+  })
+  if (!result.ok) {
+    const status = result.reason === "not_found"
+      ? 404
+      : result.reason === "version_conflict" || result.reason === "resolution_conflict"
+        ? 409
+        : 400
+    return c.json({ error: result.reason }, status)
+  }
+  const pendingSettlement = result.outcome === "resolved_pending"
+  return c.json({
+    booking: result.booking,
+    resolution,
+    pending_settlement: pendingSettlement,
+    replayed: result.outcome === "replayed",
+  }, pendingSettlement ? 202 : 200)
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {

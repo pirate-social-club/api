@@ -5,8 +5,7 @@ import {
   evaluateAttendance,
 } from "../communities/bookings/booking-attendance-evaluator";
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
-import { createBookingLifecycleWriteRepository } from "./booking-lifecycle-repository";
-import { completeGlobalBooking, noShowGlobalBooking, startGlobalBookingSession } from "./booking-lifecycle-service";
+import { completeGlobalBooking, markGlobalBookingSettlementAmbiguous, noShowGlobalBooking, startGlobalBookingSession } from "./booking-lifecycle-service";
 import type { SettlementEffectSqlExecutor } from "./settlement-effect-repository";
 
 export interface GlobalBookingSettlementSqlExecutor {
@@ -131,11 +130,11 @@ export async function resolveGlobalDueBooking(input: {
       return {
         outcome: "ambiguous",
         acted: false,
-        flagged: Boolean(await createBookingLifecycleWriteRepository(input.executor).flagBookingSettlementDisputed({
+        flagged: (await markGlobalBookingSettlementAmbiguous({
+          executor: input.executor,
           bookingId: input.bookingId,
-          fromStatus: booking.status as "confirmed" | "live",
           nowUtc: input.nowUtc,
-        })),
+        })).ok,
       };
   }
 }

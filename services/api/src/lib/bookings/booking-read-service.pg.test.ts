@@ -1,10 +1,15 @@
 // Real-Postgres tests for global booking read projections. Runs only when
-// BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core b0001.
+// BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core booking migrations.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
-import { getGlobalBookingForParty, listGlobalBookingsForUser, type BookingReadSqlExecutor } from "./booking-read-service";
+import { applyCanonicalBookingMigrations } from "./test-migrations";
+import {
+  getGlobalBookingForParty,
+  getGlobalBookingSettlementReview,
+  listGlobalBookingsForUser,
+  listPendingGlobalBookingSettlementReviews,
+  type BookingReadSqlExecutor,
+} from "./booking-read-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
 const RUN = Boolean(ADMIN_URL);
@@ -70,6 +75,17 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
     ]);
   }
 
+  async function markPendingReview(bookingId: string, updatedAt: string): Promise<void> {
+    await repoDb.unsafe(`UPDATE bookings.bookings
+      SET status = 'disputed',
+          settlement_review_status = 'pending',
+          settlement_review_reason = 'attendance_ambiguous',
+          settlement_review_opened_at = $2::timestamptz,
+          settlement_review_version = settlement_review_version + 1,
+          updated_at = $2::timestamptz
+      WHERE booking_id = $1`, [bookingId, updatedAt]);
+  }
+
   beforeAll(async () => {
     const root = connect();
     await root.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
@@ -82,7 +98,7 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       await db.unsafe(`CREATE ROLE ${r} NOLOGIN`);
     }
     await db.unsafe("CREATE EXTENSION IF NOT EXISTS btree_gist");
-    await db.unsafe(readFileSync(resolveCoreRepoPath("db/bookings/migrations/b0001_bookings_global_schema.sql"), "utf8"));
+    await applyCanonicalBookingMigrations(db);
     await db.end();
 
     repoDb = connect(TEST_DB);
@@ -174,5 +190,69 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       sourceCommunityId: "community_read_a",
     });
     expect(asBooker.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
+  });
+
+  test("lists and gets pending settlement reviews with source filter and cursor pagination", async () => {
+    await seedBooking({
+      bookingId: "bkg_read_review_a",
+      hostUserId: "host_read_review",
+      bookerUserId: "booker_read_review_a",
+      sourceCommunityId: "community_review_a",
+      status: "live",
+      slotStartUtc: "2026-07-04T10:00:00Z",
+    });
+    await seedBooking({
+      bookingId: "bkg_read_review_b",
+      hostUserId: "host_read_review",
+      bookerUserId: "booker_read_review_b",
+      sourceCommunityId: "community_review_a",
+      status: "live",
+      slotStartUtc: "2026-07-05T10:00:00Z",
+    });
+    await seedBooking({
+      bookingId: "bkg_read_review_other",
+      hostUserId: "host_read_review",
+      bookerUserId: "booker_read_review_c",
+      sourceCommunityId: "community_review_b",
+      status: "live",
+      slotStartUtc: "2026-07-06T10:00:00Z",
+    });
+    await markPendingReview("bkg_read_review_a", "2026-07-04T11:00:00Z");
+    await markPendingReview("bkg_read_review_b", "2026-07-04T11:05:00Z");
+    await markPendingReview("bkg_read_review_other", "2026-07-04T11:02:00Z");
+
+    const firstPage = await listPendingGlobalBookingSettlementReviews({
+      executor: makeExecutor(repoDb),
+      sourceCommunityId: "community_review_a",
+      limit: 1,
+    });
+    expect(firstPage.data.map((review) => review.booking_id)).toEqual(["bkg_read_review_a"]);
+    expect(firstPage.has_more).toBe(true);
+    expect(typeof firstPage.next_cursor).toBe("string");
+
+    const secondPage = await listPendingGlobalBookingSettlementReviews({
+      executor: makeExecutor(repoDb),
+      sourceCommunityId: "community_review_a",
+      limit: 1,
+      cursor: firstPage.next_cursor,
+    });
+    expect(secondPage.data.map((review) => review.booking_id)).toEqual(["bkg_read_review_b"]);
+    expect(secondPage.has_more).toBe(false);
+    expect(secondPage.next_cursor).toBeNull();
+
+    const detail = await getGlobalBookingSettlementReview({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_read_review_a",
+    });
+    expect(detail).toMatchObject({
+      object: "booking_settlement_review",
+      booking_id: "bkg_read_review_a",
+      community_id: "community_review_a",
+      booking_status: "disputed",
+      review_status: "pending",
+      review_reason: "attendance_ambiguous",
+      review_resolution: null,
+      review_version: 1,
+    });
   });
 });
