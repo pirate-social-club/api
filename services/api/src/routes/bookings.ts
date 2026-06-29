@@ -1,23 +1,29 @@
 import { Hono, type Context } from "hono"
 
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
-import { getUserRepository } from "../lib/auth/repositories"
-import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
-import { createGlobalBookingHold, resolveGlobalBookingAvailability } from "../lib/bookings/booking-hold-service"
+import { getUserRepository as getRealUserRepository } from "../lib/auth/repositories"
 import {
-  attachGlobalBookingSession,
-  cancelGlobalBooking,
-  completeGlobalBooking,
-  heartbeatGlobalBookingSession,
-  noShowGlobalBooking,
-  startGlobalBookingSession,
+  confirmGlobalBookingHold as realConfirmGlobalBookingHold,
+  quoteGlobalBookingHold as realQuoteGlobalBookingHold,
+} from "../lib/bookings/booking-confirm-service"
+import {
+  createGlobalBookingHold as realCreateGlobalBookingHold,
+  resolveGlobalBookingAvailability as realResolveGlobalBookingAvailability,
+} from "../lib/bookings/booking-hold-service"
+import {
+  attachGlobalBookingSession as realAttachGlobalBookingSession,
+  cancelGlobalBooking as realCancelGlobalBooking,
+  completeGlobalBooking as realCompleteGlobalBooking,
+  heartbeatGlobalBookingSession as realHeartbeatGlobalBookingSession,
+  noShowGlobalBooking as realNoShowGlobalBooking,
+  startGlobalBookingSession as realStartGlobalBookingSession,
 } from "../lib/bookings/booking-lifecycle-service"
 import {
-  getGlobalBookingForParty,
-  listGlobalBookingsForUser,
+  getGlobalBookingForParty as realGetGlobalBookingForParty,
+  listGlobalBookingsForUser as realListGlobalBookingsForUser,
   type BookingViewerRole,
 } from "../lib/bookings/booking-read-service"
-import { getControlPlaneClient } from "../lib/runtime-deps"
+import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runtime-deps"
 import { requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -28,8 +34,52 @@ bookings.use("*", authenticateAdminOrUser)
 
 type BookingContext = Context<AuthenticatedEnv>
 
-function executor(c: BookingContext): ReturnType<typeof getControlPlaneClient> {
-  return getControlPlaneClient(c.env)
+export type GlobalBookingRouteServices = {
+  getControlPlaneClient: typeof getRealControlPlaneClient
+  getUserRepository: typeof getRealUserRepository
+  resolveGlobalBookingAvailability: typeof realResolveGlobalBookingAvailability
+  createGlobalBookingHold: typeof realCreateGlobalBookingHold
+  quoteGlobalBookingHold: typeof realQuoteGlobalBookingHold
+  confirmGlobalBookingHold: typeof realConfirmGlobalBookingHold
+  getGlobalBookingForParty: typeof realGetGlobalBookingForParty
+  listGlobalBookingsForUser: typeof realListGlobalBookingsForUser
+  cancelGlobalBooking: typeof realCancelGlobalBooking
+  startGlobalBookingSession: typeof realStartGlobalBookingSession
+  completeGlobalBooking: typeof realCompleteGlobalBooking
+  noShowGlobalBooking: typeof realNoShowGlobalBooking
+  attachGlobalBookingSession: typeof realAttachGlobalBookingSession
+  heartbeatGlobalBookingSession: typeof realHeartbeatGlobalBookingSession
+}
+
+const realServices: GlobalBookingRouteServices = {
+  getControlPlaneClient: getRealControlPlaneClient,
+  getUserRepository: getRealUserRepository,
+  resolveGlobalBookingAvailability: realResolveGlobalBookingAvailability,
+  createGlobalBookingHold: realCreateGlobalBookingHold,
+  quoteGlobalBookingHold: realQuoteGlobalBookingHold,
+  confirmGlobalBookingHold: realConfirmGlobalBookingHold,
+  getGlobalBookingForParty: realGetGlobalBookingForParty,
+  listGlobalBookingsForUser: realListGlobalBookingsForUser,
+  cancelGlobalBooking: realCancelGlobalBooking,
+  startGlobalBookingSession: realStartGlobalBookingSession,
+  completeGlobalBooking: realCompleteGlobalBooking,
+  noShowGlobalBooking: realNoShowGlobalBooking,
+  attachGlobalBookingSession: realAttachGlobalBookingSession,
+  heartbeatGlobalBookingSession: realHeartbeatGlobalBookingSession,
+}
+
+let servicesForTests: GlobalBookingRouteServices | null = null
+
+export function setGlobalBookingRouteServicesForTests(services: GlobalBookingRouteServices | null): void {
+  servicesForTests = services
+}
+
+function routeServices(): GlobalBookingRouteServices {
+  return servicesForTests ?? realServices
+}
+
+function executor(c: BookingContext): ReturnType<typeof getRealControlPlaneClient> {
+  return routeServices().getControlPlaneClient(c.env)
 }
 
 function routeParam(c: BookingContext, name: string): string {
@@ -64,7 +114,7 @@ async function slotsHandler(c: BookingContext) {
     ?? new Date(Date.parse(nowUtc) + DEFAULT_WINDOW_DAYS * 86400_000).toISOString()
   const viewerTimezone = url.searchParams.get("tz") ?? "UTC"
 
-  const result = await resolveGlobalBookingAvailability({
+  const result = await routeServices().resolveGlobalBookingAvailability({
     executor: executor(c),
     hostUserId,
     windowStartUtc,
@@ -92,7 +142,7 @@ async function createHoldHandler(c: BookingContext) {
     return c.json({ error: "slot_start_utc and slot_end_utc are required" }, 400)
   }
 
-  const result = await createGlobalBookingHold({
+  const result = await routeServices().createGlobalBookingHold({
     client: executor(c),
     sourceCommunityId: sourceCommunityIdFromBody(body.source_community_id),
     hostUserId,
@@ -106,7 +156,7 @@ async function createHoldHandler(c: BookingContext) {
 }
 
 async function quoteHoldHandler(c: BookingContext) {
-  const result = await quoteGlobalBookingHold({
+  const result = await routeServices().quoteGlobalBookingHold({
     env: c.env,
     executor: executor(c),
     holdId: routeParam(c, "holdId"),
@@ -126,10 +176,10 @@ async function confirmHoldHandler(c: BookingContext) {
     return c.json({ error: "funding_tx_ref and wallet_attachment_id are required" }, 400)
   }
 
-  const result = await confirmGlobalBookingHold({
+  const result = await routeServices().confirmGlobalBookingHold({
     env: c.env,
     executor: executor(c),
-    userRepository: getUserRepository(c.env),
+    userRepository: routeServices().getUserRepository(c.env),
     holdId: routeParam(c, "holdId"),
     bookerUserId: actor.userId,
     fundingTxRef: body.funding_tx_ref,
@@ -147,7 +197,7 @@ bookings.get("/", async (c) => {
   const statusParam = url.searchParams.get("status")
   const statuses = statusParam ? statusParam.split(",").map((status) => status.trim()).filter(Boolean) : undefined
   const sourceCommunityId = optionalSourceCommunityId(url.searchParams.get("source_community_id"))
-  const data = await listGlobalBookingsForUser({
+  const data = await routeServices().listGlobalBookingsForUser({
     executor: executor(c),
     actorUserId: actor.userId,
     role,
@@ -167,7 +217,7 @@ bookings.post("/holds/:holdId/confirm", confirmHoldHandler)
 bookings.post("/booking-holds/:holdId/confirm", confirmHoldHandler)
 
 bookings.get("/:bookingId", async (c) => {
-  const booking = await getGlobalBookingForParty({
+  const booking = await routeServices().getGlobalBookingForParty({
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
     actorUserId: c.get("actor").userId,
@@ -177,7 +227,7 @@ bookings.get("/:bookingId", async (c) => {
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {
-  const result = await cancelGlobalBooking({
+  const result = await routeServices().cancelGlobalBooking({
     env: c.env,
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
@@ -189,7 +239,7 @@ bookings.post("/:bookingId/cancel", async (c) => {
 })
 
 bookings.post("/:bookingId/start", async (c) => {
-  const result = await startGlobalBookingSession({
+  const result = await routeServices().startGlobalBookingSession({
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
     actorUserId: c.get("actor").userId,
@@ -200,7 +250,7 @@ bookings.post("/:bookingId/start", async (c) => {
 })
 
 bookings.post("/:bookingId/complete", async (c) => {
-  const result = await completeGlobalBooking({
+  const result = await routeServices().completeGlobalBooking({
     env: c.env,
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
@@ -212,7 +262,7 @@ bookings.post("/:bookingId/complete", async (c) => {
 })
 
 bookings.post("/:bookingId/no-show", async (c) => {
-  const result = await noShowGlobalBooking({
+  const result = await routeServices().noShowGlobalBooking({
     env: c.env,
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
@@ -224,7 +274,7 @@ bookings.post("/:bookingId/no-show", async (c) => {
 })
 
 bookings.post("/:bookingId/session/attach", async (c) => {
-  const result = await attachGlobalBookingSession({
+  const result = await routeServices().attachGlobalBookingSession({
     env: c.env,
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
@@ -239,7 +289,7 @@ bookings.post("/:bookingId/session/heartbeat", async (c) => {
   const body = await c.req.json<{ session_id?: unknown }>().catch(() => null)
   const sessionId = body && typeof body.session_id === "string" ? body.session_id : ""
   if (!sessionId) return c.json({ error: "invalid_payload" }, 400)
-  const result = await heartbeatGlobalBookingSession({
+  const result = await routeServices().heartbeatGlobalBookingSession({
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
     actorUserId: c.get("actor").userId,
