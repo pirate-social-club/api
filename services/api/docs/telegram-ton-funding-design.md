@@ -275,10 +275,11 @@ Findings that support continuing:
   destination address. This still needs fixture validation against the exact
   route before being treated as guaranteed.
 - A no-money quote probe with two different Base `to` addresses returned `200 OK`
-  for both and preserved the final output as native Base USDC. This is positive
-  evidence for per-intent destination support, but it does not replace a tx
-  lookup fixture proving the final delivered tx actually pays the requested
-  address.
+  for both, preserved the final output as native Base USDC, and produced
+  different TON wallet payloads while keeping the same TON message recipient.
+  This is strong quote-level evidence that the requested Base destination is
+  encoded into the route. It still does not replace a tx lookup fixture proving
+  the final delivered tx actually pays the requested `to` address.
 
 Important corrections and open checks:
 
@@ -291,8 +292,9 @@ Important corrections and open checks:
   yet that Pirate can inject `expectedTonPayload(spend_intent_id)` into the real
   Symbiosis TON payment. Treat the exact TON memo as a simulation invariant, not
   a production invariant, until Symbiosis confirms custom payload support.
-- OpenAPI inspection found required `from` and `to` fields but no obvious custom
-  TON memo/payload field in the swap request shape. Treat memo injection as
+- OpenAPI inspection found required `from` and `to` fields but no custom TON
+  memo/payload field in the swap request shape. The only TON `payload` field is
+  in response schemas (`tx.messages[].payload`). Treat memo injection as
   unsupported unless provider docs/support confirm otherwise.
 - If custom TON payloads are unavailable, production attribution must bind the
   Telegram session, selected source wallet, submitted source tx hash, Symbiosis
