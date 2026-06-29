@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   bookings-repository:
-    # Real-Postgres test for the global bookings repository (host-config read slice): provisions
+    # Real-Postgres tests for the global bookings repositories: provisions
     # PostgreSQL 17 and applies the CANONICAL core b0001 before exercising the repository.
     runs-on: ubuntu-latest
     services:
@@ -68,7 +68,7 @@ jobs:
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
-        run: bun test src/lib/bookings/host-config-repository.pg.test.ts
+        run: bun test src/lib/bookings/host-config-repository.pg.test.ts src/lib/bookings/hold-repository.pg.test.ts
 
   api:
     runs-on: ubuntu-latest

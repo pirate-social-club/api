@@ -54,6 +54,34 @@ export interface PriceRule {
   updatedAt: string;
 }
 
+export interface HostSlotLock {
+  lockId: string;
+  hostUserId: string;
+  slotStartUtc: string;
+  slotEndUtc: string;
+  holdId: string | null;
+  bookingId: string | null;
+  status: "active" | "released";
+  sourceCommunityId: string | null;
+  expiresAtUtc: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookingHold {
+  holdId: string;
+  hostUserId: string;
+  bookerUserId: string;
+  slotStartUtc: string;
+  slotEndUtc: string;
+  priceCents: number;
+  status: "active" | "consumed" | "expired";
+  sourceCommunityId: string | null;
+  expiresAtUtc: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Aggregate host configuration. `null` when the host has no profile row (the caller decides what an
 // unpublished/absent profile means — the repository stays policy-free).
 export interface HostConfiguration {
