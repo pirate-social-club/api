@@ -86,6 +86,13 @@ describe.skipIf(!RUN)("global booking settlement cron (real Postgres)", () => {
       (session_id, booking_id, party, user_id, agora_uid, attached_at, last_seen_at, ended_at, created_at, updated_at)
       VALUES ($1, $2, $3, $4, NULL, '2026-07-01T10:00:00Z', '2026-07-01T10:30:00Z', NULL, '2026-07-01T10:00:00Z', '2026-07-01T10:30:00Z')`,
     [`bas_${bookingId}_${party}`, bookingId, party, userId]);
+    for (let minute = 1; minute <= 10; minute += 1) {
+      const seenAt = `2026-07-01T10:${String(minute).padStart(2, "0")}:00Z`;
+      await repoDb.unsafe(`INSERT INTO bookings.attendance_heartbeats
+        (heartbeat_id, session_id, booking_id, seen_at)
+        VALUES ($1, $2, $3, $4::timestamptz)`,
+      [`bah_${bookingId}_${party}_${minute}`, `bas_${bookingId}_${party}`, bookingId, seenAt]);
+    }
   }
 
   function installFakes(): void {
