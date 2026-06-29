@@ -1926,6 +1926,13 @@ export type SongPresentation = {
   timed_lyrics?: (Record<string, unknown>) | null;
 };
 
+export type SongStudyCapability = {
+  status: "ready" | "locked" | "processing" | "unavailable";
+  exercise_count?: number | null;
+  source_language?: string | null;
+  target_language?: string | null;
+};
+
 export type SongKaraokePayload = {
   id: string;
   object: "song_karaoke_payload";
@@ -1982,6 +1989,7 @@ export type LocalizedPostResponse = {
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
+  study_capability?: SongStudyCapability | null;
   viewer_gate_state?: (Record<string, unknown>) | null;
   asset_story?: ({
     story_ip?: string | null;
