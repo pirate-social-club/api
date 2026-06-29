@@ -17,6 +17,7 @@ import { registerCommunityModerationRoutes } from "./communities-moderation-rout
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
 import { registerCommunitySettingsRoutes } from "./communities-settings-routes"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
+import { registerCommunityStudyRoutes } from "./communities-study-routes"
 import { registerCommunityTelegramRoutes } from "./communities-telegram-routes"
 
 const communities = new Hono<AuthenticatedEnv>()
@@ -89,6 +90,7 @@ registerCommunityBookingsRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
 registerCommunityKaraokeSessionRoutes(communities)
+registerCommunityStudyRoutes(communities)
 registerCommunityTelegramRoutes(communities)
 
 export default communities

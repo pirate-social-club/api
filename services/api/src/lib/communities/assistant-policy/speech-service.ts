@@ -47,6 +47,10 @@ export type CommunityAssistantTranscriptionResponse = {
   duration_seconds: number | null
 }
 
+export type CommunityAudioTranscriptionResponse = Omit<CommunityAssistantTranscriptionResponse, "object"> & {
+  object: "community_audio_transcription"
+}
+
 export type CommunityAssistantSpeechBody = {
   text?: unknown
 }
@@ -196,6 +200,23 @@ export async function transcribeCommunityAssistantAudioForCommunity(input: {
   })
 }
 
+export async function transcribeCommunityAudioWithElevenLabs(input: {
+  communityId: string
+  env: Env
+  file: File
+  model?: string | null
+}): Promise<CommunityAudioTranscriptionResponse> {
+  return {
+    ...await transcribeCommunityAudioWithElevenLabsInternal({
+      communityId: input.communityId,
+      env: input.env,
+      file: input.file,
+      model: input.model,
+    }),
+    object: "community_audio_transcription",
+  }
+}
+
 async function transcribeCommunityAssistantAudioWithPolicy(input: {
   communityId: string
   env: Env
@@ -204,6 +225,23 @@ async function transcribeCommunityAssistantAudioWithPolicy(input: {
 }): Promise<CommunityAssistantTranscriptionResponse> {
   assertTranscriptionPolicy(input.policy)
 
+  return {
+    ...await transcribeCommunityAudioWithElevenLabsInternal({
+      communityId: input.communityId,
+      env: input.env,
+      file: input.file,
+      model: input.policy.sttModel,
+    }),
+    object: "community_assistant_transcription",
+  }
+}
+
+async function transcribeCommunityAudioWithElevenLabsInternal(input: {
+  communityId: string
+  env: Env
+  file: File
+  model?: string | null
+}): Promise<Omit<CommunityAssistantTranscriptionResponse, "object">> {
   const mimeType = normalizeAudioMimeType(input.file)
   if (!SUPPORTED_TRANSCRIPTION_MIME_TYPES.has(mimeType)) {
     throw badRequestError("audio file type is not supported")
@@ -215,7 +253,7 @@ async function transcribeCommunityAssistantAudioWithPolicy(input: {
     throw badRequestError("audio file must be at most 20MB")
   }
 
-  const model = input.policy.sttModel.trim() || DEFAULT_ELEVENLABS_STT_MODEL
+  const model = input.model?.trim() || DEFAULT_ELEVENLABS_STT_MODEL
   const form = new FormData()
   form.set("file", input.file)
   form.set("model_id", model)
@@ -238,7 +276,16 @@ async function transcribeCommunityAssistantAudioWithPolicy(input: {
   if (!response.ok) {
     throw providerUnavailable(`ElevenLabs transcription failed with http_${response.status}`)
   }
-  return parseTranscriptionBody(await response.json().catch(() => null), model)
+  const parsed = parseTranscriptionBody(await response.json().catch(() => null), model)
+  return {
+    provider: parsed.provider,
+    model: parsed.model,
+    text: parsed.text,
+    confidence: parsed.confidence,
+    language_code: parsed.language_code,
+    language_probability: parsed.language_probability,
+    duration_seconds: parsed.duration_seconds,
+  }
 }
 
 export async function synthesizeCommunityAssistantSpeech(input: {
