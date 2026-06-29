@@ -66,6 +66,8 @@ Flags:
                          When publishing a replay, wait this long after host attach before ending; default 20000.
   --community-id <id>    Reuse an existing provisioned community instead of creating a new one.
                          Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
+  --require-existing-community
+                         Fail before creating smoke users or communities unless --community-id/PIRATE_SMOKE_COMMUNITY_ID is set.
   --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
   --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
@@ -1223,12 +1225,16 @@ async function main(): Promise<void> {
   const settle = hasFlag("--settle-purchase")
   const recordingEnabled = hasFlag("--recording-enabled")
   const replayAccessMode = readReplayAccessMode()
+  const requireExistingCommunity = hasFlag("--require-existing-community")
   const replayPriceCents = readPositiveInteger(
     readArg("--replay-price-cents") || readEnv(env, "PIRATE_SMOKE_REPLAY_PRICE_CENTS", String(priceCents)),
     "replay price cents",
   )
   if (replayAccessMode && !recordingEnabled) {
     throw new Error("--replay-access-mode requires --recording-enabled")
+  }
+  if (requireExistingCommunity && !existingCommunityId) {
+    throw new Error("--require-existing-community requires --community-id or PIRATE_SMOKE_COMMUNITY_ID")
   }
   const skipVerification = hasFlag("--skip-verification")
   let host: SmokeSession | null = null
