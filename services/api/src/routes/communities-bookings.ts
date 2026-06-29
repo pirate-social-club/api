@@ -4,12 +4,27 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { resolveBookingAvailability } from "../lib/communities/bookings/booking-availability-service"
 import { confirmBookingHold, quoteBookingHold } from "../lib/communities/bookings/booking-confirm-service"
 import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
-import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
+import {
+  cancelBooking,
+  completeBooking,
+  noShowBooking,
+  resolveBookingSettlementReview,
+  startBookingSession,
+  type BookingSettlementReviewResolution,
+} from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
 import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import {
+  authenticateOperatorCredential,
+  BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+  requireOperatorScope,
+} from "../lib/operator-credential-auth"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
+const SETTLEMENT_REVIEW_RESOLUTIONS = new Set<string>(["completed", "no_show_host", "no_show_booker"])
 
 export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedEnv>): void {
   // Read-only availability for a host within a community (Slice A): resolves the host's
@@ -197,6 +212,57 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ booking: result.booking, already_resolved: result.already }, 200)
+  })
+
+  communities.post("/:communityId/bookings/:bookingId/settlement-review/resolve", async (c) => {
+    const operatorActor = await authenticateOperatorCredential({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+    const body = await requireJsonBody<{
+      resolution?: unknown
+      expected_review_version?: unknown
+      note?: unknown
+    }>(c, "resolution and expected_review_version are required")
+    const resolution = typeof body.resolution === "string" ? body.resolution.trim() : ""
+    if (!SETTLEMENT_REVIEW_RESOLUTIONS.has(resolution)) {
+      return c.json({ error: "invalid_resolution" }, 400)
+    }
+    const expectedReviewVersion = Number(body.expected_review_version)
+    if (!Number.isInteger(expectedReviewVersion) || expectedReviewVersion < 0) {
+      return c.json({ error: "invalid_expected_review_version" }, 400)
+    }
+
+    const communityRepository = getCommunityRepository(c.env)
+    const routeCommunityId = c.req.param("communityId")
+    const communityId = await resolveCommunityIdentifier(communityRepository, routeCommunityId) ?? routeCommunityId
+    const result = await resolveBookingSettlementReview({
+      env: c.env,
+      communityRepository,
+      communityId,
+      bookingId: c.req.param("bookingId"),
+      resolution: resolution as BookingSettlementReviewResolution,
+      expectedReviewVersion,
+      operatorCredentialId: operatorActor.operatorCredentialId,
+      operatorActorId: operatorActor.operatorActorId,
+      note: typeof body.note === "string" ? body.note : null,
+      nowUtc: new Date().toISOString(),
+    })
+    if (!result.ok) {
+      const status = result.reason === "not_found"
+        ? 404
+        : result.reason === "version_conflict" || result.reason === "resolution_conflict"
+          ? 409
+          : 400
+      return c.json({ error: result.reason }, status)
+    }
+    return c.json({
+      booking: result.booking,
+      resolution,
+      replayed: result.outcome === "replayed",
+    }, 200)
   })
 
   // Slice D2/D3: attach to the booking's private 1:1 session (host/booker only). Mints an Agora

@@ -5,7 +5,7 @@ import {
   type AttendanceOutcome,
   evaluateAttendance,
 } from "./booking-attendance-evaluator"
-import { completeBooking, noShowBooking, startBookingSession } from "./booking-lifecycle-service"
+import { completeBooking, markBookingSettlementAmbiguous, noShowBooking, startBookingSession } from "./booking-lifecycle-service"
 
 type CommunityRepository = Parameters<typeof openCommunityReadClient>[1]
 
@@ -76,6 +76,10 @@ export interface ResolveDueResult {
   acted: boolean
 }
 
+export function isBookingSettlementAmbiguousReviewEnabled(env: Env): boolean {
+  return String(env.BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED ?? "").trim().toLowerCase() === "true"
+}
+
 /**
  * Settle one booking past its slot from objective attendance (Slice D4). Auto-starts the session
  * (confirmed → live) before resolving, since complete/no-show require `live`. Ambiguous results are
@@ -129,6 +133,15 @@ export async function resolveDueBooking(input: {
       await noShowBooking({ ...base, actorUserId: booking.booker_user_id })
       return { outcome: "no_show_host", acted: true }
     default:
+      if (isBookingSettlementAmbiguousReviewEnabled(input.env)) {
+        await markBookingSettlementAmbiguous({
+          env: input.env,
+          communityRepository: input.communityRepository,
+          communityId: input.communityId,
+          bookingId: input.bookingId,
+          nowUtc: input.nowUtc,
+        })
+      }
       return { outcome: "ambiguous", acted: false }
   }
 }

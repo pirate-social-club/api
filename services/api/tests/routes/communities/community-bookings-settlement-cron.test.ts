@@ -90,6 +90,20 @@ async function bookingStatus(root: string, communityId: string, bookingId: strin
     return r.rows[0] ? String(r.rows[0].status) : null
   } finally { c.close() }
 }
+async function bookingSettlementReviewStatus(root: string, communityId: string, bookingId: string): Promise<{ status: string | null; reviewStatus: string | null }> {
+  const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+  try {
+    const r = await c.execute({
+      sql: `SELECT status, settlement_review_status FROM bookings WHERE booking_id = ?1`,
+      args: [bookingId],
+    })
+    const row = r.rows[0]
+    return {
+      status: row?.status == null ? null : String(row.status),
+      reviewStatus: row?.settlement_review_status == null ? null : String(row.settlement_review_status),
+    }
+  } finally { c.close() }
+}
 function resumeInput(ctx: Ctx, communityId: string, bookingId: string) {
   return { env: ctx.env, communityRepository: getCommunityRepository(ctx.env), communityId, bookingId, nowUtc: new Date().toISOString(), confirmPollMs: [] as number[] }
 }
@@ -206,6 +220,25 @@ describe("booking settlement cron — sweep over real D1", () => {
     expect(summary.ambiguous).toBe(1)
     expect(summary.settled).toBe(0)
     expect(await bookingStatus(root, communityId, "bkg1")).toBe("live") // untouched
+  })
+
+  test("ambiguous-review flag moves a due ambiguous booking to pending review", async () => {
+    const { ctx, communityId, root, hostId, bookerId } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg1", status: "live", refundCents: null, hostId, bookerId })
+    installCoordinator()
+    const summary = await sweepDueBookingSettlements({
+      ...sweepInput(ctx, communityId),
+      env: {
+        ...sweepInput(ctx, communityId).env,
+        BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED: "true",
+      },
+    })
+    expect(summary.ambiguous).toBe(1)
+    expect(summary.settled).toBe(0)
+    expect(await bookingSettlementReviewStatus(root, communityId, "bkg1")).toEqual({
+      status: "disputed",
+      reviewStatus: "pending",
+    })
   })
 
   test("one failed booking does not stop sibling bookings", async () => {
