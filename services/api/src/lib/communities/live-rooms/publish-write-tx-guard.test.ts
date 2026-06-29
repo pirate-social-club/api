@@ -68,6 +68,7 @@ const PREPARED_ROOM: PreparedLiveRoomCreate = {
   guestUserId: null,
   eventStartAt: null,
   coverRef: null,
+  recordingEnabled: false,
   allocations: [{ userId: "usr_host", role: "host", shareBps: 10_000 }],
   setlist: { status: "draft", items: [] },
 }
@@ -94,6 +95,7 @@ describe("publishLiveRoom combined create+listing inside a D1 write transaction"
         createdAt: "2026-06-22T00:00:00.000Z",
         assetId: null,
         liveRoomId: null,
+        replayAssetId: null,
         status: "active",
         priceUsd: 9.99,
         regionalPricingPolicyJson: JSON.stringify({

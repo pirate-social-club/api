@@ -812,6 +812,7 @@ export type CommunityListing = {
   community: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   listing_mode: "fixed_price";
   status: "draft" | "active" | "paused" | "archived";
   price_cents: number;
@@ -827,6 +828,7 @@ export type CommunityListing = {
 export type CreateCommunityListingRequest = {
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   price_cents: number;
   regional_pricing_enabled: boolean;
   donation_partner?: string | null;
@@ -856,6 +858,7 @@ export type CommunityPurchase = {
   listing: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   buyer_user: string;
   settlement_wallet_attachment: string;
   purchase_price_cents: number;
@@ -935,6 +938,7 @@ export type CommunityPurchaseQuote = {
   buyer_user: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   base_price_cents: number;
   pricing_tier?: string | null;
   final_price_cents: number;
@@ -979,6 +983,7 @@ export type CommunityPurchaseSettlement = {
   buyer_user: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   settlement_wallet_attachment: string;
   purchase_price_cents: number;
   pricing_tier?: string | null;
@@ -993,7 +998,7 @@ export type CommunityPurchaseSettlement = {
   donation_amount_cents?: number | null;
   vinyl_release_provider?: "elasticstage" | null;
   vinyl_release_url?: string | null;
-  entitlement_kind: "asset_access" | "live_room_access";
+  entitlement_kind: "asset_access" | "live_room_access" | "replay_access";
   entitlement_target_ref: string;
   purchase_entitlement: string;
   settled_at: number;
@@ -1011,6 +1016,131 @@ export type CommunityPurchaseSettlementFailure = {
   status: "failed" | "expired";
   failed_at?: number | null;
   expires_at: number;
+};
+
+export type CreateLiveRoomRequest = {
+  title: string;
+  description?: string | null;
+  event_start_at?: number | null;
+  access_mode: "free" | "included_with_ticket" | "paid" | "gated" | "paid";
+  room_kind: "solo" | "duet";
+  visibility: "public" | "unlisted";
+  guest_user?: string | null;
+  performer_allocations: Array<LiveRoomPerformerAllocationInput>;
+  cover_ref?: string | null;
+  recording_enabled?: boolean | null;
+  participant_capacity?: number | null;
+  listing?: string | null;
+  replay_listing?: string | null;
+  anchor_post?: string | null;
+  initial_setlist: InitialLiveSetlistInput;
+};
+
+export type LiveRoom = {
+  id: string;
+  object: "live_room";
+  community: string;
+  anchor_post: string;
+  host_user: string;
+  title: string;
+  description?: string | null;
+  status: "scheduled" | "live" | "ended" | "canceled";
+  access_mode: "free" | "gated" | "paid";
+  room_kind: "solo" | "duet";
+  visibility: "public" | "unlisted";
+  guest_user?: string | null;
+  performer_allocations: Array<LiveRoomPerformerAllocationInput>;
+  listing?: string | null;
+  replay_listing?: string | null;
+  broadcast_ref?: string | null;
+  recording_enabled: boolean;
+  event_start_at?: number | null;
+  live_started_at?: number | null;
+  ended_at?: number | null;
+  canceled_at?: number | null;
+  cover_ref?: string | null;
+  participant_capacity?: number | null;
+  replay_asset?: string | null;
+  replay_status: "none" | "processing" | "review_pending" | "published" | "failed";
+  created: number;
+};
+
+export type LiveRoomReplayDraft = {
+  object: "live_room_replay_draft";
+  live_room: string;
+  recording_enabled: boolean;
+  replay_status: "none" | "processing" | "review_pending" | "published" | "failed";
+  status: LiveRoomReplayDraftStatus;
+  replay_asset: LiveRoomReplayAsset | null;
+  recording: LiveRoomReplayRecording | null;
+};
+
+export type LiveRoomReplayAsset = {
+  id: string;
+  object: "live_room_replay_asset";
+  publication_status: "draft" | "published" | "failed";
+  title: string;
+  caption: string | null;
+  duration_ms: number | null;
+  preview_ref: string | null;
+  access_mode: LiveRoomReplayAssetAccessMode;
+  locked_delivery_status: "none" | "requested" | "ready" | "failed";
+  published_at: string | null;
+  allocations: Array<LiveRoomReplayAllocation>;
+};
+
+export type LiveRoomReplayAllocation = {
+  id: string;
+  participant_user: string | null;
+  external_party_ref: string | null;
+  role: string;
+  share_bps: number;
+  rights_basis: string;
+  approval_status: "pending" | "approved" | "rejected";
+};
+
+export type LiveRoomReplayStoryCdrAccess = {
+  chain_id: number;
+  rpc_url: string;
+  cdr_contract_address: string;
+  read_condition_address: string;
+  ciphertext_ref: string;
+  cipher_algorithm: string;
+  cipher_iv_b64: string;
+  mime_type: string;
+  vault_uuid: number;
+  namespace: string;
+  access_scope: "asset.owner" | "asset.share";
+  access_ref: string;
+  access_aux_data_hex?: string;
+  access_proof: Record<string, unknown>;
+};
+
+export type LiveRoomReplayAccessResponse = {
+  live_room: string;
+  replay_asset: string | null;
+  replay_listing: CommunityListing | null;
+  replay_status: "none" | "processing" | "review_pending" | "published" | "failed";
+  access_mode: LiveRoomReplayAssetAccessMode | null;
+  locked_delivery_status: "none" | "requested" | "ready" | "failed" | null;
+  access_granted: boolean;
+  decision_reason: "free" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending" | "not_published" | "not_available";
+  delivery_kind: "primary_content_ref" | "story_cdr_ref" | null;
+  delivery_ref: string | null;
+  story_cdr_access: LiveRoomReplayStoryCdrAccess | null;
+};
+
+export type UpdateLiveRoomReplayDraftRequest = {
+  title?: string | null;
+  caption?: string | null;
+  preview_ref?: string | null;
+  access_mode?: LiveRoomReplayAssetAccessMode | null;
+  allocations?: Array<LiveRoomReplayDraftAllocationInput> | null;
+};
+
+export type PublishLiveRoomReplayDraftRequest = {
+  access_mode?: "free" | "included_with_ticket" | "paid";
+  listing?: CreateCommunityListingRequest | null;
 };
 
 export type CommunityHandle = {
@@ -1274,7 +1404,7 @@ export type CreateSongArtifactUploadRequest = {
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
-  upload_mode?: "proxy" | "direct_multipart";
+  upload_mode?: "proxy" | "direct_multipart" | null;
 };
 
 export type CreateSongArtifactBundleRequest = {
@@ -1290,36 +1420,7 @@ export type CreateSongArtifactBundleRequest = {
   vocal_audio?: SongArtifactUploadRef | null;
 };
 
-export type PostEventStatus = "scheduled" | "canceled" | "postponed" | "ended";
-
-export type PostEventPlace = {
-  label: string;
-  address?: string | null;
-  lat: number;
-  lon: number;
-  source: "geoapify" | "manual";
-  providerPlaceId?: string | null;
-  countryCode?: string | null;
-  city?: string | null;
-};
-
-export type PostEvent = {
-  starts_at: number;
-  ends_at?: number | null;
-  timezone: string;
-  location_name?: string | null;
-  address?: string | null;
-  is_online?: boolean | null;
-  event_url?: string | null;
-  status?: PostEventStatus | null;
-  place?: PostEventPlace | null;
-};
-
-export type CreatePostRequest = (((unknown & {
-  post_type: "text";
-  title?: string;
-  body?: string;
-}) | {
+export type CreatePostRequest = (unknown | {
   post_type: "image";
   title?: string | null;
   media_refs: Array<ImageMediaDescriptor>;
@@ -1335,50 +1436,11 @@ export type CreatePostRequest = (((unknown & {
   title?: string | null;
   body?: string | null;
   link_url: string;
-} | (unknown & {
-  post_type: "song";
-  identity_mode: "public";
-  access_mode?: "public" | "locked";
-  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
-  commercial_rev_share_pct?: number | null;
-  title?: string | null;
-  media_refs?: Array<AudioMediaDescriptor>;
-}) | {
+} | {
   post_type: "crosspost";
   title: string;
   source_post: string;
   source_community: string;
-}) & {
-  idempotency_key: string;
-  authorship_mode?: "human_direct" | "user_agent";
-  agent?: string | null;
-  agent_action_proof?: AgentActionProof | null;
-  identity_mode?: "public" | "anonymous";
-  anonymous_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
-  disclosed_qualifier_ids?: Array<string> | null;
-  parent_post?: string | null;
-  label?: string | null;
-  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
-  body?: string | null;
-  caption?: string | null;
-  link_url?: string | null;
-  source_post?: string | null;
-  source_community?: string | null;
-  media_refs?: Array<MediaDescriptor>;
-  creator_relation?: PostCreatorRelation | null;
-  promotion_disclosure?: PromotionDisclosureInput | null;
-  translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid";
-  visibility?: "public" | "members_only";
-  access_mode?: "public" | "locked" | null;
-  asset?: string | null;
-  song_artifact_bundle?: string | null;
-  song_mode?: "original" | "remix" | null;
-  rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
-  upstream_asset_refs?: Array<string> | null;
-  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
-  commercial_rev_share_pct?: number | null;
-  lyrics?: string | null;
-  event?: PostEvent | null;
 });
 
 export type CreateCommentRequest = {
@@ -1463,6 +1525,17 @@ export type AssetAccessResponse = {
     access_aux_data_hex?: string;
     access_proof: Record<string, unknown>;
   }) | null;
+};
+
+export type SongAudioArtifactDescriptor = {
+  storage_ref: string;
+  mime_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  decentralized_storage?: (Record<string, unknown>) | null;
+  duration_ms?: number | null;
+  clip_start_ms?: number | null;
+  clip_duration_ms?: number | null;
 };
 
 export type SongArtifactUpload = {
@@ -1561,6 +1634,23 @@ export type CrosspostSource = {
   thumbnail_ref?: string | null;
 };
 
+export type PostDerivativeSource = {
+  source_ref: string;
+  title: string;
+  kind: "song" | "video";
+  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples";
+  community?: string | null;
+  asset?: string | null;
+  source_post?: string | null;
+  story_ip?: string | null;
+  story_license_terms?: string | null;
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
+  creator_user?: string | null;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+};
+
 export type Post = {
   id: string;
   object: "post";
@@ -1592,12 +1682,16 @@ export type Post = {
   link_og_image_url?: string | null;
   link_og_title?: string | null;
   link_enrichment?: (Record<string, unknown>) | null;
-  event?: PostEvent | null;
   embeds?: Array<PostEmbed> | null;
   media_refs?: Array<MediaDescriptor>;
   creator_relation?: PostCreatorRelation | null;
   promotion_disclosure?: PromotionDisclosure | null;
   source_language?: string | null;
+  source_language_confidence?: number | null;
+  source_language_reliable?: boolean;
+  source_language_detector?: string | null;
+  source_language_detected_at?: string | null;
+  source_language_source_hash?: string | null;
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null;
   access_mode?: "public" | "locked" | null;
   asset?: string | null;
@@ -1643,6 +1737,12 @@ export type Comment = {
   agent_ownership_provider_snapshot?: AgentOwnershipProvider | null;
   body: string | null;
   media_refs?: Array<MediaDescriptor>;
+  source_language?: string | null;
+  source_language_confidence?: number | null;
+  source_language_reliable?: boolean;
+  source_language_detector?: string | null;
+  source_language_detected_at?: string | null;
+  source_language_source_hash?: string | null;
   status: "published" | "hidden" | "removed" | "deleted";
   replies_locked?: boolean;
   replies_locked_at?: number | null;
@@ -1808,38 +1908,22 @@ export type CreateModerationActionRequest = {
   note?: string | null;
 };
 
-export type SongPresentationDownloadableAudio = {
-  kind: "original" | "instrumental" | "vocals";
-  storage_ref: string;
-  mime_type: string;
-  size_bytes?: number | null;
-  duration_ms?: number | null;
-  filename?: string | null;
-  decentralized_storage?: DecentralizedStorageProof | null;
-};
-
 export type SongPresentation = {
   title: string | null;
   cover_art_ref: string | null;
   duration_ms: number | null;
-  downloadable_audio?: Array<SongPresentationDownloadableAudio> | null;
-};
-
-export type PostDerivativeSource = {
-  source_ref: string;
-  title: string;
-  kind: "song" | "video";
-  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples";
-  community?: string | null;
-  asset?: string | null;
-  source_post?: string | null;
-  story_ip?: string | null;
-  story_license_terms?: string | null;
-  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
-  commercial_rev_share_pct?: number | null;
-  creator_user?: string | null;
-  creator_handle?: string | null;
-  creator_display_name?: string | null;
+  downloadable_audio?: Array<{
+    kind: "original" | "instrumental" | "vocals" | "preview";
+    storage_ref: string;
+    mime_type: string;
+    size_bytes?: number | null;
+    duration_ms?: number | null;
+    filename?: string | null;
+    decentralized_storage?: (Record<string, unknown>) | null;
+  }> | null;
+  alignment_status?: "pending" | "processing" | "completed" | "failed" | null;
+  timed_lyrics_ref?: string | null;
+  timed_lyrics?: (Record<string, unknown>) | null;
 };
 
 export type SongKaraokePayload = {
@@ -1893,22 +1977,16 @@ export type KaraokeSession = {
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
-  viewer_gate_state?: PostViewerGateState | null;
   author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
-  study_capability?: {
-    status: "ready" | "locked" | "processing" | "unavailable";
-    exercise_count?: number | null;
-    source_language?: string | null;
-    target_language?: string | null;
-  } | null;
-  asset_story?: {
-    story_ip: string | null;
-    story_royalty_registration_status: "none" | "pending" | "registered" | "failed";
-  } | null;
+  viewer_gate_state?: (Record<string, unknown>) | null;
+  asset_story?: ({
+    story_ip?: string | null;
+    story_royalty_registration_status?: "none" | "pending" | "registered" | "failed";
+  }) | null;
   derivative_sources?: Array<PostDerivativeSource> | null;
   upvote_count: number;
   downvote_count: number;
@@ -1926,15 +2004,6 @@ export type LocalizedPostResponse = {
   translated_caption?: string | null;
   translated_embeds?: Array<LocalizedPostEmbedTranslation> | null;
   source_hash: string;
-};
-
-export type PostViewerGateState = {
-  community_id: string;
-  community_display_name: string;
-  viewer_community_role: "owner" | "admin" | "moderator" | null;
-  viewer_membership_status: "member" | "not_member" | "banned" | null;
-  membership_gate_summaries: Array<MembershipGateSummary>;
-  gate_match_mode?: "all" | "any" | null;
 };
 
 export type LocalizedPostEmbedTranslation = {
@@ -2259,15 +2328,6 @@ export type RoyaltyClaimHistoryResponse = {
   items: Array<RoyaltyClaimRecord>;
 };
 
-type AudioMediaDescriptor = {
-  storage_ref: string;
-  mime_type: string;
-  size_bytes?: number | null;
-  content_hash?: string | null;
-  duration_ms?: number | null;
-  decentralized_storage?: DecentralizedStorageProof | null;
-};
-
 type CentralizedGovernanceBackend = {
   governance_mode: "centralized";
   governance_verification_state: GovernanceVerificationState;
@@ -2526,7 +2586,7 @@ type CommunitySaleAllocationLeg = (CommunitySaleAllocationSnapshot & {
   failure_reason?: string | null;
 });
 
-type CommunitySaleAllocationRecipientType = "creator" | "charity" | "community_treasury";
+type CommunitySaleAllocationRecipientType = "creator" | "performer" | "charity" | "community_treasury";
 
 type CommunitySaleAllocationSettlementStrategy = "story_payout" | "provider_payout" | "treasury_payout";
 
@@ -2925,6 +2985,11 @@ type ImageMediaDescriptor = {
   height?: number | null;
 };
 
+type InitialLiveSetlistInput = {
+  status: "draft" | "active";
+  items: Array<LiveSetlistItemInput>;
+};
+
 type KalshiMarketEmbed = {
   embed: string;
   embed_key: string;
@@ -2939,6 +3004,40 @@ type KalshiMarketEmbed = {
   unavailable_reason?: "deleted" | "withheld" | "private" | "unsupported" | "unknown" | null;
   last_checked_at?: number | null;
 };
+
+type LiveRoomPerformerAllocationInput = {
+  user: string;
+  role: "host" | "guest";
+  share_pct: number;
+};
+
+type LiveRoomReplayAssetAccessMode = "free" | "included_with_ticket" | "paid";
+
+type LiveRoomReplayDraftAllocationInput = {
+  participant_user?: string | null;
+  external_party_ref?: string | null;
+  role?: string | null;
+  share_bps?: number;
+};
+
+type LiveRoomReplayDraftStatus = "not_recorded" | "processing" | "ready" | "published" | "failed";
+
+type LiveRoomReplayRawArtifact = {
+  provider: "filebase";
+  ipfs_cid: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+type LiveRoomReplayRecording = {
+  id: string;
+  provider: "agora";
+  status: string;
+  failure_reason: string | null;
+  raw_artifact: LiveRoomReplayRawArtifact | null;
+};
+
+type LiveSetlistItemInput = unknown;
 
 type MajeurGovernanceBackend = {
   governance_mode: "majeur";
@@ -3034,6 +3133,7 @@ type MediaDescriptor = {
   mime_type?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
+  decentralized_storage?: (Record<string, unknown>) | null;
   duration_ms?: number | null;
   poster_ref?: string | null;
   poster_mime_type?: string | null;
@@ -3042,7 +3142,6 @@ type MediaDescriptor = {
   poster_height?: number | null;
   poster_frame_ms?: number | null;
   preview_video?: SongVideoArtifactDescriptor | null;
-  decentralized_storage?: DecentralizedStorageProof | null;
 };
 
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
@@ -3161,11 +3260,6 @@ type PromotionDisclosure = {
   affiliation_kind: PromotionAffiliationKind;
 };
 
-type PromotionDisclosureInput = {
-  is_promotional: boolean;
-  affiliation_kind: PromotionAffiliationKind;
-};
-
 type ProofRequirement = {
   proof_type: "unique_human" | "biometric_liveness" | "wallet_score" | "sanctions_clear" | "gov_id" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "phone";
   accepted_providers?: Array<"self" | "zkpassport" | "very" | "passport"> | null;
@@ -3229,29 +3323,12 @@ type SongArtifactUploadRef = {
   song_artifact_upload: string;
 };
 
-type DecentralizedStorageProof = {
-  provider: "filebase_ipfs";
-  cid: string;
-  gateway_url: string;
-  encrypted?: boolean;
-};
-
-type SongAudioArtifactDescriptor = {
-  storage_ref: string;
-  mime_type: string;
-  size_bytes?: number | null;
-  content_hash?: string | null;
-  duration_ms?: number | null;
-  clip_start_ms?: number | null;
-  clip_duration_ms?: number | null;
-  decentralized_storage?: DecentralizedStorageProof | null;
-};
-
 type SongImageArtifactDescriptor = {
   storage_ref: string;
   mime_type: string;
   size_bytes?: number | null;
   content_hash?: string | null;
+  upload_mode?: "proxy" | "direct_multipart";
   width?: number | null;
   height?: number | null;
 };
@@ -3449,6 +3526,12 @@ export const apiRoutes = {
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
   communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
+  communityLiveRoomReplayDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft`,
+  communityLiveRoomReplayDraftPublish: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft/publish`,
+  communityLiveRoomReplayAccess: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay/access`,
+  communityLiveRoomReplayContent: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay/content`,
+  publicCommunityLiveRoomReplayAccess: (communityId: string, liveRoomId: string) => `/public-communities/${communityId}/live-rooms/${liveRoomId}/replay/access`,
+  publicCommunityLiveRoomReplayContent: (communityId: string, liveRoomId: string) => `/public-communities/${communityId}/live-rooms/${liveRoomId}/replay/content`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
   postVote: (postId: string) => `/posts/${postId}/vote`,

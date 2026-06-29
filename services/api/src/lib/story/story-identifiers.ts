@@ -54,6 +54,18 @@ export function encodeTokenGateConditionData(input: {
   ) as `0x${string}`
 }
 
+export function encodeCompositeReadConditionData(input: {
+  entitlementTokenAddress: string
+  tokenId: bigint
+  namespace: `0x${string}`
+  minBalance?: bigint
+}): `0x${string}` {
+  return abiCoder.encode(
+    ["address", "uint256", "uint256", "bytes32"],
+    [input.entitlementTokenAddress, input.tokenId, input.minBalance ?? 1n, input.namespace],
+  ) as `0x${string}`
+}
+
 export function encodeWriteConditionOperatorData(operatorAddress: string): `0x${string}` {
   return abiCoder.encode(["address"], [operatorAddress]) as `0x${string}`
 }

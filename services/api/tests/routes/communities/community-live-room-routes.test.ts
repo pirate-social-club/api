@@ -12,6 +12,9 @@ import {
 } from "./community-routes-test-helpers"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import { badRequestError } from "../../../src/lib/errors"
+import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
+import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
+import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -49,6 +52,9 @@ beforeEach(() => {
 afterEach(async () => {
   globalThis.fetch = originalFetch
   setCommunityCommerceBuyerFundingVerifierForTests(null)
+  setStoryCdrUploaderForTests(null)
+  setStoryRuntimeFundingAssertionForTests(null)
+  setStoryAccessProofSignerForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -367,6 +373,155 @@ async function countLiveRoomViewerSessions(input: {
   }
 }
 
+async function readLiveRoomRecordingRows(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+}): Promise<Array<{
+  status: string
+  provider: string
+  provider_resource_id: string | null
+  provider_session_id: string | null
+  stopped_at: number | null
+  raw_artifact_ref: string | null
+  failure_reason: string | null
+}>> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT status, provider, provider_resource_id, provider_session_id, stopped_at, raw_artifact_ref, failure_reason
+        FROM live_room_recordings
+        WHERE community_id = ?1
+          AND live_room_id = ?2
+        ORDER BY created_at ASC
+      `,
+      args: [input.communityId, input.liveRoomId],
+    })
+    return result.rows.map((row) => ({
+      status: String(row.status),
+      provider: String(row.provider),
+      provider_resource_id: row.provider_resource_id == null ? null : String(row.provider_resource_id),
+      provider_session_id: row.provider_session_id == null ? null : String(row.provider_session_id),
+      stopped_at: row.stopped_at == null ? null : Number(row.stopped_at),
+      raw_artifact_ref: row.raw_artifact_ref == null ? null : String(row.raw_artifact_ref),
+      failure_reason: row.failure_reason == null ? null : String(row.failure_reason),
+    }))
+  } finally {
+    client.close()
+  }
+}
+
+async function readLiveRoomReplayAssetRows(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+}): Promise<Array<{
+  replay_asset_id: string
+  publication_status: string
+  access_mode: string
+  locked_delivery_status: string
+  locked_delivery_storage_ref: string | null
+  locked_delivery_secret_json: string | null
+  story_cdr_vault_uuid: string | null
+  story_namespace: string | null
+  story_entitlement_token_id: string | null
+  story_read_condition: string | null
+  story_write_condition: string | null
+  locked_delivery_error: string | null
+}>> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT replay_asset_id, publication_status, access_mode, locked_delivery_status,
+               locked_delivery_storage_ref, locked_delivery_secret_json,
+               story_cdr_vault_uuid, story_namespace, story_entitlement_token_id,
+               story_read_condition, story_write_condition, locked_delivery_error
+        FROM live_room_replay_assets
+        WHERE community_id = ?1
+          AND live_room_id = ?2
+        ORDER BY created_at ASC
+      `,
+      args: [input.communityId, input.liveRoomId],
+    })
+    return result.rows.map((row) => ({
+      replay_asset_id: String(row.replay_asset_id),
+      publication_status: String(row.publication_status),
+      access_mode: String(row.access_mode),
+      locked_delivery_status: String(row.locked_delivery_status),
+      locked_delivery_storage_ref: row.locked_delivery_storage_ref == null ? null : String(row.locked_delivery_storage_ref),
+      locked_delivery_secret_json: row.locked_delivery_secret_json == null ? null : String(row.locked_delivery_secret_json),
+      story_cdr_vault_uuid: row.story_cdr_vault_uuid == null ? null : String(row.story_cdr_vault_uuid),
+      story_namespace: row.story_namespace == null ? null : String(row.story_namespace),
+      story_entitlement_token_id: row.story_entitlement_token_id == null ? null : String(row.story_entitlement_token_id),
+      story_read_condition: row.story_read_condition == null ? null : String(row.story_read_condition),
+      story_write_condition: row.story_write_condition == null ? null : String(row.story_write_condition),
+      locked_delivery_error: row.locked_delivery_error == null ? null : String(row.locked_delivery_error),
+    }))
+  } finally {
+    client.close()
+  }
+}
+
+async function readLiveRoomCommerceRow(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+}): Promise<{
+  replay_listing_id: string | null
+}> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT replay_listing_id
+        FROM live_rooms
+        WHERE community_id = ?1
+          AND live_room_id = ?2
+        LIMIT 1
+      `,
+      args: [input.communityId, input.liveRoomId],
+    })
+    const row = result.rows[0]
+    return {
+      replay_listing_id: row?.replay_listing_id == null ? null : String(row.replay_listing_id),
+    }
+  } finally {
+    client.close()
+  }
+}
+
+async function setLiveRoomRecordingEnabledRaw(input: {
+  communityDbRoot: string
+  communityId: string
+  liveRoomId: string
+  recordingEnabled: 0 | 1 | null
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE live_rooms
+        SET recording_enabled = ?3
+        WHERE community_id = ?1
+          AND live_room_id = ?2
+      `,
+      args: [input.communityId, input.liveRoomId, input.recordingEnabled],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function insertSyntheticLiveRoomViewerSession(input: {
   communityDbRoot: string
   communityId: string
@@ -445,12 +600,14 @@ describe("community live-room routes", () => {
       status: string
       anchor_post: string
       host_user: string
+      recording_enabled: boolean
       performer_allocations: Array<{ user: string; share_bps: number }>
       setlist: { status: string; items: Array<{ title: string; rights_basis: string; song_artifact_bundle: string | null }> }
     }
     expect(room.id.startsWith("lr_")).toBe(true)
     expect(room.object).toBe("live_room")
     expect(room.status).toBe("scheduled")
+    expect(room.recording_enabled).toBe(false)
     expect(room.anchor_post.startsWith("pst_")).toBe(true)
     expect(room.host_user).toBe(`usr_${owner.userId}`)
     expect(room.performer_allocations[0]?.user).toBe(`usr_${owner.userId}`)
@@ -468,6 +625,25 @@ describe("community live-room routes", () => {
       ctx.env,
     )
     expect(readResponse.status).toBe(200)
+    const readRoom = await json(readResponse) as { recording_enabled: boolean }
+    expect(readRoom.recording_enabled).toBe(false)
+
+    await setLiveRoomRecordingEnabledRaw({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+      recordingEnabled: null,
+    })
+    const legacyNullRead = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(legacyNullRead.status).toBe(200)
+    const legacyNullRoom = await json(legacyNullRead) as { recording_enabled: boolean }
+    expect(legacyNullRoom.recording_enabled).toBe(false)
 
     const anchorPostResponse = await app.request(`http://pirate.test/posts/${room.anchor_post}`, {
       headers: { authorization: `Bearer ${owner.accessToken}` },
@@ -477,6 +653,40 @@ describe("community live-room routes", () => {
       post: { anchor_live_room: string | null }
     }
     expect(anchorPost.post.anchor_live_room).toBe(room.id)
+  })
+
+  test("owner creates live rooms with explicit recording preference", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-recording-pref-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+
+    const recordedBody = readySoloRoomBody()
+    recordedBody.performer_allocations[0].user = `usr_${owner.userId}`
+    const recorded = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body: { ...recordedBody, recording_enabled: true },
+    })
+    expect(recorded.status).toBe(201)
+    const recordedRoom = await json(recorded) as { id: string; recording_enabled: boolean }
+    expect(recordedRoom.recording_enabled).toBe(true)
+
+    const notRecordedBody = readySoloRoomBody()
+    notRecordedBody.title = "Unrecorded Friday Set"
+    notRecordedBody.performer_allocations[0].user = `usr_${owner.userId}`
+    const notRecorded = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body: { ...notRecordedBody, recording_enabled: false },
+    })
+    expect(notRecorded.status).toBe(201)
+    const notRecordedRoom = await json(notRecorded) as { id: string; recording_enabled: boolean }
+    expect(notRecordedRoom.recording_enabled).toBe(false)
   })
 
   test("owner creates a live room setlist with a Story source asset ref", async () => {
@@ -1658,6 +1868,1385 @@ describe("community live-room routes", () => {
       ctx.env,
     )
     expect(attachAfterEnd.status).toBe(409)
+  })
+
+  test("recording-enabled rooms start and stop Agora cloud recording", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+      FILEBASE_S3_ENDPOINT: "https://filebase.test",
+      FILEBASE_S3_REGION: "us-east-1",
+      FILEBASE_MEDIA_BUCKET: "media",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+    })
+    const originalFetch = globalThis.fetch
+    const agoraRequests: Array<{ url: string; body: Record<string, unknown> | null }> = []
+    const storageRequests: string[] = []
+    const filebaseObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const href = url instanceof Request ? url.url : String(url)
+      if (href.startsWith("https://capture-storage.test/")) {
+        storageRequests.push(href)
+        return new Response(new TextEncoder().encode("captured recording"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      }
+      if (href.startsWith("https://filebase.test/")) {
+        storageRequests.push(href)
+        const request = url instanceof Request ? url : new Request(url, init)
+        if (request.method === "PUT") {
+          filebaseObjects.set(href, {
+            body: new Uint8Array(await request.arrayBuffer()),
+            contentType: request.headers.get("content-type") || "application/octet-stream",
+          })
+          return new Response("", {
+            status: 200,
+            headers: { "x-amz-meta-cid": "bafy-live-room-recording" },
+          })
+        }
+        if (request.method === "GET") {
+          const stored = filebaseObjects.get(href)
+          if (!stored) {
+            return new Response("missing", { status: 404 })
+          }
+          return new Response(stored.body.slice().buffer, {
+            status: 200,
+            headers: {
+              "content-length": String(stored.body.byteLength),
+              "content-type": stored.contentType,
+            },
+          })
+        }
+        return new Response("unexpected filebase method", { status: 500 })
+      }
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(url, init)
+      }
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null
+      agoraRequests.push({ url: href, body })
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-live-room" })
+      }
+      if (href.endsWith("/start")) {
+        return Response.json({ resourceId: "resource-live-room", sid: "sid-live-room" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-live-room",
+          sid: "sid-live-room",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/replay.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-recording-lifecycle")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      const body = readySoloRoomBody()
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string; recording_enabled: boolean; replay_status: string }
+      expect(room.recording_enabled).toBe(true)
+      expect(room.replay_status).toBe("none")
+
+      expect(await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })).toEqual([])
+
+      const attach = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(attach.status).toBe(200)
+      expect(await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })).toEqual([{
+        provider: "agora",
+        provider_resource_id: "resource-live-room",
+        provider_session_id: "sid-live-room",
+        status: "recording",
+        stopped_at: null,
+        raw_artifact_ref: null,
+        failure_reason: null,
+      }])
+      const processingDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/recording-draft`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(processingDraft.status).toBe(200)
+      expect(await json(processingDraft)).toMatchObject({
+        object: "live_room_replay_draft",
+        live_room: room.id,
+        recording_enabled: true,
+        replay_status: "none",
+        status: "processing",
+        replay_asset: null,
+        recording: {
+          provider: "agora",
+          status: "recording",
+          raw_artifact: null,
+        },
+      })
+
+      const attachAgain = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(attachAgain.status).toBe(200)
+      expect(await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })).toHaveLength(1)
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+      const ended = await json(end) as { ended_at: number; replay_status: string; status: string }
+      expect(ended.status).toBe("ended")
+      expect(ended.replay_status).toBe("review_pending")
+      const recordingRows = await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(recordingRows).toHaveLength(1)
+      expect(recordingRows[0]).toMatchObject({
+        provider: "agora",
+        provider_resource_id: "resource-live-room",
+        provider_session_id: "sid-live-room",
+        status: "captured",
+        stopped_at: ended.ended_at,
+        failure_reason: null,
+      })
+      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"provider\":\"filebase\"")
+      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"ipfs_cid\":\"bafy-live-room-recording\"")
+      const readyDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(readyDraft.status).toBe(200)
+      expect(await json(readyDraft)).toMatchObject({
+        object: "live_room_replay_draft",
+        live_room: room.id,
+        recording_enabled: true,
+        replay_status: "review_pending",
+        status: "ready",
+        replay_asset: {
+          object: "live_room_replay_asset",
+          publication_status: "draft",
+          title: body.title,
+          access_mode: "free",
+          locked_delivery_status: "none",
+          allocations: [
+            {
+              participant_user: `usr_${owner.userId}`,
+              role: "host",
+              share_bps: 10000,
+              rights_basis: "performer_default",
+              approval_status: "approved",
+            },
+          ],
+        },
+        recording: {
+          provider: "agora",
+          status: "captured",
+          raw_artifact: {
+            provider: "filebase",
+            ipfs_cid: "bafy-live-room-recording",
+            mime_type: "video/mp4",
+            size_bytes: "captured recording".length,
+          },
+        },
+      })
+      const updateDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            title: "Edited replay title",
+            caption: "Clean board mix from the late set.",
+            access_mode: "free",
+            allocations: [
+              {
+                participant_user: `usr_${owner.userId}`,
+                role: "host",
+                share_bps: 8500,
+              },
+              {
+                external_party_ref: "wallet:0x1111111111111111111111111111111111111111",
+                role: "venue",
+                share_bps: 1500,
+              },
+            ],
+          }),
+        },
+        ctx.env,
+      )
+      expect(updateDraft.status).toBe(200)
+      expect(await json(updateDraft)).toMatchObject({
+        replay_status: "review_pending",
+        status: "ready",
+        replay_asset: {
+          publication_status: "draft",
+          title: "Edited replay title",
+          caption: "Clean board mix from the late set.",
+          access_mode: "free",
+          allocations: [
+            {
+              participant_user: `usr_${owner.userId}`,
+              external_party_ref: null,
+              role: "host",
+              share_bps: 8500,
+              rights_basis: "host_draft",
+              approval_status: "approved",
+            },
+            {
+              participant_user: null,
+              external_party_ref: "wallet:0x1111111111111111111111111111111111111111",
+              role: "venue",
+              share_bps: 1500,
+              rights_basis: "host_draft",
+              approval_status: "approved",
+            },
+          ],
+        },
+      })
+      const publish = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft/publish`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ access_mode: "free" }),
+        },
+        ctx.env,
+      )
+      expect(publish.status).toBe(200)
+      expect(await json(publish)).toMatchObject({
+        replay_status: "published",
+        status: "published",
+        replay_asset: {
+          publication_status: "published",
+          title: "Edited replay title",
+          access_mode: "free",
+        },
+      })
+      const publishedRoom = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(publishedRoom.status).toBe(200)
+      const publishedRoomBody = await json(publishedRoom) as { replay_status: string; replay_asset_id: string | null }
+      expect(publishedRoomBody.replay_status).toBe("published")
+      expect(publishedRoomBody.replay_asset_id).toMatch(/^lra_/)
+      const replayAccess = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayAccess.status).toBe(200)
+      const replayAccessBody = await json(replayAccess) as {
+        access_granted: boolean
+        access_mode: string
+        decision_reason: string
+        delivery_kind: string
+        delivery_ref: string
+        replay_asset: string
+        replay_status: string
+        story_cdr_access: unknown
+      }
+      expect(replayAccessBody).toMatchObject({
+        access_granted: true,
+        access_mode: "free",
+        decision_reason: "free",
+        delivery_kind: "primary_content_ref",
+        replay_asset: publishedRoomBody.replay_asset_id,
+        replay_status: "published",
+        story_cdr_access: null,
+      })
+      expect(replayAccessBody.delivery_ref).toBe(`/communities/${communityId}/live-rooms/${room.id}/replay/content`)
+
+      const replayContent = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/content`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayContent.status).toBe(200)
+      expect(replayContent.headers.get("content-type")).toContain("video/mp4")
+      expect(await replayContent.text()).toBe("captured recording")
+
+      const publicReplayAccess = await app.request(
+        `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {},
+        ctx.env,
+      )
+      expect(publicReplayAccess.status).toBe(200)
+      const publicReplayAccessBody = await json(publicReplayAccess) as {
+        access_granted: boolean
+        access_mode: string
+        decision_reason: string
+        delivery_kind: string
+        delivery_ref: string
+        story_cdr_access: unknown
+      }
+      expect(publicReplayAccessBody).toMatchObject({
+        access_granted: true,
+        access_mode: "free",
+        decision_reason: "free",
+        delivery_kind: "primary_content_ref",
+        story_cdr_access: null,
+      })
+      expect(publicReplayAccessBody.delivery_ref).toBe(`/public-communities/${communityId}/live-rooms/${room.id}/replay/content`)
+
+      const publicReplayContent = await app.request(
+        `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/replay/content`,
+        {},
+        ctx.env,
+      )
+      expect(publicReplayContent.status).toBe(200)
+      expect(publicReplayContent.headers.get("content-type")).toContain("video/mp4")
+      expect(await publicReplayContent.text()).toBe("captured recording")
+      expect(agoraRequests.map((request) => request.url)).toEqual([
+        "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/acquire",
+        "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/mode/mix/start",
+        "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/sid/sid-live-room/mode/mix/stop",
+      ])
+      expect(storageRequests[0]).toContain("https://capture-storage.test/capture-bucket/pirate/live/replay.mp4")
+      expect(storageRequests[1]).toContain("https://filebase.test/media/livestream-recordings/")
+      expect(storageRequests[1]).toContain("/replay.mp4")
+      expect(storageRequests[2]).toBe(storageRequests[1])
+      expect(storageRequests[3]).toBe(storageRequests[1])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("recording ingest failure marks the replay failed without creating a replay asset", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+      FILEBASE_S3_ENDPOINT: "https://filebase.test",
+      FILEBASE_S3_REGION: "us-east-1",
+      FILEBASE_MEDIA_BUCKET: "media",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const href = url instanceof Request ? url.url : String(url)
+      if (href.startsWith("https://capture-storage.test/")) {
+        return new Response(new TextEncoder().encode("captured recording"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      }
+      if (href.startsWith("https://filebase.test/")) {
+        return new Response("filebase down", { status: 503 })
+      }
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(url, init)
+      }
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-live-room" })
+      }
+      if (href.endsWith("/start")) {
+        return Response.json({ resourceId: "resource-live-room", sid: "sid-live-room" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-live-room",
+          sid: "sid-live-room",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/replay.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-recording-ingest-failure")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      const body = readySoloRoomBody()
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string }
+
+      const attach = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(attach.status).toBe(200)
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+      const ended = await json(end) as { replay_status: string; replay_asset_id: string | null; status: string }
+      expect(ended.status).toBe("ended")
+      expect(ended.replay_status).toBe("failed")
+      expect(ended.replay_asset_id).toBeNull()
+
+      const recordingRows = await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(recordingRows).toHaveLength(1)
+      expect(recordingRows[0]).toMatchObject({
+        provider: "agora",
+        provider_resource_id: "resource-live-room",
+        provider_session_id: "sid-live-room",
+        status: "failed",
+        raw_artifact_ref: null,
+      })
+      expect(recordingRows[0]?.failure_reason).toContain("Filebase object upload failed with status 503")
+
+      const replayAssets = await readLiveRoomReplayAssetRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(replayAssets).toEqual([])
+
+      const draft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(draft.status).toBe(200)
+      expect(await json(draft)).toMatchObject({
+        object: "live_room_replay_draft",
+        live_room: room.id,
+        replay_status: "failed",
+        status: "failed",
+        replay_asset: null,
+        recording: {
+          provider: "agora",
+          status: "failed",
+          raw_artifact: null,
+        },
+      })
+
+      const publish = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft/publish`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ access_mode: "free" }),
+        },
+        ctx.env,
+      )
+      expect(publish.status).toBe(409)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("recording start configuration failure keeps live attach usable and fails replay", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "live-room-recording-start-failure")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+    const body = readySoloRoomBody()
+    body.performer_allocations[0].user = `usr_${owner.userId}`
+
+    const create = await postLiveRoom({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      communityId,
+      body: { ...body, recording_enabled: true },
+    })
+    expect(create.status).toBe(201)
+    const room = await json(create) as { id: string; recording_enabled: boolean; replay_status: string }
+    expect(room.recording_enabled).toBe(true)
+    expect(room.replay_status).toBe("none")
+
+    const attach = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(attach.status).toBe(200)
+    const attachBody = await json(attach) as { room: { status: string; replay_status: string }; runtime: { seat: string } }
+    expect(attachBody.runtime.seat).toBe("host")
+    expect(attachBody.room.status).toBe("live")
+    expect(attachBody.room.replay_status).toBe("none")
+
+    const recordingRowsAfterAttach = await readLiveRoomRecordingRows({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })
+    expect(recordingRowsAfterAttach).toHaveLength(1)
+    expect(recordingRowsAfterAttach[0]).toMatchObject({
+      provider: "agora",
+      provider_resource_id: null,
+      provider_session_id: null,
+      raw_artifact_ref: null,
+      status: "failed",
+    })
+    expect(recordingRowsAfterAttach[0]?.failure_reason).toContain("missing_agora_cloud_recording_configuration")
+
+    const processingDraft = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/recording-draft`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(processingDraft.status).toBe(200)
+    expect(await json(processingDraft)).toMatchObject({
+      object: "live_room_replay_draft",
+      live_room: room.id,
+      recording_enabled: true,
+      replay_status: "none",
+      status: "failed",
+      replay_asset: null,
+      recording: {
+        provider: "agora",
+        status: "failed",
+        raw_artifact: null,
+      },
+    })
+
+    const end = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(end.status).toBe(200)
+    const ended = await json(end) as { replay_status: string; replay_asset_id: string | null; status: string }
+    expect(ended.status).toBe("ended")
+    expect(ended.replay_status).toBe("failed")
+    expect(ended.replay_asset_id).toBeNull()
+
+    const replayAssets = await readLiveRoomReplayAssetRows({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      liveRoomId: room.id,
+    })
+    expect(replayAssets).toEqual([])
+
+    const readyDraft = await app.request(
+      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+      {
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(readyDraft.status).toBe(200)
+    expect(await json(readyDraft)).toMatchObject({
+      object: "live_room_replay_draft",
+      live_room: room.id,
+      replay_status: "failed",
+      status: "failed",
+      replay_asset: null,
+      recording: {
+        provider: "agora",
+        status: "failed",
+        raw_artifact: null,
+      },
+    })
+  })
+
+  test("paid recording replay publishes as included-with-ticket locked delivery", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const compositeReadConditionAddress = "0x9999999999999999999999999999999999999999"
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+      FILEBASE_S3_ENDPOINT: "https://filebase.test",
+      FILEBASE_S3_REGION: "us-east-1",
+      FILEBASE_MEDIA_BUCKET: "media",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: compositeReadConditionAddress,
+    })
+    const originalFetch = globalThis.fetch
+    const storageObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    const cdrUploads: Array<{
+      readConditionAddr: string
+      writeConditionAddr: string
+      readConditionData: string
+      accessAuxData: string | undefined
+    }> = []
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async (input) => {
+      cdrUploads.push({
+        readConditionAddr: input.readConditionAddr,
+        writeConditionAddr: input.writeConditionAddr,
+        readConditionData: input.readConditionData,
+        accessAuxData: input.accessAuxData,
+      })
+      return {
+        cdrVaultUuid: 9090,
+        writerAddress: "0x0000000000000000000000000000000000000cd1",
+        txHashes: {
+          allocate: "0xalloc-replay",
+          write: "0xwrite-replay",
+        },
+      }
+    })
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e570000000000000000000000000000000000000000000000000000000001",
+      signature: `0x${"11".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: input.scope === "asset.owner"
+          ? "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18"
+          : "0x2e3cf0f4f202b4d5d9581a50ca154fd30d982d3e5b85f49252f774117e2a1f7c",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = url instanceof Request ? url : new Request(url, init)
+      const href = request.url
+      if (href.startsWith("https://capture-storage.test/")) {
+        return new Response(new TextEncoder().encode("paid captured recording"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      }
+      if (href.startsWith("https://filebase.test/")) {
+        const objectKey = new URL(href).pathname.replace(/^\/media\//, "")
+        if (request.method === "PUT") {
+          storageObjects.set(objectKey, {
+            body: new Uint8Array(await request.arrayBuffer()),
+            contentType: request.headers.get("content-type") ?? "application/octet-stream",
+          })
+          return new Response("", {
+            status: 200,
+            headers: {
+              "x-amz-meta-cid": objectKey.startsWith("locked-replays/")
+                ? "bafy-locked-live-room-replay"
+                : "bafy-paid-live-room-recording",
+            },
+          })
+        }
+        if (request.method === "GET") {
+          const stored = storageObjects.get(objectKey)
+          if (!stored) {
+            return new Response(`missing object ${objectKey}`, { status: 404 })
+          }
+          const body = stored.body.buffer.slice(
+            stored.body.byteOffset,
+            stored.body.byteOffset + stored.body.byteLength,
+          ) as ArrayBuffer
+          return new Response(body, {
+            status: 200,
+            headers: { "content-type": stored.contentType },
+          })
+        }
+      }
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(request)
+      }
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-paid-live-room" })
+      }
+      if (href.endsWith("/start")) {
+        return Response.json({ resourceId: "resource-paid-live-room", sid: "sid-paid-live-room" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-paid-live-room",
+          sid: "sid-paid-live-room",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/paid-replay.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-included-replay-owner")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const buyer = await exchangeJwt(ctx.env, "live-room-included-replay-buyer")
+      await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+      const body = readySoloRoomBody()
+      body.access_mode = "paid"
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string; access_mode: string }
+      expect(room.access_mode).toBe("paid")
+
+      const listingCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/listings`,
+        {
+          live_room: room.id,
+          price_cents: 1200,
+          regional_pricing_enabled: false,
+          status: "active",
+        },
+        ctx.env,
+        owner.accessToken,
+      )
+      expect(listingCreate.status).toBe(201)
+      const listingBody = await json(listingCreate) as { id: string }
+      const quoteCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-quotes`,
+        {
+          listing: listingBody.id,
+          ...routedCheckoutQuoteFields,
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(quoteCreate.status).toBe(201)
+      const quoteBody = await json(quoteCreate) as { id: string }
+      await insertTestWalletAttachment({
+        client: ctx.client,
+        userId: buyer.userId,
+        walletAttachmentId: "wal_live_room_included_replay_buyer",
+        walletAddress: "0x7100000000000000000000000000000000000007",
+      })
+      const purchaseSettle = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-settlements`,
+        {
+          quote: quoteBody.id,
+          settlement_wallet_attachment: "wal_live_room_included_replay_buyer",
+          funding_tx_ref: "0xfunding-included-replay",
+          settlement_tx_ref: "tx-included-replay",
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(purchaseSettle.status).toBe(201)
+
+      const attach = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(attach.status).toBe(200)
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+      expect(await json(end)).toMatchObject({
+        status: "ended",
+        replay_status: "review_pending",
+      })
+
+      const updateDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ access_mode: "included_with_ticket" }),
+        },
+        ctx.env,
+      )
+      expect(updateDraft.status).toBe(200)
+      expect(await json(updateDraft)).toMatchObject({
+        replay_asset: {
+          publication_status: "draft",
+          access_mode: "included_with_ticket",
+        },
+      })
+
+      const publish = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft/publish`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ access_mode: "included_with_ticket" }),
+        },
+        ctx.env,
+      )
+      expect(publish.status).toBe(200)
+      expect(await json(publish)).toMatchObject({
+        replay_status: "published",
+        status: "published",
+        replay_asset: {
+          publication_status: "published",
+          access_mode: "included_with_ticket",
+          locked_delivery_status: "ready",
+        },
+      })
+
+      const replayAssets = await readLiveRoomReplayAssetRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(replayAssets).toHaveLength(1)
+      expect(replayAssets[0]).toMatchObject({
+        publication_status: "published",
+        access_mode: "included_with_ticket",
+        locked_delivery_status: "ready",
+        story_cdr_vault_uuid: "9090",
+        story_read_condition: compositeReadConditionAddress,
+        locked_delivery_error: null,
+      })
+      expect(replayAssets[0]?.locked_delivery_storage_ref).toMatch(/^locked-replays\//)
+      expect(replayAssets[0]?.locked_delivery_secret_json).toContain("\"mime_type\":\"video/mp4\"")
+      expect(replayAssets[0]?.story_namespace).toMatch(/^0x[a-f0-9]{64}$/)
+      expect(replayAssets[0]?.story_entitlement_token_id).toMatch(/^[0-9]+$/)
+      expect(replayAssets[0]?.story_write_condition).toMatch(/^0x[a-fA-F0-9]{40}$/)
+      expect(cdrUploads).toHaveLength(1)
+      expect(cdrUploads[0]?.readConditionAddr).toBe(compositeReadConditionAddress)
+      expect(cdrUploads[0]?.accessAuxData).toBe("0x")
+      expect(cdrUploads[0]?.readConditionData).toMatch(/^0x[a-fA-F0-9]+$/)
+      expect([...storageObjects.keys()].some((key) => key.startsWith("livestream-recordings/"))).toBe(true)
+      expect([...storageObjects.keys()].some((key) => key.startsWith("locked-replays/"))).toBe(true)
+
+      const hostReplayAccess = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(hostReplayAccess.status).toBe(200)
+      const hostReplayAccessBody = await json(hostReplayAccess) as {
+        access_granted: boolean
+        decision_reason: string
+        delivery_kind: string
+        story_cdr_access: {
+          access_aux_data_hex: string
+          access_proof: Record<string, unknown>
+          access_scope: string
+        }
+      }
+      expect(hostReplayAccessBody.access_granted).toBe(true)
+      expect(hostReplayAccessBody.decision_reason).toBe("creator")
+      expect(hostReplayAccessBody.delivery_kind).toBe("story_cdr_ref")
+      expect(hostReplayAccessBody.story_cdr_access.access_scope).toBe("asset.owner")
+      expect(hostReplayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
+      expect(hostReplayAccessBody.story_cdr_access.access_aux_data_hex).not.toBe("0x")
+      expect(hostReplayAccessBody.story_cdr_access.access_proof.mode).toBeUndefined()
+      expect(hostReplayAccessBody.story_cdr_access.access_proof.signature).toMatch(/^0x[a-fA-F0-9]+$/)
+
+      const replayAccess = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${buyer.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayAccess.status).toBe(200)
+      const replayAccessBody = await json(replayAccess) as {
+        access_granted: boolean
+        decision_reason: string
+        delivery_kind: string
+        delivery_ref: string
+        story_cdr_access: {
+          access_aux_data_hex: string
+          access_proof: Record<string, unknown>
+          access_scope: string
+          ciphertext_ref: string
+          mime_type: string
+          vault_uuid: number
+        }
+      }
+      expect(replayAccessBody.access_granted).toBe(true)
+      expect(replayAccessBody.decision_reason).toBe("purchase_entitlement")
+      expect(replayAccessBody.delivery_kind).toBe("story_cdr_ref")
+      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
+      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).not.toBe("0x")
+      expect(replayAccessBody.story_cdr_access.access_scope).toBe("asset.share")
+      expect(replayAccessBody.story_cdr_access.ciphertext_ref).toBe(replayAccessBody.delivery_ref)
+      expect(replayAccessBody.story_cdr_access.mime_type).toBe("video/mp4")
+      expect(replayAccessBody.story_cdr_access.vault_uuid).toBe(9090)
+
+      const replayContent = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/content`,
+        {
+          headers: { authorization: `Bearer ${buyer.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayContent.status).toBe(200)
+      expect(replayContent.headers.get("content-type")).toContain("application/octet-stream")
+      expect((await replayContent.arrayBuffer()).byteLength).toBeGreaterThan(0)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("recording replay can publish as a separately paid replay listing", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const compositeReadConditionAddress = "0x9999999999999999999999999999999999999999"
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+      FILEBASE_S3_ENDPOINT: "https://filebase.test",
+      FILEBASE_S3_REGION: "us-east-1",
+      FILEBASE_MEDIA_BUCKET: "media",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: compositeReadConditionAddress,
+    })
+    const originalFetch = globalThis.fetch
+    const storageObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 9191,
+      writerAddress: "0x0000000000000000000000000000000000000cd1",
+      txHashes: {
+        allocate: "0xalloc-paid-replay",
+        write: "0xwrite-paid-replay",
+      },
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e570000000000000000000000000000000000000000000000000000000002",
+      signature: `0x${"22".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: input.scope === "asset.owner"
+          ? "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18"
+          : "0x2e3cf0f4f202b4d5d9581a50ca154fd30d982d3e5b85f49252f774117e2a1f7c",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = url instanceof Request ? url : new Request(url, init)
+      const href = request.url
+      if (href.startsWith("https://capture-storage.test/")) {
+        return new Response(new TextEncoder().encode("separately paid captured replay"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      }
+      if (href.startsWith("https://filebase.test/")) {
+        const objectKey = new URL(href).pathname.replace(/^\/media\//, "")
+        if (request.method === "PUT") {
+          storageObjects.set(objectKey, {
+            body: new Uint8Array(await request.arrayBuffer()),
+            contentType: request.headers.get("content-type") ?? "application/octet-stream",
+          })
+          return new Response("", {
+            status: 200,
+            headers: {
+              "x-amz-meta-cid": objectKey.startsWith("locked-replays/")
+                ? "bafy-paid-replay-locked"
+                : "bafy-paid-replay-raw",
+            },
+          })
+        }
+        if (request.method === "GET") {
+          const stored = storageObjects.get(objectKey)
+          if (!stored) {
+            return new Response(`missing object ${objectKey}`, { status: 404 })
+          }
+          return new Response(stored.body.slice().buffer, {
+            status: 200,
+            headers: { "content-type": stored.contentType },
+          })
+        }
+      }
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(request)
+      }
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-paid-replay" })
+      }
+      if (href.endsWith("/start")) {
+        return Response.json({ resourceId: "resource-paid-replay", sid: "sid-paid-replay" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-paid-replay",
+          sid: "sid-paid-replay",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/paid-replay.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-paid-replay-owner")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const buyer = await exchangeJwt(ctx.env, "live-room-paid-replay-buyer")
+      await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+      const body = readySoloRoomBody()
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string }
+
+      const attach = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(attach.status).toBe(200)
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+
+      const updateDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ access_mode: "paid" }),
+        },
+        ctx.env,
+      )
+      expect(updateDraft.status).toBe(200)
+
+      const publish = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft/publish`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            access_mode: "paid",
+            listing: {
+              price_cents: 700,
+              regional_pricing_enabled: false,
+              status: "active",
+            },
+          }),
+        },
+        ctx.env,
+      )
+      expect(publish.status).toBe(200)
+      expect(await json(publish)).toMatchObject({
+        replay_status: "published",
+        status: "published",
+        replay_asset: {
+          publication_status: "published",
+          access_mode: "paid",
+          locked_delivery_status: "ready",
+        },
+      })
+
+      const commerceRow = await readLiveRoomCommerceRow({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(commerceRow.replay_listing_id).toMatch(/^lst_/)
+      const replayAssets = await readLiveRoomReplayAssetRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      const replayAssetId = replayAssets[0]?.replay_asset_id
+      expect(replayAssetId).toMatch(/^lra_/)
+
+      const hostReplayAccess = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(hostReplayAccess.status).toBe(200)
+      const hostReplayAccessBody = await json(hostReplayAccess) as {
+        access_granted: boolean
+        decision_reason: string
+        story_cdr_access: {
+          access_aux_data_hex: string
+          access_proof: Record<string, unknown>
+          access_scope: string
+        }
+      }
+      expect(hostReplayAccessBody.access_granted).toBe(true)
+      expect(hostReplayAccessBody.decision_reason).toBe("creator")
+      expect(hostReplayAccessBody.story_cdr_access.access_scope).toBe("asset.owner")
+      expect(hostReplayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
+      expect(hostReplayAccessBody.story_cdr_access.access_aux_data_hex).not.toBe("0x")
+      expect(hostReplayAccessBody.story_cdr_access.access_proof.mode).toBeUndefined()
+      expect(hostReplayAccessBody.story_cdr_access.access_proof.signature).toMatch(/^0x[a-fA-F0-9]+$/)
+
+      const accessBeforePurchase = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${buyer.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(accessBeforePurchase.status).toBe(200)
+      expect(await json(accessBeforePurchase)).toMatchObject({
+        access_granted: false,
+        decision_reason: "purchase_required",
+        access_mode: "paid",
+        replay_asset: replayAssetId,
+        replay_listing: {
+          id: `lst_${commerceRow.replay_listing_id}`,
+          replay_asset: replayAssetId,
+          price_cents: 700,
+        },
+      })
+
+      const quoteCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-quotes`,
+        {
+          listing: `lst_${commerceRow.replay_listing_id}`,
+          ...routedCheckoutQuoteFields,
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(quoteCreate.status).toBe(201)
+      const quoteBody = await json(quoteCreate) as {
+        id: string
+        replay_asset: string
+        allocation_snapshot: Array<{ recipient_type: string; recipient_ref: string | null; share_bps: number }>
+      }
+      expect(quoteBody.replay_asset).toBe(replayAssetId)
+      expect(quoteBody.allocation_snapshot).toEqual([
+        expect.objectContaining({
+          recipient_type: "performer",
+          recipient_ref: owner.userId,
+          share_bps: 10000,
+        }),
+      ])
+
+      await insertTestWalletAttachment({
+        client: ctx.client,
+        userId: buyer.userId,
+        walletAttachmentId: "wal_live_room_paid_replay_buyer",
+        walletAddress: "0x7200000000000000000000000000000000000007",
+      })
+      const purchaseSettle = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-settlements`,
+        {
+          quote: quoteBody.id,
+          settlement_wallet_attachment: "wal_live_room_paid_replay_buyer",
+          funding_tx_ref: "0xfunding-paid-replay",
+          settlement_tx_ref: "",
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(purchaseSettle.status).toBe(201)
+      expect(await json(purchaseSettle)).toMatchObject({
+        replay_asset: replayAssetId,
+        entitlement_kind: "replay_access",
+        entitlement_target_ref: replayAssetId,
+      })
+
+      const replayAccess = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
+        {
+          headers: { authorization: `Bearer ${buyer.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayAccess.status).toBe(200)
+      const replayAccessBody = await json(replayAccess) as {
+        access_granted: boolean
+        decision_reason: string
+        story_cdr_access: {
+          access_aux_data_hex: string
+          access_scope: string
+          vault_uuid: number
+        }
+      }
+      expect(replayAccessBody.access_granted).toBe(true)
+      expect(replayAccessBody.decision_reason).toBe("purchase_entitlement")
+      expect(replayAccessBody.story_cdr_access.access_scope).toBe("asset.share")
+      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
+      expect(replayAccessBody.story_cdr_access.vault_uuid).toBe(9191)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("host attach resolves configured JackTrip endpoint for duet rooms", async () => {

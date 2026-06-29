@@ -17,6 +17,7 @@ import {
   deriveStorageRefHash,
   deriveStoryAssetVersionId,
   deriveStoryNamespace,
+  encodeCompositeReadConditionData,
   encodeTokenGateConditionData,
   encodeWriteConditionOperatorData,
   hashBytes32FromParts,
@@ -31,6 +32,7 @@ import { publishLockedAssetVersionToStory } from "../../story/story-publish-serv
 import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
 import {
   resolveStoryChainId,
+  resolveStoryCompositeReadConditionAddress,
   resolveStoryRpcUrl,
   resolveStoryRuntimeSignerTargetBalanceWei,
   STORY_DELIVERY_CONTRACTS,
@@ -51,13 +53,17 @@ import type {
   SongArtifactUpload,
 } from "../../../types"
 
-type LockedDeliverySecret = {
+export type LockedDeliverySecret = {
   algorithm: "AES-GCM"
   iv_b64: string
   mime_type: string
 }
 
 const abiCoder = AbiCoder.defaultAbiCoder()
+
+export function sameStoryAddress(left: string | null | undefined, right: string | null | undefined): boolean {
+  return String(left || "").toLowerCase() === String(right || "").toLowerCase()
+}
 
 type LockedAssetDeliveryResult = {
   storyStatus: Asset["story_status"]
@@ -122,7 +128,7 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-async function encryptLockedPayload(bytes: Uint8Array): Promise<{
+export async function encryptLockedPayload(bytes: Uint8Array): Promise<{
   ciphertext: Uint8Array
   dataKey: Uint8Array
   metadata: LockedDeliverySecret
@@ -144,7 +150,7 @@ async function encryptLockedPayload(bytes: Uint8Array): Promise<{
   }
 }
 
-function encodeStoryAccessAuxData(input: {
+export function encodeStoryAccessAuxData(input: {
   vaultUuid: number
   caller: string
   accessRef: `0x${string}`
@@ -183,29 +189,38 @@ function formatCdrWriteFailure(error: unknown, env: Pick<Env, "ENVIRONMENT">): s
 
 function buildStoryAccessRef(input: {
   communityId: string
-  assetId: string
+  subjectId: string
   userId: string
-  decisionReason: AssetAccessResponse["decision_reason"]
+  decisionReason: string
 }): `0x${string}` {
   return hashBytes32FromParts(
     "pirate",
     "story-access",
     input.communityId,
-    input.assetId,
+    input.subjectId,
     input.userId,
     input.decisionReason,
   )
 }
 
-export async function buildStoryCdrAccessPackage(input: {
+export type LockedDeliveryStoryCdrAccessPackage = NonNullable<AssetAccessResponse["story_cdr_access"]>
+
+export async function buildLockedDeliveryStoryCdrAccessPackage(input: {
   env: Env
-  asset: AssetRow
-  callerWalletAddress: string
+  communityId: string
+  subjectId: string
   userId: string
+  callerWalletAddress: string
   decisionReason: "creator" | "moderator" | "purchase_entitlement"
-  ciphertextRef?: string
-}): Promise<NonNullable<AssetAccessResponse["story_cdr_access"]>> {
-  if (!input.asset.story_cdr_vault_uuid || !input.asset.story_namespace || !input.asset.locked_delivery_secret_json) {
+  storyCdrVaultUuid: string | number | null
+  storyNamespace: string | null
+  storyEntitlementTokenId: string | null
+  storyReadCondition: string | null
+  lockedDeliverySecretJson: string | null
+  ciphertextRef: string
+  purchaseEntitlementProofMode?: "token_gate" | "signed"
+}): Promise<LockedDeliveryStoryCdrAccessPackage> {
+  if (!input.storyCdrVaultUuid || !input.storyNamespace || !input.lockedDeliverySecretJson) {
     throw notFoundError("Locked asset CDR metadata not found")
   }
   const chainId = resolveStoryChainId(input.env)
@@ -213,52 +228,61 @@ export async function buildStoryCdrAccessPackage(input: {
   if (!cdrContracts) {
     throw badRequestError("Story CDR contracts are not configured for this chain")
   }
-  const metadata = parseJsonValue<LockedDeliverySecret>(input.asset.locked_delivery_secret_json, {
+  const metadata = parseJsonValue<LockedDeliverySecret>(input.lockedDeliverySecretJson, {
     algorithm: "AES-GCM",
     iv_b64: "",
     mime_type: "application/octet-stream",
   })
   const accessScope: StoryAccessScope = input.decisionReason === "purchase_entitlement" ? "asset.share" : "asset.owner"
   const accessRef = buildStoryAccessRef({
-    communityId: input.asset.community_id,
-    assetId: input.asset.asset_id,
+    communityId: input.communityId,
+    subjectId: input.subjectId,
     userId: input.userId,
     decisionReason: input.decisionReason,
   })
-  const readConditionAddress = input.asset.story_read_condition || STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
-  const ciphertextRef = input.ciphertextRef ?? buildAssetContentPath(input.asset.community_id, input.asset.asset_id)
+  const readConditionAddress = input.storyReadCondition || STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const compositeReadConditionAddress = resolveStoryCompositeReadConditionAddress(input.env)
+  const isTokenGateReadCondition = sameStoryAddress(readConditionAddress, STORY_DELIVERY_CONTRACTS.tokenGateCondition)
+  const isCompositeReadCondition = sameStoryAddress(readConditionAddress, compositeReadConditionAddress)
+  const purchaseEntitlementProofMode = input.purchaseEntitlementProofMode ?? "token_gate"
   if (
-    readConditionAddress === STORY_DELIVERY_CONTRACTS.tokenGateCondition
-    && input.decisionReason === "purchase_entitlement"
+    input.decisionReason === "purchase_entitlement"
+    && purchaseEntitlementProofMode === "token_gate"
+    && (isTokenGateReadCondition || isCompositeReadCondition)
   ) {
     return {
       chain_id: chainId,
       rpc_url: resolveStoryRpcUrl(input.env),
       cdr_contract_address: cdrContracts.cdrAddress,
       read_condition_address: readConditionAddress,
-      ciphertext_ref: ciphertextRef,
+      ciphertext_ref: input.ciphertextRef,
       cipher_algorithm: metadata.algorithm,
       cipher_iv_b64: metadata.iv_b64,
       mime_type: metadata.mime_type,
-      vault_uuid: input.asset.story_cdr_vault_uuid,
-      namespace: input.asset.story_namespace,
+      vault_uuid: Number(input.storyCdrVaultUuid),
+      namespace: input.storyNamespace,
       access_scope: accessScope,
       access_ref: accessRef,
       access_aux_data_hex: "0x",
       access_proof: {
         mode: "token_gate",
-        entitlement_token_id: input.asset.story_entitlement_token_id,
+        entitlement_token_id: input.storyEntitlementTokenId,
       },
+    }
+  }
+  if (isTokenGateReadCondition) {
+    if (input.decisionReason !== "purchase_entitlement") {
+      throw badRequestError("Locked asset uses token-gated CDR only; creator/moderator signed reads require the composite read condition")
     }
   }
   const accessProof = await generateStorySignedAccessProof({
     env: input.env,
-    vaultUuid: input.asset.story_cdr_vault_uuid,
+    vaultUuid: Number(input.storyCdrVaultUuid),
     callerAddress: input.callerWalletAddress,
     accessRef,
     scope: accessScope,
     expiry: Math.floor(Date.now() / 1000) + 300,
-    namespace: input.asset.story_namespace as `0x${string}`,
+    namespace: input.storyNamespace as `0x${string}`,
     verifyingContract: readConditionAddress,
   })
 
@@ -267,12 +291,12 @@ export async function buildStoryCdrAccessPackage(input: {
     rpc_url: resolveStoryRpcUrl(input.env),
     cdr_contract_address: cdrContracts.cdrAddress,
     read_condition_address: readConditionAddress,
-    ciphertext_ref: ciphertextRef,
+    ciphertext_ref: input.ciphertextRef,
     cipher_algorithm: metadata.algorithm,
     cipher_iv_b64: metadata.iv_b64,
     mime_type: metadata.mime_type,
-    vault_uuid: input.asset.story_cdr_vault_uuid,
-    namespace: input.asset.story_namespace,
+    vault_uuid: Number(input.storyCdrVaultUuid),
+    namespace: input.storyNamespace,
     access_scope: accessScope,
     access_ref: accessRef,
     access_aux_data_hex: encodeStoryAccessAuxData({
@@ -295,6 +319,30 @@ export async function buildStoryCdrAccessPackage(input: {
       namespace: accessProof.proof.namespace,
     },
   }
+}
+
+export async function buildStoryCdrAccessPackage(input: {
+  env: Env
+  asset: AssetRow
+  callerWalletAddress: string
+  userId: string
+  decisionReason: "creator" | "moderator" | "purchase_entitlement"
+  ciphertextRef?: string
+}): Promise<NonNullable<AssetAccessResponse["story_cdr_access"]>> {
+  return await buildLockedDeliveryStoryCdrAccessPackage({
+    env: input.env,
+    communityId: input.asset.community_id,
+    subjectId: input.asset.asset_id,
+    userId: input.userId,
+    decisionReason: input.decisionReason,
+    callerWalletAddress: input.callerWalletAddress,
+    storyCdrVaultUuid: input.asset.story_cdr_vault_uuid,
+    storyNamespace: input.asset.story_namespace,
+    storyEntitlementTokenId: input.asset.story_entitlement_token_id,
+    storyReadCondition: input.asset.story_read_condition,
+    lockedDeliverySecretJson: input.asset.locked_delivery_secret_json,
+    ciphertextRef: input.ciphertextRef ?? buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+  })
 }
 
 export async function prepareLockedAssetDelivery(input: {
@@ -368,7 +416,8 @@ export async function prepareLockedAssetDelivery(input: {
   })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
-  const readConditionAddress = STORY_DELIVERY_CONTRACTS.tokenGateCondition
+  const readConditionAddress = resolveStoryCompositeReadConditionAddress(input.env)
+    ?? STORY_DELIVERY_CONTRACTS.tokenGateCondition
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
   const storyPublishRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
     ? input.rightsBasis
@@ -387,11 +436,18 @@ export async function prepareLockedAssetDelivery(input: {
     if (!writerConfig.value) {
       throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
     }
-    const readConditionData = encodeTokenGateConditionData({
-      entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
-      tokenId: entitlementTokenId,
-      minBalance: 1n,
-    })
+    const readConditionData = sameStoryAddress(readConditionAddress, STORY_DELIVERY_CONTRACTS.tokenGateCondition)
+      ? encodeTokenGateConditionData({
+        entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+        tokenId: entitlementTokenId,
+        minBalance: 1n,
+      })
+      : encodeCompositeReadConditionData({
+        entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+        tokenId: entitlementTokenId,
+        minBalance: 1n,
+        namespace,
+      })
     const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
     let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
     try {

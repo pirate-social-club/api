@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import { parseExpectedEvmAddress } from "../evm-signer"
 
 export const DEFAULT_STORY_CHAIN_ID = 1315
 export const DEFAULT_STORY_RPC_URL = "https://aeneid.storyrpc.io"
@@ -14,6 +15,12 @@ export const STORY_DELIVERY_CONTRACTS = {
   assetPublishCoordinatorV1: "0xAD6919367E72F3D2390E837bEbf042368c2acfDf",
   marketplaceSettlementV1: "0x71c7ee1B0F108C7AC76AF12D70D8BE6fE13F8847",
 } as const
+
+export function resolveStoryCompositeReadConditionAddress(
+  env: Pick<Env, "STORY_COMPOSITE_READ_CONDITION_ADDRESS">,
+): string | null {
+  return parseExpectedEvmAddress(env.STORY_COMPOSITE_READ_CONDITION_ADDRESS)
+}
 
 export function resolveStoryChainId(env: Pick<Env, "STORY_CHAIN_ID">): number {
   const raw = String(env.STORY_CHAIN_ID || "").trim()
