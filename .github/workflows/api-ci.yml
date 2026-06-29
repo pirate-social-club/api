@@ -87,6 +87,9 @@ jobs:
           echo "::group::settlement effect repository PG"
           timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
           echo "::endgroup::"
+          echo "::group::booking confirm service PG"
+          timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          echo "::endgroup::"
 
   api:
     runs-on: ubuntu-latest
