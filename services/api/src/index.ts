@@ -4,6 +4,7 @@ import { captureException, withSentry } from "@sentry/cloudflare"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
+import bookings from "./routes/bookings"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import communityMedia from "./routes/community-media"
@@ -215,6 +216,7 @@ app.route("/", discovery)
 app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
+app.route("/bookings", bookings)
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
 app.route("/community-media", communityMedia)
