@@ -200,28 +200,33 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
   test("claimed tx uniqueness maps reused transactions to a domain conflict", async () => {
     await seedHold("hold_pi_reuse_a");
     await seedHold("hold_pi_reuse_b");
-    const repo = writeRepo();
-    const a = await repo.createOrGetPaymentIntent(inputFor("hold_pi_reuse_a"));
-    const b = await repo.createOrGetPaymentIntent(inputFor("hold_pi_reuse_b"));
-    if (!a.ok || !b.ok) throw new Error("expected creates");
+    const conflictDb = connect(TEST_DB);
+    try {
+      const repo = createPaymentIntentWriteRepository(makeExecutor(conflictDb));
+      const a = await repo.createOrGetPaymentIntent(inputFor("hold_pi_reuse_a"));
+      const b = await repo.createOrGetPaymentIntent(inputFor("hold_pi_reuse_b"));
+      if (!a.ok || !b.ok) throw new Error("expected creates");
 
-    expect((await repo.reservePaymentIntentForVerification({
-      paymentIntentId: a.intent.paymentIntentId,
-      claimToken: "claim_reuse_a",
-      claimExpiresAt: "2026-06-10T10:05:00Z",
-      normalizedTxRef: "0xreused",
-      walletAttachmentId: "wallet_reuse_a",
-      nowUtc: "2026-06-10T10:00:00Z",
-    })).ok).toBe(true);
+      expect((await repo.reservePaymentIntentForVerification({
+        paymentIntentId: a.intent.paymentIntentId,
+        claimToken: "claim_reuse_a",
+        claimExpiresAt: "2026-06-10T10:05:00Z",
+        normalizedTxRef: "0xreused",
+        walletAttachmentId: "wallet_reuse_a",
+        nowUtc: "2026-06-10T10:00:00Z",
+      })).ok).toBe(true);
 
-    expect(await repo.reservePaymentIntentForVerification({
-      paymentIntentId: b.intent.paymentIntentId,
-      claimToken: "claim_reuse_b",
-      claimExpiresAt: "2026-06-10T10:05:00Z",
-      normalizedTxRef: "0xreused",
-      walletAttachmentId: "wallet_reuse_b",
-      nowUtc: "2026-06-10T10:00:00Z",
-    })).toEqual({ ok: false, reason: "reused-tx" });
+      expect(await repo.reservePaymentIntentForVerification({
+        paymentIntentId: b.intent.paymentIntentId,
+        claimToken: "claim_reuse_b",
+        claimExpiresAt: "2026-06-10T10:05:00Z",
+        normalizedTxRef: "0xreused",
+        walletAttachmentId: "wallet_reuse_b",
+        nowUtc: "2026-06-10T10:00:00Z",
+      })).toEqual({ ok: false, reason: "reused-tx" });
+    } finally {
+      await conflictDb.end();
+    }
   });
 
   test("verified, rejected, expired, and consumed transitions are claim/status guarded", async () => {
