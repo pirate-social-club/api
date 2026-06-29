@@ -149,6 +149,31 @@ export interface AttendanceHeartbeat {
   seenAt: string;
 }
 
+export type BookingSettlementEffectKind = "booking_payout" | "booking_refund";
+export type BookingSettlementEffectStatus = "submitted" | "confirmed" | "failed";
+
+export interface BookingSettlementEffect {
+  bookingSettlementEffectId: string;
+  bookingId: string;
+  effectKind: BookingSettlementEffectKind;
+  idempotencyKey: string;
+  status: BookingSettlementEffectStatus;
+  amountCents: number;
+  recipientAddress: string;
+  settlementRef: string | null;
+  failureReason: string | null;
+  attemptCount: number;
+  signedTx: string | null;
+  broadcastNonce: number | null;
+  coordinatorRef: string | null;
+  coordinatorState: string | null;
+  submittedAt: string | null;
+  confirmedAt: string | null;
+  failedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type PaymentIntentStatus =
   | "active"
   | "verifying"
