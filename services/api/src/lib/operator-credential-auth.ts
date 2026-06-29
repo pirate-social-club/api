@@ -205,7 +205,8 @@ export function requireOperatorScope(
   if (actor.authType !== "operator_credential") {
     throw eligibilityFailed("Operator credential is required", { required_scope: requiredScope })
   }
-  if (!actor.scopes.includes(requiredScope)) {
+  const operatorActor = actor as OperatorActorContext
+  if (!operatorActor.scopes.includes(requiredScope)) {
     throw eligibilityFailed("Insufficient operator scope", { required_scope: requiredScope })
   }
 }

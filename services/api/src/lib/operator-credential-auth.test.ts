@@ -14,7 +14,6 @@ import type { DbExecutor } from "./db-helpers"
 
 const SECRET = "test-operator-secret-with-high-entropy-shape"
 
-type TestDb = Awaited<ReturnType<typeof createControlPlaneTestClient>>
 const cleanups: Array<() => Promise<void>> = []
 
 afterEach(async () => {
