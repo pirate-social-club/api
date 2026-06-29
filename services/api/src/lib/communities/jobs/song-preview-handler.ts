@@ -1,7 +1,7 @@
 import { trimEnv } from "../../env-strings"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
 import { updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
-import { providerUnavailable } from "../../errors"
+import { HttpError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import type { CommunityJobHandlerInput } from "./handler-types"
@@ -82,6 +82,15 @@ async function readErrorBody(response: Response): Promise<string | null> {
 }
 
 function previewFailureMessage(error: unknown): string {
+  if (error instanceof HttpError && error.details) {
+    const details = error.details as { body?: unknown; status?: unknown }
+    const status = typeof details.status === "number" ? `status=${details.status}` : null
+    const body = typeof details.body === "string" && details.body.trim()
+      ? `body=${details.body.trim()}`
+      : null
+    const suffix = [status, body].filter(Boolean).join(" ")
+    return suffix ? `${error.message} (${suffix})` : error.message
+  }
   const message = error instanceof Error ? error.message : String(error)
   return message || "preview_generation_failed"
 }
@@ -166,6 +175,17 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
     try {
       return await runRemoteSongPreviewGenerate(input, endpoint, payload)
     } catch (error) {
+      if (error instanceof HttpError && error.details) {
+        console.warn(JSON.stringify({
+          event: "song_preview.remote.failed",
+          community_id: input.job.community_id,
+          details: error.details,
+          error: error.message,
+          job_id: input.job.job_id,
+          service: "api",
+          song_artifact_bundle: songArtifactBundleId,
+        }))
+      }
       await markRemoteSongPreviewFailed(input, songArtifactBundleId, error)
       throw error
     }
