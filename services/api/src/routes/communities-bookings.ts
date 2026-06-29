@@ -13,7 +13,14 @@ import {
   type BookingSettlementReviewResolution,
 } from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
-import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
+import {
+  getBookingForParty,
+  getBookingSettlementReview,
+  InvalidBookingSettlementReviewCursorError,
+  listBookingsForUser,
+  listPendingBookingSettlementReviews,
+  type BookingViewerRole,
+} from "../lib/communities/bookings/booking-read-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import {
@@ -77,12 +84,66 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     return c.json({ object: "list", data, has_more: false }, 200)
   })
 
+  communities.get("/:communityId/bookings/settlement-review/pending", async (c) => {
+    const operatorActor = await authenticateOperatorCredential({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+    const communityRepository = getCommunityRepository(c.env)
+    const routeCommunityId = c.req.param("communityId")
+    const communityId = await resolveCommunityIdentifier(communityRepository, routeCommunityId) ?? routeCommunityId
+    const url = new URL(c.req.url)
+    const limitParam = url.searchParams.get("limit")
+    const limit = limitParam == null ? undefined : Number(limitParam)
+    if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+      return c.json({ error: "invalid_limit" }, 400)
+    }
+    let page
+    try {
+      page = await listPendingBookingSettlementReviews({
+        env: c.env,
+        communityRepository,
+        communityId,
+        limit,
+        cursor: url.searchParams.get("cursor"),
+      })
+    } catch (error) {
+      if (error instanceof InvalidBookingSettlementReviewCursorError) {
+        return c.json({ error: "invalid_cursor" }, 400)
+      }
+      throw error
+    }
+    return c.json(page, 200)
+  })
+
   // Read: retrieve a single booking — only if the caller is a party (host or booker), else 404.
   communities.get("/:communityId/bookings/:bookingId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const booking = await getBookingForParty({ env: c.env, communityRepository, communityId, bookingId: c.req.param("bookingId"), actorUserId: actor.userId })
     if (!booking) return c.json({ error: "not_found" }, 404)
     return c.json({ booking }, 200)
+  })
+
+  communities.get("/:communityId/bookings/:bookingId/settlement-review", async (c) => {
+    const operatorActor = await authenticateOperatorCredential({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+    const communityRepository = getCommunityRepository(c.env)
+    const routeCommunityId = c.req.param("communityId")
+    const communityId = await resolveCommunityIdentifier(communityRepository, routeCommunityId) ?? routeCommunityId
+    const review = await getBookingSettlementReview({
+      env: c.env,
+      communityRepository,
+      communityId,
+      bookingId: c.req.param("bookingId"),
+    })
+    if (!review) return c.json({ error: "not_found" }, 404)
+    return c.json({ review }, 200)
   })
 
   // Slice B: create a short-lived hold on a slot. Acquires the cross-community control-plane
@@ -249,6 +310,7 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       operatorActorId: operatorActor.operatorActorId,
       note: typeof body.note === "string" ? body.note : null,
       nowUtc: new Date().toISOString(),
+      confirmPollMs: [],
     })
     if (!result.ok) {
       const status = result.reason === "not_found"
@@ -258,11 +320,13 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
           : 400
       return c.json({ error: result.reason }, status)
     }
+    const pendingSettlement = result.outcome === "resolved_pending"
     return c.json({
       booking: result.booking,
       resolution,
+      pending_settlement: pendingSettlement,
       replayed: result.outcome === "replayed",
-    }, 200)
+    }, pendingSettlement ? 202 : 200)
   })
 
   // Slice D2/D3: attach to the booking's private 1:1 session (host/booker only). Mints an Agora

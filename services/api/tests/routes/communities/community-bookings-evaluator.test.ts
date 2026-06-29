@@ -3,6 +3,7 @@ import { createClient } from "@libsql/client"
 
 import { app } from "../../../src/index"
 import { setBookingOperatorEffectExecutorForTests, type OperatorEffect } from "../../../src/lib/communities/bookings/booking-lifecycle-service"
+import { setBookingSettlementCoordinatorForTests } from "../../../src/lib/communities/bookings/booking-custody-adapter"
 import { resolveDueBooking } from "../../../src/lib/communities/bookings/booking-settlement-evaluator"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
@@ -34,6 +35,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   setBookingOperatorEffectExecutorForTests(null)
+  setBookingSettlementCoordinatorForTests(null)
   if (cleanup) { await cleanup(); cleanup = null }
 })
 
@@ -53,20 +55,23 @@ function minuteSamples(startUtc: string, count: number): string[] {
 async function seedBookingWithAttendance(root: string, communityId: string, opts: {
   bookingId: string; hostUserId: string; bookerUserId: string
   hostPresent: boolean; bookerPresent: boolean
+  slotStartUtc?: string; slotEndUtc?: string
 }): Promise<void> {
   const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
   try {
     const now = new Date().toISOString()
+    const slotStartUtc = opts.slotStartUtc ?? SLOT_START
+    const slotEndUtc = opts.slotEndUtc ?? SLOT_END
     await c.execute({
       sql: `INSERT INTO bookings (booking_id, community_id, hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
               gross_cents, platform_fee_bps, platform_fee_cents, host_payout_cents, status, funding_tx_ref,
               funding_wallet_address, host_payout_wallet_address, created_at, updated_at)
             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, 5000, 1000, 500, 4500, 'confirmed', '0xfunded',
               '0x0000000000000000000000000000000000000b0c', '0x0000000000000000000000000000000000000a11', ?7, ?7)`,
-      args: [opts.bookingId, communityId, opts.hostUserId, opts.bookerUserId, SLOT_START, SLOT_END, now],
+      args: [opts.bookingId, communityId, opts.hostUserId, opts.bookerUserId, slotStartUtc, slotEndUtc, now],
     })
     // 16 minute-spaced samples 10:00..10:15 → continuous presence (<=90s apart), overlap 15min.
-    const stamps = minuteSamples(SLOT_START, 16)
+    const stamps = minuteSamples(slotStartUtc, 16)
     for (const [party, userId, present] of [["host", opts.hostUserId, opts.hostPresent], ["booker", opts.bookerUserId, opts.bookerPresent]] as const) {
       if (!present) continue
       const sessionId = `bas_${party}_${opts.bookingId}`
@@ -259,6 +264,178 @@ describe("booking settlement evaluator (Slice D4)", () => {
     }, ctx.env)
     expect(conflict.status).toBe(409)
     expect(await json(conflict)).toEqual({ error: "resolution_conflict" })
+  })
+
+  test("operator lists and reads pending settlement reviews with versions", async () => {
+    const { ctx, communityId, host, booker, root } = await setup()
+    await seedBookingWithAttendance(root, communityId, { bookingId: "bkg_review_list_1", hostUserId: host.userId, bookerUserId: booker.userId, hostPresent: false, bookerPresent: false })
+    await seedBookingWithAttendance(root, communityId, {
+      bookingId: "bkg_review_list_2",
+      hostUserId: host.userId,
+      bookerUserId: booker.userId,
+      hostPresent: false,
+      bookerPresent: false,
+      slotStartUtc: "2026-06-20T12:00:00.000Z",
+      slotEndUtc: "2026-06-20T13:00:00.000Z",
+    })
+    for (const [bookingId, nowUtc] of [
+      ["bkg_review_list_1", "2026-06-20T11:10:00.000Z"],
+      ["bkg_review_list_2", "2026-06-20T11:11:00.000Z"],
+    ] as const) {
+      await resolveDueBooking({
+        env: { ...ctx.env, BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED: "true" },
+        communityRepository: getCommunityRepository(ctx.env),
+        communityId,
+        bookingId,
+        nowUtc,
+      })
+    }
+    const authorization = await seedOperatorCredential(ctx)
+
+    const firstPage = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/settlement-review/pending?limit=1`,
+      { headers: { authorization } },
+      ctx.env,
+    )
+    expect(firstPage.status).toBe(200)
+    const first = await json(firstPage) as { data: Array<{ booking_id: string; review_version: number }>; has_more: boolean; next_cursor: string | null }
+    expect(first.data.map((row) => ({ booking_id: row.booking_id, review_version: row.review_version }))).toEqual([{ booking_id: "bkg_review_list_1", review_version: 1 }])
+    expect(first.has_more).toBe(true)
+    expect(typeof first.next_cursor).toBe("string")
+
+    const secondPage = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/settlement-review/pending?limit=1&cursor=${encodeURIComponent(first.next_cursor!)}`,
+      { headers: { authorization } },
+      ctx.env,
+    )
+    expect(secondPage.status).toBe(200)
+    const second = await json(secondPage) as { data: Array<{ booking_id: string; review_version: number }>; has_more: boolean; next_cursor: string | null }
+    expect(second.data.map((row) => ({ booking_id: row.booking_id, review_version: row.review_version }))).toEqual([{ booking_id: "bkg_review_list_2", review_version: 1 }])
+    expect(second.has_more).toBe(false)
+    expect(second.next_cursor).toBeNull()
+
+    const invalidCursor = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/settlement-review/pending?cursor=not-a-cursor`,
+      { headers: { authorization } },
+      ctx.env,
+    )
+    expect(invalidCursor.status).toBe(400)
+    expect(await json(invalidCursor)).toEqual({ error: "invalid_cursor" })
+
+    const single = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/bkg_review_list_2/settlement-review`,
+      { headers: { authorization } },
+      ctx.env,
+    )
+    expect(single.status).toBe(200)
+    expect(await json(single)).toMatchObject({
+      review: {
+        object: "booking_settlement_review",
+        booking_id: "bkg_review_list_2",
+        review_status: "pending",
+        review_reason: "attendance_ambiguous",
+        review_version: 1,
+      },
+    })
+  })
+
+  test("admin token cannot list or read settlement reviews", async () => {
+    const { ctx, communityId, host, booker, root } = await setup()
+    await seedBookingWithAttendance(root, communityId, { bookingId: "bkg_review_read_blocked", hostUserId: host.userId, bookerUserId: booker.userId, hostPresent: false, bookerPresent: false })
+    await resolveDueBooking({
+      env: { ...ctx.env, BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED: "true" },
+      communityRepository: getCommunityRepository(ctx.env),
+      communityId,
+      bookingId: "bkg_review_read_blocked",
+      nowUtc: "2026-06-20T11:10:00.000Z",
+    })
+    const env = { ...ctx.env, PIRATE_ADMIN_TOKEN: "admin-secret" }
+    for (const url of [
+      `http://pirate.test/communities/${communityId}/bookings/settlement-review/pending`,
+      `http://pirate.test/communities/${communityId}/bookings/bkg_review_read_blocked/settlement-review`,
+    ]) {
+      const response = await app.request(url, {
+        headers: {
+          "x-admin-token": "admin-secret",
+          "x-admin-as-user-id": host.userId,
+        },
+      }, env)
+      expect(response.status).toBe(401)
+    }
+  })
+
+  test("operator resolution returns pending success when money is broadcast but unconfirmed", async () => {
+    const { ctx, communityId, host, booker, root } = await setup()
+    await seedBookingWithAttendance(root, communityId, { bookingId: "bkg_route_pending", hostUserId: host.userId, bookerUserId: booker.userId, hostPresent: false, bookerPresent: false })
+    await resolveDueBooking({
+      env: { ...ctx.env, BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED: "true" },
+      communityRepository: getCommunityRepository(ctx.env),
+      communityId,
+      bookingId: "bkg_route_pending",
+      nowUtc: "2026-06-20T11:10:00.000Z",
+    })
+    setBookingOperatorEffectExecutorForTests(null)
+    setBookingSettlementCoordinatorForTests({
+      async settle(req) {
+        return { state: "broadcast", idempotencyKey: `${req.effectKind}:${req.bookingId}`, txHash: "0xpending", nonce: 7 }
+      },
+      async confirm(req, txHash) {
+        return { state: "broadcast", idempotencyKey: `${req.effectKind}:${req.bookingId}`, txHash, nonce: 7 }
+      },
+      async reconcile(req) {
+        return { state: "broadcast", idempotencyKey: `${req.effectKind}:${req.bookingId}`, txHash: "0xpending", nonce: 7 }
+      },
+    })
+    const authorization = await seedOperatorCredential(ctx)
+    const response = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/bkg_route_pending/settlement-review/resolve`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization },
+        body: JSON.stringify({ resolution: "no_show_host", expected_review_version: 1 }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(202)
+    expect(await json(response)).toMatchObject({
+      pending_settlement: true,
+      replayed: false,
+      resolution: "no_show_host",
+      booking: {
+        booking_id: "bkg_route_pending",
+        status: "no_show_host",
+        refund_cents: 5000,
+        refund_tx_ref: null,
+      },
+    })
+    expect(await bookingReviewState(root, communityId, "bkg_route_pending")).toMatchObject({
+      status: "no_show_host",
+      reviewStatus: "resolved",
+      resolution: "no_show_host",
+      refundCents: 5000,
+      version: 2,
+    })
+
+    const replay = await app.request(
+      `http://pirate.test/communities/${communityId}/bookings/bkg_route_pending/settlement-review/resolve`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization },
+        body: JSON.stringify({ resolution: "no_show_host", expected_review_version: 1 }),
+      },
+      ctx.env,
+    )
+    expect(replay.status).toBe(202)
+    expect(await json(replay)).toMatchObject({
+      pending_settlement: true,
+      replayed: false,
+      resolution: "no_show_host",
+      booking: {
+        booking_id: "bkg_route_pending",
+        status: "no_show_host",
+        refund_cents: 5000,
+      },
+    })
   })
 
   test("admin token cannot resolve a pending settlement review", async () => {

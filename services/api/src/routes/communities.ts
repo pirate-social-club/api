@@ -31,6 +31,8 @@ communityAuthPolicy.get("/:communityId/telegram-bot-username", publicAccess)
 communityAuthPolicy.get("/:communityId/posts/:postId/karaoke", publicAccess)
 communityAuthPolicy.post("/:communityId/posts", agentDelegatedAccess)
 communityAuthPolicy.post("/:communityId/posts/:postId/comments", agentDelegatedAccess)
+communityAuthPolicy.get("/:communityId/bookings/settlement-review/pending", publicAccess)
+communityAuthPolicy.get("/:communityId/bookings/:bookingId/settlement-review", publicAccess)
 communityAuthPolicy.post("/:communityId/bookings/:bookingId/settlement-review/resolve", publicAccess)
 
 function communityPath(url: string): string {
