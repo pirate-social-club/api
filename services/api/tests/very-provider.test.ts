@@ -200,6 +200,27 @@ describe("Very provider adapter", () => {
     expect(query.options ? "sessionId" in query.options : true).toBe(false)
   })
 
+  test("startSession labels contribution verification intents", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const env = {
+      VERY_API_URL: "https://very.example.com",
+      VERY_APP_ID: "test-app",
+    } as any
+    const provider = getVeryProvider(env)
+
+    const postResult = await provider.startSession(veryStartInput({
+      verificationIntent: "post_create",
+    }))
+    const commentResult = await provider.startSession(veryStartInput({
+      verificationIntent: "comment_create",
+    }))
+    const postQuery = postResult.launch.query as { options?: Record<string, unknown> }
+    const commentQuery = commentResult.launch.query as { options?: Record<string, unknown> }
+
+    expect(postQuery.options?.externalNullifier).toBe("Pirate - Post Create")
+    expect(commentQuery.options?.externalNullifier).toBe("Pirate - Comment Create")
+  })
+
   test("configured provider verifies a proof payload through the Very verifier endpoint", async () => {
     const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
     const env = {
