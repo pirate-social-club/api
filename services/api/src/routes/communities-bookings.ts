@@ -3,11 +3,12 @@ import type { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { resolveBookingAvailability } from "../lib/communities/bookings/booking-availability-service"
 import { confirmBookingHold, quoteBookingHold } from "../lib/communities/bookings/booking-confirm-service"
-import { createBookingHold } from "../lib/communities/bookings/booking-hold-service"
+import { createBookingHold as createCommunityBookingHold } from "../lib/communities/bookings/booking-hold-service"
 import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
 import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
 import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
+import { createGlobalBookingHold } from "../lib/bookings/booking-hold-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
@@ -97,7 +98,26 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       return c.json({ error: "slot_start_utc and slot_end_utc are required" }, 400)
     }
 
-    const result = await createBookingHold({
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await createGlobalBookingHold({
+        client: getControlPlaneClient(c.env),
+        sourceCommunityId: communityId,
+        hostUserId,
+        bookerUserId: actor.userId,
+        slotStartUtc: body.slot_start_utc,
+        slotEndUtc: body.slot_end_utc,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ hold: globalResult.hold }, 201)
+      }
+      return c.json({ error: globalResult.reason }, 409)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
+
+    const result = await createCommunityBookingHold({
       env: c.env,
       communityRepository,
       communityId,
@@ -105,7 +125,7 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       bookerUserId: actor.userId,
       slotStartUtc: body.slot_start_utc,
       slotEndUtc: body.slot_end_utc,
-      nowUtc: new Date().toISOString(),
+      nowUtc,
     })
 
     if (!result.ok) {

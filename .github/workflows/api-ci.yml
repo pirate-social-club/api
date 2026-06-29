@@ -75,6 +75,9 @@ jobs:
           echo "::group::hold repository PG"
           timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
           echo "::endgroup::"
+          echo "::group::booking hold service PG"
+          timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          echo "::endgroup::"
           echo "::group::payment-intent repository PG"
           timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
           echo "::endgroup::"
