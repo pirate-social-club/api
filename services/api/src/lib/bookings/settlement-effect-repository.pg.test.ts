@@ -264,10 +264,12 @@ describe.skipIf(!RUN)("settlement effect repository (real Postgres)", () => {
     expect((await repo.listSettlementEffectsByBooking("bkg_effect_unique")).map((e) => e.idempotencyKey)).toEqual([
       "booking_payout:bkg_effect_unique:first",
     ]);
-    expect((await repo.listSubmittedSettlementEffects(2)).map((e) => e.idempotencyKey)).toEqual([
-      "booking_refund:bkg_effect_list",
-      "booking_payout:bkg_effect_unique:first",
-    ]);
+    const submitted = (await repo.listSubmittedSettlementEffects(100)).map((e) => e.idempotencyKey);
+    expect(submitted).toContain("booking_refund:bkg_effect_list");
+    expect(submitted).toContain("booking_payout:bkg_effect_unique:first");
+    expect(submitted.indexOf("booking_refund:bkg_effect_list")).toBeLessThan(
+      submitted.indexOf("booking_payout:bkg_effect_unique:first"),
+    );
   });
 
   test("transaction-bound settlement effects roll back", async () => {

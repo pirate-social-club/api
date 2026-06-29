@@ -259,14 +259,14 @@ async function mirrorSettlementCoordinatorEffect(
     sql: `UPDATE bookings.settlement_effects
           SET coordinator_ref = COALESCE(coordinator_ref, ?2),
               coordinator_state = ?3,
-              settlement_ref = COALESCE(?4, settlement_ref),
-              broadcast_nonce = COALESCE(?5, broadcast_nonce),
+              settlement_ref = COALESCE(?4::text, settlement_ref),
+              broadcast_nonce = COALESCE(?5::integer, broadcast_nonce),
               updated_at = ?6::timestamptz
           WHERE idempotency_key = ?1
             AND status != 'confirmed'
             AND (coordinator_ref IS NULL OR coordinator_ref = ?2)
-            AND (?4 IS NULL OR settlement_ref IS NULL OR settlement_ref = ?4)
-            AND (?5 IS NULL OR broadcast_nonce IS NULL OR broadcast_nonce = ?5)
+            AND (?4::text IS NULL OR settlement_ref IS NULL OR settlement_ref = ?4::text)
+            AND (?5::integer IS NULL OR broadcast_nonce IS NULL OR broadcast_nonce = ?5::integer)
             AND (
               coordinator_state IS NULL
               OR coordinator_state = ?3
