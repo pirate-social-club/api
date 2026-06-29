@@ -40,6 +40,19 @@ function parseStudyGenerationJson(content: string): unknown {
   }
 }
 
+function normalizeGeneratedChoice(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase()
+}
+
+function isPlausibleDistractorLength(answer: string, distractor: string): boolean {
+  const answerLength = [...answer].length
+  const distractorLength = [...distractor].length
+  if (answerLength <= 0 || distractorLength <= 0) return false
+  if (answerLength < 8) return distractorLength <= 48
+  return distractorLength >= Math.max(3, Math.floor(answerLength * 0.4))
+    && distractorLength <= Math.ceil(answerLength * 2.2)
+}
+
 function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>): ParsedGeneratedLine[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("OpenRouter study generation response schema mismatch: expected object")
@@ -68,12 +81,28 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
     if (!translation || distractors.length < 3) {
       throw new Error("OpenRouter study generation response schema mismatch: missing translation distractors")
     }
+    const normalizedTranslation = normalizeGeneratedChoice(translation)
+    const seenDistractors = new Set<string>()
+    const validDistractors = distractors.filter((distractor) => {
+      const normalized = normalizeGeneratedChoice(distractor)
+      if (!normalized || normalized === normalizedTranslation || seenDistractors.has(normalized)) {
+        return false
+      }
+      if (!isPlausibleDistractorLength(translation, distractor)) {
+        return false
+      }
+      seenDistractors.add(normalized)
+      return true
+    })
+    if (validDistractors.length < 3) {
+      throw new Error("OpenRouter study generation response schema mismatch: invalid translation distractors")
+    }
     seen.add(lineId)
     lines.push({
       line_id: lineId,
       explanation,
       translation,
-      distractors: distractors.filter((distractor) => distractor !== translation).slice(0, 3),
+      distractors: validDistractors.slice(0, 3),
     })
   }
 

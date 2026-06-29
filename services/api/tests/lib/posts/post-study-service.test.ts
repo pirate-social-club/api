@@ -592,4 +592,51 @@ describe("post study service", () => {
     expect(payload.exercise_count).toBe(2)
     expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
   })
+
+  test("lazy generation rejects answer-equal and duplicate distractors", async () => {
+    await seedMultilineSongPost()
+
+    const payload = await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    translation: "Me perdí en las olas de medianoche",
+                    explanation: "Explica el sentido de estar perdido.",
+                    distractors: [
+                      "Me perdí en las olas de medianoche",
+                      "Me perdí en las olas de medianoche",
+                      "Me perdí en las olas de medianoche",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    }))
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    const localizations = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'ready'")
+    expect(Number(localizations.rows[0]?.count ?? 0)).toBe(0)
+  })
 })
