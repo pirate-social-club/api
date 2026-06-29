@@ -19,11 +19,19 @@ afterEach(async () => {
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
-  const existing = await client.execute("PRAGMA table_info(song_study_unit)")
-  if (existing.rows.length > 0) {
-    return
+  const studyExisting = await client.execute("PRAGMA table_info(song_study_unit)")
+  if (studyExisting.rows.length === 0) {
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1109_song_study.sql")
   }
-  const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1109_song_study.sql", import.meta.url))
+
+  const communityColumns = await client.execute("PRAGMA table_info(communities)")
+  if (!communityColumns.rows.some((row) => String(row.name) === "study_enabled")) {
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1115_community_study_enabled.sql")
+  }
+}
+
+async function applyMigrationFile(client: Client, relativePath: string): Promise<void> {
+  const path = fileURLToPath(new URL(relativePath, import.meta.url))
   const raw = await readFile(path, "utf8")
   for (const statement of splitSqlStatements(raw)) {
     for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
@@ -49,10 +57,10 @@ async function seedStudySong(input: {
           community_id, display_name, status, artist_governance_state,
           membership_mode, default_age_gate_policy, donation_policy_mode,
           donation_partner_status, governance_mode, created_by_user_id,
-          created_at, updated_at
+          created_at, updated_at, study_enabled
         )
         VALUES (?1, 'Study Route Club', 'active', 'fan_run', 'open', 'none',
-                'none', 'unconfigured', 'centralized', 'route_author', ?2, ?2)
+                'none', 'unconfigured', 'centralized', 'route_author', ?2, ?2, 1)
       `,
       args: [input.communityId, now],
     })
