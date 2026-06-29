@@ -151,6 +151,13 @@ export type Env = {
   PIRATE_CHECKOUT_RPC_URL?: string
   PIRATE_CHECKOUT_SOURCE_CHAIN_ID?: string
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS?: string
+  // Booking custody/settlement can be decoupled from the global commerce checkout chain.
+  // Missing booking-specific config fails closed instead of falling back to PIRATE_CHECKOUT_*.
+  PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS?: string
+  PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY?: string
+  PIRATE_BOOKING_SETTLEMENT_RPC_URL?: string
+  PIRATE_BOOKING_SETTLEMENT_CHAIN_ID?: string
+  PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
   // Caps RPC receipt waits for routed checkout funding confirmation. Paid
   // handle claims can be retried with the same funding_tx_ref after timeout.
   // Use 15000-30000 for pilot smoke.

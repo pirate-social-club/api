@@ -3,12 +3,12 @@ import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethe
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
 import { parseExpectedEvmAddress } from "../../evm-signer"
-import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
 import {
-  resolvePirateCheckoutRpcUrl,
-  resolvePirateCheckoutSourceChainId,
-  resolvePirateCheckoutUsdcTokenAddress,
-} from "../commerce/checkout-config"
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorPrivateKey,
+  resolveBookingSettlementRpcUrl,
+  resolveBookingSettlementUsdcTokenAddress,
+} from "./booking-chain-config"
 import type { ChainPrimitives } from "./operator-signing-coordinator-do"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
@@ -24,9 +24,12 @@ const ERC20_ABI = [
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 
 function resolveConfig(env: Env): { privateKey: string; rpcUrl: string; chainId: number; usdc: string } {
-  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY || "").trim())
-  if (!privateKey) throw badRequestError("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY is invalid")
-  return { privateKey, rpcUrl: resolvePirateCheckoutRpcUrl(env), chainId: resolvePirateCheckoutSourceChainId(env), usdc: resolvePirateCheckoutUsdcTokenAddress(env) }
+  return {
+    privateKey: resolveBookingSettlementOperatorPrivateKey(env),
+    rpcUrl: resolveBookingSettlementRpcUrl(env),
+    chainId: resolveBookingSettlementChainId(env),
+    usdc: resolveBookingSettlementUsdcTokenAddress(env),
+  }
 }
 function checksumRecipient(raw: string): string {
   const a = parseExpectedEvmAddress(raw)

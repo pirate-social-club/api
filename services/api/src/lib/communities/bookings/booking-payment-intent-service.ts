@@ -3,10 +3,10 @@ import { getAddress } from "ethers"
 import type { Env } from "../../../env"
 import { conflictError } from "../../errors"
 import {
-  resolvePirateCheckoutOperatorAddress,
-  resolvePirateCheckoutSourceChainId,
-  resolvePirateCheckoutUsdcTokenAddress,
-} from "../commerce/checkout-config"
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorAddress,
+  resolveBookingSettlementUsdcTokenAddress,
+} from "./booking-chain-config"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 
 type CommunityRepository = Parameters<typeof openCommunityReadClient>[1]
@@ -93,11 +93,11 @@ export async function loadPaymentIntent(env: Env, repo: CommunityRepository, com
 // Derive the immutable intent fields for a hold from the hold + current config. Deterministic.
 function deriveIntent(env: Env, hold: HoldForIntent): Pick<PaymentIntentRow, "chain_id" | "token_address" | "token_decimals" | "token_symbol" | "recipient_address" | "amount_atomic" | "gross_cents"> {
   return {
-    chain_id: resolvePirateCheckoutSourceChainId(env),
-    token_address: getAddress(resolvePirateCheckoutUsdcTokenAddress(env)),
+    chain_id: resolveBookingSettlementChainId(env),
+    token_address: getAddress(resolveBookingSettlementUsdcTokenAddress(env)),
     token_decimals: USDC_DECIMALS,
     token_symbol: USDC_SYMBOL,
-    recipient_address: getAddress(resolvePirateCheckoutOperatorAddress(env)),
+    recipient_address: getAddress(resolveBookingSettlementOperatorAddress(env)),
     amount_atomic: centsToAtomicString(hold.price_cents),
     gross_cents: hold.price_cents,
   }
