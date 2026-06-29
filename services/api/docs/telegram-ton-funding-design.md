@@ -178,6 +178,10 @@ The implementation work allowed before real-money testing is limited to:
   `PIRATE_OMNISTON_SIM_ENABLED`, not the production accept-provider gate. The
   normal `/telegram/spend-intents/accept` flow must continue rejecting
   `omniston_ton` until the real proof extension is approved.
+- `PIRATE_OMNISTON_SIM_ENABLED` is a dev/staging-only switch and must be absent
+  from production Worker vars/secrets. Production deploy review must confirm
+  this flag is not configured before shipping any build containing the
+  `/telegram/spend-intents/omniston-sim/*` routes.
 - TON testnet source-leg parsing using the existing
   `ton_testnet_transfer` simulation.
 - Base Sepolia or local/forked Base USDC delivery verification for the Base leg
