@@ -1,4 +1,4 @@
-// Real-Postgres test for the host-configuration read repository. Runs ONLY when
+// Real-Postgres test for the host-configuration read/write repository. Runs ONLY when
 // BOOKINGS_REPO_TEST_ADMIN_URL is set (API CI provisions PostgreSQL 17). Applies the CANONICAL core
 // b0001 migration (located via resolveCoreRepoPath — never copies DDL), seeds rows, and exercises the
 // repository through an executor that mirrors PostgresClientAdapter (?N -> $N, {rows}). Isolated DB with
@@ -8,7 +8,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
 import {
-  createBookingHostConfigRepository, createBookingHostConfigTxRepository, type BookingSqlExecutor,
+  createBookingHostConfigRepository, createBookingHostConfigTxRepository, createBookingHostConfigTxWriteRepository,
+  createBookingHostConfigWriteRepository, type BookingSqlExecutor,
 } from "./host-config-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
@@ -39,6 +40,20 @@ function makeExecutor(conn: { unsafe(sql: string, args?: unknown[]): Promise<unk
 
 describe.skipIf(!RUN)("bookings host-config repository (real Postgres)", () => {
   let repoDb: SQL;
+
+  function writeRepo() {
+    return createBookingHostConfigWriteRepository(makeExecutor(repoDb));
+  }
+
+  async function seedWritableProfile(hostUserId: string): Promise<void> {
+    await writeRepo().createProfile({
+      hostUserId,
+      hostTimezone: "UTC",
+      basePriceCents: 5000,
+      defaultSlotDurationSeconds: 1800,
+      createdAt: "2026-06-10T00:00:00Z",
+    });
+  }
 
   beforeAll(async () => {
     const root = connect();
@@ -187,5 +202,231 @@ describe.skipIf(!RUN)("bookings host-config repository (real Postgres)", () => {
       expect((await repo.getProfile("host1"))!.hostUserId).toBe("host1");
       expect((await repo.listPriceRules("host1")).map((p) => p.priceRuleId)).toEqual(["p_hi_a", "p_hi_b", "p_lo"]);
     });
+  });
+
+  test("profile writes: create, update, publish, and unpublish", async () => {
+    const write = writeRepo();
+    const read = createBookingHostConfigRepository(makeExecutor(repoDb));
+    const hostUserId = "host_write_profile";
+
+    const created = await write.createProfile({
+      hostUserId,
+      displayHeadline: "Original headline",
+      bio: "Original bio",
+      topics: ["music", "mixing"],
+      introVideoRef: "asset_intro",
+      hostTimezone: "Europe/London",
+      basePriceCents: 5500,
+      defaultSlotDurationSeconds: 1800,
+      platformFeeBps: 900,
+      payoutWalletAddress: "0xabc",
+      createdAt: "2026-06-10T01:00:00Z",
+    });
+    expect(created.isPublished).toBe(false);
+    expect(created.topics).toEqual(["music", "mixing"]);
+    expect((await repoDb.unsafe(
+      `SELECT jsonb_typeof(topics) AS type FROM bookings.profiles WHERE host_user_id = $1`,
+      [hostUserId],
+    ) as Array<{ type: string }>)[0].type).toBe("array");
+
+    const updated = await write.updateProfile(hostUserId, {
+      displayHeadline: null,
+      topics: null,
+      hostTimezone: "America/Los_Angeles",
+      basePriceCents: 6500,
+      payoutWalletAddress: null,
+      updatedAt: "2026-06-10T02:00:00Z",
+    });
+    expect(updated!.displayHeadline).toBeNull();
+    expect(updated!.topics).toBeNull();
+    expect(updated!.basePriceCents).toBe(6500);
+    expect(updated!.updatedAt).toBe("2026-06-10T02:00:00.000Z");
+    expect(await write.updateProfile("missing_profile", { updatedAt: "2026-06-10T02:00:00Z" })).toBeNull();
+
+    expect((await write.publishProfile(hostUserId, "2026-06-10T03:00:00Z"))!.isPublished).toBe(true);
+    expect((await write.unpublishProfile(hostUserId, "2026-06-10T04:00:00Z"))!.isPublished).toBe(false);
+    expect((await read.getProfile(hostUserId))!.hostTimezone).toBe("America/Los_Angeles");
+  });
+
+  test("profile upsert inserts, then patches conflict fields without clearing omitted optional values", async () => {
+    const write = writeRepo();
+    const hostUserId = "host_write_profile_upsert";
+
+    const created = await write.upsertProfile({
+      hostUserId,
+      displayHeadline: "Upsert headline",
+      bio: "Preserved bio",
+      topics: ["guitar"],
+      introVideoRef: "asset_upsert",
+      hostTimezone: "Europe/Berlin",
+      basePriceCents: 6000,
+      defaultSlotDurationSeconds: 1800,
+      platformFeeBps: 850,
+      payoutWalletAddress: "0xupsert",
+      createdAt: "2026-06-11T00:00:00Z",
+    });
+    expect(created.hostUserId).toBe(hostUserId);
+    expect(created.platformFeeBps).toBe(850);
+    expect(created.isPublished).toBe(false);
+    expect((await repoDb.unsafe(
+      `SELECT jsonb_typeof(topics) AS type FROM bookings.profiles WHERE host_user_id = $1`,
+      [hostUserId],
+    ) as Array<{ type: string }>)[0].type).toBe("array");
+
+    expect((await write.publishProfile(hostUserId, "2026-06-11T01:00:00Z"))!.isPublished).toBe(true);
+    const updated = await write.upsertProfile({
+      hostUserId,
+      displayHeadline: null,
+      topics: ["voice"],
+      hostTimezone: "America/Chicago",
+      basePriceCents: 7500,
+      defaultSlotDurationSeconds: 3600,
+      createdAt: "2026-06-11T00:30:00Z",
+      updatedAt: "2026-06-11T02:00:00Z",
+    });
+    expect(updated.displayHeadline).toBeNull();
+    expect(updated.bio).toBe("Preserved bio");
+    expect(updated.topics).toEqual(["voice"]);
+    expect(updated.introVideoRef).toBe("asset_upsert");
+    expect(updated.hostTimezone).toBe("America/Chicago");
+    expect(updated.basePriceCents).toBe(7500);
+    expect(updated.defaultSlotDurationSeconds).toBe(3600);
+    expect(updated.platformFeeBps).toBe(850);
+    expect(updated.payoutWalletAddress).toBe("0xupsert");
+    expect(updated.isPublished).toBe(true);
+    expect(updated.createdAt).toBe("2026-06-11T00:00:00.000Z");
+    expect(updated.updatedAt).toBe("2026-06-11T02:00:00.000Z");
+    expect((await repoDb.unsafe(
+      `SELECT jsonb_typeof(topics) AS type FROM bookings.profiles WHERE host_user_id = $1`,
+      [hostUserId],
+    ) as Array<{ type: string }>)[0].type).toBe("array");
+  });
+
+  test("availability rule writes: create, update, delete", async () => {
+    const hostUserId = "host_write_rules";
+    await seedWritableProfile(hostUserId);
+    const write = writeRepo();
+    const read = createBookingHostConfigRepository(makeExecutor(repoDb));
+
+    const created = await write.createAvailabilityRule({
+      ruleId: "rule_write_1",
+      hostUserId,
+      byWeekday: [1, 3],
+      startLocal: "09:00",
+      endLocal: "12:00",
+      slotDurationSeconds: 1800,
+      effectiveFromUtc: "2026-07-01T00:00:00Z",
+      createdAt: "2026-06-10T05:00:00Z",
+    });
+    expect(created.startLocal).toBe("09:00:00");
+    expect(created.byWeekday).toEqual([1, 3]);
+
+    const updated = await write.updateAvailabilityRule(hostUserId, "rule_write_1", {
+      byWeekday: [2],
+      startLocal: "10:00",
+      endLocal: "11:30",
+      effectiveFromUtc: null,
+      updatedAt: "2026-06-10T06:00:00Z",
+    });
+    expect(updated!.byWeekday).toEqual([2]);
+    expect(updated!.effectiveFromUtc).toBeNull();
+    expect(await write.updateAvailabilityRule(hostUserId, "missing_rule", { updatedAt: "2026-06-10T06:00:00Z" })).toBeNull();
+    expect((await read.listAvailabilityRules(hostUserId)).map((r) => r.ruleId)).toEqual(["rule_write_1"]);
+
+    expect(await write.deleteAvailabilityRule(hostUserId, "rule_write_1")).toBe(true);
+    expect(await write.deleteAvailabilityRule(hostUserId, "rule_write_1")).toBe(false);
+    expect(await read.listAvailabilityRules(hostUserId)).toEqual([]);
+  });
+
+  test("availability exception writes: create, update, delete", async () => {
+    const hostUserId = "host_write_exceptions";
+    await seedWritableProfile(hostUserId);
+    const write = writeRepo();
+    const read = createBookingHostConfigRepository(makeExecutor(repoDb));
+
+    const created = await write.createAvailabilityException({
+      exceptionId: "exception_write_1",
+      hostUserId,
+      kind: "block",
+      startUtc: "2026-07-20T10:00:00Z",
+      endUtc: "2026-07-20T11:00:00Z",
+      createdAt: "2026-06-10T07:00:00Z",
+    });
+    expect(created.kind).toBe("block");
+
+    const unchanged = await write.updateAvailabilityException(hostUserId, "exception_write_1", {});
+    expect(unchanged!.exceptionId).toBe("exception_write_1");
+    const updated = await write.updateAvailabilityException(hostUserId, "exception_write_1", {
+      kind: "open",
+      startUtc: "2026-07-21T10:00:00Z",
+      endUtc: "2026-07-21T12:00:00Z",
+    });
+    expect(updated!.kind).toBe("open");
+    expect(updated!.endUtc).toBe("2026-07-21T12:00:00.000Z");
+    expect(await write.updateAvailabilityException(hostUserId, "missing_exception", {})).toBeNull();
+    expect((await read.listAvailabilityExceptions(hostUserId)).map((e) => e.exceptionId)).toEqual(["exception_write_1"]);
+
+    expect(await write.deleteAvailabilityException(hostUserId, "exception_write_1")).toBe(true);
+    expect(await write.deleteAvailabilityException(hostUserId, "exception_write_1")).toBe(false);
+    expect(await read.listAvailabilityExceptions(hostUserId)).toEqual([]);
+  });
+
+  test("price rule writes: create, update, delete", async () => {
+    const hostUserId = "host_write_prices";
+    await seedWritableProfile(hostUserId);
+    const write = writeRepo();
+    const read = createBookingHostConfigRepository(makeExecutor(repoDb));
+
+    const created = await write.createPriceRule({
+      priceRuleId: "price_write_1",
+      hostUserId,
+      matchWeekday: [5],
+      matchLocalStart: "18:00",
+      matchLocalEnd: "20:00",
+      matchDurationSeconds: null,
+      priceCents: 9000,
+      priority: 10,
+      createdAt: "2026-06-10T08:00:00Z",
+    });
+    expect(created.matchWeekday).toEqual([5]);
+    expect(created.matchLocalStart).toBe("18:00:00");
+
+    const updated = await write.updatePriceRule(hostUserId, "price_write_1", {
+      matchWeekday: null,
+      matchLocalStart: null,
+      matchLocalEnd: null,
+      matchDurationSeconds: 3600,
+      priceCents: 12000,
+      priority: 20,
+      updatedAt: "2026-06-10T09:00:00Z",
+    });
+    expect(updated!.matchWeekday).toBeNull();
+    expect(updated!.matchLocalStart).toBeNull();
+    expect(updated!.matchDurationSeconds).toBe(3600);
+    expect(updated!.priority).toBe(20);
+    expect(await write.updatePriceRule(hostUserId, "missing_price", { updatedAt: "2026-06-10T09:00:00Z" })).toBeNull();
+    expect((await read.listPriceRules(hostUserId)).map((p) => p.priceRuleId)).toEqual(["price_write_1"]);
+
+    expect(await write.deletePriceRule(hostUserId, "price_write_1")).toBe(true);
+    expect(await write.deletePriceRule(hostUserId, "price_write_1")).toBe(false);
+    expect(await read.listPriceRules(hostUserId)).toEqual([]);
+  });
+
+  test("transaction-bound write repository uses caller-owned tx and rolls back with it", async () => {
+    const hostUserId = "host_write_tx";
+    await expect(repoDb.begin(async (tx: { unsafe(sql: string, args?: unknown[]): Promise<unknown> }) => {
+      const write = createBookingHostConfigTxWriteRepository(makeExecutor(tx));
+      await write.createProfile({
+        hostUserId,
+        hostTimezone: "UTC",
+        basePriceCents: 7000,
+        defaultSlotDurationSeconds: 1800,
+        createdAt: "2026-06-10T10:00:00Z",
+      });
+      throw new Error("rollback_probe");
+    })).rejects.toThrow("rollback_probe");
+
+    const read = createBookingHostConfigRepository(makeExecutor(repoDb));
+    expect(await read.getProfile(hostUserId)).toBeNull();
   });
 });
