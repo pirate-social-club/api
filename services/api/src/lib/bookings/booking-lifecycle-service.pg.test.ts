@@ -202,7 +202,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       sessionId: attached.sessionId,
       nowUtc: "2026-07-01T10:00:20Z",
     })).toEqual({ ok: true });
-    const heartbeats = await repoDb.unsafe(`SELECT seen_at FROM bookings.attendance_heartbeats WHERE session_id = $1`, [attached.sessionId]) as Record<string, unknown>[];
+    const heartbeats = await repoDb.unsafe(`SELECT seen_at::text AS seen_at FROM bookings.attendance_heartbeats WHERE session_id = $1`, [attached.sessionId]) as Record<string, unknown>[];
     expect(String(heartbeats[0].seen_at)).toBe("2026-07-01 10:00:20+00");
   });
 
