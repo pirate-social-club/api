@@ -15,6 +15,17 @@ import {
 } from "../runtime-deps";
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
 import { createBookingHostConfigRepository, createBookingHostConfigTxRepository } from "./host-config-repository";
+import {
+  createAvailabilityException,
+  createAvailabilityRule,
+  createPriceRule,
+  getBookingProfile,
+  listAvailabilityExceptions,
+  listAvailabilityRules,
+  listPriceRules,
+  setProfilePublished,
+  upsertBookingProfile,
+} from "./host-authoring-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
 const RUN = Boolean(ADMIN_URL);
@@ -118,5 +129,63 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
     }
     expect(created).toBe(1); // pool created once per request URL
     expect(ended).toBe(1); // closed when the request scope exits
+  });
+
+  test("host authoring service writes through the production request-scoped global path", async () => {
+    let ended = 0;
+    setControlPlanePostgresPoolFactoryForTests((_url) => {
+      const run = async (sql: string, values?: unknown[]) => ({
+        rows: (await repoDb.unsafe(sql, values ?? [])) as Record<string, unknown>[],
+        rowCount: null,
+      });
+      return { query: run, connect: async () => ({ query: run, release: () => {} }), end: async () => { ended += 1; } };
+    });
+    try {
+      await withRequestControlPlaneClients(async () => {
+        const hostUserId = "host_authoring_prodpath";
+        const profileResult = await upsertBookingProfile(PG_ENV, hostUserId, {
+          host_timezone: "Europe/Vienna",
+          base_price_cents: 5000,
+          default_slot_duration_seconds: 1800,
+          topics: ["mentoring", "music"],
+          payout_wallet_address: "0x1111111111111111111111111111111111111111",
+        });
+        expect(profileResult.ok).toBe(true);
+        expect(profileResult.ok && profileResult.data.created).toBe(true);
+
+        const publishResult = await setProfilePublished(PG_ENV, hostUserId, true);
+        expect(publishResult.ok).toBe(true);
+        expect(publishResult.ok && publishResult.data.isPublished).toBe(true);
+
+        const ruleResult = await createAvailabilityRule(PG_ENV, hostUserId, {
+          by_weekday: [1, 2],
+          start_local: "09:00",
+          end_local: "12:00",
+          slot_duration_seconds: 1800,
+        });
+        expect(ruleResult.ok).toBe(true);
+
+        const exceptionResult = await createAvailabilityException(PG_ENV, hostUserId, {
+          kind: "block",
+          start_utc: "2026-07-01T00:00:00Z",
+          end_utc: "2026-07-02T00:00:00Z",
+        });
+        expect(exceptionResult.ok).toBe(true);
+
+        const priceResult = await createPriceRule(PG_ENV, hostUserId, {
+          price_cents: 6500,
+          match_weekday: [1],
+        }, 5);
+        expect(priceResult.ok).toBe(true);
+
+        expect((await getBookingProfile(PG_ENV, hostUserId))!.topics).toEqual(["mentoring", "music"]);
+        expect((await listAvailabilityRules(PG_ENV, hostUserId)).map((rule) => rule.ruleId)).toHaveLength(1);
+        expect((await listAvailabilityExceptions(PG_ENV, hostUserId)).map((exception) => exception.kind)).toEqual(["block"]);
+        expect((await listPriceRules(PG_ENV, hostUserId)).map((price) => price.priceCents)).toEqual([6500]);
+      });
+    } finally {
+      setControlPlanePostgresPoolFactoryForTests(null);
+    }
+    expect(ended).toBe(1);
   });
 });
