@@ -17,6 +17,7 @@ import {
   uploadSongArtifactBytes,
 } from "./song-artifact-storage"
 import type { Env } from "../../env"
+import type { Client } from "../sql-client"
 
 function resolveWorkerPublicOrigin(env: Env): string {
   return String(env.PIRATE_API_PUBLIC_ORIGIN || "http://pirate.test").trim()
@@ -27,8 +28,9 @@ export async function generateSongPreviewForBundle(input: {
   communityId: string
   songArtifactBundleId: string
   expectedPrimaryAudioContentHash?: string | null
+  client?: Client
 }): Promise<string> {
-  const client = getControlPlaneClient(input.env)
+  const client = input.client ?? getControlPlaneClient(input.env)
   const bundle = await getSongArtifactBundle(client, input.communityId, input.songArtifactBundleId)
   if (!bundle) {
     throw notFoundError("Song artifact bundle not found")

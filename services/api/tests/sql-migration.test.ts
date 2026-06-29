@@ -97,4 +97,33 @@ describe("sql migration helpers", () => {
     expect(identityNullifiers).toContain("provider IN ('self', 'very', 'zkpassport')")
     expect(identityNullifiers).toContain("mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')")
   })
+
+  test("a ';' inside a line comment does not split the statement (regression: migration 0122)", () => {
+    // The leading comment block has an embedded ';' AND an apostrophe — neither may split the
+    // statement or toggle quote state. Matches migration 0122's "(superuser); the ..." comment.
+    const sql = `-- Repair: must run as the owner; the apply script uses that role.
+-- The migrator's grants are corrected here.
+ALTER TABLE booking_profiles OWNER TO control_plane_migrator;
+GRANT SELECT ON booking_profiles TO control_plane_api_rw;`
+    expect(splitSqlStatements(sql)).toEqual([
+      `-- Repair: must run as the owner; the apply script uses that role.
+-- The migrator's grants are corrected here.
+ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`,
+      "GRANT SELECT ON booking_profiles TO control_plane_api_rw;",
+    ])
+  })
+
+  test("skips postgres-only ownership/grant statements for the sqlite mirror", () => {
+    expect(toSqliteCompatibleStatement("ALTER TABLE booking_profiles OWNER TO control_plane_migrator;")).toBeNull()
+    expect(toSqliteCompatibleStatement("GRANT SELECT ON booking_profiles TO control_plane_api_rw;")).toBeNull()
+    expect(toSqliteCompatibleStatement("REVOKE ALL ON TABLE operator_credentials FROM control_plane_api_rw;")).toBeNull()
+    // ...even when a leading comment block is glued onto the statement by the splitter.
+    expect(toSqliteCompatibleStatement(`-- ownership repair
+ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
+  })
+
+  test("a ';' inside a block comment does not split the statement", () => {
+    const sql = `/* note: run as owner; then grant */ CREATE TABLE t (id TEXT);`
+    expect(splitSqlStatements(sql)).toEqual([sql])
+  })
 })

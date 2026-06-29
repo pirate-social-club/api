@@ -277,4 +277,12 @@ export interface CommunityRepository
     CommunityCommentProjectionRepository,
     CommunityMembershipProjectionRepository,
     CommunityProvisioningRepository,
-    CommunityMutationRepository {}
+    CommunityMutationRepository {
+  // Settlement-capable routes only (ready, non-decommissioned D1). Used by the unattended
+  // booking-settlement cron so it enumerates from authoritative routing state, never the
+  // generic active-community list. Lives on the full repository (not the narrow read interface)
+  // so unrelated read-only mocks are not forced to implement it.
+  listSettlementEligibleCommunities(input?: {
+    limit?: number
+  }): Promise<Array<{ community_id: string; created_at: string }>>
+}

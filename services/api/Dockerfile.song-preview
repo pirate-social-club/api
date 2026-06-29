@@ -11,7 +11,12 @@ RUN apt-get update \
 COPY api/package.json api/bun.lock ./
 COPY contracts /app/services/contracts
 COPY shared /app/services/shared
-RUN bun install --frozen-lockfile
+# The full API package has file: dependencies on sibling web/core repos that
+# are not part of this image build context. The song preview service does not
+# import those runtime packages, so remove them from the image-local manifest.
+RUN bun -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); delete pkg.dependencies["@pirate-social-club/karaoke-runtime"]; delete pkg.dependencies["@pirate/bookings-domain"]; fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);' \
+  && rm bun.lock
+RUN bun install --production
 
 COPY api/scripts ./scripts
 COPY api/src ./src

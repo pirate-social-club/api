@@ -11,6 +11,7 @@ import type { Env } from "../../../env"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import {
+  bookingSettlementErrorKind,
   executeBookingOperatorEffect,
   type BookingOperatorEffect,
 } from "./booking-custody-adapter"
@@ -38,6 +39,14 @@ interface BookingLifecycleSnapshot {
   refund_cents: number
   refund_tx_ref: string | null
   payout_tx_ref: string | null
+}
+
+interface BookingSettlementReviewSnapshot {
+  booking_id: string
+  status: string
+  settlement_review_status: string | null
+  settlement_review_resolution: string | null
+  settlement_review_version: number
 }
 
 function asNumber(value: unknown): number {
@@ -133,6 +142,34 @@ async function loadSnapshot(env: Env, repo: CommunityRepository, communityId: st
   }
 }
 
+async function loadSettlementReviewSnapshot(
+  env: Env,
+  repo: CommunityRepository,
+  communityId: string,
+  bookingId: string,
+): Promise<BookingSettlementReviewSnapshot | null> {
+  const handle = await openCommunityReadClient(env, repo, communityId)
+  try {
+    const r = await handle.client.execute({
+      sql: `SELECT booking_id, status, settlement_review_status, settlement_review_resolution,
+                   settlement_review_version
+            FROM bookings WHERE booking_id = ?1`,
+      args: [bookingId],
+    })
+    const row = r.rows[0]
+    if (!row) return null
+    return {
+      booking_id: String(row.booking_id),
+      status: String(row.status),
+      settlement_review_status: row.settlement_review_status ? String(row.settlement_review_status) : null,
+      settlement_review_resolution: row.settlement_review_resolution ? String(row.settlement_review_resolution) : null,
+      settlement_review_version: asNumber(row.settlement_review_version ?? 0),
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
 async function releaseBookingLock(env: Env, bookingId: string, nowUtc: string): Promise<void> {
   await getControlPlaneClient(env).execute({
     sql: `UPDATE booking_host_slot_locks SET status = 'released', updated_at = ?2
@@ -147,6 +184,21 @@ async function writeBooking(env: Env, repo: CommunityRepository, communityId: st
   const write = await openCommunityWriteClient(env, repo, communityId)
   try {
     await write.client.execute(statement as Parameters<typeof write.client.execute>[0])
+  } finally {
+    await write.close()
+  }
+}
+
+async function writeBookingResult(
+  env: Env,
+  repo: CommunityRepository,
+  communityId: string,
+  statement: { sql: string; args: unknown[] },
+): Promise<number> {
+  const write = await openCommunityWriteClient(env, repo, communityId)
+  try {
+    const result = await write.client.execute(statement as Parameters<typeof write.client.execute>[0])
+    return result.rowsAffected ?? 0
   } finally {
     await write.close()
   }
@@ -247,6 +299,195 @@ async function executeSettlement(
 
 const CANCELLED_STATES = new Set<string>(["cancelled_by_host", "cancelled_by_booker"])
 const NO_SHOW_STATES = new Set<string>(["no_show_host", "no_show_booker"])
+export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker"
+
+function refundForSettlementReviewResolution(booking: BookingRow, resolution: BookingSettlementReviewResolution): number {
+  switch (resolution) {
+    case "completed":
+    case "no_show_booker":
+      return 0
+    case "no_show_host":
+      return booking.gross_cents
+  }
+}
+
+export type MarkBookingSettlementAmbiguousResult =
+  | { ok: false; reason: "not_found" | "not_reviewable" }
+  | { ok: true; already: boolean; reviewVersion: number }
+
+export async function markBookingSettlementAmbiguous(input: {
+  env: Env
+  communityRepository: CommunityRepository
+  communityId: string
+  bookingId: string
+  nowUtc: string
+}): Promise<MarkBookingSettlementAmbiguousResult> {
+  const review = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!review) return { ok: false, reason: "not_found" }
+  if (review.status === "disputed" && review.settlement_review_status === "pending") {
+    return { ok: true, already: true, reviewVersion: review.settlement_review_version }
+  }
+  if (review.status !== "confirmed" && review.status !== "live") {
+    return { ok: false, reason: "not_reviewable" }
+  }
+  const rowsAffected = await writeBookingResult(input.env, input.communityRepository, input.communityId, {
+    sql: `UPDATE bookings
+          SET status = 'disputed',
+              settlement_review_status = 'pending',
+              settlement_review_reason = 'attendance_ambiguous',
+              settlement_review_resolution = NULL,
+              settlement_review_opened_at = COALESCE(settlement_review_opened_at, ?2),
+              settlement_review_resolved_at = NULL,
+              settlement_review_operator_credential_id = NULL,
+              settlement_review_operator_actor_id = NULL,
+              settlement_review_note = NULL,
+              settlement_review_version = settlement_review_version + 1,
+              updated_at = ?2
+          WHERE booking_id = ?1
+            AND status IN ('confirmed', 'live')
+            AND settlement_review_status IS NULL`,
+    args: [input.bookingId, input.nowUtc],
+  })
+  if (rowsAffected !== 1) {
+    const latest = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
+    if (latest?.status === "disputed" && latest.settlement_review_status === "pending") {
+      return { ok: true, already: true, reviewVersion: latest.settlement_review_version }
+    }
+    return { ok: false, reason: "not_reviewable" }
+  }
+  const latest = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
+  return { ok: true, already: false, reviewVersion: latest?.settlement_review_version ?? 1 }
+}
+
+export type ResolveBookingSettlementReviewResult =
+  | { ok: false; reason: "not_found" | "not_pending_review" | "version_conflict" | "resolution_conflict" | "invalid_resolution" }
+  | { ok: true; outcome: "resolved" | "resolved_pending" | "replayed"; booking: BookingLifecycleSnapshot }
+
+// Every unfinished intent state (reserved + maybe broadcast, not yet finalized to settled/refunded).
+const UNFINISHED_INTENT_STATES = new Set<string>([
+  "completed", "no_show_booker", "no_show_host", "cancelled_by_host", "cancelled_by_booker",
+])
+
+function resolvedReviewReplayOutcome(
+  review: BookingSettlementReviewSnapshot,
+  resolution: BookingSettlementReviewResolution,
+): "replayed" | "resolved_pending" | null {
+  if (review.settlement_review_resolution !== resolution) return null
+  if (review.status === "settled" || review.status === "refunded") return "replayed"
+  if (UNFINISHED_INTENT_STATES.has(review.status)) return "resolved_pending"
+  return null
+}
+
+export async function resolveBookingSettlementReview(input: {
+  env: Env
+  communityRepository: CommunityRepository
+  communityId: string
+  bookingId: string
+  resolution: BookingSettlementReviewResolution
+  expectedReviewVersion: number
+  operatorCredentialId: string
+  operatorActorId: string
+  note?: string | null
+  nowUtc: string
+  confirmPollMs?: number[]
+}): Promise<ResolveBookingSettlementReviewResult> {
+  if (!Number.isInteger(input.expectedReviewVersion) || input.expectedReviewVersion < 0) {
+    return { ok: false, reason: "version_conflict" }
+  }
+
+  const review = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!review) return { ok: false, reason: "not_found" }
+  if (review.settlement_review_status === "resolved") {
+    const replayOutcome = resolvedReviewReplayOutcome(review, input.resolution)
+    if (replayOutcome) {
+      return {
+        ok: true,
+        outcome: replayOutcome,
+        booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+      }
+    }
+    return { ok: false, reason: "resolution_conflict" }
+  }
+  if (review.status !== "disputed" || review.settlement_review_status !== "pending") {
+    return { ok: false, reason: "not_pending_review" }
+  }
+  if (review.settlement_review_version !== input.expectedReviewVersion) {
+    return { ok: false, reason: "version_conflict" }
+  }
+
+  const booking = await loadBooking(input.env, input.communityRepository, input.communityId, input.bookingId)
+  if (!booking || booking.status !== "disputed") return { ok: false, reason: "not_pending_review" }
+  const refundCents = refundForSettlementReviewResolution(booking, input.resolution)
+  const rowsAffected = await writeBookingResult(input.env, input.communityRepository, input.communityId, {
+    sql: `UPDATE bookings
+          SET status = ?2,
+              refund_cents = ?3,
+              settlement_review_status = 'resolved',
+              settlement_review_resolution = ?2,
+              settlement_review_resolved_at = ?4,
+              settlement_review_operator_credential_id = ?5,
+              settlement_review_operator_actor_id = ?6,
+              settlement_review_note = ?7,
+              settlement_review_version = settlement_review_version + 1,
+              updated_at = ?4
+          WHERE booking_id = ?1
+            AND status = 'disputed'
+            AND settlement_review_status = 'pending'
+            AND settlement_review_version = ?8`,
+    args: [
+      input.bookingId,
+      input.resolution,
+      refundCents,
+      input.nowUtc,
+      input.operatorCredentialId,
+      input.operatorActorId,
+      input.note ?? null,
+      input.expectedReviewVersion,
+    ],
+  })
+  if (rowsAffected !== 1) {
+    const latest = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
+    if (latest?.settlement_review_status === "resolved") {
+      const replayOutcome = resolvedReviewReplayOutcome(latest, input.resolution)
+      return replayOutcome
+        ? {
+            ok: true,
+            outcome: replayOutcome,
+            booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+          }
+        : { ok: false, reason: "resolution_conflict" }
+    }
+    return { ok: false, reason: "version_conflict" }
+  }
+
+  try {
+    const reconciled = await reconcileBookingSettlement({
+      env: input.env,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      bookingId: input.bookingId,
+      nowUtc: input.nowUtc,
+      confirmPollMs: input.confirmPollMs,
+    })
+    if (reconciled.outcome !== "resumed") {
+      return {
+        ok: true,
+        outcome: "resolved_pending",
+        booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+      }
+    }
+    return { ok: true, outcome: "resolved", booking: reconciled.booking }
+  } catch (error) {
+    if (bookingSettlementErrorKind(error) === "pending") {
+      return {
+        ok: true,
+        outcome: "resolved_pending",
+        booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+      }
+    }
+    throw error
+  }
+}
 
 export interface LifecycleInput {
   env: Env
@@ -409,11 +650,6 @@ export async function noShowBooking(input: LifecycleInput): Promise<LifecycleRes
   const settled = await executeSettlement(ctxOf(input), booking, "live", intentState, refundCents)
   return { ok: true, already: false, booking: settled }
 }
-
-// Every unfinished intent state (reserved + maybe broadcast, not yet finalized to settled/refunded).
-const UNFINISHED_INTENT_STATES = new Set<string>([
-  "completed", "no_show_booker", "no_show_host", "cancelled_by_host", "cancelled_by_booker",
-])
 
 export type ReconcileBookingSettlementResult =
   | { outcome: "skipped" }

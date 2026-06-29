@@ -46,6 +46,20 @@ async function setup() {
   const booker = await exchangeJwt(ctx.env, "set-booker")
   await completeUniqueHumanVerification(ctx.env, booker.accessToken)
   const root = String(ctx.env.LOCAL_COMMUNITY_DB_ROOT)
+  // The settlement cron now enumerates from authoritative routing state (ready, non-decommissioned
+  // D1) rather than the generic active-community list. Force a ready-D1 routing row so this
+  // community is settlement-eligible regardless of what local provisioning seeds.
+  const cp = ctx.client
+  const nowIso = new Date().toISOString()
+  await cp.execute({
+    sql: `INSERT INTO community_database_routing
+            (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+          VALUES (?1, 'd1', 'ready', 'community-d1-shard-test', 'DB_CMTY_TEST', 'enam', ?2, ?2)
+          ON CONFLICT (community_id) DO UPDATE SET
+            backend = 'd1', provisioning_state = 'ready', decommissioned_at = NULL, turso_database_binding_id = NULL,
+            shard_worker_id = 'community-d1-shard-test', binding_name = 'DB_CMTY_TEST', region = 'enam', updated_at = ?2`,
+    args: [communityId, nowIso],
+  })
   return { ctx, communityId, root, hostId: host.userId, bookerId: booker.userId }
 }
 
@@ -74,6 +88,20 @@ async function bookingStatus(root: string, communityId: string, bookingId: strin
   try {
     const r = await c.execute({ sql: `SELECT status FROM bookings WHERE booking_id = ?1`, args: [bookingId] })
     return r.rows[0] ? String(r.rows[0].status) : null
+  } finally { c.close() }
+}
+async function bookingSettlementReviewStatus(root: string, communityId: string, bookingId: string): Promise<{ status: string | null; reviewStatus: string | null }> {
+  const c = createClient({ url: buildLocalCommunityDbUrl(root, communityId) })
+  try {
+    const r = await c.execute({
+      sql: `SELECT status, settlement_review_status FROM bookings WHERE booking_id = ?1`,
+      args: [bookingId],
+    })
+    const row = r.rows[0]
+    return {
+      status: row?.status == null ? null : String(row.status),
+      reviewStatus: row?.settlement_review_status == null ? null : String(row.settlement_review_status),
+    }
   } finally { c.close() }
 }
 function resumeInput(ctx: Ctx, communityId: string, bookingId: string) {
@@ -192,6 +220,25 @@ describe("booking settlement cron — sweep over real D1", () => {
     expect(summary.ambiguous).toBe(1)
     expect(summary.settled).toBe(0)
     expect(await bookingStatus(root, communityId, "bkg1")).toBe("live") // untouched
+  })
+
+  test("ambiguous-review flag moves a due ambiguous booking to pending review", async () => {
+    const { ctx, communityId, root, hostId, bookerId } = await setup()
+    await seedBooking(root, communityId, { bookingId: "bkg1", status: "live", refundCents: null, hostId, bookerId })
+    installCoordinator()
+    const summary = await sweepDueBookingSettlements({
+      ...sweepInput(ctx, communityId),
+      env: {
+        ...sweepInput(ctx, communityId).env,
+        BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED: "true",
+      },
+    })
+    expect(summary.ambiguous).toBe(1)
+    expect(summary.settled).toBe(0)
+    expect(await bookingSettlementReviewStatus(root, communityId, "bkg1")).toEqual({
+      status: "disputed",
+      reviewStatus: "pending",
+    })
   })
 
   test("one failed booking does not stop sibling bookings", async () => {

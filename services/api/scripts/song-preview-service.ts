@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { generateSongPreviewForBundle } from "../src/lib/song-artifacts/song-artifact-preview-service"
 import type { Env } from "../src/env"
+import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
 
 const DEFAULT_PORT = 8795
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024
@@ -138,12 +139,14 @@ async function handlePreview(request: Request, context: SongPreviewRequestContex
     content_length: Number.isFinite(contentLength) ? contentLength : null,
   })
 
-  const storageRef = await generateSongPreviewForBundle({
-    env: process.env as Env,
+  const env = process.env as Env
+  const storageRef = await withStandaloneControlPlaneClient(env, (client) => generateSongPreviewForBundle({
+    env,
+    client,
     communityId: body.community_id,
     songArtifactBundleId: body.song_artifact_bundle,
     expectedPrimaryAudioContentHash: body.primary_audio_content_hash ?? null,
-  })
+  }))
 
   logSongPreviewEvent("song_preview.preview.completed", {
     request_id: context.requestId,

@@ -567,45 +567,28 @@ function telegramCommunityStartMarkup(input: {
   }
 }
 
-function directAssistantVerifyReplyMarkup(input: {
-  env: Env
-  communityId: string
-  locale: RuntimeUiLocaleCode
-}): unknown | undefined {
-  const verifyUrl = telegramCommunityVerificationUrl(input.env, input.communityId)
-  if (!verifyUrl) {
-    return undefined
-  }
-  return telegramCommunityStartMarkup({
-    text: getTelegramCopy(input.locale).buttons.verifyToJoin,
-    url: verifyUrl,
-  })
-}
-
 function directAssistantPreviewText(input: {
   content: string
-  hasVerifyUrl: boolean
   locale: RuntimeUiLocaleCode
 }): string {
-  const copy = getTelegramCopy(input.locale).privateAssistant
-  const cta = input.hasVerifyUrl ? copy.previewCta : copy.previewCtaFallback
-  return telegramText(`${input.content.trim()}\n\n${cta}`)
+  return telegramText(input.content.trim())
 }
 
 function directAssistantPreviewLimitText(input: {
-  hasVerifyUrl: boolean
+  limitScope: "community" | "user"
   locale: RuntimeUiLocaleCode
 }): string {
   const copy = getTelegramCopy(input.locale).privateAssistant
-  return input.hasVerifyUrl ? copy.previewUserCapReached : copy.previewUserCapReachedFallback
+  return input.limitScope === "user"
+    ? copy.previewUserCapReached
+    : copy.previewCommunityCapReached
 }
 
 function directAssistantPreviewUnavailableText(input: {
-  hasVerifyUrl: boolean
   locale: RuntimeUiLocaleCode
 }): string {
   const copy = getTelegramCopy(input.locale).privateAssistant
-  return input.hasVerifyUrl ? copy.previewUnavailable : copy.previewUnavailableFallback
+  return copy.previewUnavailable
 }
 
 async function insertDirectAssistantPreviewEvent(input: {
@@ -723,12 +706,6 @@ async function sendDirectAssistantPreviewResponse(input: {
   policy: CommunityAssistantPolicy
   prompt: string
 }): Promise<void> {
-  const replyMarkup = directAssistantVerifyReplyMarkup({
-    env: input.env,
-    communityId: input.bot.communityId,
-    locale: input.locale,
-  })
-  const hasVerifyUrl = Boolean(replyMarkup)
   const now = nowIso()
   const eventId = await insertDirectAssistantPreviewEvent({
     env: input.env,
@@ -761,10 +738,9 @@ async function sendDirectAssistantPreviewResponse(input: {
       await safeSendTelegramMessage(input.bot, {
         chat_id: input.chatId,
         text: directAssistantPreviewLimitText({
-          hasVerifyUrl,
+          limitScope,
           locale: input.locale,
         }),
-        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       })
       return
     }
@@ -785,10 +761,8 @@ async function sendDirectAssistantPreviewResponse(input: {
       chat_id: input.chatId,
       text: directAssistantPreviewText({
         content: answer.content,
-        hasVerifyUrl,
         locale: input.locale,
       }),
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     })
   } catch (error) {
     console.warn("[telegram-assistant] direct preview failed", {
@@ -809,10 +783,8 @@ async function sendDirectAssistantPreviewResponse(input: {
     await safeSendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: directAssistantPreviewUnavailableText({
-        hasVerifyUrl,
         locale: input.locale,
       }),
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     })
   }
 }
@@ -1266,6 +1238,30 @@ async function handleCommunityBotStartMessage(env: Env, input: {
   const joinCommunityId = parseCommunityJoinPayload(startPayload)
   const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
   const requestedCommunityId = joinCommunityId ?? legacyCommunityId
+  if (!startPayload) {
+    const policy = await getTelegramDirectAssistantPolicy({
+      env,
+      communityId: input.bot.communityId,
+    }).catch(() => null)
+    if (policy?.telegramPreviewEnabled && policy.telegramPreviewDailyCap > 0) {
+      const locale = resolveTelegramStartLocale({
+        telegramLanguageCode: input.telegramLanguageCode,
+      })
+      await safeSendTelegramMessage(input.bot, {
+        chat_id: input.chatId,
+        text: getTelegramCopy(locale).privateAssistant.intro,
+      })
+      return
+    }
+    await handleCommunityStartMessage(env, {
+      bot: input.bot,
+      chatId: input.chatId,
+      communityId: input.bot.communityId,
+      telegramLanguageCode: input.telegramLanguageCode,
+      telegramUserId: input.telegramUserId,
+    })
+    return
+  }
   if (requestedCommunityId && requestedCommunityId !== input.bot.communityId) {
     await safeSendTelegramMessage(input.bot, {
       chat_id: input.chatId,

@@ -957,6 +957,7 @@ describe("community Telegram routes", () => {
     })
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
       TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
       TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
       TELEGRAM_BOT_TOKEN: "999999999:PLATFORMTOKENSHOULDNOTBEUSED",
@@ -968,6 +969,11 @@ describe("community Telegram routes", () => {
       env: ctx.env,
       accessToken: owner.accessToken,
       displayName: "Community Webhook Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
     })
     const saveResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/telegram-bot`,
@@ -1007,6 +1013,91 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     expect(sendMessageRequests[0]?.url).toBe(`https://api.telegram.org/bot${token}/sendMessage`)
+    const sendBody = await sendMessageRequests[0]!.json() as { reply_markup?: unknown; text?: string }
+    expect(sendBody.text).toBe("Send a question to talk to this community assistant.")
+    expect(sendBody.reply_markup).toBeUndefined()
+  })
+
+  test("community bot bare /start falls back to join presentation when preview is disabled", async () => {
+    const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
+    const telegramRequests = installTelegramApiMock(async (request) => {
+      const method = request.url.split("/").at(-1)
+      if (method === "getMe") {
+        return {
+          ok: true,
+          result: {
+            id: 123456789,
+            is_bot: true,
+            first_name: "Community Test Bot",
+            username: "CommunityOwnedBot",
+          },
+        }
+      }
+      if (method === "setWebhook" || method === "setChatMenuButton") {
+        return { ok: true, result: true }
+      }
+      return { ok: true, result: { message_id: 702 } }
+    })
+    const ctx = await createRouteTestContext({
+      PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
+      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
+      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      TELEGRAM_BOT_TOKEN: "999999999:PLATFORMTOKENSHOULDNOTBEUSED",
+      TELEGRAM_BOT_USERNAME: "PlatformBot",
+    })
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "telegram-community-webhook-preview-disabled-owner")
+    const communityId = await createCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      displayName: "Preview Disabled Club",
+    })
+    await setupEnabledAssistant({
+      env: ctx.env,
+      communityId,
+      ownerToken: owner.accessToken,
+      policy: { telegramPreviewEnabled: false },
+    })
+    const saveResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/telegram-bot`,
+      { bot_token: token },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(saveResponse.status).toBe(200)
+    const stored = await ctx.client.execute({
+      sql: `
+        SELECT webhook_id, webhook_secret
+        FROM telegram_community_bots
+        WHERE bot_username = ?1
+        LIMIT 1
+      `,
+      args: ["CommunityOwnedBot"],
+    })
+    expect(stored.rows.length).toBe(1)
+    const webhookId = String(stored.rows[0]?.webhook_id)
+    const webhookSecret = String(stored.rows[0]?.webhook_secret)
+
+    const accepted = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: { update_id: 3, message: { message_id: 3, chat: { id: 9002, type: "private" }, from: { id: 5002 }, text: "/start" } },
+    })
+    expect(accepted.status).toBe(200)
+    const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(sendMessageRequests).toHaveLength(1)
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+      text?: string
+    }
+    expect(sendBody.text).toContain("Preview Disabled Club")
+    expect(sendBody.text).not.toBe("Send a question to talk to this community assistant.")
+    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+      text: "Verify to join",
+      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    })
   })
 
   test("public bot username endpoint exposes only the active bot username", async () => {
@@ -2928,7 +3019,7 @@ describe("community Telegram routes", () => {
     expect((voice as File).name).toBe("assistant-reply.ogg")
   })
 
-  test("community bot private DM answers unlinked Telegram users with preview and verify button", async () => {
+  test("community bot private DM answers unlinked Telegram users with preview and no verify button", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -2981,11 +3072,8 @@ describe("community Telegram routes", () => {
       text: string
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
     }
-    expect(sendBody.text).toBe("Preview answer.\n\nVerify to unlock the full assistant.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
-      text: "Verify to join",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
-    })
+    expect(sendBody.text).toBe("Preview answer.")
+    expect(sendBody.reply_markup).toBeUndefined()
     expect(await getTelegramAccount({
       client: ctx.client,
       telegramUserId: "777202",
@@ -3006,7 +3094,7 @@ describe("community Telegram routes", () => {
     })).toBe("private_preview")
   })
 
-  test("community bot private DM preview limit encourages verification", async () => {
+  test("community bot private DM user preview limit asks the user to try tomorrow", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -3080,12 +3168,9 @@ describe("community Telegram routes", () => {
       text: string
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
     }
-    expect(sendBody.text).toContain("დღევანდელი საცდელი შეტყობინებები ამოიწურა")
+    expect(sendBody.text).toContain("დღევანდელი უფასო შეტყობინებები ამოიწურა")
     expect(sendBody.text).not.toContain("/start")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
-      text: "გაიარეთ ვერიფიკაცია",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
-    })
+    expect(sendBody.reply_markup).toBeUndefined()
     expect(await getTelegramAssistantEvent({
       client: ctx.client,
       telegramChatId: "887203",
@@ -3102,7 +3187,7 @@ describe("community Telegram routes", () => {
     })).toBe("private_preview")
   })
 
-  test("community bot private DM preview aggregate cap encourages verification", async () => {
+  test("community bot private DM preview aggregate cap reports the community limit", async () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
@@ -3174,11 +3259,8 @@ describe("community Telegram routes", () => {
       text: string
       reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
     }
-    expect(sendBody.text).toContain("You have used today's preview messages.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
-      text: "Verify to join",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
-    })
+    expect(sendBody.text).toBe("This bot has reached today's free message limit. Try again tomorrow.")
+    expect(sendBody.reply_markup).toBeUndefined()
     expect(await getTelegramAssistantEvent({
       client: ctx.client,
       telegramChatId: "887205",

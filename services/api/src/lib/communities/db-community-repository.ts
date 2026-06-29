@@ -52,7 +52,11 @@ import {
   getJobById,
   getLatestCommunityProvisioningJob,
 } from "./community-read-repository"
-import { upsertD1CommunityRoutingRow as upsertD1CommunityRoutingRowRaw } from "./community-routing-repository"
+import {
+  upsertD1CommunityRoutingRow as upsertD1CommunityRoutingRowRaw,
+  listSettlementEligibleCommunities,
+  type SettlementEligibleCommunity,
+} from "./community-routing-repository"
 import { persistProvisionedD1Binding as persistProvisionedD1BindingRaw } from "./provisioning/repository"
 import {
   createCommunityProvisioningRequest,
@@ -143,6 +147,15 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     limit?: number
   }): Promise<CommunityRow[]> {
     return listActiveCommunities(this.client, input)
+  }
+
+  // Settlement-capable routes only (ready D1, not decommissioned). Used by the
+  // unattended booking-settlement cron so it never enumerates Turso / decommissioned
+  // / not-yet-ready communities (which cannot settle and would only emit errors).
+  async listSettlementEligibleCommunities(input?: {
+    limit?: number
+  }): Promise<SettlementEligibleCommunity[]> {
+    return listSettlementEligibleCommunities(this.client, input)
   }
 
   async searchActiveCommunities(input: {
