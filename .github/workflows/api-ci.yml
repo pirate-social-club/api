@@ -33,6 +33,7 @@ permissions:
 jobs:
   api:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -199,9 +200,13 @@ jobs:
         working-directory: services/api
         run: bun run lint
 
-      - name: Run API tests
+      - name: Run API unit tests
         working-directory: services/api
-        run: bun run test
+        run: bun run test:unit
+
+      - name: Run API route tests
+        working-directory: services/api
+        run: bun run test:routes
 
       - name: Run API coverage report
         working-directory: services/api
