@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
-import { getPostStudyPayload, submitPostStudyAttempt } from "../../../src/lib/posts/post-study-service"
+import { getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
 import type { Env } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -155,6 +155,30 @@ async function seedReadyPack(): Promise<void> {
   ])
 }
 
+async function seedActiveAssetEntitlement(userId: string, assetId = "ast_song"): Promise<void> {
+  await exec(`
+    INSERT INTO purchases (
+      purchase_id, community_id, listing_id, asset_id, buyer_user_id,
+      settlement_wallet_attachment_id, purchase_price_usd, settlement_chain,
+      settlement_token, settlement_tx_ref, created_at
+    )
+    VALUES (
+      'pur_study_entitlement', ?1, 'lst_study_entitlement', ?2, ?3,
+      'wla_study', 3.99, 'base', 'usdc', '0xstudy', ?4
+    )
+  `, [COMMUNITY_ID, assetId, userId, NOW])
+  await exec(`
+    INSERT INTO purchase_entitlements (
+      purchase_entitlement_id, purchase_id, community_id, buyer_user_id,
+      entitlement_kind, target_ref, status, granted_at, created_at, updated_at
+    )
+    VALUES (
+      'pet_study_entitlement', 'pur_study_entitlement', ?1, ?2,
+      'asset_access', ?3, 'active', ?4, ?4, ?4
+    )
+  `, [COMMUNITY_ID, userId, assetId, NOW])
+}
+
 beforeEach(async () => {
   rootDir = await mkdtemp(join(tmpdir(), "pirate-study-"))
   await mkdir(rootDir, { recursive: true })
@@ -254,6 +278,25 @@ describe("post study service", () => {
     expect(payload.exercise_count).toBe(0)
     expect(payload.exercises).toEqual([])
     expect(JSON.stringify(payload)).not.toContain("Abrázame")
+  })
+
+  test("returns ready for an active purchaser who is not the author of a locked song", async () => {
+    await seedSongPost("locked")
+    await seedReadyPack()
+    await seedActiveAssetEntitlement(LEARNER_ID)
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(3)
+    expect(payload.exercises.some((exercise) => exercise.type === "translation_choice")).toBe(true)
   })
 
   test("records attempts server-side and replays idempotent retries without double-writing", async () => {
@@ -362,6 +405,61 @@ describe("post study service", () => {
 
     const row = await client!.execute("SELECT transcript FROM song_study_attempt LIMIT 1")
     expect(row.rows[0]?.transcript).toBe("I was in the midnight waves")
+  })
+
+  test("say-it-back review state is shared across target languages", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-say-shared",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const rows = await client!.execute(`
+      SELECT exercise_type, target_language, reps
+      FROM song_study_review_state
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+      ORDER BY target_language ASC
+    `, [LEARNER_ID, POST_ID])
+
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]).toMatchObject({
+      exercise_type: "say_it_back",
+      target_language: "en",
+      reps: 1,
+    })
+  })
+
+  test("transcription gates entitlement before calling STT", async () => {
+    await seedSongPost("locked")
+
+    let fetchCalled = false
+    await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => {
+      await expect(transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })).rejects.toThrow(/entitled/)
+    })
+
+    expect(fetchCalled).toBe(false)
   })
 
   test("missing generated pack lazily creates say-it-back exercises from gated lyrics", async () => {
