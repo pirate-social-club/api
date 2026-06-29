@@ -170,6 +170,10 @@ The implementation work allowed before real-money testing is limited to:
 - Provider adapter interfaces and fixture-based contract tests.
 - Mock bridge responses that exercise successful delivery, pending delivery,
   underdelivery, late delivery, route failure, replay, and mismatched tx cases.
+- The mock bridge should use the existing `omniston_ton` provider slot under a
+  dev/test-only resolver rather than adding a second mock provider enum. This
+  exercises the future provider lifecycle while keeping `omniston_ton`
+  unavailable for real user selection.
 - TON testnet source-leg parsing using the existing
   `ton_testnet_transfer` simulation.
 - Base Sepolia or local/forked Base USDC delivery verification for the Base leg
