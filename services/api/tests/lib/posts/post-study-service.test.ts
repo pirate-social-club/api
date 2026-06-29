@@ -28,6 +28,7 @@ const repo: CommunityDatabaseBindingRepository = {
 }
 
 const learnerActor: ActorContext = { authType: "user", userId: LEARNER_ID }
+const authorActor: ActorContext = { authType: "user", userId: AUTHOR_ID }
 
 let rootDir: string | null = null
 let client: Client | null = null
@@ -194,6 +195,47 @@ describe("post study service", () => {
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
     expect(serialized).not.toContain("correct_option_id")
+  })
+
+  test("orders multiple-choice options deterministically per learner without storing per-user rows", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const learnerPayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const learnerRetryPayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const authorPayload = await getPostStudyPayload({
+      actor: authorActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    const optionIds = (payload: Awaited<ReturnType<typeof getPostStudyPayload>>) =>
+      payload.exercises
+        .find((exercise) => exercise.type === "translation_choice")
+        ?.options.map((option) => option.id)
+
+    expect(optionIds(learnerPayload)).toEqual(optionIds(learnerRetryPayload))
+    expect(optionIds(learnerPayload)).not.toEqual(optionIds(authorPayload))
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
   })
 
   test("returns locked without exercise content for a non-entitled locked song", async () => {

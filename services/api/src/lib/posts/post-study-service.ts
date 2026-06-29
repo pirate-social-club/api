@@ -280,14 +280,31 @@ function parseOptions(raw: string | null): Array<{ id: string; text: string }> {
   })
 }
 
-function toExercise(row: StudyExerciseRow): SongStudyExercise {
+function stableHash(value: string): number {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function orderOptionsForLearner(options: Array<{ id: string; text: string }>, seed: string): Array<{ id: string; text: string }> {
+  return [...options].sort((left, right) => {
+    const leftRank = stableHash(`${seed}:${left.id}`)
+    const rightRank = stableHash(`${seed}:${right.id}`)
+    return leftRank - rightRank || left.id.localeCompare(right.id)
+  })
+}
+
+function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExercise {
   if (row.exercise_type === "translation_choice") {
     return {
       id: row.id,
       line_id: row.line_id,
       line_index: row.line_index,
       max_attempts: row.max_attempts,
-      options: parseOptions(row.options_json),
+      options: orderOptionsForLearner(parseOptions(row.options_json), `${learnerSeed}:${row.id}`),
       prompt_text: row.prompt_text,
       question: row.question || "Choose the best translation.",
       type: "translation_choice",
@@ -538,7 +555,7 @@ export async function getPostStudyPayload(input: {
       }
     }
 
-    const exercises = (await listExercises(db.client, pack.id)).map(toExercise)
+    const exercises = (await listExercises(db.client, pack.id)).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
