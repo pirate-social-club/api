@@ -22,6 +22,8 @@ const API_QUERIED_COMMUNITY_TABLES = new Set([
   "purchases",
 ])
 
+const API_ONLY_COMMUNITY_MIGRATION_GUARD_MIN = "1110_"
+
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const apiRoot = resolve(scriptDir, "..")
 const repoRoot = resolve(apiRoot, "../..")
@@ -104,6 +106,81 @@ function readMigrationByName(migrationName: string): { path: string; sql: string
     }
   }
   return null
+}
+
+function listSqlMigrations(dir: string): string[] {
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+}
+
+function resolveCoreCommunityMigrationsDir(): string {
+  const candidates = [
+    process.env.PIRATE_CORE_REPO?.trim()
+      ? resolve(process.env.PIRATE_CORE_REPO.trim(), "db/community-template/migrations")
+      : "",
+    resolve(repoRoot, "core/db/community-template/migrations"),
+    resolve(repoRoot, "../core/db/community-template/migrations"),
+    resolve(repoRoot, "../core-song-study-spec/db/community-template/migrations"),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  console.error("community schema guard check failed")
+  console.error("")
+  console.error("Could not locate canonical core community-template migrations.")
+  console.error("Set PIRATE_CORE_REPO to a core checkout.")
+  process.exit(1)
+}
+
+function generatedCommunityMigrationNames(): string[] {
+  const generatedPath = resolve(repoRoot, "services/community-provision-operator/src/generated/community-migrations.ts")
+  if (!existsSync(generatedPath)) {
+    return []
+  }
+  const text = readFileSync(generatedPath, "utf8")
+  return [...text.matchAll(/name:\s*"([^"]+\.sql)"/g)]
+    .map((match) => match[1] ?? "")
+    .filter(Boolean)
+    .sort()
+}
+
+function diffMigrationSets(label: string, expected: string[], actual: string[]): string[] {
+  const expectedSet = new Set(expected)
+  const failures: string[] = []
+  for (const name of actual) {
+    if (name >= API_ONLY_COMMUNITY_MIGRATION_GUARD_MIN && !expectedSet.has(name)) {
+      failures.push(`${label} has API-only migration: ${name}`)
+    }
+  }
+  return failures
+}
+
+function assertCommunityMigrationSetsDoNotContainApiOnlyMigrations(): void {
+  const coreMigrations = listSqlMigrations(resolveCoreCommunityMigrationsDir())
+  const fixtureMigrations = listSqlMigrations(resolve(repoRoot, "services/api/test-fixtures/db/community-template/migrations"))
+  const generatedMigrations = generatedCommunityMigrationNames()
+
+  const failures = [
+    ...diffMigrationSets("API community-template fixtures", coreMigrations, fixtureMigrations),
+    ...diffMigrationSets("generated community migration manifest", coreMigrations, generatedMigrations),
+  ]
+
+  if (failures.length === 0) {
+    return
+  }
+
+  console.error("community schema guard check failed")
+  console.error("")
+  console.error("Community migration sources contain migrations that are absent from core.")
+  for (const failure of failures) {
+    console.error(`  - ${failure}`)
+  }
+  process.exit(1)
 }
 
 function stripIdentifier(value: string): string {
@@ -302,6 +379,8 @@ function relative(file: string): string {
 }
 
 function main(): void {
+  assertCommunityMigrationSetsDoNotContainApiOnlyMigrations()
+
   const files = changedFiles()
   const introducedColumns = introducedColumnsFromChangedMigrations(files)
   if (introducedColumns.length === 0) {
