@@ -57,7 +57,7 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       ) VALUES (
         $1, NULL, $2, $3, $4::timestamptz, ($4::timestamptz + interval '30 minutes'),
         5000, 500, 250, 4750, NULL, $5,
-        '0xfund', NULL, NULL, '0xbuyer', '0xhost',
+        $7, NULL, NULL, '0xbuyer', '0xhost',
         NULL, $6, '2026-07-01T09:50:00Z', NULL, NULL, NULL, '2026-07-01T09:50:00Z', '2026-07-01T09:50:00Z'
       )`, [
       input.bookingId,
@@ -66,6 +66,7 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       input.slotStartUtc ?? "2026-07-01T10:00:00Z",
       input.status ?? "confirmed",
       input.sourceCommunityId === undefined ? "community_read_a" : input.sourceCommunityId,
+      `0xfund_${input.bookingId}`,
     ]);
   }
 
@@ -107,7 +108,7 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
     });
     expect(asHost?.viewer_role).toBe("host");
     expect(asHost?.community_id).toBe("community_read_a");
-    expect(asHost?.funding_tx_ref).toBe("0xfund");
+    expect(asHost?.funding_tx_ref).toBe("0xfund_bkg_read_get");
 
     const asBooker = await getGlobalBookingForParty({
       executor: makeExecutor(repoDb),
