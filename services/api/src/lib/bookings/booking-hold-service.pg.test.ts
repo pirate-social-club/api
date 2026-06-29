@@ -139,6 +139,7 @@ describe.skipIf(!RUN)("global booking hold service (real Postgres)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected hold");
     expect(result.hold.community_id).toBe("community_discovery_a");
+    expect(result.hold.source_community_id).toBe("community_discovery_a");
     expect(result.hold.price_cents).toBe(6250);
     expect(result.hold.expires_at_utc).toBe("2026-06-10T09:10:00.000Z");
 

@@ -101,6 +101,7 @@ export interface CreateGlobalBookingHoldInput {
 export interface GlobalBookingHoldResponse {
   hold_id: string;
   community_id: string | null;
+  source_community_id: string | null;
   host_user_id: string;
   booker_user_id: string;
   slot_start_utc: string;
@@ -238,6 +239,7 @@ function toResponse(input: {
   return {
     hold_id: input.holdId,
     community_id: input.sourceCommunityId,
+    source_community_id: input.sourceCommunityId,
     host_user_id: input.hostUserId,
     booker_user_id: input.bookerUserId,
     slot_start_utc: input.slotStartUtc,
