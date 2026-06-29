@@ -6,7 +6,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { readFileSync } from "node:fs";
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths";
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client";
-import { createGlobalBookingHold, setGlobalBookingResolveSlotsForTests } from "./booking-hold-service";
+import {
+  createGlobalBookingHold,
+  resolveGlobalBookingAvailability,
+  setGlobalBookingResolveSlotsForTests,
+} from "./booking-hold-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
 const RUN = Boolean(ADMIN_URL);
@@ -149,6 +153,45 @@ describe.skipIf(!RUN)("global booking hold service (real Postgres)", () => {
       source_community_id: "community_discovery_a",
       lock_status: "active",
     }]);
+  });
+
+  test("resolves global availability slots from published host config without writing holds", async () => {
+    await seedPublishedHost("host_hold_service_slots");
+    setGlobalBookingResolveSlotsForTests((input) => {
+      expect(input.windowStartUtc).toBe("2026-07-01T10:00:00Z");
+      expect(input.windowEndUtc).toBe("2026-07-01T11:00:00Z");
+      expect(input.viewerTimezone).toBe("America/New_York");
+      expect(input.basePriceCents).toBe(5000);
+      return [{
+        startUtc: "2026-07-01T10:00:00Z",
+        endUtc: "2026-07-01T10:30:00Z",
+        priceCents: 5000,
+        available: true,
+      }];
+    });
+
+    const result = await resolveGlobalBookingAvailability({
+      executor: makeClient(repoDb),
+      hostUserId: "host_hold_service_slots",
+      windowStartUtc: "2026-07-01T10:00:00Z",
+      windowEndUtc: "2026-07-01T11:00:00Z",
+      viewerTimezone: "America/New_York",
+      nowUtc: "2026-06-10T09:00:00Z",
+    });
+
+    expect(result.bookable).toBe(true);
+    if (!result.bookable) throw new Error("expected bookable host");
+    expect(result.hostTimezone).toBe("UTC");
+    expect(result.viewerTimezone).toBe("America/New_York");
+    expect(result.slots).toEqual([{
+      startUtc: "2026-07-01T10:00:00Z",
+      endUtc: "2026-07-01T10:30:00Z",
+      priceCents: 5000,
+      available: true,
+    }]);
+    const rows = await repoDb.unsafe(`SELECT count(*)::int AS n FROM bookings.holds WHERE host_user_id = $1`,
+      ["host_hold_service_slots"]) as Record<string, unknown>[];
+    expect(rows[0].n).toBe(0);
   });
 
   test("rejects unavailable slots before writing hold state", async () => {

@@ -114,6 +114,10 @@ export type CreateGlobalBookingHoldResult =
   | { ok: true; hold: GlobalBookingHoldResponse }
   | { ok: false; reason: "slot_unavailable" | "slot_locked" };
 
+export type GlobalBookingAvailabilityResult =
+  | { bookable: false }
+  | { bookable: true; hostTimezone: string; viewerTimezone: string; slots: ResolvedBookingSlot[] };
+
 function buildReadPolicy(platformFeeBps: number): ResolveSlotsInput["policy"] {
   return {
     platformFeeBps,
@@ -182,13 +186,14 @@ async function listGlobalBusyIntervals(
   }));
 }
 
-async function resolveGlobalBookingAvailability(input: {
+export async function resolveGlobalBookingAvailability(input: {
   executor: BookingHoldSqlExecutor;
   hostUserId: string;
-  slotStartUtc: string;
-  slotEndUtc: string;
+  windowStartUtc: string;
+  windowEndUtc: string;
+  viewerTimezone: string;
   nowUtc: string;
-}): Promise<{ bookable: false } | { bookable: true; slot: ResolvedBookingSlot }> {
+}): Promise<GlobalBookingAvailabilityResult> {
   const config = await createBookingHostConfigRepository(input.executor).getHostConfiguration(input.hostUserId);
   if (!config?.profile.isPublished) return { bookable: false };
 
@@ -197,19 +202,21 @@ async function resolveGlobalBookingAvailability(input: {
     rules: toDomainRules(config.profile, config.availabilityRules),
     exceptions: toDomainExceptions(config.availabilityExceptions),
     existingBusyUtc,
-    windowStartUtc: input.slotStartUtc,
-    windowEndUtc: input.slotEndUtc,
+    windowStartUtc: input.windowStartUtc,
+    windowEndUtc: input.windowEndUtc,
     hostTimezone: config.profile.hostTimezone,
-    viewerTimezone: "UTC",
+    viewerTimezone: input.viewerTimezone,
     policy: buildReadPolicy(config.profile.platformFeeBps),
     nowUtc: input.nowUtc,
     priceRules: toDomainPriceRules(config.priceRules),
     basePriceCents: config.profile.basePriceCents,
   });
-  const slot = slots.find((candidate) =>
-    candidate.startUtc === input.slotStartUtc && candidate.endUtc === input.slotEndUtc && candidate.available
-  );
-  return slot ? { bookable: true, slot } : { bookable: false };
+  return {
+    bookable: true,
+    hostTimezone: config.profile.hostTimezone,
+    viewerTimezone: input.viewerTimezone,
+    slots,
+  };
 }
 
 function toResponse(input: {
@@ -241,11 +248,16 @@ export async function createGlobalBookingHold(
   const availability = await resolveGlobalBookingAvailability({
     executor: input.client,
     hostUserId: input.hostUserId,
-    slotStartUtc: input.slotStartUtc,
-    slotEndUtc: input.slotEndUtc,
+    windowStartUtc: input.slotStartUtc,
+    windowEndUtc: input.slotEndUtc,
+    viewerTimezone: "UTC",
     nowUtc: input.nowUtc,
   });
   if (!availability.bookable) return { ok: false, reason: "slot_unavailable" };
+  const slot = availability.slots.find((candidate) =>
+    candidate.startUtc === input.slotStartUtc && candidate.endUtc === input.slotEndUtc && candidate.available
+  );
+  if (!slot) return { ok: false, reason: "slot_unavailable" };
 
   const holdId = `hld_${crypto.randomUUID()}`;
   const lockId = `blk_${crypto.randomUUID()}`;
@@ -272,7 +284,7 @@ export async function createGlobalBookingHold(
         bookerUserId: input.bookerUserId,
         slotStartUtc: input.slotStartUtc,
         slotEndUtc: input.slotEndUtc,
-        priceCents: availability.slot.priceCents,
+        priceCents: slot.priceCents,
         sourceCommunityId: input.sourceCommunityId,
         expiresAtUtc,
         createdAt: input.nowUtc,
@@ -289,7 +301,7 @@ export async function createGlobalBookingHold(
         bookerUserId: input.bookerUserId,
         slotStartUtc: input.slotStartUtc,
         slotEndUtc: input.slotEndUtc,
-        priceCents: availability.slot.priceCents,
+        priceCents: slot.priceCents,
         expiresAtUtc,
       }),
     };

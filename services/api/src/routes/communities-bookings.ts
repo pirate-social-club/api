@@ -8,7 +8,7 @@ import { cancelBooking, completeBooking, noShowBooking, startBookingSession } fr
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
 import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
 import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
-import { createGlobalBookingHold } from "../lib/bookings/booking-hold-service"
+import { createGlobalBookingHold, resolveGlobalBookingAvailability } from "../lib/bookings/booking-hold-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
@@ -40,6 +40,27 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     const windowEndUtc = url.searchParams.get("to")
       ?? new Date(Date.parse(nowUtc) + DEFAULT_WINDOW_DAYS * 86400_000).toISOString()
     const viewerTimezone = url.searchParams.get("tz") ?? "UTC"
+
+    try {
+      const globalResult = await resolveGlobalBookingAvailability({
+        executor: getControlPlaneClient(c.env),
+        hostUserId,
+        windowStartUtc,
+        windowEndUtc,
+        viewerTimezone,
+        nowUtc,
+      })
+      if (!globalResult.bookable) {
+        return c.json({ error: "host_not_bookable" }, 404)
+      }
+      return c.json({
+        host_timezone: globalResult.hostTimezone,
+        viewer_timezone: globalResult.viewerTimezone,
+        slots: globalResult.slots,
+      }, 200)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
 
     const result = await resolveBookingAvailability({
       env: c.env,
