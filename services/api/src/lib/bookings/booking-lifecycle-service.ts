@@ -8,6 +8,13 @@ const NO_SHOW_GRACE_MS = 10 * 60_000;
 const ATTACHABLE_STATES = new Set<string>(["confirmed", "live"]);
 const CANCELLED_STATES = new Set<string>(["cancelled_by_host", "cancelled_by_booker"]);
 const NO_SHOW_STATES = new Set<string>(["no_show_host", "no_show_booker"]);
+const UNFINISHED_INTENT_STATES = new Set<string>([
+  "completed",
+  "no_show_booker",
+  "no_show_host",
+  "cancelled_by_host",
+  "cancelled_by_booker",
+]);
 
 interface BookingLifecycleSnapshot {
   booking_id: string;
@@ -406,6 +413,39 @@ export async function noShowGlobalBooking(input: {
     refundCents,
   });
   return { ok: true, already: false, booking: settled };
+}
+
+export type ReconcileGlobalBookingSettlementResult =
+  | { outcome: "skipped" }
+  | { outcome: "resumed"; booking: BookingLifecycleSnapshot };
+
+export async function reconcileGlobalBookingSettlement(input: {
+  env: Env;
+  executor: BookingLifecycleSqlExecutor & SettlementEffectSqlExecutor;
+  bookingId: string;
+  nowUtc: string;
+  confirmPollMs?: number[];
+}): Promise<ReconcileGlobalBookingSettlementResult> {
+  const repo = createBookingLifecycleWriteRepository(input.executor);
+  const booking = await repo.getBooking(input.bookingId);
+  if (!booking || !UNFINISHED_INTENT_STATES.has(booking.status)) return { outcome: "skipped" };
+  if (booking.refundCents == null) throw new Error("booking_settlement_intent_missing_refund_decision");
+  if (!Number.isInteger(booking.refundCents) || booking.refundCents < 0 || booking.refundCents > booking.grossCents) {
+    throw new Error("booking_settlement_intent_refund_out_of_range");
+  }
+  const refundCents = booking.refundCents;
+  const payoutCents = await computeRetainedHostPayout(booking.grossCents, refundCents, booking.platformFeeBps);
+  if (refundCents > 0) requireSettlementAddress(booking.fundingWalletAddress, "booking_refund_destination_missing");
+  if (payoutCents > 0) requireSettlementAddress(booking.hostPayoutWalletAddress, "booking_payout_destination_missing");
+
+  const settled = await executeSettlement({
+    ctx: { env: input.env, executor: input.executor, nowUtc: input.nowUtc, confirmPollMs: input.confirmPollMs },
+    booking,
+    fromStatus: CANCELLED_STATES.has(booking.status) ? "confirmed" : "live",
+    intentState: booking.status as SettlementIntentState,
+    refundCents,
+  });
+  return { outcome: "resumed", booking: settled };
 }
 
 export type AttachGlobalBookingSessionResult =
