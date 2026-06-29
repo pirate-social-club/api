@@ -6,6 +6,7 @@ import {
 } from "../openrouter-client"
 
 export type StudyGeneratedLine = {
+  explanation?: string | null
   lineId: string
   translation: string
   distractors: string[]
@@ -18,6 +19,7 @@ export type StudyPackGenerationResult = {
 }
 
 type ParsedGeneratedLine = {
+  explanation: string | null
   line_id: string
   translation: string
   distractors: string[]
@@ -56,6 +58,7 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
     const line = item as Record<string, unknown>
     const lineId = typeof line.line_id === "string" ? line.line_id.trim() : ""
     const translation = typeof line.translation === "string" ? line.translation.trim() : ""
+    const explanation = typeof line.explanation === "string" ? line.explanation.trim() : null
     const distractors = isStringArray(line.distractors)
       ? line.distractors.map((distractor) => distractor.trim()).filter(Boolean)
       : []
@@ -68,6 +71,7 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
     seen.add(lineId)
     lines.push({
       line_id: lineId,
+      explanation,
       translation,
       distractors: distractors.filter((distractor) => distractor !== translation).slice(0, 3),
     })
@@ -85,7 +89,7 @@ export function canGenerateStudyTranslations(env: Env): boolean {
 
 export async function requestStudyPackGeneration(input: {
   env: Env
-  lines: Array<{ lineId: string; text: string }>
+  lines: Array<{ lineId: string; next?: string | null; previous?: string | null; text: string }>
   sourceLanguage?: string | null
   targetLanguage: string
 }): Promise<StudyPackGenerationResult> {
@@ -125,10 +129,11 @@ export async function requestStudyPackGeneration(input: {
                 items: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["line_id", "translation", "distractors"],
+                  required: ["line_id", "translation", "distractors", "explanation"],
                   properties: {
                     line_id: { type: "string" },
                     translation: { type: "string" },
+                    explanation: { type: "string" },
                     distractors: {
                       type: "array",
                       minItems: 3,
@@ -147,8 +152,9 @@ export async function requestStudyPackGeneration(input: {
           role: "system",
           content:
             "Generate language-learning exercises from lyric lines. " +
-            "For each supplied line, translate the meaning into the requested target language and provide exactly three plausible but incorrect translations. " +
-            "Keep translations natural, concise, and appropriate for music lyrics. Do not add lines or change line_id values.",
+            "For each supplied source line, produce a natural meaning-based answer in the requested target language, exactly three plausible but incorrect target-language distractors, and a brief explanation in the target language. " +
+            "Answers and distractors must be written entirely in the target language, not transliteration or mixed lyric style. " +
+            "Use previous/next source lines only as context. Keep translations concise and appropriate for music lyrics. Do not add lines or change line_id values.",
         },
         {
           role: "user",
@@ -157,6 +163,8 @@ export async function requestStudyPackGeneration(input: {
             target_language: input.targetLanguage,
             lines: input.lines.map((line) => ({
               line_id: line.lineId,
+              next_line: line.next ?? null,
+              previous_line: line.previous ?? null,
               text: line.text,
             })),
           }),
@@ -170,6 +178,7 @@ export async function requestStudyPackGeneration(input: {
     model,
     lines: validateStudyGeneration(parseStudyGenerationJson(content), requestedLineIds).map((line) => ({
       lineId: line.line_id,
+      explanation: line.explanation,
       translation: line.translation,
       distractors: line.distractors,
     })),

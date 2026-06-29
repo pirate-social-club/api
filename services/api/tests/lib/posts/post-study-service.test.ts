@@ -49,7 +49,7 @@ async function exec(sql: string, args: unknown[] = []): Promise<void> {
 
 async function applyStudyMigration(): Promise<void> {
   if (!client) throw new Error("test db not initialized")
-  const existing = await client.execute("PRAGMA table_info(song_study_pack)")
+  const existing = await client.execute("PRAGMA table_info(song_study_unit)")
   if (existing.rows.length > 0) {
     return
   }
@@ -115,37 +115,35 @@ Hold me close until the morning', 'en',
 
 async function seedReadyPack(): Promise<void> {
   await exec(`
-    INSERT INTO song_study_pack (
-      id, post_id, target_language, source_language, study_pack_version,
-      status, generated_at, created_at, updated_at
+    INSERT INTO song_study_unit (
+      id, post_id, line_id, line_index, source_language, prompt_text,
+      reference_text, say_it_back_status, unit_version, max_attempts,
+      created_at, updated_at
     )
-    VALUES ('ssp_1', ?1, 'es', 'en', 1, 'ready', ?2, ?2, ?2)
+    VALUES
+      ('stu_1', ?1, 'line_001', 0, 'en',
+       'I was lost in the midnight waves',
+       'I was lost in the midnight waves',
+       'ready', 1, 2, ?2, ?2),
+      ('stu_2', ?1, 'line_002', 1, 'en',
+       'Hold me close until the morning',
+       'Hold me close until the morning',
+       'ready', 1, 2, ?2, ?2)
   `, [POST_ID, NOW])
   await exec(`
-    INSERT INTO song_study_exercise (
-      id, pack_id, line_id, line_index, exercise_type, prompt_text,
-      reference_text, translation_text, max_attempts, created_at
+    INSERT INTO song_study_unit_localization (
+      id, unit_id, target_language, localization_version, status,
+      question, translation_text, options_json, correct_option_id,
+      explanation_text, max_attempts, generated_at, created_at, updated_at
     )
     VALUES (
-      'ex_say_1', 'ssp_1', 'line_001', 0, 'say_it_back',
-      'I was lost in the midnight waves',
-      'I was lost in the midnight waves',
-      'Estaba perdido en las olas de medianoche',
-      2, ?1
-    )
-  `, [NOW])
-  await exec(`
-    INSERT INTO song_study_exercise (
-      id, pack_id, line_id, line_index, exercise_type, prompt_text,
-      question, options_json, correct_option_id, max_attempts, created_at
-    )
-    VALUES (
-      'ex_choice_1', 'ssp_1', 'line_002', 1, 'translation_choice',
-      'Hold me close until the morning',
+      'sul_2_es', 'stu_2', 'es', 1, 'ready',
       'Choose the best translation.',
+      'Abrázame fuerte hasta la mañana',
       ?1,
       'opt_a',
-      2, ?2
+      'La traducción mantiene el sentido de cercanía hasta la mañana.',
+      2, ?2, ?2, ?2
     )
   `, [
     JSON.stringify([
@@ -190,7 +188,7 @@ describe("post study service", () => {
     })
 
     expect(payload.access).toBe("ready")
-    expect(payload.exercise_count).toBe(2)
+    expect(payload.exercise_count).toBe(3)
     expect(payload.study_pack_version).toBe(1)
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
@@ -266,7 +264,7 @@ describe("post study service", () => {
       actor: learnerActor,
       body: {
         attempt_number: 1,
-        exercise_id: "ex_choice_1",
+        exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-attempt-1",
         selected_option_id: "opt_a",
         type: "translation_choice",
@@ -280,7 +278,7 @@ describe("post study service", () => {
       actor: learnerActor,
       body: {
         attempt_number: 1,
-        exercise_id: "ex_choice_1",
+        exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-attempt-1",
         selected_option_id: "opt_a",
         type: "translation_choice",
@@ -294,7 +292,7 @@ describe("post study service", () => {
     expect(first).toEqual({
       attempts_remaining: 1,
       correct_option_id: "opt_a",
-      exercise_id: "ex_choice_1",
+      exercise_id: "stu:stu_2:translation_choice:es",
       next_review_hint: "good",
       object: "song_study_attempt_result",
       outcome: "correct",
@@ -313,7 +311,7 @@ describe("post study service", () => {
       actor: learnerActor,
       body: {
         attempt_number: 1,
-        exercise_id: "ex_choice_1",
+        exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-attempt-conflict",
         selected_option_id: "opt_a",
         type: "translation_choice",
@@ -328,7 +326,7 @@ describe("post study service", () => {
       actor: learnerActor,
       body: {
         attempt_number: 1,
-        exercise_id: "ex_choice_1",
+        exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-attempt-conflict",
         selected_option_id: "opt_b",
         type: "translation_choice",
@@ -348,7 +346,7 @@ describe("post study service", () => {
       actor: learnerActor,
       body: {
         attempt_number: 1,
-        exercise_id: "ex_say_1",
+        exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-attempt-say-1",
         transcript: "I was in the midnight waves",
         type: "say_it_back",
@@ -387,7 +385,7 @@ describe("post study service", () => {
       reference_text: "I was lost in the midnight waves",
       type: "say_it_back",
     })
-    const packs = await client!.execute("SELECT COUNT(*) AS count FROM song_study_pack")
+    const packs = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit")
     expect(Number(packs.rows[0]?.count ?? 0)).toBe(1)
   })
 
@@ -404,6 +402,7 @@ describe("post study service", () => {
                   {
                     line_id: "line_001",
                     translation: "Me perdí en las olas de medianoche",
+                    explanation: "Esta opción conserva el sentido de perderse en las olas.",
                     distractors: [
                       "Encontré mi camino al amanecer",
                       "Corrí lejos de la ciudad",
@@ -413,6 +412,7 @@ describe("post study service", () => {
                   {
                     line_id: "line_002",
                     translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta opción expresa cercanía hasta la mañana.",
                     distractors: [
                       "Déjame ir antes del amanecer",
                       "Canta conmigo toda la noche",
@@ -460,12 +460,12 @@ describe("post study service", () => {
     expect(JSON.stringify(payload)).not.toContain("correct_option_id")
 
     const rows = await client!.execute(`
-      SELECT exercise_type, correct_option_id, translation_text
-      FROM song_study_exercise
-      ORDER BY line_index ASC, exercise_type ASC
+      SELECT correct_option_id, translation_text, explanation_text
+      FROM song_study_unit_localization
+      ORDER BY target_language ASC
     `)
-    expect(rows.rows.some((row) => row.exercise_type === "translation_choice" && row.correct_option_id)).toBe(true)
-    expect(rows.rows.some((row) => row.exercise_type === "say_it_back" && row.translation_text)).toBe(true)
+    expect(rows.rows.some((row) => row.correct_option_id && row.translation_text)).toBe(true)
+    expect(rows.rows.some((row) => row.explanation_text)).toBe(true)
   })
 
   test("lazy generation falls back to say-it-back when provider output is invalid", async () => {

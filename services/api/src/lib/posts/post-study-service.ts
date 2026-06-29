@@ -11,13 +11,12 @@ import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant
 import { canGenerateStudyTranslations, requestStudyPackGeneration, type StudyGeneratedLine } from "./post-study-generation-provider"
 import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
+import { withTransaction } from "../transactions"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
 type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
-
-const STUDY_STUB_LINE_LIMIT = 24
 
 type StudyPost = {
   access_mode: "public" | "locked" | null
@@ -37,7 +36,6 @@ type StudyPost = {
 
 type StudyPack = {
   generated_at: string | null
-  id: string
   source_language: string | null
   status: "ready" | "processing" | "unavailable"
   study_pack_version: number
@@ -56,7 +54,21 @@ type StudyExerciseRow = {
   prompt_text: string
   question: string | null
   reference_text: string | null
+  review_language: string
+  study_pack_version: number
   translation_text: string | null
+}
+
+type StudyUnitRow = {
+  id: string
+  line_id: string
+  line_index: number
+  max_attempts: number
+  prompt_text: string
+  reference_text: string
+  say_it_back_status: "ready" | "unavailable"
+  source_language: string | null
+  unit_version: number
 }
 
 type StudyAttemptRow = {
@@ -243,27 +255,39 @@ async function getLatestPack(input: {
   postId: string
   targetLanguage: string
 }): Promise<StudyPack | null> {
-  const row = await executeFirst(input.client, {
+  const unitSummary = await executeFirst(input.client, {
     sql: `
-      SELECT id, source_language, target_language, study_pack_version, status,
-             unavailable_reason, generated_at
-      FROM song_study_pack
+      SELECT COUNT(*) AS unit_count,
+             MAX(source_language) AS source_language,
+             MAX(unit_version) AS unit_version
+      FROM song_study_unit
       WHERE post_id = ?1
-        AND target_language = ?2
-      ORDER BY study_pack_version DESC
-      LIMIT 1
     `,
-    args: [input.postId, input.targetLanguage],
+    args: [input.postId],
   }) as Record<string, unknown> | null
-  if (!row) return null
+  const unitCount = Number(unitSummary?.unit_count ?? 0)
+  if (unitCount <= 0) return null
+  const localizationSummary = await executeFirst(input.client, {
+    sql: `
+      SELECT MAX(generated_at) AS generated_at,
+             SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
+             SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing_count
+      FROM song_study_unit_localization
+      WHERE target_language = ?1
+        AND unit_id IN (
+          SELECT id FROM song_study_unit WHERE post_id = ?2
+        )
+    `,
+    args: [input.targetLanguage, input.postId],
+  }) as Record<string, unknown> | null
+  const processingCount = Number(localizationSummary?.processing_count ?? 0)
   return {
-    generated_at: readString(row.generated_at),
-    id: readString(row.id) ?? "",
-    source_language: readString(row.source_language),
-    status: (readString(row.status) ?? "processing") as StudyPack["status"],
-    study_pack_version: Number(row.study_pack_version ?? 0),
-    target_language: readString(row.target_language) ?? input.targetLanguage,
-    unavailable_reason: readString(row.unavailable_reason) as StudyPack["unavailable_reason"],
+    generated_at: readString(localizationSummary?.generated_at),
+    source_language: readString(unitSummary?.source_language),
+    status: processingCount > 0 ? "processing" : "ready",
+    study_pack_version: Number(unitSummary?.unit_version ?? 1),
+    target_language: input.targetLanguage,
+    unavailable_reason: null,
   }
 }
 
@@ -322,18 +346,40 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
   }
 }
 
-async function listExercises(client: ReadClient, packId: string): Promise<StudyExerciseRow[]> {
-  const result = await client.execute({
+async function listExercises(input: {
+  client: ReadClient
+  postId: string
+  targetLanguage: string
+}): Promise<StudyExerciseRow[]> {
+  const result = await input.client.execute({
     sql: `
-      SELECT id, line_id, line_index, exercise_type, prompt_text, question,
-             reference_text, translation_text, options_json, correct_option_id, max_attempts
-      FROM song_study_exercise
-      WHERE pack_id = ?1
-      ORDER BY line_index ASC,
-        CASE exercise_type WHEN 'say_it_back' THEN 0 ELSE 1 END,
-        id ASC
+      SELECT ('stu:' || id || ':say_it_back:' || COALESCE(source_language, 'source')) AS id,
+             line_id, line_index, 'say_it_back' AS exercise_type, prompt_text,
+             NULL AS question, reference_text, NULL AS translation_text,
+             NULL AS options_json, NULL AS correct_option_id, max_attempts,
+             COALESCE(source_language, 'source') AS review_language, unit_version AS study_pack_version,
+             0 AS sort_order
+      FROM song_study_unit
+      WHERE post_id = ?1
+        AND say_it_back_status = 'ready'
+      UNION ALL
+      SELECT ('stu:' || u.id || ':translation_choice:' || l.target_language) AS id,
+             u.line_id, u.line_index, 'translation_choice' AS exercise_type,
+             u.prompt_text, l.question, NULL AS reference_text, l.translation_text,
+             l.options_json, l.correct_option_id, l.max_attempts,
+             l.target_language AS review_language, l.localization_version AS study_pack_version,
+             1 AS sort_order
+      FROM song_study_unit u
+      JOIN song_study_unit_localization l ON l.unit_id = u.id
+      WHERE u.post_id = ?1
+        AND l.target_language = ?2
+        AND l.status = 'ready'
+        AND l.translation_text IS NOT NULL
+        AND l.options_json IS NOT NULL
+        AND l.correct_option_id IS NOT NULL
+      ORDER BY line_index ASC, sort_order ASC, id ASC
     `,
-    args: [packId],
+    args: [input.postId, input.targetLanguage],
   })
   return result.rows.map((row) => ({
     correct_option_id: readString(row.correct_option_id),
@@ -346,6 +392,8 @@ async function listExercises(client: ReadClient, packId: string): Promise<StudyE
     prompt_text: readString(row.prompt_text) ?? "",
     question: readString(row.question),
     reference_text: readString(row.reference_text),
+    review_language: readString(row.review_language) ?? input.targetLanguage,
+    study_pack_version: Number(row.study_pack_version ?? 1),
     translation_text: readString(row.translation_text),
   }))
 }
@@ -354,16 +402,36 @@ function studyLineId(index: number): string {
   return `line_${String(index + 1).padStart(3, "0")}`
 }
 
-function splitLyricsForStudy(lyrics: string | null): string[] {
-  return String(lyrics ?? "")
+function isPureAdLib(line: string): boolean {
+  return /^\s*\([^)]+\)\s*$/u.test(line)
+}
+
+function stripTrailingAdLibs(line: string): string {
+  return line.replace(/\s*\([^)]*\)\s*$/u, "").trim()
+}
+
+function wordCount(line: string): number {
+  return line.split(/\s+/u).filter(Boolean).length
+}
+
+function splitLyricsForStudy(lyrics: string | null): Array<{ lineId: string; lineIndex: number; text: string }> {
+  const seen = new Set<string>()
+  const units: Array<{ lineId: string; lineIndex: number; text: string }> = []
+  String(lyrics ?? "")
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/gu, " ").trim())
     .filter(Boolean)
     .filter((line) => !/^\[[^\]]+\]$/u.test(line))
-    // V1 lazy generation is intentionally say-it-back-only and capped. Real
-    // translation-choice packs require authoritative line-level translations,
-    // which the existing post localization table does not provide.
-    .slice(0, STUDY_STUB_LINE_LIMIT)
+    .forEach((line, index) => {
+      if (isPureAdLib(line)) return
+      const text = stripTrailingAdLibs(line)
+      if (wordCount(text) < 2) return
+      const normalized = normalizeForStudy(text)
+      if (seen.has(normalized)) return
+      seen.add(normalized)
+      units.push({ lineId: studyLineId(index), lineIndex: index, text })
+    })
+  return units
 }
 
 function optionId(lineIndex: number, optionIndex: number): string {
@@ -390,24 +458,82 @@ function orderedTranslationOptions(input: {
   return { correctOptionId, options }
 }
 
+async function ensureStudyUnits(client: Client, post: StudyPost): Promise<StudyUnitRow[]> {
+  const existing = await client.execute({
+    sql: `
+      SELECT id, line_id, line_index, source_language, prompt_text, reference_text,
+             say_it_back_status, unit_version, max_attempts
+      FROM song_study_unit
+      WHERE post_id = ?1
+      ORDER BY line_index ASC
+    `,
+    args: [post.post_id],
+  })
+  if (existing.rows.length > 0) {
+    return existing.rows.map((row) => ({
+      id: readString(row.id) ?? "",
+      line_id: readString(row.line_id) ?? "",
+      line_index: Number(row.line_index ?? 0),
+      max_attempts: Number(row.max_attempts ?? 2),
+      prompt_text: readString(row.prompt_text) ?? "",
+      reference_text: readString(row.reference_text) ?? readString(row.prompt_text) ?? "",
+      say_it_back_status: (readString(row.say_it_back_status) ?? "ready") as StudyUnitRow["say_it_back_status"],
+      source_language: readString(row.source_language),
+      unit_version: Number(row.unit_version ?? 1),
+    }))
+  }
+
+  const lines = splitLyricsForStudy(post.lyrics)
+  if (lines.length === 0) return []
+  const now = nowIso()
+  for (const line of lines) {
+    await client.execute({
+      sql: `
+        INSERT INTO song_study_unit (
+          id, post_id, line_id, line_index, source_language, prompt_text,
+          reference_text, say_it_back_status, unit_version, max_attempts,
+          created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'ready', 1, 2, ?7, ?7)
+      `,
+      args: [
+        makeId("stu"),
+        post.post_id,
+        line.lineId,
+        line.lineIndex,
+        post.source_language,
+        line.text,
+        now,
+      ],
+    })
+  }
+  return ensureStudyUnits(client, post)
+}
+
 async function createReadyStudyPack(input: {
   client: Client
   env: Env
   post: StudyPost
   targetLanguage: string
 }): Promise<StudyPack | null> {
-  const lines = splitLyricsForStudy(input.post.lyrics)
-  if (lines.length === 0) return null
+  const units = await ensureStudyUnits(input.client, input.post)
+  if (units.length === 0) return null
 
   const generatedLines = new Map<string, StudyGeneratedLine>()
   if (canGenerateStudyTranslations(input.env)) {
     try {
       const generated = await requestStudyPackGeneration({
         env: input.env,
-        lines: lines.map((line, index) => ({
-          lineId: studyLineId(index),
-          text: line,
-        })),
+        lines: units.filter((unit) => wordCount(unit.prompt_text) >= 3).map((unit) => {
+          const previous = units.find((candidate) => candidate.line_index === unit.line_index - 1)
+          const next = units.find((candidate) => candidate.line_index === unit.line_index + 1)
+          return {
+            lineId: unit.line_id,
+            next: next?.prompt_text ?? null,
+            previous: previous?.prompt_text ?? null,
+            text: unit.prompt_text,
+          }
+        }),
         sourceLanguage: input.post.source_language,
         targetLanguage: input.targetLanguage,
       })
@@ -421,63 +547,49 @@ async function createReadyStudyPack(input: {
   }
 
   const now = nowIso()
-  const packId = makeId("ssp")
-  await input.client.execute({
-    sql: `
-      INSERT INTO song_study_pack (
-        id, post_id, target_language, source_language, study_pack_version,
-        status, generated_at, created_at, updated_at
-      )
-      VALUES (?1, ?2, ?3, ?4, 1, 'ready', ?5, ?5, ?5)
-    `,
-    args: [packId, input.post.post_id, input.targetLanguage, input.post.source_language, now],
-  })
-
-  for (const [index, line] of lines.entries()) {
-    const lineId = studyLineId(index)
-    const generatedLine = generatedLines.get(lineId)
-    await input.client.execute({
-      sql: `
-        INSERT INTO song_study_exercise (
-          id, pack_id, line_id, line_index, exercise_type, prompt_text,
-          reference_text, translation_text, max_attempts, created_at
-        )
-        VALUES (?1, ?2, ?3, ?4, 'say_it_back', ?5, ?5, ?6, 2, ?7)
-      `,
-      args: [makeId("ex"), packId, lineId, index, line, generatedLine?.translation ?? null, now],
-    })
-    if (generatedLine && generatedLine.distractors.length >= 3) {
-      const { correctOptionId, options } = orderedTranslationOptions({
-        generated: generatedLine,
-        lineIndex: index,
-      })
+  for (const unit of units) {
+    const generatedLine = generatedLines.get(unit.line_id)
+    if (!generatedLine || generatedLine.distractors.length < 3) {
       await input.client.execute({
         sql: `
-          INSERT INTO song_study_exercise (
-            id, pack_id, line_id, line_index, exercise_type, prompt_text,
-            question, translation_text, options_json, correct_option_id,
-            max_attempts, created_at
+          INSERT OR IGNORE INTO song_study_unit_localization (
+            id, unit_id, target_language, localization_version, status,
+            max_attempts, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, 'translation_choice', ?5, 'Choose the best translation.', ?6, ?7, ?8, 1, ?9)
+          VALUES (?1, ?2, ?3, 1, 'unavailable', 1, ?4, ?4)
         `,
-        args: [
-          makeId("ex"),
-          packId,
-          lineId,
-          index,
-          line,
-          generatedLine.translation,
-          JSON.stringify(options),
-          correctOptionId,
-          now,
-        ],
+        args: [makeId("sul"), unit.id, input.targetLanguage, now],
       })
+      continue
     }
+    const { correctOptionId, options } = orderedTranslationOptions({
+      generated: generatedLine,
+      lineIndex: unit.line_index,
+    })
+    await input.client.execute({
+      sql: `
+        INSERT OR IGNORE INTO song_study_unit_localization (
+          id, unit_id, target_language, localization_version, status,
+          question, translation_text, options_json, correct_option_id,
+          explanation_text, max_attempts, generated_at, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, 1, 'ready', 'Choose the best translation.', ?4, ?5, ?6, ?7, 1, ?8, ?8, ?8)
+      `,
+      args: [
+        makeId("sul"),
+        unit.id,
+        input.targetLanguage,
+        generatedLine.translation,
+        JSON.stringify(options),
+        correctOptionId,
+        generatedLine.explanation ?? null,
+        now,
+      ],
+    })
   }
 
   return {
     generated_at: now,
-    id: packId,
     source_language: input.post.source_language,
     status: "ready",
     study_pack_version: 1,
@@ -555,7 +667,11 @@ export async function getPostStudyPayload(input: {
       }
     }
 
-    const exercises = (await listExercises(db.client, pack.id)).map((row) => toExercise(row, input.actor.userId))
+    const exercises = (await listExercises({
+      client: db.client,
+      postId: input.postId,
+      targetLanguage: pack.target_language,
+    })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
@@ -583,38 +699,83 @@ async function getExerciseForAttempt(client: ReadClient, exerciseId: string): Pr
   study_pack_version: number
   target_language: string
 }) | null> {
-  const row = await executeFirst(client, {
-    sql: `
-      SELECT e.id, e.line_id, e.line_index, e.exercise_type, e.prompt_text, e.question,
-             e.reference_text, e.translation_text, e.options_json, e.correct_option_id,
-             e.max_attempts, p.post_id, p.source_language, p.status, p.study_pack_version,
-             p.target_language
-      FROM song_study_exercise e
-      JOIN song_study_pack p ON p.id = e.pack_id
-      WHERE e.id = ?1
-      LIMIT 1
-    `,
-    args: [exerciseId],
-  }) as Record<string, unknown> | null
-  if (!row) return null
-  return {
-    correct_option_id: readString(row.correct_option_id),
-    exercise_type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
-    id: readString(row.id) ?? "",
-    line_id: readString(row.line_id) ?? "",
-    line_index: Number(row.line_index ?? 0),
-    max_attempts: Number(row.max_attempts ?? 1),
-    options_json: readString(row.options_json),
-    post_id: readString(row.post_id) ?? "",
-    prompt_text: readString(row.prompt_text) ?? "",
-    question: readString(row.question),
-    reference_text: readString(row.reference_text),
-    source_language: readString(row.source_language),
-    status: (readString(row.status) ?? "processing") as StudyPack["status"],
-    study_pack_version: Number(row.study_pack_version ?? 0),
-    target_language: readString(row.target_language) ?? "en",
-    translation_text: readString(row.translation_text),
+  const sayItBackMatch = /^stu:([^:]+):say_it_back:([^:]+)$/u.exec(exerciseId)
+  if (sayItBackMatch) {
+    const unitId = sayItBackMatch[1]!
+    const row = await executeFirst(client, {
+      sql: `
+        SELECT id, post_id, line_id, line_index, source_language, prompt_text,
+               reference_text, say_it_back_status, unit_version, max_attempts
+        FROM song_study_unit
+        WHERE id = ?1
+        LIMIT 1
+      `,
+      args: [unitId],
+    }) as Record<string, unknown> | null
+    if (!row) return null
+    const sourceLanguage = readString(row.source_language) ?? "source"
+    return {
+      correct_option_id: null,
+      exercise_type: "say_it_back",
+      id: exerciseId,
+      line_id: readString(row.line_id) ?? "",
+      line_index: Number(row.line_index ?? 0),
+      max_attempts: Number(row.max_attempts ?? 2),
+      options_json: null,
+      post_id: readString(row.post_id) ?? "",
+      prompt_text: readString(row.prompt_text) ?? "",
+      question: null,
+      reference_text: readString(row.reference_text),
+      review_language: sourceLanguage,
+      source_language: sourceLanguage,
+      status: (readString(row.say_it_back_status) === "ready" ? "ready" : "unavailable"),
+      study_pack_version: Number(row.unit_version ?? 1),
+      target_language: sourceLanguage,
+      translation_text: null,
+    }
   }
+
+  const translationMatch = /^stu:([^:]+):translation_choice:(.+)$/u.exec(exerciseId)
+  if (translationMatch) {
+    const unitId = translationMatch[1]!
+    const targetLanguage = translationMatch[2]!
+    const row = await executeFirst(client, {
+      sql: `
+        SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
+               u.prompt_text, l.question, l.translation_text, l.options_json,
+               l.correct_option_id, l.max_attempts, l.status, l.localization_version,
+               l.target_language
+        FROM song_study_unit u
+        JOIN song_study_unit_localization l ON l.unit_id = u.id
+        WHERE u.id = ?1
+          AND l.target_language = ?2
+        LIMIT 1
+      `,
+      args: [unitId, targetLanguage],
+    }) as Record<string, unknown> | null
+    if (!row) return null
+    return {
+      correct_option_id: readString(row.correct_option_id),
+      exercise_type: "translation_choice",
+      id: exerciseId,
+      line_id: readString(row.line_id) ?? "",
+      line_index: Number(row.line_index ?? 0),
+      max_attempts: Number(row.max_attempts ?? 1),
+      options_json: readString(row.options_json),
+      post_id: readString(row.post_id) ?? "",
+      prompt_text: readString(row.prompt_text) ?? "",
+      question: readString(row.question),
+      reference_text: null,
+      review_language: readString(row.target_language) ?? targetLanguage,
+      source_language: readString(row.source_language),
+      status: (readString(row.status) ?? "processing") as StudyPack["status"],
+      study_pack_version: Number(row.localization_version ?? 1),
+      target_language: readString(row.target_language) ?? targetLanguage,
+      translation_text: readString(row.translation_text),
+    }
+  }
+
+  return null
 }
 
 function normalizeForStudy(value: string): string {
@@ -731,7 +892,7 @@ async function hasAttemptNumber(client: ReadClient, userId: string, exerciseId: 
 
 async function upsertReviewState(input: {
   attemptNumber: number
-  client: Client
+  client: Pick<ReadClient, "execute">
   exercise: Awaited<ReturnType<typeof getExerciseForAttempt>> & {}
   now: string
   outcome: AttemptOutcome
@@ -764,7 +925,7 @@ async function upsertReviewState(input: {
       input.exercise.post_id,
       input.exercise.line_id,
       input.exercise.exercise_type,
-      input.exercise.target_language,
+      input.exercise.review_language,
       state,
       input.outcome === "correct" ? 2 : 0.5,
       input.outcome === "correct" ? 4 : 8,
@@ -851,41 +1012,44 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
     const now = nowIso()
-    const fsrsRating = await upsertReviewState({
-      attemptNumber,
-      client: db.client,
-      exercise,
-      now,
-      outcome,
-      userId: input.actor.userId,
-    })
-    await db.client.execute({
-      sql: `
-        INSERT INTO song_study_attempt (
-          id, user_id, post_id, exercise_id, line_id, exercise_type,
-          target_language, study_pack_version, attempt_number, idempotency_key,
-          selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
-        )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-      `,
-      args: [
-        makeId("sta"),
-        input.actor.userId,
-        input.postId,
-        exercise.id,
-        exercise.line_id,
-        exercise.exercise_type,
-        exercise.target_language,
-        exercise.study_pack_version,
+    const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
+      const rating = await upsertReviewState({
         attemptNumber,
-        idempotencyKey,
-        selectedOptionId,
-        transcript,
-        outcome,
-        feedback ? JSON.stringify(feedback) : null,
-        fsrsRating,
+        client: tx,
+        exercise,
         now,
-      ],
+        outcome,
+        userId: input.actor.userId,
+      })
+      await tx.execute({
+        sql: `
+          INSERT INTO song_study_attempt (
+            id, user_id, post_id, exercise_id, line_id, exercise_type,
+            target_language, study_pack_version, attempt_number, idempotency_key,
+            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        `,
+        args: [
+          makeId("sta"),
+          input.actor.userId,
+          input.postId,
+          exercise.id,
+          exercise.line_id,
+          exercise.exercise_type,
+          exercise.review_language,
+          exercise.study_pack_version,
+          attemptNumber,
+          idempotencyKey,
+          selectedOptionId,
+          transcript,
+          outcome,
+          feedback ? JSON.stringify(feedback) : null,
+          rating,
+          now,
+        ],
+      })
+      return rating
     })
     return {
       attempts_remaining: attemptsRemaining,

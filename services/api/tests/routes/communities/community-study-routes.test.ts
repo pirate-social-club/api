@@ -19,7 +19,7 @@ afterEach(async () => {
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
-  const existing = await client.execute("PRAGMA table_info(song_study_pack)")
+  const existing = await client.execute("PRAGMA table_info(song_study_unit)")
   if (existing.rows.length > 0) {
     return
   }
