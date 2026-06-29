@@ -31,6 +31,7 @@ communityAuthPolicy.get("/:communityId/telegram-bot-username", publicAccess)
 communityAuthPolicy.get("/:communityId/posts/:postId/karaoke", publicAccess)
 communityAuthPolicy.post("/:communityId/posts", agentDelegatedAccess)
 communityAuthPolicy.post("/:communityId/posts/:postId/comments", agentDelegatedAccess)
+communityAuthPolicy.post("/:communityId/bookings/:bookingId/settlement-review/resolve", publicAccess)
 
 function communityPath(url: string): string {
   const pathname = new URL(url).pathname
