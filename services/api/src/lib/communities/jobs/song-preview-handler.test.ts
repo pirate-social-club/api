@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import type { Env } from "../../../env"
 import type { CommunityJobRow } from "./store"
 import { runSongPreviewGenerate, setSongPreviewFailureUpdaterForTests } from "./song-preview-handler"
@@ -194,6 +194,10 @@ describe("runSongPreviewGenerate", () => {
     globalThis.fetch = (async (): Promise<Response> => {
       return Response.json({ code: "preview_generation_failed" }, { status: 502 })
     }) as typeof globalThis.fetch
+    const warnings: string[] = []
+    const warnSpy = spyOn(console, "warn").mockImplementation((message) => {
+      warnings.push(String(message))
+    })
 
     await expect(runSongPreviewGenerate({
       env: {
@@ -213,7 +217,21 @@ describe("runSongPreviewGenerate", () => {
       songArtifactBundleId: "sab_payload",
       previewAudio: null,
       previewStatus: "failed",
-      previewError: "Song preview service rejected the request",
+      previewError: "Song preview service rejected the request (status=502 body={\"code\":\"preview_generation_failed\"})",
     }])
+    expect(warnings).toHaveLength(1)
+    expect(JSON.parse(warnings[0]!) as unknown).toMatchObject({
+      community_id: "com_test",
+      details: {
+        body: "{\"code\":\"preview_generation_failed\"}",
+        status: 502,
+      },
+      error: "Song preview service rejected the request",
+      event: "song_preview.remote.failed",
+      job_id: "cjb_test",
+      service: "api",
+      song_artifact_bundle: "sab_payload",
+    })
+    warnSpy.mockRestore()
   })
 })
