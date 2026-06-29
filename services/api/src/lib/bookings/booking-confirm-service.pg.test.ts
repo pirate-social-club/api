@@ -59,7 +59,9 @@ function userRepository(walletAttachmentId = "wal_confirm", walletAddress = BUYE
     async getWalletAttachmentsByUserId(userId: string) {
       return [{
         wallet_attachment: walletAttachmentId,
+        chain_namespace: "eip155",
         wallet_address: walletAddress,
+        is_primary: true,
         user_id: userId,
         status: "verified",
       }];
