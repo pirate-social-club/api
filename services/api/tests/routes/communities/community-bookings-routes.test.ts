@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { createClient } from "@libsql/client"
+import { getAddress } from "ethers"
 
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
@@ -8,17 +9,22 @@ import { setBookingPaymentVerifierForTests, setCommunityCommerceBuyerFundingVeri
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { addCommunityMember, completeUniqueHumanVerification, exchangeJwt, requestJson } from "./community-routes-test-helpers"
 
+setDefaultTimeout(20_000)
+
 type Ctx = Awaited<ReturnType<typeof createRouteTestContext>>
 type Client = Ctx["client"]
 
 let cleanup: (() => Promise<void>) | null = null
 let verifierCalls = 0
+let verifierRpcUrls: Array<string | undefined> = []
 beforeEach(() => {
   resetRuntimeCaches()
   verifierCalls = 0
+  verifierRpcUrls = []
   // Default: booking payment verification succeeds, echoing the expected sender from the intent.
   setBookingPaymentVerifierForTests(async (input) => {
     verifierCalls += 1
+    verifierRpcUrls.push(input.rpcUrl)
     return { kind: "verified", senderAddress: input.expected.senderAddress, txRef: input.fundingTxRef }
   })
 })
@@ -585,6 +591,23 @@ describe("community bookings — quote + confirm (Slice C)", () => {
     expect(body.quote.host_payout_cents).toBe(4500)
   })
 
+  test("booking quote fails closed when booking chain config is missing despite global checkout config", async () => {
+    const { ctx, communityId, host } = await setupHost()
+    const { dateStr, weekday } = bookableDay()
+    await seedProfile(ctx.client, { hostUserId: host.userId, basePriceCents: 5000, platformFeeBps: 1000 })
+    await seedRule(ctx.client, { hostUserId: host.userId, weekday })
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+
+    ctx.env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID = "8453"
+    ctx.env.PIRATE_BOOKING_SETTLEMENT_CHAIN_ID = undefined
+    ctx.env.PIRATE_BOOKING_SETTLEMENT_RPC_URL = undefined
+    ctx.env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY = undefined
+
+    const res = await postQuote(ctx.env, communityId, holdId, host.accessToken)
+    expect(res.status).toBe(400)
+    expect((await json(res) as { code: string; message: string }).message).toContain("PIRATE_BOOKING_SETTLEMENT_CHAIN_ID")
+  })
+
   test("verified funding confirms the booking, consumes the hold, makes the lock permanent", async () => {
     const { ctx, communityId, host } = await setupHost()
     const { dateStr, weekday } = bookableDay()
@@ -608,6 +631,21 @@ describe("community bookings — quote + confirm (Slice C)", () => {
     expect(lock?.status).toBe("active")
     expect(lock?.expires_at_utc).toBeNull()
     expect(lock?.booking_id).toBeTruthy()
+  })
+
+  test("confirm verifies booking payments through the booking RPC, not the global checkout RPC", async () => {
+    const { ctx, communityId, host } = await setupHost()
+    const { dateStr, weekday } = bookableDay()
+    ctx.env.PIRATE_CHECKOUT_RPC_URL = "https://mainnet.example"
+    ctx.env.PIRATE_BOOKING_SETTLEMENT_RPC_URL = "https://booking-sepolia.example"
+    await seedProfile(ctx.client, { hostUserId: host.userId, basePriceCents: 5000 })
+    await seedRule(ctx.client, { hostUserId: host.userId, weekday })
+    await insertWalletAttachment(ctx.client, host.userId, "wal_booker")
+    const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
+
+    const res = await postConfirm(ctx.env, communityId, holdId, host.accessToken, "0xfunding-ok", "wal_booker")
+    expect(res.status).toBe(201)
+    expect(verifierRpcUrls).toEqual(["https://booking-sepolia.example"])
   })
 
   test("fake funding is rejected: no booking, hold and hold-lock left intact", async () => {
@@ -748,9 +786,13 @@ describe("community bookings — payment intent (Slice C hardening)", () => {
 
   test("quote returns persisted payment instructions (deposit address only, no payout snapshot)", async () => {
     const { ctx, communityId, host, dateStr } = await prep()
+    ctx.env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID = "8453"
+    ctx.env.PIRATE_BOOKING_SETTLEMENT_CHAIN_ID = "84532"
     const holdId = await createActiveHold(ctx, communityId, host, `${dateStr}T09:00:00Z`, `${dateStr}T09:30:00Z`)
     const body = await json(await postQuote(ctx.env, communityId, holdId, host.accessToken)) as { quote: { payment: Record<string, unknown> } }
     const p = body.quote.payment
+    expect(p.chain_id).toBe(84532)
+    expect(p.token_address).toBe(getAddress("0x036cbd53842c5426634e7929541ec2318f3dcf7e"))
     expect(p.amount_atomic).toBe("50000000") // 5000 cents → 50 USDC at 6 decimals
     expect(p.token_decimals).toBe(6)
     expect(typeof p.recipient_address).toBe("string")

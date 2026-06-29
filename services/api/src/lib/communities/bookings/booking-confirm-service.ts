@@ -7,6 +7,7 @@ import { getControlPlaneClient } from "../../runtime-deps"
 import { resolveWalletAttachmentAddress } from "../commerce/access"
 import { classifyBookingPaymentReceipt } from "../commerce/funding-proof-service"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import { resolveBookingSettlementRpcUrl } from "./booking-chain-config"
 import {
   createOrGetPaymentIntent,
   expirePaymentIntentIfDue,
@@ -341,6 +342,7 @@ export async function confirmBookingHold(input: {
   // Verify the tx against the PERSISTED intent (explicit expected values; classified outcome).
   const outcome = await classifyBookingPaymentReceipt({
     env: input.env, fundingTxRef: normTx,
+    rpcUrl: resolveBookingSettlementRpcUrl(input.env),
     expected: { chainId: intent.chain_id, tokenAddress: intent.token_address, recipientAddress: intent.recipient_address, amountAtomic: BigInt(intent.amount_atomic), senderAddress: buyerAddress },
   })
   const claimArgs = { env: input.env, communityRepository: input.communityRepository, communityId: input.communityId, intentId, claimToken, nowUtc: input.nowUtc }

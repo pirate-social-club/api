@@ -17,9 +17,9 @@ import {
   type OperatorSigningCoordinatorDO,
 } from "./operator-signing-coordinator-do"
 import {
-  resolvePirateCheckoutOperatorAddress,
-  resolvePirateCheckoutSourceChainId,
-} from "../commerce/checkout-config"
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorAddress,
+} from "./booking-chain-config"
 
 type CommunityRepository = Parameters<typeof openCommunityWriteClient>[1]
 
@@ -57,7 +57,7 @@ export function setBookingSettlementCoordinatorForTests(c: BookingSettlementCoor
 function realCoordinator(env: Env): BookingSettlementCoordinator {
   const ns = env.OPERATOR_SIGNING_COORDINATOR as DurableObjectNamespace<OperatorSigningCoordinatorDO> | undefined
   if (!ns) throw badRequestError("OPERATOR_SIGNING_COORDINATOR binding is not configured")
-  const stub = ns.getByName(operatorSigningCoordinatorName(resolvePirateCheckoutOperatorAddress(env), resolvePirateCheckoutSourceChainId(env)))
+  const stub = ns.getByName(operatorSigningCoordinatorName(resolveBookingSettlementOperatorAddress(env), resolveBookingSettlementChainId(env)))
   return {
     settle: (req) => stub.settle(req),
     confirm: (req, txHash) => stub.confirm(req, txHash),
