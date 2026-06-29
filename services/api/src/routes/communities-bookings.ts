@@ -7,9 +7,22 @@ import { createBookingHold } from "../lib/communities/bookings/booking-hold-serv
 import { cancelBooking, completeBooking, noShowBooking, startBookingSession } from "../lib/communities/bookings/booking-lifecycle-service"
 import { attachBookingSession, heartbeatBookingSession } from "../lib/communities/bookings/booking-session-service"
 import { getBookingForParty, listBookingsForUser, type BookingViewerRole } from "../lib/communities/bookings/booking-read-service"
+import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
+
+function isMissingGlobalBookingsSchema(error: unknown): boolean {
+  let current: unknown = error
+  while (current && typeof current === "object") {
+    const code = "code" in current ? String((current as { code?: unknown }).code) : ""
+    if (code === "42P01") return true
+    current = "cause" in current ? (current as { cause?: unknown }).cause : null
+  }
+  const message = String((error as { message?: unknown })?.message ?? error).toLowerCase()
+  return message.includes("no such table: bookings.") || message.includes('relation "bookings.')
+}
 
 export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedEnv>): void {
   // Read-only availability for a host within a community (Slice A): resolves the host's
@@ -105,12 +118,30 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // Slice C: immutable quote preview derived from the hold's price snapshot (no quote table).
   communities.post("/:communityId/booking-holds/:holdId/quote", async (c) => {
     const { communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const holdId = c.req.param("holdId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await quoteGlobalBookingHold({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        holdId,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ quote: globalResult.quote }, 200)
+      }
+      if (globalResult.reason !== "hold_not_found") {
+        return c.json({ error: globalResult.reason }, 409)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await quoteBookingHold({
       env: c.env,
       communityRepository,
       communityId,
-      holdId: c.req.param("holdId"),
-      nowUtc: new Date().toISOString(),
+      holdId,
+      nowUtc,
     })
     if (!result.ok) {
       return c.json({ error: result.reason }, result.reason === "hold_not_found" ? 404 : 409)
@@ -131,16 +162,39 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       return c.json({ error: "funding_tx_ref and wallet_attachment_id are required" }, 400)
     }
 
+    const holdId = c.req.param("holdId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await confirmGlobalBookingHold({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        userRepository,
+        holdId,
+        bookerUserId: actor.userId,
+        fundingTxRef: body.funding_tx_ref,
+        walletAttachmentId: body.wallet_attachment_id,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ booking: globalResult.booking, already_confirmed: globalResult.already }, globalResult.already ? 200 : 201)
+      }
+      if (globalResult.reason !== "hold_not_found") {
+        return c.json({ error: globalResult.reason }, 409)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
+
     const result = await confirmBookingHold({
       env: c.env,
       communityRepository,
       userRepository,
       communityId,
-      holdId: c.req.param("holdId"),
+      holdId,
       bookerUserId: actor.userId,
       fundingTxRef: body.funding_tx_ref,
       walletAttachmentId: body.wallet_attachment_id,
-      nowUtc: new Date().toISOString(),
+      nowUtc,
     })
     if (!result.ok) {
       return c.json({ error: result.reason }, result.reason === "hold_not_found" ? 404 : 409)
