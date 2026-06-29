@@ -106,7 +106,7 @@ async function executeOperatorEffect(ctx: GlobalSettlementContext, effect: Globa
 function randomAgoraUid(): number {
   const v = new Uint32Array(1);
   crypto.getRandomValues(v);
-  return v[0];
+  return (v[0] & 0x7fffffff) || 1;
 }
 
 function deriveBookingChannel(bookingId: string): string {
