@@ -40,7 +40,8 @@ The branch already has the Telegram-side purchase shape:
 - `spend_intents.telegram_user_id` can bind an order to a verified Telegram user.
 - Mini App `init_data` verification gates Telegram confirmation routes.
 - `expectedTonPayload(spend_intent_id)` provides the required per-order TON
-  comment.
+  comment for the dev/test TON path and for any future provider that supports
+  caller-supplied TON payloads.
 - `ton_testnet_transfer` is explicitly a dev-only UX/state-machine simulation,
   not a canonical funding receipt.
 - `omniston_ton` remains gated off because live settlement proof is not complete.
@@ -60,7 +61,8 @@ one canonical receipt model and treats TON as a funding source.
 A bridge/solver delivery has this shape:
 
 1. Buyer signs a TON-side payment from Telegram Wallet.
-2. The TON payment carries `expectedTonPayload(spend_intent_id)`.
+2. The TON payment either carries Pirate's `expectedTonPayload(spend_intent_id)`
+   or a provider-generated payload that Pirate cannot control.
 3. A route swaps/bridges the value.
 4. A bridge/solver sends Base USDC to the checkout operator.
 
@@ -72,8 +74,12 @@ The Base transfer alone is not enough to attribute the payment to a spend intent
 
 Therefore attribution must bind both legs:
 
-- TON source leg: sender, recipient, amount, and exact comment =
-  `expectedTonPayload(spend_intent_id)`.
+- TON source leg, memo-bound mode: sender, recipient, amount, and exact comment
+  = `expectedTonPayload(spend_intent_id)`.
+- TON source leg, provider-generated-payload mode: sender, recipient, amount,
+  and source tx hash can be verified on-chain, but the source tx does not
+  self-identify the spend intent. The spend-intent binding then depends on the
+  server-created route reference and its one-route-one-intent idempotency.
 - Base delivery leg: token, recipient, chain, confirmed status, and
   `amount >= expectedAmount`.
 - Route correlation: route/bridge evidence locates the Base delivery tx for this
@@ -84,10 +90,17 @@ Therefore attribution must bind both legs:
 This is a deliberate proof-model extension. It must not be implemented by simply
 trusting `route_provider` or by relaxing the existing Base verifier globally.
 
-Route/bridge evidence is correlation data only. It may tell the verifier which
-on-chain transactions to inspect, but it never substitutes for on-chain
-verification. The TON source leg and Base delivery leg must both be independently
-verified against their chain data.
+Route/bridge evidence is correlation data only in memo-bound mode. It may tell
+the verifier which on-chain transactions to inspect, but it never substitutes
+for on-chain verification.
+
+Provider-generated-payload mode has a materially weaker trust boundary: route
+evidence is no longer only a locator, because it is also the off-chain link
+between the source tx and the spend intent. Do not treat this as equivalent to
+the memo-bound model. It can be acceptable only if some other on-chain
+self-attribution exists, most likely a per-intent Base destination address, or
+if the team explicitly accepts provider-trust-only attribution as a separate
+financial policy decision.
 
 Amount roles:
 
@@ -100,10 +113,23 @@ Amount roles:
   output. Swap/bridge fees, route buffers, and over-delivery make equality the
   wrong invariant.
 
-Per-intent Base destination addresses could make the Base leg self-attributing
-and reduce dependence on bridge route evidence. This remains an open alternative
-until the bridge is selected; evaluate whether the selected bridge can target
-per-order Base addresses and whether the operational/accounting cost is worth it.
+Per-intent Base destination addresses could make the Base leg self-attributing.
+If the selected bridge cannot attach Pirate's exact TON memo, per-intent Base
+destinations are likely required to keep an on-chain spend-intent binding. A
+shared operator destination plus provider-generated TON payload leaves
+attribution provider-trust-only; that is likely a no-go for the canonical
+receipt invariant unless approved as a deliberate policy exception.
+
+Bridge viability decision tree:
+
+1. Can the bridge attach Pirate's exact TON memo/payload to the source tx?
+   Memo-bound attribution is viable.
+2. If not, can the bridge deliver to a Pirate-controlled per-intent Base
+   destination address?
+   Provider-generated payload attribution may be viable, with the Base delivery
+   leg providing the on-chain spend-intent binding.
+3. If neither is true, attribution depends on provider route evidence alone.
+   Escalate as a financial policy decision before writing real-money code.
 
 ## Required Sequencing
 
@@ -248,6 +274,11 @@ Findings that support continuing:
   compatible with sending the Base delivery to an operator or per-intent Base
   destination address. This still needs fixture validation against the exact
   route before being treated as guaranteed.
+- A no-money quote probe with two different Base `to` addresses returned `200 OK`
+  for both and preserved the final output as native Base USDC. This is positive
+  evidence for per-intent destination support, but it does not replace a tx
+  lookup fixture proving the final delivered tx actually pays the requested
+  address.
 
 Important corrections and open checks:
 
@@ -260,10 +291,14 @@ Important corrections and open checks:
   yet that Pirate can inject `expectedTonPayload(spend_intent_id)` into the real
   Symbiosis TON payment. Treat the exact TON memo as a simulation invariant, not
   a production invariant, until Symbiosis confirms custom payload support.
+- OpenAPI inspection found required `from` and `to` fields but no obvious custom
+  TON memo/payload field in the swap request shape. Treat memo injection as
+  unsupported unless provider docs/support confirm otherwise.
 - If custom TON payloads are unavailable, production attribution must bind the
   Telegram session, selected source wallet, submitted source tx hash, Symbiosis
-  route lookup, and verified Base delivery tx. Do not design the real verifier
-  around exact Pirate memo matching unless that support is confirmed.
+  route lookup, and verified Base delivery tx. A shared operator Base address
+  would make this provider-trust-heavy; per-intent Base destination support is
+  the likely requirement for keeping an on-chain spend-intent binding.
 - Need a persisted quote fixture and a tx-lookup fixture before implementation:
   confirm which response field is the destination Base tx hash, how finality is
   represented beyond pending/success/stuck/reverted, and whether per-intent
@@ -271,8 +306,16 @@ Important corrections and open checks:
 
 Current read: Symbiosis is viable enough to shape the next adapter contract and
 web dev UI, but it is not production-approved. The next no-money step is to
-capture sanitized v2 quote fixtures and tx-lookup fixtures, then update the
-mock adapter to match that contract while keeping `omniston_ton` disabled.
+answer the attribution decision tree:
+
+1. Can Symbiosis attach Pirate's exact TON memo/payload?
+2. If not, can Symbiosis reliably deliver to caller-supplied per-intent Base
+   destination addresses for the TON -> native Base USDC route?
+3. If neither is true, Symbiosis remains useful as a UX prototype but is likely
+   not acceptable for real unlocks under the current canonical-receipt policy.
+
+Capture sanitized v2 quote fixtures and tx-lookup fixtures, then update the mock
+adapter to match that contract while keeping `omniston_ton` disabled.
 
 Reference docs:
 
