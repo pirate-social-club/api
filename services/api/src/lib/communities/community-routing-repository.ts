@@ -218,3 +218,65 @@ export async function findStuckD1ProvisioningBindings(
     region: requiredString(row, "region"),
   }))
 }
+
+/**
+ * A community route is "settlement-capable" only when its authoritative
+ * control-plane routing state is a fully-ready D1 binding that has not been
+ * decommissioned. The unattended booking-settlement cron MUST enumerate from
+ * this predicate rather than the generic active-community list: only D1 has the
+ * shard binding the cron can open, and a Turso / decommissioned / not-yet-ready
+ * route cannot settle. Skipping them here (instead of attempting + failing) keeps
+ * the sweep free of spurious settlement errors for routes that were never eligible.
+ *
+ * `backend === 'd1'` is a deliberate ALLOWLIST: any other backend (a future
+ * value, or 'turso') is excluded by construction, never assumed D1.
+ * `provisioning_state === 'ready'` excludes 'provisioning' (no usable binding yet)
+ * and 'degraded' (a known-unhealthy DB should not be hammered by settlement; it
+ * recovers to 'ready' before its bookings settle). `decommissioned_at === null`
+ * is belt-and-suspenders alongside the 'decommissioned' provisioning state.
+ */
+export function isSettlementEligibleRoute(
+  row: Pick<CommunityDatabaseRoutingRow, "backend" | "provisioning_state" | "decommissioned_at">,
+): boolean {
+  return row.backend === "d1" && row.provisioning_state === "ready" && row.decommissioned_at === null
+}
+
+export type SettlementEligibleCommunity = { community_id: string; created_at: string }
+
+/**
+ * Enumerate settlement-capable community routes (see {@link isSettlementEligibleRoute}),
+ * ordered oldest-first for stable rotation. The SQL filter mirrors the predicate; results
+ * are re-checked through the predicate as defence-in-depth so the cron can never treat a
+ * non-eligible route as D1 even if the query and predicate ever drift.
+ */
+export async function listSettlementEligibleCommunities(
+  executor: DbExecutor,
+  input?: { limit?: number },
+): Promise<SettlementEligibleCommunity[]> {
+  const limit = input?.limit
+  const result = await executor.execute({
+    sql: `
+      SELECT community_id, backend, provisioning_state, decommissioned_at, created_at
+      FROM community_database_routing
+      WHERE backend = 'd1'
+        AND provisioning_state = 'ready'
+        AND decommissioned_at IS NULL
+      ORDER BY created_at ASC, community_id ASC
+      ${limit === undefined ? "" : "LIMIT ?1"}
+    `,
+    args: limit === undefined ? [] : [limit],
+  })
+
+  return (result.rows ?? [])
+    .filter((row) =>
+      isSettlementEligibleRoute({
+        backend: requiredString(row, "backend") as CommunityBackend,
+        provisioning_state: requiredString(row, "provisioning_state") as CommunityProvisioningState,
+        decommissioned_at: stringOrNull(rowValue(row, "decommissioned_at")),
+      }),
+    )
+    .map((row) => ({
+      community_id: requiredString(row, "community_id"),
+      created_at: requiredString(row, "created_at"),
+    }))
+}

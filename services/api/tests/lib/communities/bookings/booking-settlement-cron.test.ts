@@ -18,7 +18,7 @@ function fakeRepo(ids: string[]): SweepBookingSettlementsInput["communityReposit
   let calls = 0
   const repo = {
     get calls() { return calls },
-    listActiveCommunities: async () => { calls += 1; return ids.map((community_id, i) => ({ community_id, created_at: new Date(1_700_000_000_000 + i).toISOString() })) },
+    listSettlementEligibleCommunities: async () => { calls += 1; return ids.map((community_id, i) => ({ community_id, created_at: new Date(1_700_000_000_000 + i).toISOString() })) },
   }
   return repo as unknown as SweepBookingSettlementsInput["communityRepository"] & { calls: number }
 }
@@ -134,8 +134,8 @@ describe("booking settlement cron — sanitized failure logging", () => {
 })
 
 describe("booking settlement cron — fatal enumeration", () => {
-  test("a failing listActiveCommunities returns a structured FATAL summary (never throws), sanitized", async () => {
-    const repo = { listActiveCommunities: async () => { throw new Error("control plane down at https://db/secret-token") } } as unknown as SweepBookingSettlementsInput["communityRepository"]
+  test("a failing listSettlementEligibleCommunities returns a structured FATAL summary (never throws), sanitized", async () => {
+    const repo = { listSettlementEligibleCommunities: async () => { throw new Error("control plane down at https://db/secret-token") } } as unknown as SweepBookingSettlementsInput["communityRepository"]
     const { result: summary, lines } = await captureConsoleError(() => sweepDueBookingSettlements({ env: envWith("true"), communityRepository: repo }))
     expect(summary.enabled).toBe(true)
     expect(summary.fatal).toBe(true)
