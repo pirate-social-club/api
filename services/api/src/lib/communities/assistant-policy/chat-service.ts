@@ -17,9 +17,12 @@ import {
   COMMUNITY_ASSISTANT_TOOLS,
   MAX_TOOL_ROUNDS,
   MAX_TOTAL_TOOL_RESULT_CHARS,
+  communityAssistantToolDefinitions,
   executeCommunityAssistantTool,
   isCommunityAssistantToolCall,
+  type CommunityAssistantPurchaseBinding,
   type CommunityAssistantToolCall,
+  type CommunityAssistantToolDefinition,
 } from "./assistant-tools"
 import { buildCommunityContext } from "./context-builder"
 import { decryptActiveCommunityOpenRouterKey } from "./credential-service"
@@ -556,6 +559,7 @@ async function requestAssistantCompletion(input: {
   timeoutMs: number
   toolChoice?: "auto" | "none"
   toolsEnabled: boolean
+  tools?: readonly CommunityAssistantToolDefinition[]
 }) {
   return requestOpenRouterChatCompletion({
     apiKey: input.apiKey,
@@ -566,7 +570,7 @@ async function requestAssistantCompletion(input: {
       model: input.model,
       messages: input.messages,
       ...(input.toolsEnabled ? {
-        tools: COMMUNITY_ASSISTANT_TOOLS,
+        tools: input.tools ?? COMMUNITY_ASSISTANT_TOOLS,
         tool_choice: input.toolChoice ?? "auto",
         parallel_tool_calls: false,
       } : {}),
@@ -585,12 +589,17 @@ async function runCommunityAssistantCompletion(input: {
   policy: CommunityAssistantPolicy
   timeoutMs: number
   userId: string | null
+  // Present only when purchasing is enabled for this chat (constructed upstream, gated on
+  // Telegram delivery + identities + config). When absent, propose_song_purchase is neither
+  // offered to the model nor dispatchable — the assistant behaves exactly as before.
+  purchaseProposal?: CommunityAssistantPurchaseBinding
 }): Promise<AssistantCompletionResult> {
   const messages = [...input.messages]
   let toolRounds = 0
   let toolCallCount = 0
   let totalToolResultChars = 0
   const toolsUsed = new Set<string>()
+  const tools = communityAssistantToolDefinitions({ purchasingEnabled: Boolean(input.purchaseProposal) })
 
   let completion = await requestAssistantCompletion({
     apiKey: input.apiKey,
@@ -599,6 +608,7 @@ async function runCommunityAssistantCompletion(input: {
     model: input.model,
     timeoutMs: input.timeoutMs,
     toolsEnabled: true,
+    tools,
   }).catch(async (error) => {
     if (!toolUnsupportedError(error)) {
       throw error
@@ -611,6 +621,7 @@ async function runCommunityAssistantCompletion(input: {
       timeoutMs: input.timeoutMs,
       toolChoice: "none",
       toolsEnabled: false,
+      tools,
     })
   })
 
@@ -654,6 +665,7 @@ async function runCommunityAssistantCompletion(input: {
         policy: input.policy,
         toolCall,
         userId: input.userId,
+        purchaseProposal: input.purchaseProposal,
       })
     const remaining = Math.max(0, MAX_TOTAL_TOOL_RESULT_CHARS - totalToolResultChars)
     const content = toolResult.content.length <= remaining

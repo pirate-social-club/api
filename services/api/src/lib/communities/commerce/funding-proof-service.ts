@@ -84,7 +84,7 @@ function topicAddress(topic: string): string | null {
   return getAddress(`0x${topic.slice(26)}`)
 }
 
-async function verifyPirateCheckoutUsdcFundingReceipt(input: {
+async function verifyBaseUsdcFundingReceipt(input: {
   env: Env
   quote: CheckoutFundingQuote
   buyerAddress: string
@@ -93,9 +93,10 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   if (testBuyerFundingVerifier) {
     return await testBuyerFundingVerifier(input)
   }
-  if (input.quote.route_provider !== "pirate_checkout") {
-    throw badRequestError("Only Pirate checkout funding receipts are supported")
-  }
+  // Provider-neutral by design: any funding source (pirate checkout today, Omniston/TON later)
+  // may have produced the underlying Base USDC tx. We never trust the provider name — the
+  // receipt is only accepted after the explicit on-chain checks below (source chain, token,
+  // recipient, sender, amount). Do NOT reintroduce a route_provider gate here.
   if (input.quote.funding_mode !== "routed") {
     throw badRequestError("Story royalty commerce requires routed checkout funding")
   }
@@ -201,7 +202,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
   if (!txRef) {
     throw badRequestError("funding_tx_ref is required")
   }
-  return await verifyPirateCheckoutUsdcFundingReceipt({
+  return await verifyBaseUsdcFundingReceipt({
     env: input.env,
     buyerAddress: input.buyerAddress,
     fundingTxRef: txRef,
@@ -249,7 +250,7 @@ export async function confirmBuyerFundingForSettlement(input: {
     return metadata
   }
   try {
-    const receipt = await verifyPirateCheckoutUsdcFundingReceipt({
+    const receipt = await verifyBaseUsdcFundingReceipt({
       env: input.env,
       quote: input.quote,
       buyerAddress: input.buyerAddress,

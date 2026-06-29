@@ -8,6 +8,12 @@ import { decodePublicPostId, publicPostId } from "../../public-ids"
 import type { Client } from "../../sql-client"
 import type { CommunityAssistantAudience } from "./context-builder"
 import type { CommunityAssistantPolicy } from "./service"
+import {
+  PROPOSE_SONG_PURCHASE_TOOL,
+  buildPurchaseProposalToolResult,
+  type PurchaseProposalDeps,
+  type PurchaseProposalToolContext,
+} from "../commerce/funding-source/purchase-proposal"
 
 const DEFAULT_TOOL_LIMIT = 5
 const MAX_TOOL_LIMIT = 10
@@ -28,7 +34,19 @@ export type CommunityAssistantToolDefinition = {
   }
 }
 
-export type CommunityAssistantToolName = "search_board" | "get_thread" | "get_my_activity"
+export type CommunityAssistantToolName =
+  | "search_board"
+  | "get_thread"
+  | "get_my_activity"
+  | "propose_song_purchase"
+
+// Binding that enables the propose_song_purchase tool. Supplied only when purchasing is available
+// for this chat (identified user, purchasing enabled). When absent the tool is neither offered nor
+// dispatchable.
+export type CommunityAssistantPurchaseBinding = {
+  context: PurchaseProposalToolContext
+  deps: PurchaseProposalDeps
+}
 
 export type CommunityAssistantToolCall = {
   id: string
@@ -46,6 +64,18 @@ export type CommunityAssistantToolExecutionInput = {
   policy: CommunityAssistantPolicy
   toolCall: CommunityAssistantToolCall
   userId: string | null
+  // Present only when purchasing is available for this chat; enables propose_song_purchase.
+  purchaseProposal?: CommunityAssistantPurchaseBinding
+}
+
+// Tool definitions to offer the model. propose_song_purchase is included only when purchasing is
+// enabled for the chat.
+export function communityAssistantToolDefinitions(options?: {
+  purchasingEnabled?: boolean
+}): readonly CommunityAssistantToolDefinition[] {
+  return options?.purchasingEnabled
+    ? [...COMMUNITY_ASSISTANT_TOOLS, PROPOSE_SONG_PURCHASE_TOOL]
+    : COMMUNITY_ASSISTANT_TOOLS
 }
 
 export const COMMUNITY_ASSISTANT_TOOLS: readonly CommunityAssistantToolDefinition[] = [
@@ -284,6 +314,23 @@ export async function executeCommunityAssistantTool(input: CommunityAssistantToo
             score: comment.score,
           })),
         }, MAX_TOOL_RESULT_CHARS),
+      }
+    }
+
+    if (name === "propose_song_purchase") {
+      if (!input.purchaseProposal) {
+        throw new Error("Purchasing is not available in this chat")
+      }
+      return {
+        name,
+        content: clipToolResult(
+          await buildPurchaseProposalToolResult(
+            args,
+            input.purchaseProposal.context,
+            input.purchaseProposal.deps,
+          ),
+          MAX_TOOL_RESULT_CHARS,
+        ),
       }
     }
 

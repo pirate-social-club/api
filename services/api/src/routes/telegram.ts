@@ -61,6 +61,14 @@ import {
 } from "../lib/telegram/join-request-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { handleConfirmSpendIntentFunding } from "../lib/communities/commerce/funding-source/confirm-funding-route"
+import { runSettlePirateCheckoutSpendIntent } from "../lib/communities/commerce/funding-source/settlement-runtime"
+import { realSpendIntentRuntimeDeps } from "../lib/communities/commerce/funding-source/settlement-runtime-deps"
+import { handleAcceptProposal } from "../lib/communities/commerce/funding-source/accept-proposal"
+import { runAcceptSpendIntentProposal } from "../lib/communities/commerce/funding-source/accept-proposal-runtime"
+import { handleCreateTelegramSpendIntentProposal, runCreateTelegramSpendIntentProposal } from "../lib/communities/commerce/funding-source/telegram-proposal"
+import { handleTonTestnetConfirm } from "../lib/communities/commerce/funding-source/confirm-ton-route"
+import { runConfirmTonTestnetFunding } from "../lib/communities/commerce/funding-source/ton-testnet-confirm-runtime"
 import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import { joinCommunity } from "../lib/communities/membership/request-service"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
@@ -2052,6 +2060,101 @@ telegram.post("/session/auto-exchange", async (c) => {
       status: summarizeTelegramJoinGrantApprovalResults(joinGrantApprovals),
     },
   }, 200)
+})
+
+// Telegram-first, pre-money purchase proposal. This creates a spend intent bound to the verified
+// Mini App user without requiring Privy/user_id or an EVM buyer wallet. It is safe only because
+// real settlement still goes through the existing quote/buyer verifier; this endpoint does not
+// move funds, unlock assets, or enable omniston_ton.
+telegram.post("/spend-intents/propose", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleCreateTelegramSpendIntentProposal(
+    { env: c.env, body, now: nowIso() },
+    {
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      createProposal: (input) => runCreateTelegramSpendIntentProposal(input),
+    },
+  )
+  return c.json(result, 201)
+})
+
+// Accept a purchase proposal and choose how to pay: proposed/approved -> funding_pending.
+// Authenticated mini-app user, intent-owner + community scoped. Returns payment instructions for
+// the selected provider. Pre-money only (purchaseComplete:false). Provider selection is gated:
+// pirate_checkout always; ton_testnet_transfer only when PIRATE_TON_TESTNET_ENABLED=true (dev);
+// omniston_ton not selectable yet.
+telegram.post("/spend-intents/accept", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleAcceptProposal(
+    { env: c.env, body, now: nowIso() },
+    {
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      tonTestnetEnabled:
+        (c.env as { PIRATE_TON_TESTNET_ENABLED?: string }).PIRATE_TON_TESTNET_ENABLED?.trim() === "true",
+      acceptProposal: (input) => runAcceptSpendIntentProposal(input),
+    },
+  )
+  return c.json(result, 200)
+})
+
+// DEV-ONLY (hidden unless PIRATE_TON_TESTNET_ENABLED=true): observe a TON testnet transfer and
+// advance the intent. Proves the Telegram Wallet / TON Connect approval + async observation loop.
+// Maps to a namespaced mock Base ref; never the real Base verifier, never settled / purchase-complete.
+telegram.post("/spend-intents/ton-testnet/confirm", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleTonTestnetConfirm(
+    { env: c.env, body, now: nowIso() },
+    {
+      tonTestnetEnabled:
+        (c.env as { PIRATE_TON_TESTNET_ENABLED?: string }).PIRATE_TON_TESTNET_ENABLED?.trim() === "true",
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      runConfirm: (input) => runConfirmTonTestnetFunding(input),
+    },
+  )
+  return c.json(result, 200)
+})
+
+// Confirm that a pirate-checkout spend intent's Base USDC funding tx landed. Authenticated
+// mini-app user only; the handler enforces intent ownership and returns funding confirmation
+// ONLY (never purchase completion / asset unlock — that is a later finalization slice).
+telegram.post("/spend-intents/confirm-funding", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleConfirmSpendIntentFunding(
+    { env: c.env, body, now: nowIso() },
+    {
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      runSettle: (input) => runSettlePirateCheckoutSpendIntent(input, realSpendIntentRuntimeDeps),
+    },
+  )
+  return c.json(result, 200)
 })
 
 telegram.post("/webhook", async (c) => {

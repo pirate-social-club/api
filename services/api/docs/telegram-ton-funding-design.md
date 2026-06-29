@@ -1,0 +1,229 @@
+# Telegram TON Funding Design
+
+Status: design note for `feature/ton-omniston-funding`.
+
+## Decision
+
+Keep Base USDC as the only canonical settlement receipt.
+
+Telegram Wallet / TON funding is a source-acquisition path only. It can help a
+Telegram user fund a spend intent without Privy, but an asset unlock must still
+come from a verified Base USDC settlement receipt.
+
+Do not make USDT-TON or any TON-side transfer a second canonical settlement
+ledger without a separate financial proof review.
+
+## Existing Invariant
+
+The current settlement verifier accepts a funding receipt only when the Base USDC
+transfer log matches:
+
+- token: configured Base USDC token
+- recipient: checkout operator / funding destination
+- sender: `buyerAddress`
+- amount: at least the expected quote amount
+- chain: configured Base chain
+
+The amount check is intentionally `>= expectedAmount`, not exact. That means a
+route that over-delivers USDC can settle without exact-out routing. Refund/dust
+handling is optional policy, not required for unlock correctness.
+
+The sender check is the load-bearing constraint for bridged TON funding. A
+TON-originating route will usually deliver Base USDC from a bridge or solver
+address, not from the buyer's EVM address. A bridged receipt therefore cannot
+pass the current direct-buyer verifier unchanged.
+
+## What Is Already Wired
+
+The branch already has the Telegram-side purchase shape:
+
+- `spend_intents.telegram_user_id` can bind an order to a verified Telegram user.
+- Mini App `init_data` verification gates Telegram confirmation routes.
+- `expectedTonPayload(spend_intent_id)` provides the required per-order TON
+  comment.
+- `ton_testnet_transfer` is explicitly a dev-only UX/state-machine simulation,
+  not a canonical funding receipt.
+- `omniston_ton` remains gated off because live settlement proof is not complete.
+
+## Why "Watch TON And Unlock" Is Rejected
+
+Watching a TON or USDT-TON transfer and unlocking directly would create a second
+canonical settlement asset. That expands the proof surface to Jetton transfer
+parsing, TON finality, treasury accounting, replay handling, refund policy, and
+cross-ledger reconciliation.
+
+That is a different architecture from this branch. The chosen architecture keeps
+one canonical receipt model and treats TON as a funding source.
+
+## Bridged Receipt Attribution Problem
+
+A bridge/solver delivery has this shape:
+
+1. Buyer signs a TON-side payment from Telegram Wallet.
+2. The TON payment carries `expectedTonPayload(spend_intent_id)`.
+3. A route swaps/bridges the value.
+4. A bridge/solver sends Base USDC to the checkout operator.
+
+The Base transfer alone is not enough to attribute the payment to a spend intent:
+
+- `from` is the bridge/solver, not the buyer.
+- `to` is the shared operator address.
+- `value >= expectedAmount` is not unique across concurrent intents.
+
+Therefore attribution must bind both legs:
+
+- TON source leg: sender, recipient, amount, and exact comment =
+  `expectedTonPayload(spend_intent_id)`.
+- Base delivery leg: token, recipient, chain, confirmed status, and
+  `amount >= expectedAmount`.
+- Route correlation: route/bridge evidence locates the Base delivery tx for this
+  intent. The lookup rule is TON source tx -> bridge/route order reference ->
+  Base USDC tx hash. The system must not discover bridged deliveries by scanning
+  shared operator inbound transfers for recipient + amount.
+
+This is a deliberate proof-model extension. It must not be implemented by simply
+trusting `route_provider` or by relaxing the existing Base verifier globally.
+
+Route/bridge evidence is correlation data only. It may tell the verifier which
+on-chain transactions to inspect, but it never substitutes for on-chain
+verification. The TON source leg and Base delivery leg must both be independently
+verified against their chain data.
+
+Amount roles:
+
+- Base delivery amount gates unlock. The Base USDC delivery must be at least the
+  expected quote amount.
+- TON source amount supports attribution, audit, and refund policy. It should
+  verify the buyer funded the selected route, but it is not itself the settlement
+  sufficiency gate.
+- Do not require brittle equality between TON source value and post-fee Base
+  output. Swap/bridge fees, route buffers, and over-delivery make equality the
+  wrong invariant.
+
+Per-intent Base destination addresses could make the Base leg self-attributing
+and reduce dependence on bridge route evidence. This remains an open alternative
+until the bridge is selected; evaluate whether the selected bridge can target
+per-order Base addresses and whether the operational/accounting cost is worth it.
+
+## Required Sequencing
+
+1. Safe wiring:
+   - Keep `omniston_ton` gated until proof is complete.
+   - Allow checkout/Mini App UI to create Telegram-bound spend intents.
+   - Return TON payment instructions with the exact spend-intent comment.
+   - Continue using `ton_testnet_transfer` for dev/test E2E of the Telegram
+     wallet approval, comment binding, and async state transitions.
+
+2. Choose the bridge:
+   - Name the TON-to-Base USDC bridge before designing live proof.
+   - Record its receipt shape, API guarantees, route identifiers, latency,
+     finality model, replay guarantees, and trust assumptions.
+   - Omniston / STON.fi is TON-native swap infrastructure; it is not by itself a
+     TON-to-Base bridge.
+
+3. Proof extension:
+   - Add a bridged-receipt attribution path scoped to the selected bridge.
+   - Verify the TON source leg with exact payload binding.
+   - Verify the Base USDC delivery leg independently.
+   - Bind both legs through route-specific evidence.
+   - Enforce idempotency: one TON source tx can satisfy at most one spend intent,
+     and one Base delivery tx/effect can be consumed once.
+   - Model dual-chain finality explicitly.
+   - Keep direct `pirate_checkout` receipts on the existing strict
+     `from == buyerAddress` path.
+
+4. Live canaries:
+   - Exercise STON.fi / Omniston plus the chosen bridge on mainnet only, with
+     tiny amounts.
+   - Reconcile source leg, Base delivery, spend intent state, purchase unlock,
+     and accounting artifacts before enabling broader traffic.
+
+## Step 1 Implementation Checklist
+
+Step 1 is ready to build now because it does not change the financial proof
+model. It must keep `omniston_ton` unavailable for real purchases and must use
+`ton_testnet_transfer` only as a labelled simulation path.
+
+Already present on this branch:
+
+- Control-plane `spend_intents` schema supports Telegram-first orders:
+  `telegram_user_id` is required, while `user_id`, `buyer_address`,
+  `community_id`, `quote_id`, and settlement refs can resolve later.
+- Telegram Mini App routes verify `init_data` before accepting or confirming
+  spend-intent actions.
+- `/telegram/spend-intents/accept` moves an intent from proposed/approved to
+  `funding_pending` and returns payment instructions.
+- `selectFundingProvider` keeps `omniston_ton` gated and only allows
+  `ton_testnet_transfer` when `PIRATE_TON_TESTNET_ENABLED=true`.
+- `ton_testnet_transfer` returns explicit test-labelled TON instructions with
+  the exact `expectedTonPayload(spend_intent_id)` comment.
+- `/telegram/spend-intents/ton-testnet/confirm` is hidden unless testnet mode is
+  enabled and advances only the simulated funding state.
+- Funding acquisition state stores route/source/Base refs with idempotency and
+  provider/status indexes.
+
+Net-new API work for Step 1:
+
+- Expose or adapt a Telegram checkout/proposal endpoint that can create a
+  Telegram-bound spend intent without requiring a Privy-backed `user_id` or an
+  already connected EVM `buyer_address`.
+- Keep existing wallet-bound `pirate_checkout` proposal behavior intact; the
+  Telegram Wallet path is a separate pre-money proposal/intent flow.
+- Known gap: a Telegram-first pre-money intent does not yet have a wired
+  proposed -> approved-with-resolved-quote path. That means
+  `pirate_checkout` via Telegram-first checkout remains intentionally
+  unreachable in Step 1; only the `ton_testnet_transfer` simulation is expected
+  to work for this path.
+- Return enough payment-instruction metadata for the Mini App to render a TON
+  testnet simulation: recipient, exact comment, test label, and current intent
+  status.
+- Add focused route tests for the Telegram-only creation path and for preserving
+  the `omniston_ton` gate.
+
+Net-new web / Mini App work for Step 1:
+
+- Detect Telegram Mini App context from `window.Telegram.WebApp.initData`.
+- On a Telegram checkout surface, offer `Pay with Telegram Wallet` only for the
+  test/simulation rail while `omniston_ton` remains gated.
+- Call the spend-intent accept endpoint with `provider=ton_testnet_transfer`
+  when test mode is enabled.
+- Render recipient, exact TON comment, and a clear test/simulation label.
+- Provide a confirm/poll action that submits the TON testnet tx hash to
+  `/telegram/spend-intents/ton-testnet/confirm`.
+- Keep non-Telegram web checkout on the existing crypto checkout path.
+
+Step 1 definition of done:
+
+- A Telegram Mini App user can create or open a proposed spend intent without
+  Privy.
+- The UI can accept the proposal with `ton_testnet_transfer` in test mode and
+  displays the exact `expectedTonPayload(spend_intent_id)` comment.
+- A simulated TON testnet transfer with the exact comment advances the intent
+  through the async funding states.
+- The flow never marks `purchaseComplete`, `fundsMoved`, `settled`, or unlocked
+  on the simulation path.
+- `omniston_ton` remains rejected for real purchase selection.
+- Focused API tests and one Mini App/browser E2E cover create-intent -> wallet
+  instructions -> TON confirm -> state update.
+
+## Open Decision
+
+Select the actual TON-to-Base USDC bridge.
+
+Until that bridge is named and its proof surface is reviewed, `omniston_ton`
+should remain unavailable for real purchases.
+
+## Open Questions For The Proof PR
+
+- Lookup contract: define the exact route/bridge order reference used to resolve
+  a TON source tx into a Base USDC tx hash.
+- Per-intent Base destination: decide whether to keep the shared operator
+  address or issue/use per-order destination addresses.
+- Underdelivery: specify what happens when the Base delivery is confirmed but
+  below the expected quote amount.
+- Bridge failure: specify refund and support handling when the TON source leg is
+  paid but no Base delivery arrives.
+- Late delivery: specify whether an expired spend intent can still settle, be
+  reopened, or require manual reconciliation.
+- Overdelivery: decide whether excess Base USDC is retained as route buffer or
+  refunded.
