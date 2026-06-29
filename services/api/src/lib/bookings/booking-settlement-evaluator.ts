@@ -29,6 +29,11 @@ function text(value: unknown): string {
   return String(value);
 }
 
+function timestampText(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  return text(value);
+}
+
 async function loadDueBooking(exec: GlobalBookingSettlementSqlExecutor, bookingId: string): Promise<DueBookingRow | null> {
   const res = await exec.execute({
     sql: `SELECT host_user_id, booker_user_id, slot_start_utc, slot_end_utc, status
@@ -41,8 +46,8 @@ async function loadDueBooking(exec: GlobalBookingSettlementSqlExecutor, bookingI
   return {
     hostUserId: text(row.host_user_id),
     bookerUserId: text(row.booker_user_id),
-    slotStartUtc: text(row.slot_start_utc),
-    slotEndUtc: text(row.slot_end_utc),
+    slotStartUtc: timestampText(row.slot_start_utc),
+    slotEndUtc: timestampText(row.slot_end_utc),
     status: text(row.status),
   };
 }
@@ -65,10 +70,10 @@ async function loadAttendanceSamples(exec: GlobalBookingSettlementSqlExecutor, b
   const booker: string[] = [];
   for (const row of sessions.rows) {
     const samples = text(row.party) === "host" ? host : booker;
-    samples.push(text(row.attached_at), text(row.last_seen_at));
+    samples.push(timestampText(row.attached_at), timestampText(row.last_seen_at));
   }
   for (const row of heartbeats.rows) {
-    (text(row.party) === "host" ? host : booker).push(text(row.seen_at));
+    (text(row.party) === "host" ? host : booker).push(timestampText(row.seen_at));
   }
   return { host, booker };
 }
