@@ -69,6 +69,8 @@ import { runAcceptSpendIntentProposal } from "../lib/communities/commerce/fundin
 import { handleCreateTelegramSpendIntentProposal, runCreateTelegramSpendIntentProposal } from "../lib/communities/commerce/funding-source/telegram-proposal"
 import { handleTonTestnetConfirm } from "../lib/communities/commerce/funding-source/confirm-ton-route"
 import { runConfirmTonTestnetFunding } from "../lib/communities/commerce/funding-source/ton-testnet-confirm-runtime"
+import { handleConfirmSimulatedOmnistonFunding, handleStartSimulatedOmnistonFunding } from "../lib/communities/commerce/funding-source/omniston-simulation-route"
+import { runConfirmSimulatedOmnistonFunding, runStartSimulatedOmnistonFunding } from "../lib/communities/commerce/funding-source/omniston-simulation-runtime"
 import { getJoinEligibility } from "../lib/communities/membership/eligibility-service"
 import { joinCommunity } from "../lib/communities/membership/request-service"
 import { openCommunityDb } from "../lib/communities/community-db-factory"
@@ -2130,6 +2132,53 @@ telegram.post("/spend-intents/ton-testnet/confirm", async (c) => {
           maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
         }),
       runConfirm: (input) => runConfirmTonTestnetFunding(input),
+    },
+  )
+  return c.json(result, 200)
+})
+
+// DEV-ONLY (hidden unless PIRATE_OMNISTON_SIM_ENABLED=true): start an omniston_ton simulation
+// intent without relaxing the production accept gate. This exists only to exercise the bridged
+// funding lifecycle with mock route evidence; it never enables real omniston_ton user selection.
+telegram.post("/spend-intents/omniston-sim/start", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleStartSimulatedOmnistonFunding(
+    { env: c.env, body, now: nowIso() },
+    {
+      omnistonSimulationEnabled:
+        (c.env as { PIRATE_OMNISTON_SIM_ENABLED?: string }).PIRATE_OMNISTON_SIM_ENABLED?.trim() === "true",
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      runStart: (input) => runStartSimulatedOmnistonFunding(input),
+    },
+  )
+  return c.json(result, 200)
+})
+
+// DEV-ONLY (hidden unless PIRATE_OMNISTON_SIM_ENABLED=true): confirm simulated bridged TON route
+// evidence. Uses namespaced mock Base refs and never calls the real Base USDC verifier.
+telegram.post("/spend-intents/omniston-sim/confirm", async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const result = await handleConfirmSimulatedOmnistonFunding(
+    { env: c.env, body, now: nowIso() },
+    {
+      omnistonSimulationEnabled:
+        (c.env as { PIRATE_OMNISTON_SIM_ENABLED?: string }).PIRATE_OMNISTON_SIM_ENABLED?.trim() === "true",
+      getCommunityRepository,
+      resolveCommunityId: (repo, identifier) => resolveCommunityIdentifier(repo, identifier),
+      verifyMiniAppUser: async ({ env, communityId, initData }) =>
+        verifyTelegramMiniAppInitData({
+          botTokens: await telegramAutoExchangeMiniAppVerificationTokens(env, communityId),
+          initData,
+          maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(env),
+        }),
+      runConfirm: (input) => runConfirmSimulatedOmnistonFunding(input),
     },
   )
   return c.json(result, 200)

@@ -174,6 +174,10 @@ The implementation work allowed before real-money testing is limited to:
   dev/test-only resolver rather than adding a second mock provider enum. This
   exercises the future provider lifecycle while keeping `omniston_ton`
   unavailable for real user selection.
+- Dev reachability must use separate routes hidden behind
+  `PIRATE_OMNISTON_SIM_ENABLED`, not the production accept-provider gate. The
+  normal `/telegram/spend-intents/accept` flow must continue rejecting
+  `omniston_ton` until the real proof extension is approved.
 - TON testnet source-leg parsing using the existing
   `ton_testnet_transfer` simulation.
 - Base Sepolia or local/forked Base USDC delivery verification for the Base leg
