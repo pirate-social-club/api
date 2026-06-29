@@ -146,10 +146,10 @@ Bridge viability decision tree:
      finality model, replay guarantees, and trust assumptions.
    - Omniston / STON.fi is TON-native swap infrastructure; it is not by itself a
      TON-to-Base bridge.
-   - No real-money dependency for this step. If STON.fi / Omniston cannot be
-     exercised on testnet, bridge selection still proceeds from provider docs,
-     API contracts, local mocks, and testnet primitives for Pirate-owned proof
-     code. Do not require a mainnet swap/bridge canary to complete Step 2.
+   - No real-money dependency for this step. Bridge selection proceeds from
+     provider docs, quote-only mainnet API contracts, captured fixtures, and
+     local mocks. Do not require a mainnet swap/bridge canary to complete Step
+     2.
 
 3. Proof extension:
    - Add a bridged-receipt attribution path scoped to the selected bridge.
@@ -164,10 +164,13 @@ Bridge viability decision tree:
 
 4. Live canaries:
    - Blocked until the team explicitly allows tiny real-money testing.
-   - Exercise STON.fi / Omniston plus the chosen bridge on mainnet only, with
-     tiny amounts.
-   - Reconcile source leg, Base delivery, spend intent state, purchase unlock,
-     and accounting artifacts before enabling broader traffic.
+   - Build the real observe/read path before the canary. The canary must use the
+     real provider tx-status lookup and real Base delivery verification with
+     unlock disabled.
+   - Exercise the chosen bridge on mainnet only, with tiny amounts sized above
+     bridge/swap minimums and fee floors.
+   - Reconcile source leg, Base delivery, spend intent state, and accounting
+     artifacts before enabling any real unlock path.
 
 ## Step 2 Bridge Evaluation Without Real Money
 
@@ -194,6 +197,9 @@ Evaluate each candidate bridge against:
 The implementation work allowed before real-money testing is limited to:
 
 - Provider adapter interfaces and fixture-based contract tests.
+- One-time quote-only mainnet API calls to capture sanitized provider fixtures.
+  Tests and CI must replay committed fixtures and must never call live Symbiosis
+  APIs.
 - Mock bridge responses that exercise successful delivery, pending delivery,
   underdelivery, late delivery, route failure, replay, and mismatched tx cases.
 - The mock bridge should use the existing `omniston_ton` provider slot under a
@@ -209,7 +215,10 @@ The implementation work allowed before real-money testing is limited to:
   this flag is not configured before shipping any build containing the
   `/telegram/spend-intents/omniston-sim/*` routes.
 - TON testnet source-leg parsing using the existing
-  `ton_testnet_transfer` simulation.
+  `ton_testnet_transfer` simulation, only for Pirate-owned Telegram UX and state
+  machine checks. Do not use Symbiosis testnet as a proxy for the real
+  TON-to-Base route if it does not expose TON testnet plus Base Sepolia/native
+  USDC in the production shape.
 - Base Sepolia or local/forked Base USDC delivery verification for the Base leg
   verifier shape.
 
@@ -224,7 +233,7 @@ research gate, not production approval.
 
 | Candidate | Current read | Fit for no-real-money Step 2 |
 | --- | --- | --- |
-| Symbiosis | Documents cross-chain swaps where one side can be TON and exposes a testnet app/API surface. It is the strongest candidate to inspect first because it is closest to the product shape: user pays from TON, route delivers on another chain. | Best provisional candidate for adapter-interface research and fixture design. Still needs proof that a route/order lookup can deterministically resolve TON source tx -> Base USDC delivery tx. |
+| Symbiosis | Documents cross-chain swaps where one side can be TON and exposes a quote API for user-signed TON messages. Its testnet config is not a faithful model for Pirate's route because it does not expose the needed TON testnet -> Base Sepolia/native-USDC shape. | Best provisional candidate for adapter-interface research and fixture design via mainnet quote-only fixtures. Still needs proof that tx lookup deterministically resolves TON source tx -> Base native-USDC delivery tx. |
 | deBridge | Strong cross-chain order/transaction tracking model, but the checked supported-chain docs did not list TON. | Not viable for this TON source path unless TON support is confirmed in current provider docs or by provider support. Keep as a comparison model for order-reference design. |
 | LayerZero | Lists both TON and Base endpoints, but this is messaging/OFT infrastructure, not a turnkey consumer bridge from Telegram Wallet TON-side funds to Base USDC. | Useful background for custom infrastructure, but too large for the immediate product rail. Not selected for Step 2 unless the team chooses to build/operate a custom OFT/bridge path. |
 | STON.fi / Omniston | TON-native swap infrastructure, and STON.fi testnet support is not available for the needed route. It is not by itself the TON -> Base bridge. | Can remain the TON-side swap component in a later design, but Step 2 must not depend on exercising it on testnet or mainnet. |
@@ -318,6 +327,37 @@ answer the attribution decision tree:
 
 Capture sanitized v2 quote fixtures and tx-lookup fixtures, then update the mock
 adapter to match that contract while keeping `omniston_ton` disabled.
+
+Corrected no-money-to-real-money ladder:
+
+1. Capture-once, replay-from-fixture:
+   - Make quote-only Symbiosis mainnet calls for TON USDT -> native Base USDC
+     using Pirate-generated per-intent Base destination addresses.
+   - Commit sanitized quote fixtures. Do not call live Symbiosis from tests or
+     CI because quote expiry, rate limits, and network failures are not product
+     behavior.
+2. Per-intent destination slice:
+   - Generate and persist a per-intent Base destination address before requesting
+     the Symbiosis quote.
+   - Treat address custody as real Step-3 work. HD-derived EOAs provide address
+     attribution but require key management and sweeping. A receiver contract may
+     reduce sweeping but moves attribution to calldata/events and may not solve
+     the missing TON memo problem.
+3. Fixture-backed observe adapter:
+   - Implement the Symbiosis tx-status parser against committed pending,
+     success, stuck/reverted, underdelivery, wrong-destination, and
+     wrong-token fixtures.
+   - Keep unlock disabled; this validates observation and attribution shape
+     only.
+4. Tiny mainnet canary:
+   - Run only after the real observe path exists. Budget for real bridge/swap
+     minimums and fees, not a nominal $1 route.
+   - Confirm Pirate can observe the source tx, locate the destination tx, verify
+     the final Base native-USDC delivery to the per-intent address, and keep the
+     spend intent locked.
+5. Real unlock:
+   - Enable only behind an explicit policy gate after the canary proves
+     attribution and accounting.
 
 Reference docs:
 
