@@ -90,6 +90,9 @@ jobs:
           echo "::group::booking lifecycle repository PG"
           timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
           echo "::endgroup::"
+          echo "::group::booking lifecycle service PG"
+          timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          echo "::endgroup::"
           echo "::group::settlement effect repository PG"
           timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
           echo "::endgroup::"

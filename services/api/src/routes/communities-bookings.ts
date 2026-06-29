@@ -13,6 +13,7 @@ import {
 } from "../lib/communities/bookings/booking-read-service"
 import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
 import { createGlobalBookingHold, resolveGlobalBookingAvailability } from "../lib/bookings/booking-hold-service"
+import { attachGlobalBookingSession, heartbeatGlobalBookingSession, startGlobalBookingSession } from "../lib/bookings/booking-lifecycle-service"
 import { getGlobalBookingForParty, listGlobalBookingsForUser } from "../lib/bookings/booking-read-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
@@ -294,9 +295,27 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // Slice D: start the 1:1 session (confirmed → live). Either party may start; no money moves.
   communities.post("/:communityId/bookings/:bookingId/start", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await startGlobalBookingSession({
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ booking: globalResult.booking, already_live: globalResult.already }, 200)
+      }
+      if (globalResult.reason !== "not_found") {
+        return c.json({ error: globalResult.reason }, 409)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await startBookingSession({
       env: c.env, communityRepository, communityId,
-      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+      bookingId, actorUserId: actor.userId, nowUtc,
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ booking: result.booking, already_live: result.already }, 200)
@@ -328,9 +347,28 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // token for the derived channel and opens an attendance session.
   communities.post("/:communityId/bookings/:bookingId/session/attach", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await attachGlobalBookingSession({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ session_id: globalResult.sessionId, party: globalResult.party, channel: globalResult.channel, agora: globalResult.agora }, 200)
+      }
+      if (globalResult.reason !== "not_found") {
+        return c.json({ error: globalResult.reason }, 409)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await attachBookingSession({
       env: c.env, communityRepository, communityId,
-      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+      bookingId, actorUserId: actor.userId, nowUtc,
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ session_id: result.sessionId, party: result.party, channel: result.channel, agora: result.agora }, 200)
@@ -342,9 +380,23 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     const body = await c.req.json<{ session_id?: unknown }>().catch(() => null)
     const sessionId = body && typeof body.session_id === "string" ? body.session_id : ""
     if (!sessionId) return c.json({ error: "invalid_payload" }, 400)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await heartbeatGlobalBookingSession({
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+        sessionId,
+      })
+      if (globalResult.ok) return c.json({ ok: true }, 200)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await heartbeatBookingSession({
       env: c.env, communityRepository, communityId,
-      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(), sessionId,
+      bookingId, actorUserId: actor.userId, nowUtc, sessionId,
     })
     if (!result.ok) return c.json({ error: result.reason }, 404)
     return c.json({ ok: true }, 200)
