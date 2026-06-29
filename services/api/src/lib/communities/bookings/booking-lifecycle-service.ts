@@ -11,6 +11,7 @@ import type { Env } from "../../../env"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
 import {
+  bookingSettlementErrorKind,
   executeBookingOperatorEffect,
   type BookingOperatorEffect,
 } from "./booking-custody-adapter"
@@ -360,7 +361,22 @@ export async function markBookingSettlementAmbiguous(input: {
 
 export type ResolveBookingSettlementReviewResult =
   | { ok: false; reason: "not_found" | "not_pending_review" | "version_conflict" | "resolution_conflict" | "invalid_resolution" }
-  | { ok: true; outcome: "resolved" | "replayed"; booking: BookingLifecycleSnapshot }
+  | { ok: true; outcome: "resolved" | "resolved_pending" | "replayed"; booking: BookingLifecycleSnapshot }
+
+// Every unfinished intent state (reserved + maybe broadcast, not yet finalized to settled/refunded).
+const UNFINISHED_INTENT_STATES = new Set<string>([
+  "completed", "no_show_booker", "no_show_host", "cancelled_by_host", "cancelled_by_booker",
+])
+
+function resolvedReviewReplayOutcome(
+  review: BookingSettlementReviewSnapshot,
+  resolution: BookingSettlementReviewResolution,
+): "replayed" | "resolved_pending" | null {
+  if (review.settlement_review_resolution !== resolution) return null
+  if (review.status === "settled" || review.status === "refunded") return "replayed"
+  if (UNFINISHED_INTENT_STATES.has(review.status)) return "resolved_pending"
+  return null
+}
 
 export async function resolveBookingSettlementReview(input: {
   env: Env
@@ -382,10 +398,11 @@ export async function resolveBookingSettlementReview(input: {
   const review = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
   if (!review) return { ok: false, reason: "not_found" }
   if (review.settlement_review_status === "resolved") {
-    if (review.settlement_review_resolution === input.resolution && (review.status === "settled" || review.status === "refunded")) {
+    const replayOutcome = resolvedReviewReplayOutcome(review, input.resolution)
+    if (replayOutcome) {
       return {
         ok: true,
-        outcome: "replayed",
+        outcome: replayOutcome,
         booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
       }
     }
@@ -431,10 +448,11 @@ export async function resolveBookingSettlementReview(input: {
   if (rowsAffected !== 1) {
     const latest = await loadSettlementReviewSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId)
     if (latest?.settlement_review_status === "resolved") {
-      return latest.settlement_review_resolution === input.resolution
+      const replayOutcome = resolvedReviewReplayOutcome(latest, input.resolution)
+      return replayOutcome
         ? {
             ok: true,
-            outcome: "replayed",
+            outcome: replayOutcome,
             booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
           }
         : { ok: false, reason: "resolution_conflict" }
@@ -442,18 +460,33 @@ export async function resolveBookingSettlementReview(input: {
     return { ok: false, reason: "version_conflict" }
   }
 
-  const reconciled = await reconcileBookingSettlement({
-    env: input.env,
-    communityRepository: input.communityRepository,
-    communityId: input.communityId,
-    bookingId: input.bookingId,
-    nowUtc: input.nowUtc,
-    confirmPollMs: input.confirmPollMs,
-  })
-  if (reconciled.outcome !== "resumed") {
-    return { ok: false, reason: "not_pending_review" }
+  try {
+    const reconciled = await reconcileBookingSettlement({
+      env: input.env,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      bookingId: input.bookingId,
+      nowUtc: input.nowUtc,
+      confirmPollMs: input.confirmPollMs,
+    })
+    if (reconciled.outcome !== "resumed") {
+      return {
+        ok: true,
+        outcome: "resolved_pending",
+        booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+      }
+    }
+    return { ok: true, outcome: "resolved", booking: reconciled.booking }
+  } catch (error) {
+    if (bookingSettlementErrorKind(error) === "pending") {
+      return {
+        ok: true,
+        outcome: "resolved_pending",
+        booking: await loadSnapshot(input.env, input.communityRepository, input.communityId, input.bookingId),
+      }
+    }
+    throw error
   }
-  return { ok: true, outcome: "resolved", booking: reconciled.booking }
 }
 
 export interface LifecycleInput {
@@ -617,11 +650,6 @@ export async function noShowBooking(input: LifecycleInput): Promise<LifecycleRes
   const settled = await executeSettlement(ctxOf(input), booking, "live", intentState, refundCents)
   return { ok: true, already: false, booking: settled }
 }
-
-// Every unfinished intent state (reserved + maybe broadcast, not yet finalized to settled/refunded).
-const UNFINISHED_INTENT_STATES = new Set<string>([
-  "completed", "no_show_booker", "no_show_host", "cancelled_by_host", "cancelled_by_booker",
-])
 
 export type ReconcileBookingSettlementResult =
   | { outcome: "skipped" }
