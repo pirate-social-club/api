@@ -183,12 +183,19 @@ export async function authenticateOperatorCredential(input: {
   const scopes = parseOperatorScopes(row.scopes_json)
   const nowIso = new Date(nowMs).toISOString()
   const thresholdIso = new Date(nowMs - LAST_USED_TOUCH_INTERVAL_MS).toISOString()
-  await touchOperatorCredentialLastUsed({
-    executor,
-    operatorCredentialId: row.operator_credential_id,
-    nowIso,
-    thresholdIso,
-  })
+  try {
+    await touchOperatorCredentialLastUsed({
+      executor,
+      operatorCredentialId: row.operator_credential_id,
+      nowIso,
+      thresholdIso,
+    })
+  } catch {
+    console.warn("[operator-credential-auth] last_used_at touch failed", {
+      operatorCredentialId: row.operator_credential_id,
+      code: "operator_credential_last_used_touch_failed",
+    })
+  }
 
   return {
     authType: "operator_credential",

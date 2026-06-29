@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import {
   authenticateOperatorCredential,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
@@ -133,6 +133,49 @@ describe("authenticateOperatorCredential", () => {
       scopes: [BOOKING_SETTLEMENT_RESOLVE_SCOPE],
     })
     expect(await lastUsedAt(client)).toBe("2026-06-29T00:00:00.000Z")
+  })
+
+  test("authenticates when the best-effort last_used_at touch fails", async () => {
+    const executor: DbExecutor = {
+      execute: async (query) => {
+        const sql = typeof query === "string" ? query : query.sql
+        if (sql.includes("FROM operator_credentials")) {
+          return {
+            rows: [{
+              operator_credential_id: "opc_seed",
+              operator_actor_id: "svc_settlement_operator",
+              secret_hash: hashOperatorCredentialSecret(SECRET),
+              secret_hash_algo: "sha256",
+              secret_hash_version: 1,
+              scopes_json: JSON.stringify([BOOKING_SETTLEMENT_RESOLVE_SCOPE]),
+              status: "active",
+              expires_at: "2026-07-28T00:00:00.000Z",
+              last_used_at: null,
+            }],
+          }
+        }
+        throw new Error("simulated_touch_failure")
+      },
+    } as DbExecutor
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const actor = await authenticateOperatorCredential({
+        env: {} as Env,
+        executor,
+        authorization: `Operator opc_seed.${SECRET}`,
+        now: () => Date.parse("2026-06-29T00:00:00.000Z"),
+      })
+      expect(actor.operatorCredentialId).toBe("opc_seed")
+      expect(warn).toHaveBeenCalledWith(
+        "[operator-credential-auth] last_used_at touch failed",
+        {
+          operatorCredentialId: "opc_seed",
+          code: "operator_credential_last_used_touch_failed",
+        },
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   test("rejects bad secret, revoked, and expired credentials", async () => {
