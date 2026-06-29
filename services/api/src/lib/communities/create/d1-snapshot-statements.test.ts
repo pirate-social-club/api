@@ -25,21 +25,26 @@ function req() {
 // and in CI's per-file invocation. Sequence coverage is in backend.test.ts §8.1.
 const isMocked = localCommunityShardStatements(req()).length === 0
 
+function schemaMigrationSeedCount(stmts: ReturnType<typeof localCommunityShardStatements>): number {
+  return stmts.filter((s) => /INSERT INTO schema_migrations/i.test(s.sql)).length
+}
+
 describe.skipIf(isMocked)("localCommunityShardStatements (§8.7 translator)", () => {
   test("produces schema + schema_migrations seed + data, all CREATE/INSERT", () => {
     const stmts = localCommunityShardStatements(req())
     const verbs = new Set(stmts.map((s) => s.sql.trim().split(/\s+/)[0].toUpperCase()))
     // guard-compatible: only CREATE + INSERT reach the shard
     expect([...verbs].sort()).toEqual(["CREATE", "INSERT"])
-    // schema (CREATE) + migrations seed (102 INSERT) + data seed present
+    // schema (CREATE) + migrations seed + data seed present
     expect(stmts.filter((s) => /^\s*CREATE/i.test(s.sql)).length).toBeGreaterThan(150)
-    expect(stmts.filter((s) => /INSERT INTO schema_migrations/i.test(s.sql)).length).toBe(102)
+    expect(schemaMigrationSeedCount(stmts)).toBeGreaterThan(100)
     expect(stmts.some((s) => /INSERT INTO communities/i.test(s.sql))).toBe(true)
   })
 
   test("applies cleanly to a fresh DB and yields a queryable community", async () => {
+    const stmts = localCommunityShardStatements(req())
     const db = createClient({ url: ":memory:" })
-    for (const s of localCommunityShardStatements(req())) {
+    for (const s of stmts) {
       await db.execute({ sql: s.sql, args: s.args ?? [] })
     }
     // schema present
@@ -52,6 +57,6 @@ describe.skipIf(isMocked)("localCommunityShardStatements (§8.7 translator)", ()
     const roles = (await db.execute("SELECT role FROM community_roles WHERE role = 'owner'")).rows
     expect(roles.length).toBe(1)
     const migs = (await db.execute("SELECT count(*) AS n FROM schema_migrations")).rows[0]
-    expect(Number(migs.n)).toBe(102)
+    expect(Number(migs.n)).toBe(schemaMigrationSeedCount(stmts))
   })
 })

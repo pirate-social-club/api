@@ -423,12 +423,14 @@ async function buildCommunityPreview(input: {
   viewerCommunityRole: CommunityPreview["viewer_community_role"]
   viewerFollowing: boolean
 }): Promise<CommunityPreview> {
+  const communitiesColumns = await input.client.execute("PRAGMA table_info(communities)")
+  const hasKaraokeEnabledColumn = communitiesColumns.rows.some((row) => String(row.name ?? "") === "karaoke_enabled")
   const localResult = await input.client.execute({
     sql: `
       SELECT display_name, description, avatar_ref, banner_ref, membership_mode,
              allow_anonymous_identity, anonymous_identity_scope,
-             donation_policy_mode, donation_partner_id, settings_json,
-             karaoke_enabled
+             donation_policy_mode, donation_partner_id, settings_json
+             ${hasKaraokeEnabledColumn ? ", karaoke_enabled" : ""}
       FROM communities
       WHERE community_id = ?1
       LIMIT 1

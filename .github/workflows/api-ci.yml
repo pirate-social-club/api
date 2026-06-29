@@ -105,6 +105,7 @@ jobs:
 
   api:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       # For the bookings production-path test (withRequestControlPlaneClients -> getControlPlaneClient ->
@@ -287,9 +288,13 @@ jobs:
         working-directory: services/api
         run: bun run lint
 
-      - name: Run API tests
+      - name: Run API unit tests
         working-directory: services/api
-        run: bun run test
+        run: bun run test:unit
+
+      - name: Run API route tests
+        working-directory: services/api
+        run: bun run test:routes
 
       - name: Run bookings production-path real-Postgres test
         # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated

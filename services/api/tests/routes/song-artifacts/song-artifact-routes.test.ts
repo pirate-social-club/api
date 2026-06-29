@@ -13,6 +13,7 @@ import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-pub
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryRoyaltyRegistrarForTests } from "../../../src/lib/story/story-royalty-registration-service"
+import { setLockedAssetDeliveryPreparerForTests } from "../../../src/lib/communities/commerce/asset-delivery"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -100,6 +101,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   globalThis.fetch = originalFetch
+  setLockedAssetDeliveryPreparerForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -645,6 +647,24 @@ describe("song artifact routes", () => {
         expiry: input.expiry,
         namespace: input.namespace,
       },
+    }))
+    setLockedAssetDeliveryPreparerForTests(async (input) => ({
+      storyStatus: "published",
+      storyPublishTxRef: "0xpublish",
+      storyIpId: "0x9999999999999999999999999999999999999999",
+      storyRoyaltyPolicyId: "0x6666666666666666666666666666666666666666",
+      storyDerivativeParentIpIdsJson: null,
+      storyRoyaltyRegistrationStatus: "registered",
+      storyAssetVersionId: "0xassetversion",
+      storyCdrVaultUuid: 4242,
+      storyNamespace: "story-namespace",
+      storyEntitlementTokenId: "1",
+      storyReadCondition: "0x1111111111111111111111111111111111111111",
+      storyWriteCondition: "0x2222222222222222222222222222222222222222",
+      lockedDeliveryStatus: "ready",
+      lockedDeliveryRef: `/communities/${input.communityId}/assets/${input.assetId}/content`,
+      lockedDeliveryStorageRef: "locked-assets/song-preview-crop-payload.bin",
+      lockedDeliveryMetadataJson: "{}",
     }))
 
     const ctx = await createRouteTestContext({

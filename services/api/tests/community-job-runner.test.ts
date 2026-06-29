@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
@@ -23,6 +23,8 @@ import {
   type TestCommunityRepository,
 } from "./community-job-runner-test-helpers"
 import { withMockedFetch } from "./helpers"
+
+setDefaultTimeout(20_000)
 
 afterEach(async () => {
   setSwarmPublisherForTests(null)

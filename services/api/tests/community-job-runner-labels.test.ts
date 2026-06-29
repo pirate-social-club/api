@@ -7,22 +7,26 @@ import { getPostById } from "../src/lib/posts/community-post-query-store"
 import type { Env } from "../src/types"
 import {
   buildCommunityRepository,
-  cleanupCommunityJobRunnerArtifacts,
-  createCommunityJobRunnerRoot,
   enqueuePostLabelJob,
   fetchCommunityJobs,
   seedCommunityLabels,
   seedCommunityState,
 } from "./community-job-runner-test-helpers"
+import {
+  cleanupCommunityTestArtifacts,
+  createCommunityTestRoot,
+} from "./community-test-helpers"
 import { withMockedFetch } from "./helpers"
 
+const cleanupPaths: string[] = []
+
 afterEach(async () => {
-  await cleanupCommunityJobRunnerArtifacts()
+  await cleanupCommunityTestArtifacts(cleanupPaths)
 })
 
 describe("community-job-runner labels", () => {
   test("materializes post labels through the community job worker", async () => {
-    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-labels-")
+    const rootDir = await createCommunityTestRoot(cleanupPaths, "pirate-community-job-labels-")
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_job_labels"
     const env: Env = {
@@ -114,7 +118,7 @@ describe("community-job-runner labels", () => {
   })
 
   test("marks post label assignments failed when OPENROUTER_API_KEY is missing", async () => {
-    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-labels-missing-key-")
+    const rootDir = await createCommunityTestRoot(cleanupPaths, "pirate-community-job-labels-missing-key-")
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_job_labels_missing_key"
     const env: Env = {

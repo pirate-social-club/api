@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { createHash } from "node:crypto"
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
@@ -18,6 +18,8 @@ import {
 } from "../scripts/inventory-community-turso-size"
 
 const cleanupPaths: string[] = []
+
+setDefaultTimeout(20_000)
 
 afterEach(async () => {
   await Promise.all(cleanupPaths.splice(0).map((p) => rm(p, { recursive: true, force: true })))

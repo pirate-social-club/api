@@ -196,6 +196,7 @@ export function buildDeletedPostStubResponse(input: {
     translated_caption: null,
     translated_embeds: null,
     song_presentation: null,
+    study_capability: null,
     derivative_sources: null,
     source_hash: "",
   }

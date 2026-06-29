@@ -291,9 +291,11 @@ export async function createControlPlaneTestClient(options?: {
       const storage = resolveLocalDevStorage({
         CONTROL_PLANE_DATABASE_URL: `file:${databasePath}`,
         LOCAL_COMMUNITY_DB_ROOT: join(tempDir, "community-dbs"),
-        // Thread PIRATE_CORE_REPO explicitly so route tests resolve migrations from the
-        // intended committed core source instead of silently picking up an adjacent checkout.
-        PIRATE_CORE_REPO: process.env.PIRATE_CORE_REPO,
+      // Route tests should be reproducible from this API worktree. By default,
+      // use the pinned API fixture migrations instead of silently picking up an
+      // adjacent local core checkout, which may be on an unrelated dirty branch.
+      // An explicit PIRATE_CORE_REPO still wins for contract/cross-repo checks.
+      PIRATE_CORE_REPO: process.env.PIRATE_CORE_REPO ?? join(serviceRoot, "test-fixtures"),
       }, serviceRoot)
       await applyLocalControlPlaneMigrations(storage)
     } else {
@@ -331,6 +333,11 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
   cleanup: () => Promise<void>
 }> {
   const releaseLock = await acquireRouteTestLock()
+  const serviceRoot = fileURLToPath(new URL("..", import.meta.url))
+  const previousCoreRepo = process.env.PIRATE_CORE_REPO
+  if (!previousCoreRepo) {
+    process.env.PIRATE_CORE_REPO = join(serviceRoot, "test-fixtures")
+  }
 
   try {
     const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
@@ -356,13 +363,26 @@ export async function createRouteTestContext(overrides: Partial<Env> = {}): Prom
       controlPlaneDatabasePath: controlPlane.databasePath,
       communityDbRoot,
       cleanup: async () => {
-        resetRuntimeCaches()
-        await controlPlane.cleanup()
-        await rm(communityDbRoot, { recursive: true, force: true })
-        await releaseLock()
+        try {
+          resetRuntimeCaches()
+          await controlPlane.cleanup()
+          await rm(communityDbRoot, { recursive: true, force: true })
+        } finally {
+          if (previousCoreRepo === undefined) {
+            delete process.env.PIRATE_CORE_REPO
+          } else {
+            process.env.PIRATE_CORE_REPO = previousCoreRepo
+          }
+          await releaseLock()
+        }
       },
     }
   } catch (error) {
+    if (previousCoreRepo === undefined) {
+      delete process.env.PIRATE_CORE_REPO
+    } else {
+      process.env.PIRATE_CORE_REPO = previousCoreRepo
+    }
     await releaseLock()
     throw error
   }

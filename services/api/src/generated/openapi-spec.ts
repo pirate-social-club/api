@@ -11466,6 +11466,10 @@ const spec = {
             "$ref": "#/components/schemas/SongPresentation",
             "nullable": true
           },
+          "study_capability": {
+            "$ref": "#/components/schemas/SongStudyCapability",
+            "nullable": true
+          },
           "viewer_gate_state": {
             "type": "object",
             "nullable": true,
@@ -12127,6 +12131,38 @@ const spec = {
             "type": "object",
             "nullable": true,
             "additionalProperties": true
+          }
+        }
+      },
+      "SongStudyCapability": {
+        "type": "object",
+        "description": "Viewer-specific display capability for the Study CTA on post cards. This is an entitlement-aware summary only; exercise content and answer validation remain exclusively behind the study endpoints.",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "locked",
+              "processing",
+              "unavailable"
+            ]
+          },
+          "exercise_count": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "source_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "target_language": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
