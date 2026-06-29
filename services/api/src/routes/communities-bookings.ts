@@ -13,7 +13,14 @@ import {
 } from "../lib/communities/bookings/booking-read-service"
 import { confirmGlobalBookingHold, quoteGlobalBookingHold } from "../lib/bookings/booking-confirm-service"
 import { createGlobalBookingHold, resolveGlobalBookingAvailability } from "../lib/bookings/booking-hold-service"
-import { attachGlobalBookingSession, heartbeatGlobalBookingSession, startGlobalBookingSession } from "../lib/bookings/booking-lifecycle-service"
+import {
+  attachGlobalBookingSession,
+  cancelGlobalBooking,
+  completeGlobalBooking,
+  heartbeatGlobalBookingSession,
+  noShowGlobalBooking,
+  startGlobalBookingSession,
+} from "../lib/bookings/booking-lifecycle-service"
 import { getGlobalBookingForParty, listGlobalBookingsForUser } from "../lib/bookings/booking-read-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getResolvedCommunityRouteContext, requireJsonBody } from "./communities-route-helpers"
@@ -278,13 +285,32 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // determines the refund policy; resolves the operator refund/payout, releases the slot lock.
   communities.post("/:communityId/bookings/:bookingId/cancel", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await cancelGlobalBooking({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+      })
+      if (globalResult.ok) {
+        return c.json({ booking: globalResult.booking, cancelled_by: globalResult.cancelledBy, already_cancelled: globalResult.already }, 200)
+      }
+      if (globalResult.reason !== "not_found") {
+        return c.json({ error: globalResult.reason }, 409)
+      }
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await cancelBooking({
       env: c.env,
       communityRepository,
       communityId,
-      bookingId: c.req.param("bookingId"),
+      bookingId,
       actorUserId: actor.userId,
-      nowUtc: new Date().toISOString(),
+      nowUtc,
     })
     if (!result.ok) {
       return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
@@ -324,9 +350,24 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // Slice D: complete a live session (live → completed → settled); pays the host. Host-only.
   communities.post("/:communityId/bookings/:bookingId/complete", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await completeGlobalBooking({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+      })
+      if (globalResult.ok) return c.json({ booking: globalResult.booking, already_settled: globalResult.already }, 200)
+      if (globalResult.reason !== "not_found") return c.json({ error: globalResult.reason }, 409)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await completeBooking({
       env: c.env, communityRepository, communityId,
-      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+      bookingId, actorUserId: actor.userId, nowUtc,
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ booking: result.booking, already_settled: result.already }, 200)
@@ -335,9 +376,24 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // Slice D: report a no-show on a live booking. The actor reports the OTHER party absent.
   communities.post("/:communityId/bookings/:bookingId/no-show", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const bookingId = c.req.param("bookingId")
+    const nowUtc = new Date().toISOString()
+    try {
+      const globalResult = await noShowGlobalBooking({
+        env: c.env,
+        executor: getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+        nowUtc,
+      })
+      if (globalResult.ok) return c.json({ booking: globalResult.booking, already_resolved: globalResult.already }, 200)
+      if (globalResult.reason !== "not_found") return c.json({ error: globalResult.reason }, 409)
+    } catch (error) {
+      if (!isMissingGlobalBookingsSchema(error)) throw error
+    }
     const result = await noShowBooking({
       env: c.env, communityRepository, communityId,
-      bookingId: c.req.param("bookingId"), actorUserId: actor.userId, nowUtc: new Date().toISOString(),
+      bookingId, actorUserId: actor.userId, nowUtc,
     })
     if (!result.ok) return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     return c.json({ booking: result.booking, already_resolved: result.already }, 200)
