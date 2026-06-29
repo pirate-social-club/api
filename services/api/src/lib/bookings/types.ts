@@ -82,6 +82,51 @@ export interface BookingHold {
   updatedAt: string;
 }
 
+export type BookingStatus =
+  | "hold"
+  | "quoted"
+  | "pending_payment"
+  | "confirmed"
+  | "live"
+  | "completed"
+  | "settled"
+  | "expired_hold"
+  | "cancelled_before_payment"
+  | "cancelled_by_host"
+  | "cancelled_by_booker"
+  | "no_show_host"
+  | "no_show_booker"
+  | "refunded"
+  | "disputed";
+
+export interface Booking {
+  bookingId: string;
+  holdId: string | null;
+  hostUserId: string;
+  bookerUserId: string;
+  slotStartUtc: string;
+  slotEndUtc: string;
+  grossCents: number;
+  platformFeeBps: number;
+  platformFeeCents: number;
+  hostPayoutCents: number;
+  refundCents: number | null;
+  status: BookingStatus;
+  fundingTxRef: string | null;
+  payoutTxRef: string | null;
+  refundTxRef: string | null;
+  fundingWalletAddress: string | null;
+  hostPayoutWalletAddress: string | null;
+  liveRoomId: string | null;
+  sourceCommunityId: string | null;
+  confirmedAt: string | null;
+  completedAt: string | null;
+  settledAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type PaymentIntentStatus =
   | "active"
   | "verifying"
