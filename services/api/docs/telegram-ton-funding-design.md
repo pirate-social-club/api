@@ -120,6 +120,10 @@ per-order Base addresses and whether the operational/accounting cost is worth it
      finality model, replay guarantees, and trust assumptions.
    - Omniston / STON.fi is TON-native swap infrastructure; it is not by itself a
      TON-to-Base bridge.
+   - No real-money dependency for this step. If STON.fi / Omniston cannot be
+     exercised on testnet, bridge selection still proceeds from provider docs,
+     API contracts, local mocks, and testnet primitives for Pirate-owned proof
+     code. Do not require a mainnet swap/bridge canary to complete Step 2.
 
 3. Proof extension:
    - Add a bridged-receipt attribution path scoped to the selected bridge.
@@ -133,10 +137,47 @@ per-order Base addresses and whether the operational/accounting cost is worth it
      `from == buyerAddress` path.
 
 4. Live canaries:
+   - Blocked until the team explicitly allows tiny real-money testing.
    - Exercise STON.fi / Omniston plus the chosen bridge on mainnet only, with
      tiny amounts.
    - Reconcile source leg, Base delivery, spend intent state, purchase unlock,
      and accounting artifacts before enabling broader traffic.
+
+## Step 2 Bridge Evaluation Without Real Money
+
+STON.fi / Omniston not supporting testnet must not force production-money
+testing during bridge selection. Step 2 should produce a bridge decision record,
+not a live canary.
+
+Evaluate each candidate bridge against:
+
+- Lookup contract: whether a TON source tx or route order id can resolve to the
+  exact Base USDC delivery tx hash.
+- On-chain proofability: whether both the TON source leg and Base delivery leg
+  can be independently verified from chain data.
+- Destination support: whether the route can deliver to a shared operator
+  address and whether per-intent Base destination addresses are supported.
+- Replay/idempotency model: whether route/order ids and tx hashes are stable
+  enough to enforce one source payment -> one spend intent -> one Base delivery.
+- Finality model: required confirmations/finality signals on both TON and Base.
+- Failure surface: underdelivery, late delivery, bridge failure, cancelled route,
+  and refund evidence.
+- Trust boundary: what bridge/provider data is used only for correlation versus
+  what is verified on-chain.
+
+The implementation work allowed before real-money testing is limited to:
+
+- Provider adapter interfaces and fixture-based contract tests.
+- Mock bridge responses that exercise successful delivery, pending delivery,
+  underdelivery, late delivery, route failure, replay, and mismatched tx cases.
+- TON testnet source-leg parsing using the existing
+  `ton_testnet_transfer` simulation.
+- Base Sepolia or local/forked Base USDC delivery verification for the Base leg
+  verifier shape.
+
+Do not enable `omniston_ton` for real users until a bridge is selected, the
+proof extension passes mocked/forked tests, and a separately approved mainnet
+canary plan exists.
 
 ## Step 1 Implementation Checklist
 
