@@ -161,6 +161,10 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
+  if (normalized.startsWith("REVOKE ")) {
+    return []
+  }
+
   // Postgres-only ownership reassignment (roles do not exist in SQLite). Same category as GRANT:
   // irrelevant to the SQLite test mirror, so skip it (e.g. migration 0122's ALTER TABLE ... OWNER TO).
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" OWNER TO ")) {

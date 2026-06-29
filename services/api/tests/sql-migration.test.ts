@@ -116,6 +116,7 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`,
   test("skips postgres-only ownership/grant statements for the sqlite mirror", () => {
     expect(toSqliteCompatibleStatement("ALTER TABLE booking_profiles OWNER TO control_plane_migrator;")).toBeNull()
     expect(toSqliteCompatibleStatement("GRANT SELECT ON booking_profiles TO control_plane_api_rw;")).toBeNull()
+    expect(toSqliteCompatibleStatement("REVOKE ALL ON TABLE operator_credentials FROM control_plane_api_rw;")).toBeNull()
     // ...even when a leading comment block is glued onto the statement by the splitter.
     expect(toSqliteCompatibleStatement(`-- ownership repair
 ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
