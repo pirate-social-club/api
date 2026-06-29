@@ -50,29 +50,39 @@ async function exec(sql: string, args: unknown[] = []): Promise<void> {
 async function applyStudyMigration(): Promise<void> {
   if (!client) throw new Error("test db not initialized")
   const existing = await client.execute("PRAGMA table_info(song_study_unit)")
-  if (existing.rows.length > 0) {
-    return
+  if (existing.rows.length <= 0) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1109_song_study.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
   }
-  const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1109_song_study.sql", import.meta.url))
-  const raw = await readFile(path, "utf8")
-  for (const statement of splitSqlStatements(raw)) {
-    for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
-      await client.execute(sqliteStatement)
+
+  const communityColumns = await client.execute("PRAGMA table_info(communities)")
+  if (!communityColumns.rows.some((row) => String(row.name) === "study_enabled")) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1115_community_study_enabled.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
     }
   }
 }
 
-async function seedCommunity(): Promise<void> {
+async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {
   await exec(`
     INSERT INTO communities (
       community_id, display_name, status, artist_governance_state,
       membership_mode, default_age_gate_policy, donation_policy_mode,
       donation_partner_status, governance_mode, created_by_user_id,
-      created_at, updated_at
+      created_at, updated_at, study_enabled
     )
     VALUES (?1, 'Study Club', 'active', 'fan_run', 'open', 'none',
-            'none', 'unconfigured', 'centralized', ?2, ?3, ?3)
-  `, [COMMUNITY_ID, AUTHOR_ID, NOW])
+            'none', 'unconfigured', 'centralized', ?2, ?3, ?3, ?4)
+  `, [COMMUNITY_ID, AUTHOR_ID, NOW, (input.studyEnabled ?? true) ? 1 : 0])
   await exec(`
     INSERT INTO community_memberships (
       membership_id, community_id, user_id, status, joined_at, created_at, updated_at
@@ -95,6 +105,25 @@ async function seedSongPost(accessMode: "public" | "locked" = "public"): Promise
             'original', 'allow', 'safe', 'none', ?4, ?4, ?5, 'ast_song',
             'public', 'Midnight Waves', 'ipfs://cover')
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW, accessMode])
+}
+
+async function setStudyEnabled(enabled: boolean): Promise<void> {
+  await exec("UPDATE communities SET study_enabled = ?1 WHERE community_id = ?2", [enabled ? 1 : 0, COMMUNITY_ID])
+}
+
+async function seedNonEnglishSongPost(): Promise<void> {
+  await exec(`
+    INSERT INTO posts (
+      post_id, community_id, author_user_id, identity_mode, post_type,
+      status, song_mode, title, lyrics, source_language, rights_basis,
+      analysis_state, content_safety_state, age_gate_policy, created_at,
+      updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+    )
+    VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+            'Olas', 'perdido en olas', 'es',
+            'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
+            'public', 'Olas', 'ipfs://cover')
+  `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
 }
 
 async function seedMultilineSongPost(): Promise<void> {
@@ -217,6 +246,50 @@ describe("post study service", () => {
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
     expect(serialized).not.toContain("correct_option_id")
+  })
+
+  test("returns unavailable without lazy generation when study is disabled", async () => {
+    await setStudyEnabled(false)
+    await seedSongPost()
+
+    let fetchCalled = false
+    const payload = await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    }))
+
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
+    expect(fetchCalled).toBe(false)
+    const units = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit")
+    expect(Number(units.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("treats a missing study_enabled column as disabled without throwing", async () => {
+    await seedSongPost()
+    await client!.execute("ALTER TABLE communities DROP COLUMN study_enabled")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
   })
 
   test("orders multiple-choice options deterministically per learner without storing per-user rows", async () => {
@@ -463,6 +536,47 @@ describe("post study service", () => {
     expect(state.rows[0]).toMatchObject({ lapses: 1, state: "learning" })
   })
 
+  test("say-it-back uses strict fallback normalization for non-English source lyrics", async () => {
+    await seedNonEnglishSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises[0]).toMatchObject({
+      reference_text: "perdido en olas",
+      type: "say_it_back",
+    })
+    const exerciseId = payload.exercises[0]?.id ?? ""
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: exerciseId,
+        idempotency_key: "study-attempt-say-spanish-fallback",
+        transcript: "perdido en ola",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("incorrect")
+    expect(result.next_review_hint).toBe("hard")
+    expect(result.feedback).toMatchObject({
+      extra: ["ola"],
+      missing: ["olas"],
+    })
+  })
+
   test("say-it-back review state is shared across target languages", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -516,6 +630,52 @@ describe("post study service", () => {
     })
 
     expect(fetchCalled).toBe(false)
+  })
+
+  test("transcription is blocked before STT when study is disabled", async () => {
+    await setStudyEnabled(false)
+    await seedSongPost()
+
+    let fetchCalled = false
+    await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => {
+      await expect(transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })).rejects.toThrow(/disabled/)
+    })
+
+    expect(fetchCalled).toBe(false)
+  })
+
+  test("attempts are blocked without writes when study is disabled", async () => {
+    await setStudyEnabled(false)
+    await seedSongPost()
+    await seedReadyPack()
+
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-disabled",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })).rejects.toThrow(/disabled/)
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
   })
 
   test("missing generated pack lazily creates say-it-back exercises from gated lyrics", async () => {

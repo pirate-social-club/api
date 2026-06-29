@@ -30,6 +30,11 @@ import {
   type CommunityKaraokePolicyPatch,
 } from "../lib/communities/community-karaoke-policy-service"
 import {
+  getCommunityStudyPolicy,
+  updateCommunityStudyPolicy,
+  type CommunityStudyPolicyPatch,
+} from "../lib/communities/community-study-policy-service"
+import {
   getCommunityAssistantPolicy,
   listCommunityAssistantModels,
   updateCommunityAssistantPolicy,
@@ -85,6 +90,30 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityKaraokePolicyPatch>(c, "Invalid community karaoke policy payload")
     const result = await updateCommunityKaraokePolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      body,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.get("/:communityId/study-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await getCommunityStudyPolicy({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/study-policy", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityStudyPolicyPatch>(c, "Invalid community study policy payload")
+    const result = await updateCommunityStudyPolicy({
       env: c.env,
       communityRepository,
       communityId,

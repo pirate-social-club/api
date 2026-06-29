@@ -5,6 +5,7 @@ import { executeFirst } from "../db-helpers"
 import { makeId, nowIso } from "../helpers"
 import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
+import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
@@ -692,6 +693,9 @@ export async function getPostStudyPayload(input: {
     if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
       throw notFoundError("Post not found")
     }
+    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
+      return basePayload({ access: "unavailable", post, targetLanguage })
+    }
     if (post.post_type !== "song") {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
@@ -876,9 +880,19 @@ function recallTokens(value: string): string[] {
     .filter((token) => token && !IGNORED_RECALL_TOKENS.has(token))
 }
 
-function tokenDiff(reference: string, transcript: string): { matched: string[]; missing: string[]; extra: string[] } {
-  const referenceTokens = recallTokens(reference)
-  const transcriptTokens = recallTokens(transcript)
+function languageAgnosticRecallTokens(value: string): string[] {
+  return normalizeForStudy(value).split(" ").filter(Boolean)
+}
+
+function recallTokensForSourceLanguage(value: string, sourceLanguage: string | null | undefined): string[] {
+  return String(sourceLanguage ?? "").toLowerCase().startsWith("en")
+    ? recallTokens(value)
+    : languageAgnosticRecallTokens(value)
+}
+
+function tokenDiff(reference: string, transcript: string, sourceLanguage: string | null | undefined): { matched: string[]; missing: string[]; extra: string[] } {
+  const referenceTokens = recallTokensForSourceLanguage(reference, sourceLanguage)
+  const transcriptTokens = recallTokensForSourceLanguage(transcript, sourceLanguage)
   const remaining = [...transcriptTokens]
   const matched: string[] = []
   const missing: string[] = []
@@ -916,17 +930,18 @@ function tokenEditDistance(left: string[], right: string[]): number {
 function gradeSayItBack(input: {
   attemptNumber: number
   reference: string
+  sourceLanguage: string | null | undefined
   transcript: string
 }): { correct: boolean; feedback: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
-  const referenceTokens = recallTokens(input.reference)
-  const transcriptTokens = recallTokens(input.transcript)
+  const referenceTokens = recallTokensForSourceLanguage(input.reference, input.sourceLanguage)
+  const transcriptTokens = recallTokensForSourceLanguage(input.transcript, input.sourceLanguage)
   const distance = tokenEditDistance(referenceTokens, transcriptTokens)
   const maxLength = Math.max(referenceTokens.length, transcriptTokens.length, 1)
   const nearMiss = distance > 0 && distance <= Math.max(1, Math.floor(maxLength * 0.25))
   const correct = distance === 0
   return {
     correct,
-    feedback: tokenDiff(input.reference, input.transcript),
+    feedback: tokenDiff(input.reference, input.transcript, input.sourceLanguage),
     rating: correct ? fsrsRatingFor("correct", input.attemptNumber) : nearMiss ? "hard" : "again",
   }
 }
@@ -1084,6 +1099,10 @@ export async function submitPostStudyAttempt(input: {
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
+    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
+      throw new HttpError(403, "forbidden", "Study is disabled for this community")
+    }
+
     const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
     const existingExercise = existing ? await getExerciseForAttempt(db.client, existing.exercise_id) : null
     if (existing && existingExercise) {
@@ -1133,7 +1152,12 @@ export async function submitPostStudyAttempt(input: {
       transcript = readRequiredString(input.body.transcript, "transcript")
       if (readString(input.body.selected_option_id)) throw badRequestError("selected_option_id is only valid for translation_choice")
       const reference = exercise.reference_text || exercise.prompt_text
-      const grade = gradeSayItBack({ attemptNumber, reference, transcript })
+      const grade = gradeSayItBack({
+        attemptNumber,
+        reference,
+        sourceLanguage: exercise.source_language,
+        transcript,
+      })
       correct = grade.correct
       feedback = grade.feedback
       rating = grade.rating
@@ -1208,6 +1232,10 @@ export async function transcribePostStudyAudio(input: {
 }): Promise<SongStudyTranscriptionResponse> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
+    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
+      throw new HttpError(403, "forbidden", "Study is disabled for this community")
+    }
+
     const post = await getStudyPostById(db.client, input.postId)
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
     if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {

@@ -1,6 +1,7 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
+import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
@@ -323,6 +324,13 @@ async function buildStudyCapability(input: {
   post: Post
   viewerUserId: string | null | undefined
 }): Promise<LocalizedPostResponse["study_capability"]> {
+  if (!await isCommunityStudyEnabled({
+    executor: input.executor,
+    communityId: input.post.community_id,
+  })) {
+    return null
+  }
+
   if (input.post.post_type !== "song") {
     return null
   }
