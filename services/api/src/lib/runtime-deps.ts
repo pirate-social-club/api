@@ -374,6 +374,29 @@ export async function withRequestControlPlaneClients<T>(operation: () => Promise
   })
 }
 
+export async function withStandaloneControlPlaneClient<T>(
+  env: Env,
+  operation: (client: Client) => Promise<T>,
+): Promise<T> {
+  const url = requireControlPlaneDbUrl(env)
+  if (!isPostgresControlPlaneUrl(url)) {
+    return await operation(getControlPlaneClient(env))
+  }
+
+  configureLocalNeonForUrl(url)
+  const client = new PostgresClientAdapter(new Pool({
+    connectionString: normalizePostgresConnectionStringForDriver(url),
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+    idleTimeoutMillis: 30_000,
+  }))
+  try {
+    return await operation(client)
+  } finally {
+    await client.close?.()
+  }
+}
+
 function getRequestScopedPostgresClient(url: string): Client | null {
   const store = requestControlPlaneStore.getStore()
   if (!store) {
