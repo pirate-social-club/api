@@ -82,6 +82,45 @@ export interface BookingHold {
   updatedAt: string;
 }
 
+export type PaymentIntentStatus =
+  | "active"
+  | "verifying"
+  | "verified"
+  | "verification_failed"
+  | "verification_rejected"
+  | "consumed"
+  | "expired"
+  | "superseded";
+
+export interface PaymentIntent {
+  paymentIntentId: string;
+  holdId: string;
+  version: number;
+  chainId: number;
+  tokenAddress: string;
+  tokenDecimals: number;
+  tokenSymbol: string;
+  recipientAddress: string;
+  amountAtomic: string;
+  grossCents: number;
+  quoteExpiresAt: string;
+  holdExpiresAt: string;
+  walletAttachmentRequired: boolean;
+  platformFeeBps: number;
+  platformFeeCents: number;
+  hostPayoutCents: number;
+  status: PaymentIntentStatus;
+  verificationClaimToken: string | null;
+  verificationClaimExpiresAt: string | null;
+  claimedTxRef: string | null;
+  verifiedSenderAddress: string | null;
+  verifiedAt: string | null;
+  consumedWalletAttachmentId: string | null;
+  consumedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Aggregate host configuration. `null` when the host has no profile row (the caller decides what an
 // unpublished/absent profile means — the repository stays policy-free).
 export interface HostConfiguration {
