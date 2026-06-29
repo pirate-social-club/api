@@ -99,6 +99,10 @@ async function finalizeBookingFromVerifiedPaymentIntent(
               AND pi.claimed_tx_ref = ?5
               AND pi.consumed_wallet_attachment_id = ?6
               AND lower(pi.verified_sender_address) = lower(?7)
+              AND EXISTS (
+                SELECT 1 FROM bookings.host_slot_locks l
+                WHERE l.hold_id = h.hold_id AND l.status = 'active'
+              )
             ON CONFLICT (booking_id) DO NOTHING
             RETURNING ${BOOKING_COLUMNS}
           ),

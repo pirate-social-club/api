@@ -184,6 +184,18 @@ describe.skipIf(!RUN)("bookings finalization repository (real Postgres)", () => 
     });
   });
 
+  test("missing active slot lock fails closed without creating a booking", async () => {
+    await seedVerifiedIntent({ holdId: "hold_final_no_lock" });
+    await repoDb.unsafe(`DELETE FROM bookings.host_slot_locks WHERE hold_id = $1`, ["hold_final_no_lock"]);
+    const repo = writeRepo();
+
+    expect(await repo.finalizeBookingFromVerifiedPaymentIntent(finalizationInput("hold_final_no_lock"))).toEqual({
+      ok: false,
+      reason: "finalization-conflict",
+    });
+    expect(await repo.getBooking(bookingIdForHold("hold_final_no_lock"))).toBeNull();
+  });
+
   test("transaction-bound finalization rolls back all booking side effects", async () => {
     await seedVerifiedIntent({ holdId: "hold_final_rollback" });
     await expect(repoDb.begin(async (tx: { unsafe(sql: string, args?: unknown[]): Promise<unknown> }) => {
