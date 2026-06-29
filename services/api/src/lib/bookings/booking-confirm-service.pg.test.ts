@@ -21,11 +21,19 @@ const TEST_DB = "bookings_confirm_service_test";
 const BUYER = "0x7000000000000000000000000000000000000007";
 const OPERATOR = "0x1000000000000000000000000000000000000001";
 const TOKEN = "0x2000000000000000000000000000000000000002";
+const BOOKING_OPERATOR = "0x4000000000000000000000000000000000000004";
+const BOOKING_TOKEN = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+const BOOKING_RPC_URL = "https://booking-sepolia.example";
 
 const env = {
-  PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "84532",
+  PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
   PIRATE_CHECKOUT_OPERATOR_ADDRESS: OPERATOR,
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS: TOKEN,
+  PIRATE_CHECKOUT_RPC_URL: "https://global-mainnet.example",
+  PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+  PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: BOOKING_OPERATOR,
+  PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: BOOKING_TOKEN,
+  PIRATE_BOOKING_SETTLEMENT_RPC_URL: BOOKING_RPC_URL,
 } as Env;
 
 function urlFor(db?: string): string {
@@ -150,16 +158,22 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect(result.quote.host_payout_cents).toBe(4750);
     expect(result.quote.payment.payment_intent_id).toBe(paymentIntentIdForHold("hold_confirm_quote"));
     expect(result.quote.payment.amount_atomic).toBe("50000000");
-    expect(result.quote.payment.recipient_address).toBe(OPERATOR);
+    expect(result.quote.payment.chain_id).toBe(84532);
+    expect(result.quote.payment.token_address).toBe(BOOKING_TOKEN);
+    expect(result.quote.payment.recipient_address).toBe(BOOKING_OPERATOR);
   });
 
   test("verifies payment, finalizes booking, consumes hold and intent, and supports exact replay", async () => {
     await seedHold({ holdId: "hold_confirm_success" });
-    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+    const verifierRpcUrls: Array<string | undefined> = [];
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef, rpcUrl }) => {
+      verifierRpcUrls.push(rpcUrl);
+      return {
       kind: "verified",
       senderAddress: BUYER,
       txRef: fundingTxRef,
-    }));
+      };
+    });
 
     const first = await confirmGlobalBookingHold({
       env,
@@ -177,6 +191,7 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect(first.booking.booking_id).toBe(bookingIdForHold("hold_confirm_success"));
     expect(first.booking.status).toBe("confirmed");
     expect(first.booking.funding_tx_ref).toBe("0xtx_success");
+    expect(verifierRpcUrls).toEqual([BOOKING_RPC_URL]);
 
     const rows = await repoDb.unsafe(`SELECT h.status AS hold_status, pi.status AS intent_status, l.booking_id, l.expires_at_utc
       FROM bookings.holds h

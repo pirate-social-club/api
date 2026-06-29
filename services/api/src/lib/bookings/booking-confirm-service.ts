@@ -15,6 +15,12 @@ import {
   paymentIntentIdForHold,
 } from "./payment-intent-repository";
 import type { Booking, BookingHold, PaymentIntent } from "./types";
+import {
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorAddress,
+  resolveBookingSettlementRpcUrl,
+  resolveBookingSettlementUsdcTokenAddress,
+} from "./booking-settlement-config";
 
 export interface BookingConfirmSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
@@ -23,8 +29,6 @@ export interface BookingConfirmSqlExecutor {
 const USDC_DECIMALS = 6;
 const USDC_SYMBOL = "USDC";
 const VERIFICATION_CLAIM_TTL_MS = 60_000;
-const BASE_SEPOLIA_CHAIN_ID = 84532;
-const BASE_SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
 
 function centsToAtomicString(cents: number): string {
   return (BigInt(cents) * 10n ** BigInt(USDC_DECIMALS - 2)).toString();
@@ -43,29 +47,10 @@ function feeSnapshot(platformFeeBps: number, grossCents: number): {
   };
 }
 
-function normalizeEvmAddress(label: string, value: string | null | undefined): string {
-  const trimmed = String(value ?? "").trim();
-  if (!/^0x[0-9a-fA-F]{40}$/u.test(trimmed)) throw new Error(`${label}_invalid`);
-  return trimmed.toLowerCase();
-}
-
-function resolveSourceChainId(env: Env): number {
-  const parsed = Number(String(env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID || "").trim());
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : BASE_SEPOLIA_CHAIN_ID;
-}
-
-function resolveUsdcTokenAddress(env: Env): string {
-  return normalizeEvmAddress("PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS", env.PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS ?? BASE_SEPOLIA_USDC);
-}
-
-function resolveOperatorAddress(env: Env): string {
-  return normalizeEvmAddress("PIRATE_CHECKOUT_OPERATOR_ADDRESS", env.PIRATE_CHECKOUT_OPERATOR_ADDRESS);
-}
-
 function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a || !b) return false;
   try {
-    return normalizeEvmAddress("a", a) === normalizeEvmAddress("b", b);
+    return a.toLowerCase() === b.toLowerCase();
   } catch {
     return false;
   }
@@ -141,6 +126,7 @@ type PaymentVerifier = (input: {
   env: Env;
   fundingTxRef: string;
   expected: BookingPaymentExpectation;
+  rpcUrl?: string;
 }) => Promise<BookingPaymentVerification>;
 
 let paymentVerifierForTests: PaymentVerifier | null = null;
@@ -186,11 +172,11 @@ async function createOrGetIntent(input: {
   const snapshot = feeSnapshot(settlement.platformFeeBps, input.hold.priceCents);
   const result = await createPaymentIntentWriteRepository(input.executor).createOrGetPaymentIntent({
     holdId: input.hold.holdId,
-    chainId: resolveSourceChainId(input.env),
-    tokenAddress: resolveUsdcTokenAddress(input.env),
+    chainId: resolveBookingSettlementChainId(input.env),
+    tokenAddress: resolveBookingSettlementUsdcTokenAddress(input.env),
     tokenDecimals: USDC_DECIMALS,
     tokenSymbol: USDC_SYMBOL,
-    recipientAddress: resolveOperatorAddress(input.env),
+    recipientAddress: resolveBookingSettlementOperatorAddress(input.env),
     amountAtomic: centsToAtomicString(input.hold.priceCents),
     grossCents: input.hold.priceCents,
     quoteExpiresAt: input.hold.expiresAtUtc,
@@ -373,6 +359,7 @@ export async function confirmGlobalBookingHold(input: {
   const outcome = await verifyPayment({
     env: input.env,
     fundingTxRef: normalizedTxRef,
+    rpcUrl: resolveBookingSettlementRpcUrl(input.env),
     expected: {
       chainId: intent.chainId,
       tokenAddress: intent.tokenAddress,

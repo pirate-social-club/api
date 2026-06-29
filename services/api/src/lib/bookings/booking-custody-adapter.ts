@@ -10,9 +10,9 @@ import {
   type OperatorSigningCoordinatorDO,
 } from "../communities/bookings/operator-signing-coordinator-do";
 import {
-  resolvePirateCheckoutOperatorAddress,
-  resolvePirateCheckoutSourceChainId,
-} from "../communities/commerce/checkout-config";
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorAddress,
+} from "./booking-settlement-config";
 import {
   createSettlementEffectWriteRepository,
   type SettlementEffectSqlExecutor,
@@ -55,7 +55,7 @@ export function setGlobalBookingSettlementConfirmPollPlanForTests(delaysMs: numb
 function realCoordinator(env: Env): GlobalBookingSettlementCoordinator {
   const ns = env.OPERATOR_SIGNING_COORDINATOR as DurableObjectNamespace<OperatorSigningCoordinatorDO> | undefined;
   if (!ns) throw badRequestError("OPERATOR_SIGNING_COORDINATOR binding is not configured");
-  const stub = ns.getByName(operatorSigningCoordinatorName(resolvePirateCheckoutOperatorAddress(env), resolvePirateCheckoutSourceChainId(env)));
+  const stub = ns.getByName(operatorSigningCoordinatorName(resolveBookingSettlementOperatorAddress(env), resolveBookingSettlementChainId(env)));
   return {
     settle: (req) => stub.settle(req),
     confirm: (req, txHash) => stub.confirm(req, txHash),
