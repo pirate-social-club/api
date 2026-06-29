@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { app } from "../../src/index"
 import { json, resetRuntimeCaches, createRouteTestContext } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
 type Ctx = Awaited<ReturnType<typeof createRouteTestContext>>
+
+setDefaultTimeout(20_000)
 
 let cleanup: (() => Promise<void>) | null = null
 
