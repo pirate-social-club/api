@@ -26,12 +26,10 @@ type TelegramCopy = {
     verifyRequired(input: TelegramStartCopyArgs): string
   }
   privateAssistant: {
-    previewCta: string
-    previewCtaFallback: string
+    intro: string
+    previewCommunityCapReached: string
     previewUnavailable: string
-    previewUnavailableFallback: string
     previewUserCapReached: string
-    previewUserCapReachedFallback: string
   }
 }
 
@@ -60,12 +58,10 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyRequired: ({ community }) => `Welcome to ${community}. Verify your Pirate account to join.`,
     },
     privateAssistant: {
-      previewCta: "Verify to unlock the full assistant.",
-      previewCtaFallback: "Send /start to verify and unlock the full assistant.",
-      previewUnavailable: "Verify and join this community to use the full assistant.",
-      previewUnavailableFallback: "Verify and join this community to use the full assistant. Send /start to continue.",
-      previewUserCapReached: "You have used today's preview messages. Verify to join and keep chatting with the full assistant.",
-      previewUserCapReachedFallback: "You have used today's preview messages. Send /start to verify and unlock the full assistant.",
+      intro: "Send a question to talk to this community assistant.",
+      previewCommunityCapReached: "This bot has reached today's free message limit. Try again tomorrow.",
+      previewUnavailable: "This community assistant is unavailable right now. Try again later.",
+      previewUserCapReached: "You've used today's free messages. Try again tomorrow.",
     },
   },
   ar: {
@@ -92,12 +88,10 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyRequired: ({ community }) => `مرحباً بك في ${community}. تحقق من حسابك في Pirate للانضمام.`,
     },
     privateAssistant: {
-      previewCta: "تحقق لفتح المساعد الكامل.",
-      previewCtaFallback: "أرسل /start للتحقق وفتح المساعد الكامل.",
-      previewUnavailable: "تحقق وانضم إلى هذا المجتمع لاستخدام المساعد الكامل.",
-      previewUnavailableFallback: "تحقق وانضم إلى هذا المجتمع لاستخدام المساعد الكامل. أرسل /start للمتابعة.",
-      previewUserCapReached: "لقد استخدمت رسائل المعاينة المتاحة اليوم. تحقق للانضمام ومتابعة الدردشة مع المساعد الكامل.",
-      previewUserCapReachedFallback: "لقد استخدمت رسائل المعاينة المتاحة اليوم. أرسل /start للتحقق وفتح المساعد الكامل.",
+      intro: "أرسل سؤالاً للتحدث مع مساعد هذا المجتمع.",
+      previewCommunityCapReached: "وصل هذا البوت إلى حد الرسائل المجانية اليوم. حاول مرة أخرى غداً.",
+      previewUnavailable: "مساعد هذا المجتمع غير متاح الآن. حاول مرة أخرى لاحقاً.",
+      previewUserCapReached: "لقد استخدمت رسائلك المجانية اليوم. حاول مرة أخرى غداً.",
     },
   },
   zh: {
@@ -124,12 +118,10 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyRequired: ({ community }) => `欢迎来到 ${community}。验证你的 Pirate 账号以加入。`,
     },
     privateAssistant: {
-      previewCta: "完成验证即可解锁完整助手。",
-      previewCtaFallback: "发送 /start 完成验证并解锁完整助手。",
-      previewUnavailable: "完成验证并加入此社区后即可使用完整助手。",
-      previewUnavailableFallback: "完成验证并加入此社区后即可使用完整助手。发送 /start 继续。",
-      previewUserCapReached: "你今天的预览消息已用完。完成验证并加入后即可继续使用完整助手聊天。",
-      previewUserCapReachedFallback: "你今天的预览消息已用完。发送 /start 完成验证并解锁完整助手。",
+      intro: "发送问题即可与此社区助手对话。",
+      previewCommunityCapReached: "此机器人今天的免费消息额度已用完。请明天再试。",
+      previewUnavailable: "此社区助手暂时不可用。请稍后再试。",
+      previewUserCapReached: "你今天的免费消息已用完。请明天再试。",
     },
   },
   ka: {
@@ -156,12 +148,10 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის გაიარეთ თქვენი Pirate ანგარიშის ვერიფიკაცია.`,
     },
     privateAssistant: {
-      previewCta: "სრული ასისტენტის გასახსნელად გაიარეთ ვერიფიკაცია.",
-      previewCtaFallback: "სრული ასისტენტის გასახსნელად გაგზავნეთ /start და გაიარეთ ვერიფიკაცია.",
-      previewUnavailable: "სრული ასისტენტის გამოსაყენებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით ამ საზოგადოებაში.",
-      previewUnavailableFallback: "სრული ასისტენტის გამოსაყენებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით ამ საზოგადოებაში. გასაგრძელებლად გაგზავნეთ /start.",
-      previewUserCapReached: "დღევანდელი საცდელი შეტყობინებები ამოიწურა. გასაგრძელებლად გაიარეთ ვერიფიკაცია და გაწევრიანდით.",
-      previewUserCapReachedFallback: "დღევანდელი საცდელი შეტყობინებები ამოიწურა. სრული ასისტენტის გასახსნელად გაგზავნეთ /start.",
+      intro: "დასვით კითხვა ამ საზოგადოების ასისტენტთან სასაუბროდ.",
+      previewCommunityCapReached: "ამ ბოტმა დღევანდელი უფასო შეტყობინებების ლიმიტს მიაღწია. ხვალ სცადეთ.",
+      previewUnavailable: "ამ საზოგადოების ასისტენტი ახლა მიუწვდომელია. მოგვიანებით სცადეთ.",
+      previewUserCapReached: "დღევანდელი უფასო შეტყობინებები ამოიწურა. ხვალ სცადეთ.",
     },
   },
 }
