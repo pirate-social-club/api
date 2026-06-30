@@ -25,6 +25,7 @@ import {
 import type { Env } from "../../../types"
 import {
   fetchLiveRoomRecordingCaptureObject,
+  LIVE_ROOM_REPLAY_RAW_MAX_BYTES,
   type LiveRoomRecordingRawArtifactRef,
 } from "./recording-ingest"
 import type { LiveRoomReplayAsset } from "./replay-assets"
@@ -185,6 +186,13 @@ function parseRawArtifactRef(value: string): LiveRoomRecordingRawArtifactRef {
   if (!record.content_hash?.trim()) {
     throw badRequestError("Replay recording artifact is missing a content hash")
   }
+  const sizeBytes = Number(record.size_bytes ?? 0)
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    throw badRequestError("Replay recording artifact is missing a valid size")
+  }
+  if (sizeBytes > LIVE_ROOM_REPLAY_RAW_MAX_BYTES) {
+    throw badRequestError(`Replay recording exceeds the ${Math.floor(LIVE_ROOM_REPLAY_RAW_MAX_BYTES / (1024 * 1024))}MB limit`)
+  }
   return {
     provider: record.provider,
     bucket: record.bucket ?? "",
@@ -193,7 +201,7 @@ function parseRawArtifactRef(value: string): LiveRoomRecordingRawArtifactRef {
     content_hash: record.content_hash,
     ipfs_cid: record.ipfs_cid ?? null,
     mime_type: record.mime_type ?? "application/octet-stream",
-    size_bytes: Number(record.size_bytes ?? 0),
+    size_bytes: sizeBytes,
   }
 }
 
