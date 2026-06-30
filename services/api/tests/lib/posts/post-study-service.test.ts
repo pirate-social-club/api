@@ -155,6 +155,21 @@ async function seedNonEnglishSongPost(): Promise<void> {
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
 }
 
+async function seedJapaneseSongPost(): Promise<void> {
+  await exec(`
+    INSERT INTO posts (
+      post_id, community_id, author_user_id, identity_mode, post_type,
+      status, song_mode, title, lyrics, source_language, rights_basis,
+      analysis_state, content_safety_state, age_gate_policy, created_at,
+      updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+    )
+    VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+            '夜の波', '夜の波に迷った', 'ja',
+            'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
+            'public', '夜の波', 'ipfs://cover')
+  `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
+}
+
 async function seedMultilineSongPost(): Promise<void> {
   await exec(`
     INSERT INTO posts (
@@ -606,6 +621,44 @@ describe("post study service", () => {
     })
   })
 
+  test("say-it-back grades partial recall for space-less source scripts", async () => {
+    await seedJapaneseSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises[0]).toMatchObject({
+      reference_text: "夜の波に迷った",
+      type: "say_it_back",
+    })
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: payload.exercises[0]?.id ?? "",
+        idempotency_key: "study-attempt-say-japanese-partial",
+        transcript: "夜の波",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("incorrect")
+    expect(result.feedback?.matched?.length ?? 0).toBeGreaterThan(0)
+    expect(result.feedback?.missing?.length ?? 0).toBeGreaterThan(0)
+  })
+
   test("say-it-back review state is shared across target languages", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -638,6 +691,61 @@ describe("post study service", () => {
       target_language: "en",
       reps: 1,
     })
+  })
+
+  test("review state schedules future due dates and grows stability", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-review-schedule-1",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const first = await client!.execute(`
+      SELECT due_at, stability
+      FROM song_study_review_state
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+      LIMIT 1
+    `, [LEARNER_ID, POST_ID])
+    const firstDue = Date.parse(String(first.rows[0]?.due_at ?? ""))
+    const firstStability = Number(first.rows[0]?.stability ?? 0)
+    expect(firstDue).toBeGreaterThan(Date.parse(NOW))
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-review-schedule-2",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const second = await client!.execute(`
+      SELECT due_at, reps, stability
+      FROM song_study_review_state
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+      LIMIT 1
+    `, [LEARNER_ID, POST_ID])
+    expect(Number(second.rows[0]?.reps ?? 0)).toBe(2)
+    expect(Number(second.rows[0]?.stability ?? 0)).toBeGreaterThan(firstStability)
+    expect(Date.parse(String(second.rows[0]?.due_at ?? ""))).toBeGreaterThan(firstDue)
   })
 
   test("transcription gates entitlement before calling STT", async () => {
