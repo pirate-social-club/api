@@ -71,6 +71,7 @@ import {
   publishFreeLiveRoomReplayAsset,
   publishLockedIncludedTicketLiveRoomReplayAsset,
   publishLockedPaidLiveRoomReplayAsset,
+  savePreparedLockedLiveRoomReplayDelivery,
   updateDraftLiveRoomReplayAsset,
   type LiveRoomReplayAllocation,
   type LiveRoomReplayAsset,
@@ -849,6 +850,20 @@ export async function publishLiveRoomReplayDraft(input: {
           replayAsset: asset,
           rawArtifactRefJson: recording.raw_artifact_ref,
         })
+        await savePreparedLockedLiveRoomReplayDelivery({
+          client: db.client,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAssetId: asset.replay_asset_id,
+          lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
+          lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
+          storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
+          storyNamespace: lockedDelivery.storyNamespace,
+          storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
+          storyReadCondition: lockedDelivery.storyReadCondition,
+          storyWriteCondition: lockedDelivery.storyWriteCondition,
+          now,
+        })
         published = await publishLockedIncludedTicketLiveRoomReplayAsset({
           client: db.client,
           communityId: input.communityId,
@@ -910,6 +925,20 @@ export async function publishLiveRoomReplayDraft(input: {
           liveRoomId: input.liveRoomId,
           replayAsset: asset,
           rawArtifactRefJson: recording.raw_artifact_ref,
+        })
+        await savePreparedLockedLiveRoomReplayDelivery({
+          client: db.client,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAssetId: asset.replay_asset_id,
+          lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
+          lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
+          storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
+          storyNamespace: lockedDelivery.storyNamespace,
+          storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
+          storyReadCondition: lockedDelivery.storyReadCondition,
+          storyWriteCondition: lockedDelivery.storyWriteCondition,
+          now,
         })
         await withTransaction(db.client, "write", async (tx) => {
           await insertCommunityListingRow(tx, input.communityId, preparedListing)

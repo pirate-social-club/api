@@ -306,6 +306,54 @@ export async function publishLockedIncludedTicketLiveRoomReplayAsset(input: {
   })
 }
 
+export async function savePreparedLockedLiveRoomReplayDelivery(input: {
+  client: LiveRoomExecutor
+  communityId: string
+  liveRoomId: string
+  replayAssetId: string
+  lockedDeliveryStorageRef: string
+  lockedDeliveryMetadataJson: string
+  storyCdrVaultUuid: number
+  storyNamespace: string
+  storyEntitlementTokenId: string
+  storyReadCondition: string
+  storyWriteCondition: string
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE live_room_replay_assets
+      SET locked_delivery_status = 'requested',
+          locked_delivery_storage_ref = ?4,
+          locked_delivery_secret_json = ?5,
+          story_cdr_vault_uuid = ?6,
+          story_namespace = ?7,
+          story_entitlement_token_id = ?8,
+          story_read_condition = ?9,
+          story_write_condition = ?10,
+          locked_delivery_error = NULL,
+          updated_at = ?11
+      WHERE community_id = ?1
+        AND live_room_id = ?2
+        AND replay_asset_id = ?3
+        AND publication_status = 'draft'
+    `,
+    args: [
+      input.communityId,
+      input.liveRoomId,
+      input.replayAssetId,
+      input.lockedDeliveryStorageRef,
+      input.lockedDeliveryMetadataJson,
+      String(input.storyCdrVaultUuid),
+      input.storyNamespace,
+      input.storyEntitlementTokenId,
+      input.storyReadCondition,
+      input.storyWriteCondition,
+      input.now,
+    ],
+  })
+}
+
 export async function publishLockedPaidLiveRoomReplayAsset(input: {
   client: LiveRoomExecutor
   communityId: string

@@ -48,6 +48,16 @@ export async function prepareIncludedTicketReplayDelivery(input: {
   rawArtifactRefJson: string
 }): Promise<LockedReplayDeliveryResult> {
   const rawArtifact = parseRawArtifactRef(input.rawArtifactRefJson)
+  const assetVersionId = deriveStoryAssetVersionId({
+    communityId: input.communityId,
+    assetId: input.replayAsset.replay_asset_id,
+    bundleId: input.liveRoomId,
+    primaryContentHash: rawArtifact.content_hash,
+  })
+  const reusable = reusablePreparedReplayDelivery(input.replayAsset, assetVersionId)
+  if (reusable) {
+    return reusable
+  }
   const readConditionAddress = resolveStoryCompositeReadConditionAddress(input.env)
   if (!readConditionAddress) {
     throw badRequestError("STORY_COMPOSITE_READ_CONDITION_ADDRESS is required for locked replay publishing")
@@ -84,12 +94,6 @@ export async function prepareIncludedTicketReplayDelivery(input: {
     bytes: ciphertext,
   })
 
-  const assetVersionId = deriveStoryAssetVersionId({
-    communityId: input.communityId,
-    assetId: input.replayAsset.replay_asset_id,
-    bundleId: input.liveRoomId,
-    primaryContentHash: rawArtifact.content_hash,
-  })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
   const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
@@ -132,6 +136,35 @@ export async function prepareIncludedTicketReplayDelivery(input: {
     storyWriteCondition: writeConditionAddress,
     lockedDeliveryStorageRef: lockedObjectKey,
     lockedDeliveryMetadataJson: JSON.stringify(metadata satisfies LockedDeliverySecret),
+  }
+}
+
+function reusablePreparedReplayDelivery(
+  replayAsset: LiveRoomReplayAsset,
+  assetVersionId: string,
+): LockedReplayDeliveryResult | null {
+  const storyCdrVaultUuid = Number(replayAsset.story_cdr_vault_uuid)
+  if (
+    !Number.isInteger(storyCdrVaultUuid)
+    || storyCdrVaultUuid <= 0
+    || !replayAsset.locked_delivery_storage_ref?.trim()
+    || !replayAsset.locked_delivery_secret_json?.trim()
+    || !replayAsset.story_namespace?.trim()
+    || !replayAsset.story_entitlement_token_id?.trim()
+    || !replayAsset.story_read_condition?.trim()
+    || !replayAsset.story_write_condition?.trim()
+  ) {
+    return null
+  }
+  return {
+    storyAssetVersionId: assetVersionId,
+    storyCdrVaultUuid,
+    storyNamespace: replayAsset.story_namespace,
+    storyEntitlementTokenId: replayAsset.story_entitlement_token_id,
+    storyReadCondition: replayAsset.story_read_condition,
+    storyWriteCondition: replayAsset.story_write_condition,
+    lockedDeliveryStorageRef: replayAsset.locked_delivery_storage_ref,
+    lockedDeliveryMetadataJson: replayAsset.locked_delivery_secret_json,
   }
 }
 
