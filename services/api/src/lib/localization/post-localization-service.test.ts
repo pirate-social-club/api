@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { buildLocalizedPostResponse } from "./post-localization-service"
+import { buildLocalizedPostFeedResponses } from "../posts/post-read-response"
 import type { DbExecutor } from "../db-helpers"
+import type { PublishedLocalizedPostFeedItem } from "../posts/community-post-feed"
+import type { Client } from "../sql-client"
 import type { Post } from "../../types"
 
 function emptyExecutor(): DbExecutor {
@@ -69,6 +72,29 @@ function studyDisabledExecutor(input: {
       return { rows: [] }
     },
   } as DbExecutor
+}
+
+function studyPolicyCountingExecutor(input: {
+  studyEnabled?: boolean
+} = {}): { executor: DbExecutor; studyPolicyQueryCount: () => number } {
+  let studyPolicyQueries = 0
+  return {
+    executor: {
+      async execute(query) {
+        const sql = typeof query === "string" ? query : query.sql
+        if (String(sql).includes("PRAGMA table_info(communities)")) {
+          studyPolicyQueries += 1
+          return { rows: [{ name: "study_enabled" }] }
+        }
+        if (String(sql).includes("SELECT study_enabled") && String(sql).includes("FROM communities")) {
+          studyPolicyQueries += 1
+          return { rows: [{ study_enabled: input.studyEnabled === false ? 0 : 1 }] }
+        }
+        return { rows: [] }
+      },
+    } as DbExecutor,
+    studyPolicyQueryCount: () => studyPolicyQueries,
+  }
 }
 
 function songArtifactExecutor(): DbExecutor {
@@ -168,6 +194,35 @@ function makeSongPost(): Post {
     age_gate_policy: "none",
     created_at: "2026-06-03T00:00:00.000Z",
     updated_at: "2026-06-03T00:00:00.000Z",
+  }
+}
+
+function makeTextPost(postId: string): Post {
+  return {
+    ...makeSongPost(),
+    post_id: postId,
+    post_type: "text",
+    title: "Text post",
+    body: "Body",
+    lyrics: null,
+    song_artifact_bundle_id: null,
+    song_title: null,
+    song_cover_art_ref: null,
+    song_duration_ms: null,
+    song_mode: null,
+    rights_basis: null,
+    upstream_asset_refs: null,
+  }
+}
+
+function makeFeedItem(post: Post): PublishedLocalizedPostFeedItem {
+  return {
+    post,
+    upvote_count: 0,
+    downvote_count: 0,
+    comment_count: 0,
+    like_count: 0,
+    viewer_vote: null,
   }
 }
 
@@ -271,6 +326,50 @@ describe("buildLocalizedPostResponse", () => {
       source_language: "en",
       target_language: null,
     })
+  })
+
+  test("feed study capability skips study policy queries for non-song posts", async () => {
+    const counted = studyPolicyCountingExecutor()
+
+    const responses = await buildLocalizedPostFeedResponses({
+      client: counted.executor as Client,
+      feedItems: [
+        makeFeedItem(makeTextPost("pst_text_1")),
+        makeFeedItem(makeTextPost("pst_text_2")),
+      ],
+      viewerUserId: "usr_fan",
+      ageGateState: null,
+    })
+
+    expect(responses.map((response) => response.study_capability)).toEqual([null, null])
+    expect(counted.studyPolicyQueryCount()).toBe(0)
+  })
+
+  test("feed study capability reuses the community study flag lookup across songs", async () => {
+    const counted = studyPolicyCountingExecutor()
+
+    const responses = await buildLocalizedPostFeedResponses({
+      client: counted.executor as Client,
+      feedItems: [
+        makeFeedItem({
+          ...makeSongPost(),
+          post_id: "pst_song_1",
+          lyrics: "Line one",
+          source_language: "en",
+        }),
+        makeFeedItem({
+          ...makeSongPost(),
+          post_id: "pst_song_2",
+          lyrics: "Line two",
+          source_language: "en",
+        }),
+      ],
+      viewerUserId: "usr_fan",
+      ageGateState: null,
+    })
+
+    expect(responses.map((response) => response.study_capability?.status)).toEqual(["ready", "ready"])
+    expect(counted.studyPolicyQueryCount()).toBe(2)
   })
 
   test("adds a locked study capability for locked songs without entitlement", async () => {

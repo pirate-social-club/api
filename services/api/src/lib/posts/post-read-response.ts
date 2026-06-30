@@ -30,6 +30,7 @@ export async function buildLocalizedPostFeedResponses(input: {
   viewerUserId: string | null
   ageGateState: AgeGateViewerState | null
 }): Promise<LocalizedPostResponse[]> {
+  const studyEnabledCache = new Map<string, Promise<boolean>>()
   return Promise.all(input.feedItems.map(async (item) => {
     const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? input.ageGateState : null
     const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, item.post.post_id)
@@ -47,6 +48,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       },
       threadSnapshot,
       ageGateViewerState,
+      studyEnabledCache,
       viewerUserId: input.viewerUserId,
     })
   }))
