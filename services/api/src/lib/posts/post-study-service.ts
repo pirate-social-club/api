@@ -1,10 +1,13 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
-import { badRequestError, conflictError, HttpError, notFoundError } from "../errors"
+import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { makeId, nowIso } from "../helpers"
 import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
+import { enqueueCommunityJob } from "../communities/jobs/store"
+import type { CommunityJobHandlerInput } from "../communities/jobs/handler-types"
+import { parseJobPayload } from "../communities/jobs/payload"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
@@ -22,6 +25,20 @@ type FsrsRating = "again" | "hard" | "good" | "easy"
 const STUDY_UNIT_GENERATION_VERSION = 1
 const STUDY_LOCALIZATION_GENERATION_VERSION = 1
 const FSRS_PARAMS_VERSION = 1
+const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
+const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
+  "ar",
+  "de",
+  "en",
+  "es",
+  "fr",
+  "hi",
+  "it",
+  "ja",
+  "ko",
+  "pt",
+  "zh",
+])
 
 type StudyPost = {
   access_mode: "public" | "locked" | null
@@ -85,6 +102,22 @@ type StudyAttemptRow = {
   selected_option_id: string | null
   transcript: string | null
   type: ExerciseType
+}
+
+type StudyReviewStateRow = {
+  difficulty: number
+  lapses: number
+  reps: number
+  stability: number
+  state: "new" | "learning" | "review" | "relearning"
+}
+
+type StudyReviewSchedule = {
+  difficulty: number
+  dueAt: string
+  lapseIncrement: 0 | 1
+  stability: number
+  state: StudyReviewStateRow["state"]
 }
 
 export type SongStudyExercise =
@@ -171,6 +204,54 @@ function readRequiredString(value: unknown, field: string): string {
   const trimmed = readString(value)
   if (!trimmed) throw badRequestError(`${field} is required`)
   return trimmed
+}
+
+function parsePositiveInteger(value: string | null | undefined): number | null {
+  if (!value) return null
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function normalizeStudyTargetLanguage(value: unknown): string {
+  const raw = readString(value) ?? "en"
+  const normalized = raw.replace(/_/gu, "-").toLowerCase()
+  const primary = normalized.split("-")[0] ?? normalized
+  const canonical = primary === "cmn" || primary === "yue" ? "zh" : primary
+  if (!/^[a-z]{2,3}$/u.test(canonical) || !SUPPORTED_STUDY_TARGET_LANGUAGES.has(canonical)) {
+    throw badRequestError("target_language is not supported")
+  }
+  return canonical
+}
+
+function resolveStudyGenerationTargetLanguageLimit(env: Env): number {
+  return parsePositiveInteger(env.SONG_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT)
+    ?? DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT
+}
+
+async function enforceStudyGenerationTargetLanguageLimit(input: {
+  client: ReadClient
+  env: Env
+  postId: string
+  targetLanguage: string
+}): Promise<void> {
+  const limit = resolveStudyGenerationTargetLanguageLimit(input.env)
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT COUNT(DISTINCT l.target_language) AS language_count,
+             SUM(CASE WHEN l.target_language = ?2 THEN 1 ELSE 0 END) AS requested_count
+      FROM song_study_unit_localization l
+      JOIN song_study_unit u ON u.id = l.unit_id
+      WHERE u.post_id = ?1
+    `,
+    args: [input.postId, input.targetLanguage],
+  }) as Record<string, unknown> | null
+  if (Number(row?.requested_count ?? 0) > 0) return
+  if (Number(row?.language_count ?? 0) >= limit) {
+    throw rateLimited("Song study translation generation limit exceeded", {
+      limit,
+      scope: "post_target_languages",
+    })
+  }
 }
 
 function readAttemptNumber(value: unknown): number {
@@ -427,7 +508,12 @@ function stripTrailingAdLibs(line: string): string {
 }
 
 function wordCount(line: string): number {
-  return line.split(/\s+/u).filter(Boolean).length
+  const normalized = normalizeForStudy(line)
+  if (!normalized) return 0
+  if (!/\s/u.test(normalized) && containsSpacelessScript(normalized)) {
+    return segmentSpacelessRecallTokens(normalized).length
+  }
+  return normalized.split(/\s+/u).filter(Boolean).length
 }
 
 function splitLyricsForStudy(lyrics: string | null): Array<{ lineId: string; lineIndex: number; text: string }> {
@@ -511,6 +597,14 @@ async function ensureStudyUnits(client: Client, post: StudyPost): Promise<StudyU
           created_at, updated_at
         )
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'ready', ?7, 2, ?8, ?8)
+        ON CONFLICT(post_id, line_id) DO UPDATE SET
+          source_language = excluded.source_language,
+          prompt_text = excluded.prompt_text,
+          reference_text = excluded.reference_text,
+          say_it_back_status = excluded.say_it_back_status,
+          unit_version = excluded.unit_version,
+          max_attempts = excluded.max_attempts,
+          updated_at = excluded.updated_at
       `,
       args: [
         makeId("stu"),
@@ -658,6 +752,105 @@ async function createReadyStudyPack(input: {
   }
 }
 
+async function hasCompleteReadyStudyLocalizations(input: {
+  client: ReadClient
+  postId: string
+  targetLanguage: string
+}): Promise<boolean> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT COUNT(u.id) AS unit_count,
+             SUM(CASE
+               WHEN l.status = 'ready'
+                AND l.localization_version >= ?3
+                AND l.translation_text IS NOT NULL
+                AND l.options_json IS NOT NULL
+                AND l.correct_option_id IS NOT NULL
+               THEN 1 ELSE 0 END) AS ready_count
+      FROM song_study_unit u
+      LEFT JOIN song_study_unit_localization l
+        ON l.unit_id = u.id
+       AND l.target_language = ?2
+      WHERE u.post_id = ?1
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION],
+  }) as Record<string, unknown> | null
+  const unitCount = Number(row?.unit_count ?? 0)
+  return unitCount > 0 && Number(row?.ready_count ?? 0) >= unitCount
+}
+
+async function markStudyLocalizationsProcessing(input: {
+  client: Client
+  targetLanguage: string
+  units: StudyUnitRow[]
+}): Promise<void> {
+  const now = nowIso()
+  for (const unit of input.units) {
+    await input.client.execute({
+      sql: `
+        INSERT INTO song_study_unit_localization (
+          id, unit_id, target_language, localization_version, status,
+          max_attempts, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, 'processing', 1, ?5, ?5)
+        ON CONFLICT(unit_id, target_language) DO UPDATE SET
+          localization_version = excluded.localization_version,
+          status = CASE
+            WHEN song_study_unit_localization.status = 'ready'
+             AND song_study_unit_localization.localization_version >= excluded.localization_version
+            THEN song_study_unit_localization.status
+            ELSE 'processing'
+          END,
+          max_attempts = excluded.max_attempts,
+          updated_at = excluded.updated_at
+      `,
+      args: [makeId("sul"), unit.id, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
+    })
+  }
+}
+
+async function enqueueStudyGenerationIfNeeded(input: {
+  client: Client
+  communityId: string
+  env: Env
+  postId: string
+  targetLanguage: string
+  units: StudyUnitRow[]
+}): Promise<void> {
+  if (!canGenerateStudyTranslations(input.env)) return
+  if (input.units.length === 0) return
+  if (await hasCompleteReadyStudyLocalizations({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })) {
+    return
+  }
+  await enforceStudyGenerationTargetLanguageLimit({
+    client: input.client,
+    env: input.env,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
+  await markStudyLocalizationsProcessing({
+    client: input.client,
+    targetLanguage: input.targetLanguage,
+    units: input.units,
+  })
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "song_study_generate",
+    subjectType: "post_study",
+    subjectId: `${input.postId}:${input.targetLanguage}`,
+    payloadJson: JSON.stringify({
+      post_id: input.postId,
+      target_language: input.targetLanguage,
+    }),
+    createdAt: nowIso(),
+  })
+}
+
 function basePayload(input: {
   access: StudyAccess
   post: StudyPost
@@ -685,7 +878,7 @@ export async function getPostStudyPayload(input: {
   postId: string
   targetLanguage?: string | null
 }): Promise<SongStudyPayload> {
-  const targetLanguage = readString(input.targetLanguage) ?? "en"
+  const targetLanguage = normalizeStudyTargetLanguage(input.targetLanguage)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const post = await getStudyPostById(db.client, input.postId)
@@ -709,20 +902,24 @@ export async function getPostStudyPayload(input: {
       }
     }
 
-    let pack = await getLatestPack({ client: db.client, postId: input.postId, targetLanguage })
-    if (!pack) {
-      pack = await createReadyStudyPack({ client: db.client, env: input.env, post, targetLanguage })
-    }
-    if (!pack) {
+    const units = await ensureStudyUnits(db.client, post)
+    if (units.length === 0) {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
         unavailable_reason: "no_lyrics",
       }
     }
-    if (pack.status === "processing") {
-      return basePayload({ access: "processing", post, targetLanguage: pack.target_language })
-    }
-    if (pack.status === "unavailable") {
+    await enqueueStudyGenerationIfNeeded({
+      client: db.client,
+      communityId: input.communityId,
+      env: input.env,
+      postId: input.postId,
+      targetLanguage,
+      units,
+    })
+
+    const pack = await getLatestPack({ client: db.client, postId: input.postId, targetLanguage })
+    if (pack?.status === "unavailable") {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
         source_language: pack.source_language ?? post.source_language,
@@ -733,23 +930,65 @@ export async function getPostStudyPayload(input: {
     const exercises = (await listExercises({
       client: db.client,
       postId: input.postId,
-      targetLanguage: pack.target_language,
+      targetLanguage,
     })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
       return {
-        ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
-        source_language: pack.source_language ?? post.source_language,
+        ...basePayload({ access: "unavailable", post, targetLanguage }),
+        source_language: pack?.source_language ?? post.source_language,
         unavailable_reason: "no_lyrics",
       }
     }
     return {
-      ...basePayload({ access: "ready", post, targetLanguage: pack.target_language }),
+      ...basePayload({ access: "ready", post, targetLanguage }),
       exercise_count: exercises.length,
       exercises,
-      generated_at: toUnixSeconds(pack.generated_at),
-      source_language: pack.source_language ?? post.source_language,
-      study_pack_version: pack.study_pack_version,
+      generated_at: toUnixSeconds(pack?.generated_at ?? null),
+      source_language: pack?.source_language ?? post.source_language,
+      study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
     }
+  } finally {
+    await db.close()
+  }
+}
+
+type SongStudyGenerateJobPayload = {
+  post_id?: string | null
+  target_language?: string | null
+}
+
+export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Promise<string | null> {
+  const payload = parseJobPayload<SongStudyGenerateJobPayload>(input.job.payload_json)
+  const postId = readString(payload?.post_id) ?? input.job.subject_id.split(":")[0] ?? input.job.subject_id
+  const targetLanguage = normalizeStudyTargetLanguage(payload?.target_language)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const post = await getStudyPostById(db.client, postId)
+    if (!post || post.community_id !== input.job.community_id || post.post_type !== "song") {
+      return "skipped:missing_song"
+    }
+    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.job.community_id })) {
+      return "skipped:study_disabled"
+    }
+    const units = await ensureStudyUnits(db.client, post)
+    if (units.length === 0) return "skipped:no_lyrics"
+    if (await hasCompleteReadyStudyLocalizations({
+      client: db.client,
+      postId,
+      targetLanguage,
+    })) {
+      return "ready:already_generated"
+    }
+    if (!canGenerateStudyTranslations(input.env)) {
+      return "skipped:openrouter_unconfigured"
+    }
+    const pack = await createReadyStudyPack({
+      client: db.client,
+      env: input.env,
+      post,
+      targetLanguage,
+    })
+    return pack?.status === "ready" ? `ready:${targetLanguage}` : "skipped:generation_unavailable"
   } finally {
     await db.close()
   }
@@ -881,7 +1120,32 @@ function recallTokens(value: string): string[] {
 }
 
 function languageAgnosticRecallTokens(value: string): string[] {
-  return normalizeForStudy(value).split(" ").filter(Boolean)
+  const normalized = normalizeForStudy(value)
+  if (!normalized) return []
+  if (/\s/u.test(normalized) || !containsSpacelessScript(normalized)) {
+    return normalized.split(" ").filter(Boolean)
+  }
+  return segmentSpacelessRecallTokens(normalized)
+}
+
+function containsSpacelessScript(value: string): boolean {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u.test(value)
+}
+
+function segmentSpacelessRecallTokens(value: string): string[] {
+  const segmenterConstructor = (Intl as typeof Intl & {
+    Segmenter?: new (locale?: string, options?: { granularity?: "grapheme" | "word" | "sentence" }) => {
+      segment(input: string): Iterable<{ segment: string; isWordLike?: boolean }>
+    }
+  }).Segmenter
+  if (segmenterConstructor) {
+    const words = Array.from(new segmenterConstructor(undefined, { granularity: "word" }).segment(value))
+      .filter((segment) => segment.isWordLike !== false)
+      .map((segment) => segment.segment.trim())
+      .filter(Boolean)
+    if (words.length > 1) return words
+  }
+  return Array.from(value).filter((token) => token.trim())
 }
 
 function recallTokensForSourceLanguage(value: string, sourceLanguage: string | null | undefined): string[] {
@@ -1030,18 +1294,121 @@ async function hasAttemptNumber(client: ReadClient, userId: string, exerciseId: 
   return Boolean(row)
 }
 
+async function getReviewState(input: {
+  client: ReadClient
+  exercise: Awaited<ReturnType<typeof getExerciseForAttempt>> & {}
+  userId: string
+}): Promise<StudyReviewStateRow | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT state, stability, difficulty, reps, lapses
+      FROM song_study_review_state
+      WHERE user_id = ?1
+        AND post_id = ?2
+        AND line_id = ?3
+        AND exercise_type = ?4
+        AND target_language = ?5
+      LIMIT 1
+    `,
+    args: [
+      input.userId,
+      input.exercise.post_id,
+      input.exercise.line_id,
+      input.exercise.exercise_type,
+      input.exercise.review_language,
+    ],
+  }) as Record<string, unknown> | null
+  return row
+    ? {
+        difficulty: Number(row.difficulty ?? 5),
+        lapses: Number(row.lapses ?? 0),
+        reps: Number(row.reps ?? 0),
+        stability: Number(row.stability ?? 1),
+        state: (readString(row.state) ?? "new") as StudyReviewStateRow["state"],
+      }
+    : null
+}
+
+function addReviewInterval(now: string, intervalMs: number): string {
+  const nowMs = Date.parse(now)
+  const baseMs = Number.isFinite(nowMs) ? nowMs : Date.now()
+  return new Date(baseMs + intervalMs).toISOString()
+}
+
+function clampReviewNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Number(value.toFixed(3))))
+}
+
+function buildReviewSchedule(input: {
+  existing: StudyReviewStateRow | null
+  now: string
+  rating: FsrsRating
+}): StudyReviewSchedule {
+  const priorReps = input.existing?.reps ?? 0
+  const priorStability = Math.max(0.25, input.existing?.stability ?? 1)
+  const priorDifficulty = Math.max(1, Math.min(10, input.existing?.difficulty ?? 5))
+  const hourMs = 60 * 60 * 1000
+  const dayMs = 24 * hourMs
+
+  if (input.rating === "again") {
+    return {
+      difficulty: clampReviewNumber(priorDifficulty + 1.2, 1, 10),
+      dueAt: addReviewInterval(input.now, 10 * 60 * 1000),
+      lapseIncrement: 1,
+      stability: clampReviewNumber(Math.max(0.25, priorStability * 0.5), 0.25, 365),
+      state: priorReps > 0 ? "relearning" : "learning",
+    }
+  }
+
+  if (input.rating === "hard") {
+    const stability = clampReviewNumber(Math.max(1, priorStability * (priorReps > 0 ? 1.2 : 1)), 0.25, 365)
+    return {
+      difficulty: clampReviewNumber(priorDifficulty + 0.35, 1, 10),
+      dueAt: addReviewInterval(input.now, Math.max(12 * hourMs, stability * dayMs)),
+      lapseIncrement: 0,
+      stability,
+      state: "review",
+    }
+  }
+
+  if (input.rating === "easy") {
+    const stability = clampReviewNumber(priorReps > 0 ? priorStability * 3.5 : 4, 0.25, 365)
+    return {
+      difficulty: clampReviewNumber(priorDifficulty - 0.8, 1, 10),
+      dueAt: addReviewInterval(input.now, stability * dayMs),
+      lapseIncrement: 0,
+      stability,
+      state: "review",
+    }
+  }
+
+  const stability = clampReviewNumber(priorReps > 0 ? priorStability * 2.5 : 2, 0.25, 365)
+  return {
+    difficulty: clampReviewNumber(priorDifficulty - 0.25, 1, 10),
+    dueAt: addReviewInterval(input.now, stability * dayMs),
+    lapseIncrement: 0,
+    stability,
+    state: "review",
+  }
+}
+
 async function upsertReviewState(input: {
-  client: Pick<ReadClient, "execute">
+  client: ReadClient
   exercise: Awaited<ReturnType<typeof getExerciseForAttempt>> & {}
   now: string
   rating: FsrsRating
   userId: string
 }): Promise<FsrsRating> {
-  const rating = input.rating
-  const remembered = rating !== "again"
-  const stability = rating === "again" ? 0.5 : rating === "hard" ? 1 : rating === "easy" ? 3 : 2
-  const difficulty = rating === "again" ? 8 : rating === "hard" ? 6 : rating === "easy" ? 3 : 4
-  const state = remembered ? "review" : "learning"
+  const existing = await getReviewState({
+    client: input.client,
+    exercise: input.exercise,
+    userId: input.userId,
+  })
+  const schedule = buildReviewSchedule({
+    existing,
+    now: input.now,
+    rating: input.rating,
+  })
   await input.client.execute({
     sql: `
       INSERT INTO song_study_review_state (
@@ -1068,17 +1435,17 @@ async function upsertReviewState(input: {
       input.exercise.line_id,
       input.exercise.exercise_type,
       input.exercise.review_language,
-      state,
-      stability,
-      difficulty,
+      schedule.state,
+      schedule.stability,
+      schedule.difficulty,
+      schedule.dueAt,
       input.now,
-      input.now,
-      remembered ? 0 : 1,
+      schedule.lapseIncrement,
       FSRS_PARAMS_VERSION,
       input.now,
     ],
   })
-  return rating
+  return input.rating
 }
 
 export async function submitPostStudyAttempt(input: {

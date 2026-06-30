@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
-import { getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
+import { getPostStudyPayload, runSongStudyGenerate, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
 import type { Env } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -45,6 +45,35 @@ function env(overrides: Partial<Env> = {}): Env {
 async function exec(sql: string, args: unknown[] = []): Promise<void> {
   if (!client) throw new Error("test db not initialized")
   await client.execute({ sql, args: args as never[] })
+}
+
+async function runStudyGenerationJob(input: {
+  env: Env
+  postId?: string
+  targetLanguage?: string
+}): Promise<string | null> {
+  return runSongStudyGenerate({
+    env: input.env,
+    communityRepository: repo as never,
+    job: {
+      job_id: "cjb_study_test",
+      community_id: COMMUNITY_ID,
+      job_type: "song_study_generate",
+      subject_type: "post_study",
+      subject_id: `${input.postId ?? POST_ID}:${input.targetLanguage ?? "es"}`,
+      status: "queued",
+      payload_json: JSON.stringify({
+        post_id: input.postId ?? POST_ID,
+        target_language: input.targetLanguage ?? "es",
+      }),
+      result_ref: null,
+      error_code: null,
+      attempt_count: 0,
+      available_at: null,
+      created_at: NOW,
+      updated_at: NOW,
+    },
+  })
 }
 
 async function applyStudyMigration(): Promise<void> {
@@ -123,6 +152,21 @@ async function seedNonEnglishSongPost(): Promise<void> {
             'Olas', 'perdido en olas', 'es',
             'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
             'public', 'Olas', 'ipfs://cover')
+  `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
+}
+
+async function seedJapaneseSongPost(): Promise<void> {
+  await exec(`
+    INSERT INTO posts (
+      post_id, community_id, author_user_id, identity_mode, post_type,
+      status, song_mode, title, lyrics, source_language, rights_basis,
+      analysis_state, content_safety_state, age_gate_policy, created_at,
+      updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+    )
+    VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+            '夜の波', '夜の波に迷った', 'ja',
+            'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
+            'public', '夜の波', 'ipfs://cover')
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
 }
 
@@ -577,6 +621,44 @@ describe("post study service", () => {
     })
   })
 
+  test("say-it-back grades partial recall for space-less source scripts", async () => {
+    await seedJapaneseSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises[0]).toMatchObject({
+      reference_text: "夜の波に迷った",
+      type: "say_it_back",
+    })
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: payload.exercises[0]?.id ?? "",
+        idempotency_key: "study-attempt-say-japanese-partial",
+        transcript: "夜の波",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("incorrect")
+    expect(result.feedback?.matched?.length ?? 0).toBeGreaterThan(0)
+    expect(result.feedback?.missing?.length ?? 0).toBeGreaterThan(0)
+  })
+
   test("say-it-back review state is shared across target languages", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -609,6 +691,61 @@ describe("post study service", () => {
       target_language: "en",
       reps: 1,
     })
+  })
+
+  test("review state schedules future due dates and grows stability", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-review-schedule-1",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const first = await client!.execute(`
+      SELECT due_at, stability
+      FROM song_study_review_state
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+      LIMIT 1
+    `, [LEARNER_ID, POST_ID])
+    const firstDue = Date.parse(String(first.rows[0]?.due_at ?? ""))
+    const firstStability = Number(first.rows[0]?.stability ?? 0)
+    expect(firstDue).toBeGreaterThan(Date.parse(NOW))
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-review-schedule-2",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const second = await client!.execute(`
+      SELECT due_at, reps, stability
+      FROM song_study_review_state
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+      LIMIT 1
+    `, [LEARNER_ID, POST_ID])
+    expect(Number(second.rows[0]?.reps ?? 0)).toBe(2)
+    expect(Number(second.rows[0]?.stability ?? 0)).toBeGreaterThan(firstStability)
+    expect(Date.parse(String(second.rows[0]?.due_at ?? ""))).toBeGreaterThan(firstDue)
   })
 
   test("transcription gates entitlement before calling STT", async () => {
@@ -706,7 +843,32 @@ describe("post study service", () => {
   test("lazy generation creates translation-choice exercises from validated provider output", async () => {
     await seedMultilineSongPost()
 
-    const payload = await withMockedFetch(() => (async () => {
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_TRANSLATION_MODEL: "test/study-generator",
+    })
+    let fetchCalledByGet = false
+    const firstPayload = await withMockedFetch(() => (async () => {
+      fetchCalledByGet = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    }))
+
+    expect(firstPayload.access).toBe("ready")
+    expect(firstPayload.exercise_count).toBe(2)
+    expect(firstPayload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    expect(fetchCalledByGet).toBe(false)
+    const processingRows = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'processing'")
+    expect(Number(processingRows.rows[0]?.count ?? 0)).toBe(2)
+
+    const jobResult = await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -742,18 +904,21 @@ describe("post study service", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => getPostStudyPayload({
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(jobResult).toBe("ready:es")
+
+    const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({
-        OPENROUTER_API_KEY: "test-openrouter-key",
-        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
-        OPENROUTER_TRANSLATION_MODEL: "test/study-generator",
-      }),
+      env: generationEnv,
       postId: POST_ID,
       targetLanguage: "es",
-    }))
+    })
 
     expect(payload.access).toBe("ready")
     expect(payload.exercise_count).toBe(4)
@@ -784,25 +949,40 @@ describe("post study service", () => {
 
   test("lazy generation falls back to say-it-back when provider output is invalid", async () => {
     await seedMultilineSongPost()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
 
-    const payload = await withMockedFetch(() => (async () => {
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [{ message: { content: JSON.stringify({ lines: [] }) } }],
       }), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => getPostStudyPayload({
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({
-        OPENROUTER_API_KEY: "test-openrouter-key",
-        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
-      }),
+      env: generationEnv,
       postId: POST_ID,
       targetLanguage: "es",
-    }))
+    })
 
     expect(payload.access).toBe("ready")
     expect(payload.exercise_count).toBe(2)
@@ -811,8 +991,21 @@ describe("post study service", () => {
 
   test("lazy generation rejects answer-equal and duplicate distractors", async () => {
     await seedMultilineSongPost()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
 
-    const payload = await withMockedFetch(() => (async () => {
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -838,17 +1031,19 @@ describe("post study service", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => getPostStudyPayload({
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({
-        OPENROUTER_API_KEY: "test-openrouter-key",
-        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
-      }),
+      env: generationEnv,
       postId: POST_ID,
       targetLanguage: "es",
-    }))
+    })
 
     expect(payload.access).toBe("ready")
     expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
@@ -859,6 +1054,10 @@ describe("post study service", () => {
   test("lazy generation regenerates stale unavailable localizations", async () => {
     await seedSongPost()
     await seedReadyPack()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
     await exec(`
       INSERT INTO song_study_unit_localization (
         id, unit_id, target_language, localization_version, status,
@@ -879,7 +1078,18 @@ describe("post study service", () => {
       WHERE target_language = 'es'
     `)
 
-    const payload = await withMockedFetch(() => (async () => {
+    const firstPayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    expect(firstPayload.access).toBe("ready")
+    expect(firstPayload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+
+    await withMockedFetch(() => (async () => {
       return new Response(JSON.stringify({
         choices: [
           {
@@ -915,17 +1125,19 @@ describe("post study service", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       })
-    }) as typeof fetch, async () => getPostStudyPayload({
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({
-        OPENROUTER_API_KEY: "test-openrouter-key",
-        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
-      }),
+      env: generationEnv,
       postId: POST_ID,
       targetLanguage: "es",
-    }))
+    })
 
     expect(payload.access).toBe("ready")
     expect(payload.exercises.some((exercise) => exercise.type === "translation_choice")).toBe(true)
@@ -936,5 +1148,108 @@ describe("post study service", () => {
     `)
     expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
     expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(1)
+  })
+
+  test("canonicalizes regional target languages before enqueueing generation", async () => {
+    await seedMultilineSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "ES-MX",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.target_language).toBe("es")
+    const rows = await client!.execute("SELECT DISTINCT target_language FROM song_study_unit_localization")
+    expect(rows.rows.map((row) => row.target_language)).toEqual(["es"])
+  })
+
+  test("rejects unsupported target languages before creating generation rows", async () => {
+    await seedMultilineSongPost()
+
+    await expect(getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "tlh",
+    })).rejects.toThrow("target_language is not supported")
+
+    const localizations = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization")
+    expect(Number(localizations.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("concurrent first reads create study units idempotently", async () => {
+    await seedMultilineSongPost()
+
+    const [left, right] = await Promise.all([
+      getPostStudyPayload({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        postId: POST_ID,
+        targetLanguage: "es",
+      }),
+      getPostStudyPayload({
+        actor: authorActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        postId: POST_ID,
+        targetLanguage: "es",
+      }),
+    ])
+
+    expect(left.access).toBe("ready")
+    expect(right.access).toBe("ready")
+    const units = await client!.execute("SELECT COUNT(*) AS count, COUNT(DISTINCT line_id) AS distinct_lines FROM song_study_unit")
+    expect(Number(units.rows[0]?.count ?? 0)).toBe(2)
+    expect(Number(units.rows[0]?.distinct_lines ?? 0)).toBe(2)
+  })
+
+  test("generation cap blocks a new target language before provider calls", async () => {
+    await seedMultilineSongPost()
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        SONG_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT: "1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    let fetchCalled = false
+    await expect(withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        SONG_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT: "1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "fr",
+    }))).rejects.toThrow("Song study translation generation limit exceeded")
+    expect(fetchCalled).toBe(false)
   })
 })

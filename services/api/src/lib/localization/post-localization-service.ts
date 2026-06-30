@@ -9,6 +9,7 @@ import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentati
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
+type StudyEnabledCache = Map<string, Promise<boolean>>
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
 
@@ -412,16 +413,22 @@ async function canStudyLockedSongPost(input: {
 async function buildStudyCapability(input: {
   executor: DbExecutor
   post: Post
+  studyEnabledCache?: StudyEnabledCache
   viewerUserId: string | null | undefined
 }): Promise<LocalizedPostResponse["study_capability"]> {
-  if (!await isCommunityStudyEnabled({
-    executor: input.executor,
-    communityId: input.post.community_id,
-  })) {
+  if (input.post.post_type !== "song") {
     return null
   }
 
-  if (input.post.post_type !== "song") {
+  let studyEnabled = input.studyEnabledCache?.get(input.post.community_id)
+  if (!studyEnabled) {
+    studyEnabled = isCommunityStudyEnabled({
+      executor: input.executor,
+      communityId: input.post.community_id,
+    })
+    input.studyEnabledCache?.set(input.post.community_id, studyEnabled)
+  }
+  if (!await studyEnabled) {
     return null
   }
 
@@ -572,6 +579,7 @@ export async function buildLocalizedPostResponse(input: {
   metrics?: Partial<PostReadMetrics>
   threadSnapshot?: CommentThreadSnapshot | null
   ageGateViewerState?: "proof_required" | "verified_allowed" | null
+  studyEnabledCache?: StudyEnabledCache
   viewerUserId?: string | null
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
@@ -598,6 +606,7 @@ export async function buildLocalizedPostResponse(input: {
     study_capability: await buildStudyCapability({
       executor: input.executor,
       post: input.post,
+      studyEnabledCache: input.studyEnabledCache,
       viewerUserId: input.viewerUserId,
     }),
     author_community_role: await getAuthorCommunityRole({
