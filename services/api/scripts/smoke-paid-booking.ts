@@ -1,5 +1,6 @@
 import { Contract, JsonRpcProvider, Wallet } from "ethers"
 import { SignJWT } from "jose"
+import { chmod, writeFile } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 
 const ERC20_ABI = [
@@ -33,7 +34,9 @@ Common options:
   --buyer-address ADDRESS              Buyer wallet to inspect for --funding-preflight-only without loading a private key.
   --allow-checkout-operator-buyer      Use PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY if the buyer key env is absent.
   --host-payout-wallet ADDRESS         Override host payout wallet. Defaults to buyer wallet when a buyer key is present.
+  --base-price-cents N                 Booking price in cents. Defaults to 100.
   --wait-for-completion                After confirm/attach/heartbeat, wait for slot start and call complete.
+  --agora-evidence-file PATH           Write booking id and host/booker Agora credentials to a 0600 JSON file after attach.
 
 Funding preflight options:
   --chain-id 8453
@@ -326,6 +329,11 @@ async function sendUsdcPayment(input: {
   return tx.hash
 }
 
+async function writeAgoraEvidenceFile(path: string, evidence: Record<string, unknown>): Promise<void> {
+  await writeFile(path, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 })
+  await chmod(path, 0o600)
+}
+
 function weekdayInTimeZone(timeZone: string): number {
   const short = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(new Date())
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(short)
@@ -340,7 +348,9 @@ async function main(): Promise<void> {
   const runId = arg("--run-id") || String(Date.now())
   const claim = flag("--claim")
   const waitForCompletion = flag("--wait-for-completion")
+  const agoraEvidenceFile = arg("--agora-evidence-file")
   const privateKeyEnv = arg("--private-key-env") || "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY"
+  const basePriceCents = arg("--base-price-cents") == null ? 100 : parsePositiveInt(arg("--base-price-cents"), "--base-price-cents")
   let privateKey = env(privateKeyEnv)
   if (!privateKey && flag("--allow-checkout-operator-buyer")) {
     privateKey = env("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY")
@@ -379,7 +389,7 @@ async function main(): Promise<void> {
     headers: bearer(host.accessToken),
     body: JSON.stringify({
       host_timezone: hostTimezone,
-      base_price_cents: 100,
+      base_price_cents: basePriceCents,
       default_slot_duration_seconds: 900,
       display_headline: `Paid booking smoke ${runId}`,
       platform_fee_bps: 1000,
@@ -517,6 +527,20 @@ async function main(): Promise<void> {
       headers: bearer(token),
       body: JSON.stringify({ session_id: sessionId }),
     }), 200)
+  }
+
+  if (agoraEvidenceFile) {
+    await writeAgoraEvidenceFile(agoraEvidenceFile, {
+      booking_id: bookingId,
+      host_agora: asRecord(hostAttach.agora),
+      booker_agora: asRecord(bookerAttach.agora),
+      live_room_id: booking.live_room_id ?? null,
+      run_id: runId,
+    })
+    console.log(JSON.stringify({
+      step: "agora_evidence_written",
+      path: agoraEvidenceFile,
+    }, null, 2))
   }
 
   let completion: Record<string, unknown> | null = null
