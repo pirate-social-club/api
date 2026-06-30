@@ -155,6 +155,10 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
+function internalUserId(userId: string): string {
+  return userId.replace(/^usr_usr_/u, "usr_")
+}
+
 function resolveCheckoutSourceChainId(env: Record<string, string | undefined>): number {
   const parsed = Number(env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID || "84532")
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 84532
@@ -365,7 +369,7 @@ async function createCommunity(input: {
     job: created.job.id,
     provisioning_state: created.community.provisioning_state ?? null,
   })
-  return created.community.id
+  return created.community.id.replace(/^com_/u, "")
 }
 
 async function waitForJob(input: {
@@ -465,7 +469,7 @@ async function publishPaidLiveRoom(input: {
           {
             role: "host",
             share_bps: 10000,
-            user: input.host.userId,
+            user: internalUserId(input.host.userId),
           },
         ],
         recording_enabled: input.recordingEnabled,
