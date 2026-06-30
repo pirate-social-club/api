@@ -3534,6 +3534,7 @@ export const apiRoutes = {
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
   communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
+  communityLiveRoomRecordingDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/recording-draft`,
   communityLiveRoomReplayDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft`,
   communityLiveRoomReplayDraftPublish: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft/publish`,
   communityLiveRoomReplayAccess: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay/access`,
