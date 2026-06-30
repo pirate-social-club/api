@@ -132,6 +132,8 @@ export async function requestStudyPackGeneration(input: {
   ) || DEFAULT_STUDY_GENERATION_MODEL
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
+  const maxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)
+    ?? DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS
   const requestedLineIds = new Set(input.lines.map((line) => line.lineId))
 
   const { content } = await requestOpenRouterChatCompletion({
@@ -142,7 +144,7 @@ export async function requestStudyPackGeneration(input: {
     body: {
       model,
       temperature: 0.2,
-      max_completion_tokens: DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS,
+      max_completion_tokens: maxCompletionTokens,
       response_format: {
         type: "json_schema",
         json_schema: {
