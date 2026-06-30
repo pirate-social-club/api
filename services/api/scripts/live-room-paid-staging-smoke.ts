@@ -78,7 +78,7 @@ Required env for staging:
 Required env for --settle-purchase:
   PIRATE_CHECKOUT_RPC_URL
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
-  PIRATE_SMOKE_BUYER_PRIVATE_KEY or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+  PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY, PIRATE_SMOKE_BUYER_PRIVATE_KEY, or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
 `)
 }
 
@@ -1272,7 +1272,8 @@ async function main(): Promise<void> {
       await completeUniqueHuman({ apiBaseUrl, session: host })
     }
 
-    const buyerPrivateKey = readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
+    const buyerPrivateKey = readEnv(env, "PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY")
+      || readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
       || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
       || null
     const buyer = await createSession({
