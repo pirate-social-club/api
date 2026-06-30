@@ -23,7 +23,10 @@ import {
   type LockedDeliverySecret,
 } from "../commerce/asset-delivery"
 import type { Env } from "../../../types"
-import type { LiveRoomRecordingRawArtifactRef } from "./recording-ingest"
+import {
+  fetchLiveRoomRecordingCaptureObject,
+  type LiveRoomRecordingRawArtifactRef,
+} from "./recording-ingest"
 import type { LiveRoomReplayAsset } from "./replay-assets"
 
 export type LockedReplayDeliveryResult = {
@@ -50,10 +53,15 @@ export async function prepareIncludedTicketReplayDelivery(input: {
     throw badRequestError("STORY_COMPOSITE_READ_CONDITION_ADDRESS is required for locked replay publishing")
   }
 
-  const source = await fetchSongArtifactBytes({
-    env: input.env,
-    objectKey: rawArtifact.object_key,
-  })
+  const source = rawArtifact.provider === "agora_capture"
+    ? await fetchLiveRoomRecordingCaptureObject({
+        env: input.env,
+        objectKey: rawArtifact.object_key,
+      })
+    : await fetchSongArtifactBytes({
+        env: input.env,
+        objectKey: rawArtifact.object_key,
+      })
   if (!source.ok) {
     const detail = await source.text().catch(() => "")
     throw badRequestError(
@@ -138,19 +146,19 @@ function parseRawArtifactRef(value: string): LiveRoomRecordingRawArtifactRef {
     throw badRequestError("Replay recording artifact metadata is invalid")
   }
   const record = parsed as Partial<LiveRoomRecordingRawArtifactRef>
-  if (record.provider !== "filebase" || !record.object_key?.trim()) {
-    throw badRequestError("Replay recording artifact is not available on Filebase")
+  if ((record.provider !== "filebase" && record.provider !== "agora_capture") || !record.object_key?.trim()) {
+    throw badRequestError("Replay recording artifact is not available")
   }
   if (!record.content_hash?.trim()) {
     throw badRequestError("Replay recording artifact is missing a content hash")
   }
   return {
-    provider: "filebase",
+    provider: record.provider,
     bucket: record.bucket ?? "",
     object_key: record.object_key,
     endpoint: record.endpoint ?? "",
     content_hash: record.content_hash,
-    ipfs_cid: record.ipfs_cid ?? "",
+    ipfs_cid: record.ipfs_cid ?? null,
     mime_type: record.mime_type ?? "application/octet-stream",
     size_bytes: Number(record.size_bytes ?? 0),
   }

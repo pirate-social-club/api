@@ -158,6 +158,7 @@ export function registerCommunityLiveRoomRoutes(communities: Hono<AuthenticatedE
       liveRoomId: c.req.param("liveRoomId"),
       communityRepository,
       userRepository,
+      rangeHeader: c.req.header("range"),
     })
   })
 
