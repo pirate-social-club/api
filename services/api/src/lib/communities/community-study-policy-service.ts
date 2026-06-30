@@ -68,6 +68,43 @@ async function ensureCommunityStudyPolicyColumn(client: CommunityColumnClient): 
   }
 }
 
+function isMissingStudyEnabledColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:no such column|unknown column|column .*study_enabled.* does not exist|no column named study_enabled)/iu.test(message)
+}
+
+export async function updateStudyPolicyRow(input: {
+  client: Client
+  communityId: string
+  studyEnabled: boolean
+  updatedAt: string
+}): Promise<void> {
+  const update = () =>
+    input.client.execute({
+      sql: `
+        UPDATE communities
+        SET study_enabled = ?2,
+            updated_at = ?3
+        WHERE community_id = ?1
+      `,
+      args: [
+        input.communityId,
+        input.studyEnabled ? 1 : 0,
+        input.updatedAt,
+      ],
+    })
+
+  try {
+    await update()
+  } catch (error) {
+    if (!isMissingStudyEnabledColumnError(error)) {
+      throw error
+    }
+    await ensureCommunityStudyPolicyColumn(input.client)
+    await update()
+  }
+}
+
 async function ensureCommunityStudyPolicyRow(input: {
   client: Client
   community: CommunityRow
@@ -221,19 +258,11 @@ export async function updateCommunityStudyPolicy(input: {
       community,
       now,
     })
-    await ensureCommunityStudyPolicyColumn(db.client)
-    await db.client.execute({
-      sql: `
-        UPDATE communities
-        SET study_enabled = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [
-        input.communityId,
-        body.study_enabled ? 1 : 0,
-        now,
-      ],
+    await updateStudyPolicyRow({
+      client: db.client,
+      communityId: input.communityId,
+      studyEnabled: body.study_enabled === true,
+      updatedAt: now,
     })
   } finally {
     db.close()
