@@ -24,7 +24,7 @@ type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
 
 const STUDY_UNIT_GENERATION_VERSION = 1
-const STUDY_LOCALIZATION_GENERATION_VERSION = 3
+const STUDY_LOCALIZATION_GENERATION_VERSION = 4
 const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10

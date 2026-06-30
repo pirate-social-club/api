@@ -1483,7 +1483,7 @@ describe("post study service", () => {
       WHERE target_language = 'es' AND status = 'ready'
     `)
     expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
-    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(3)
+    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(4)
   })
 
   test("canonicalizes regional target languages before enqueueing generation", async () => {
