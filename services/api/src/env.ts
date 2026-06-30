@@ -30,12 +30,17 @@ export type Env = {
   /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
   COMMUNITY_D1_SHARD?: ShardRpc
   /**
-   * Step 5: shared secret for the shard's admin RPCs, consulted ONLY by the
-   * D1-native reconciler scheduled task (reconciler-host.ts). Present only on a
-   * reconciler host (the d1-staging worker); absent elsewhere, where the sweep
-   * is a no-op. Must equal the shard's own SHARD_ADMIN_TOKEN secret.
+   * Step 5: shared secret for the shard's admin RPCs, consulted by the
+   * D1-native reconciler scheduled task (reconciler-host.ts). Must equal the
+   * shard's own SHARD_ADMIN_TOKEN secret.
    */
   SHARD_ADMIN_TOKEN?: string
+  /**
+   * Dedicated reconciler hosts set this to "true" so their cron runs only D1
+   * provisioning reconciliation. Main API workers must leave it unset so normal
+   * scheduled tasks, including community job processing, still run.
+   */
+  COMMUNITY_D1_RECONCILER_ONLY?: string
   /**
    * Opt-in selector for D1-native provisioning (new communities born on D1).
    * "d1_native" selects the D1-native backend; any other value (or absent) keeps

@@ -682,27 +682,22 @@ const handler: ExportedHandler<Env> = {
     // independently). Bounded concurrency caps peak connections; the deadline
     // bounds when new connections stop opening (it does NOT cancel in-flight
     // jobs — see runner docs / overlap caveat).
-    // A D1 reconciler host (has SHARD_ADMIN_TOKEN + the shard binding) runs ONLY
-    // the reconciler — it is a DEDICATED reconciler worker, NOT a second full API.
-    // Its SCHEDULED_CRON_LOCK DO is its own (not shared with the main API worker),
-    // so running the general batch here would DOUBLE-PROCESS the shared control
-    // plane (settlements, community jobs, projections). The main API worker has no
-    // SHARD_ADMIN_TOKEN, so it runs the general batch and skips the reconciler.
-    const isD1ReconcilerHost = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
-    const jobs: NamedTask[] = (
-      isD1ReconcilerHost
-        ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }]
-        : [
-            { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
-            { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
-            { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
-            { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
-            { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
-            { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
-            { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
-            { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
-          ]
-    ).map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
+    const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
+    const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
+    const generalJobs: NamedTask[] = [
+      { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
+      { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
+      { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
+      { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
+      { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
+      { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
+      { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
+      { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
+    ]
+    const jobs: NamedTask[] = [
+      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
+      ...(reconcilerOnly ? [] : generalJobs),
+    ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
     // Rotate the start order each minute so a deadline-trimmed tail never starves
     // the same jobs run after run.
     const minute = Math.floor((controller.scheduledTime || Date.now()) / 60_000)
