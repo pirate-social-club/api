@@ -8,6 +8,7 @@ import {
   parsePositiveAtomic,
   parsePositiveInt,
   resolveHostPayoutWallet,
+  validateCompletedCanaryBooking,
   validateFundingReadiness,
   validateQuotePaymentFields,
 } from "../scripts/smoke-paid-booking"
@@ -114,5 +115,33 @@ describe("smoke-paid-booking script guards", () => {
       settlementNativeWei: 0n,
       requiredTokenAtomic: 1_000_000n,
     })).toThrow("paid booking canary funding preflight failed")
+  })
+
+  test("accepts a settled final canary booking with matching tx refs", () => {
+    expect(() => validateCompletedCanaryBooking({
+      booking: {
+        booking_id: "bkg_final",
+        status: "settled",
+        funding_tx_ref: `0x${"1".repeat(64)}`,
+        payout_tx_ref: `0x${"2".repeat(64)}`,
+        live_room_id: "pirate-booking-bkg_final",
+      },
+      bookingId: "bkg_final",
+      fundingTxRef: `0x${"1".repeat(64)}`,
+    })).not.toThrow()
+  })
+
+  test("rejects incomplete final canary booking state", () => {
+    expect(() => validateCompletedCanaryBooking({
+      booking: {
+        booking_id: "bkg_final",
+        status: "confirmed",
+        funding_tx_ref: `0x${"3".repeat(64)}`,
+        payout_tx_ref: null,
+        live_room_id: null,
+      },
+      bookingId: "bkg_final",
+      fundingTxRef: `0x${"1".repeat(64)}`,
+    })).toThrow("paid booking canary final verification failed")
   })
 })

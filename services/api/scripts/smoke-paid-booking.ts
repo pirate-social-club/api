@@ -44,7 +44,7 @@ Prod funding preflight:
   bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
 
 Prod full canary:
-  bun run smoke:paid-booking -- --origin https://api.pirate.sc --run-id 20260630-prod-paid-canary --claim
+  bun run smoke:paid-booking -- --origin https://api.pirate.sc --run-id 20260630-prod-paid-canary --claim --wait-for-completion
 `
 
 function arg(name: string): string | null {
@@ -132,6 +132,36 @@ export function validateFundingReadiness(input: {
   }
   if (failures.length > 0) {
     throw new Error(`paid booking canary funding preflight failed: ${failures.join("; ")}`)
+  }
+}
+
+export function validateCompletedCanaryBooking(input: {
+  booking: Record<string, unknown>
+  bookingId: string
+  fundingTxRef: string
+}): void {
+  const failures: string[] = []
+  const status = String(input.booking.status ?? "")
+  const fundingTxRef = String(input.booking.funding_tx_ref ?? "")
+  const payoutTxRef = String(input.booking.payout_tx_ref ?? "")
+  const liveRoomId = String(input.booking.live_room_id ?? "")
+  if (String(input.booking.booking_id ?? "") !== input.bookingId) {
+    failures.push(`booking_id mismatch: expected ${input.bookingId}`)
+  }
+  if (status !== "settled") {
+    failures.push(`booking status is ${status || "missing"}, expected settled`)
+  }
+  if (fundingTxRef.toLowerCase() !== input.fundingTxRef.toLowerCase()) {
+    failures.push("funding_tx_ref does not match submitted payment")
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/u.test(payoutTxRef)) {
+    failures.push("payout_tx_ref is missing or not a transaction hash")
+  }
+  if (liveRoomId !== `pirate-booking-${input.bookingId}`) {
+    failures.push("live_room_id does not match expected Agora booking channel")
+  }
+  if (failures.length > 0) {
+    throw new Error(`paid booking canary final verification failed: ${failures.join("; ")}`)
   }
 }
 
@@ -477,6 +507,23 @@ async function main(): Promise<void> {
       headers: bearer(host.accessToken),
       body: "{}",
     }), [200, 202])
+    const finalBooking = requireStatus("final_booking", await requestJson(`${origin}/bookings/${bookingId}`, {
+      headers: bearer(booker.accessToken),
+    }), 200)
+    const finalBookingView = asRecord(finalBooking.booking)
+    validateCompletedCanaryBooking({
+      booking: finalBookingView,
+      bookingId,
+      fundingTxRef,
+    })
+    console.log(JSON.stringify({
+      step: "final_booking_verified",
+      booking_id: bookingId,
+      status: finalBookingView.status ?? null,
+      funding_tx_ref: finalBookingView.funding_tx_ref ?? null,
+      payout_tx_ref: finalBookingView.payout_tx_ref ?? null,
+      live_room_id: finalBookingView.live_room_id ?? null,
+    }, null, 2))
   }
 
   console.log(JSON.stringify({
