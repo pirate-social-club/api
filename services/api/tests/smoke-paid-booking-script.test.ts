@@ -4,6 +4,7 @@ import { Wallet } from "ethers"
 import {
   isProbablyAddress,
   resolveHostPayoutWallet,
+  validateFundingReadiness,
   validateQuotePaymentFields,
 } from "../scripts/smoke-paid-booking"
 
@@ -65,5 +66,27 @@ describe("smoke-paid-booking script guards", () => {
     expect(() => validateQuotePaymentFields({ ...base, token_address: "0x123" })).toThrow("invalid token_address")
     expect(() => validateQuotePaymentFields({ ...base, recipient_address: "0x123" })).toThrow("invalid recipient_address")
     expect(() => validateQuotePaymentFields({ ...base, amount_atomic: "0" })).toThrow("invalid amount_atomic")
+  })
+
+  test("accepts funded buyer and settlement wallets", () => {
+    expect(() => validateFundingReadiness({
+      buyerAddress: VALID_ADDRESS,
+      settlementAddress: OTHER_VALID_ADDRESS,
+      buyerNativeWei: 1n,
+      buyerTokenAtomic: 1_000_000n,
+      settlementNativeWei: 1n,
+      requiredTokenAtomic: 1_000_000n,
+    })).not.toThrow()
+  })
+
+  test("rejects unfunded canary wallets before broadcasting", () => {
+    expect(() => validateFundingReadiness({
+      buyerAddress: VALID_ADDRESS,
+      settlementAddress: OTHER_VALID_ADDRESS,
+      buyerNativeWei: 0n,
+      buyerTokenAtomic: 0n,
+      settlementNativeWei: 0n,
+      requiredTokenAtomic: 1_000_000n,
+    })).toThrow("paid booking canary funding preflight failed")
   })
 })

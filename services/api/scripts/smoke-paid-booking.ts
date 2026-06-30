@@ -3,6 +3,7 @@ import { SignJWT } from "jose"
 import { setTimeout as sleep } from "node:timers/promises"
 
 const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
   "function transfer(address to, uint256 amount) returns (bool)",
 ]
 
@@ -62,6 +63,29 @@ export function validateQuotePaymentFields(payment: Record<string, unknown>): {
   if (!isProbablyAddress(recipientAddress)) throw new Error(`quote returned invalid recipient_address: ${recipientAddress}`)
   if (!/^[1-9]\d*$/u.test(amountAtomic)) throw new Error(`quote returned invalid amount_atomic: ${amountAtomic}`)
   return { chainId, tokenAddress, recipientAddress, amountAtomic }
+}
+
+export function validateFundingReadiness(input: {
+  buyerAddress: string
+  settlementAddress: string
+  buyerNativeWei: bigint
+  buyerTokenAtomic: bigint
+  settlementNativeWei: bigint
+  requiredTokenAtomic: bigint
+}): void {
+  const failures: string[] = []
+  if (input.buyerNativeWei <= 0n) {
+    failures.push(`buyer ${input.buyerAddress} has no native gas balance`)
+  }
+  if (input.buyerTokenAtomic < input.requiredTokenAtomic) {
+    failures.push(`buyer ${input.buyerAddress} has ${input.buyerTokenAtomic.toString()} token atomic, needs ${input.requiredTokenAtomic.toString()}`)
+  }
+  if (input.settlementNativeWei <= 0n) {
+    failures.push(`settlement operator ${input.settlementAddress} has no native gas balance for payout/refund settlement`)
+  }
+  if (failures.length > 0) {
+    throw new Error(`paid booking canary funding preflight failed: ${failures.join("; ")}`)
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -151,6 +175,44 @@ function resolveRpcUrl(chainId: number): string {
     || (() => {
       throw new Error(`No RPC URL configured for chain ${chainId}`)
     })()
+}
+
+async function preflightFunding(input: {
+  privateKey: string
+  chainId: number
+  tokenAddress: string
+  recipientAddress: string
+  amountAtomic: string
+}): Promise<void> {
+  const provider = new JsonRpcProvider(resolveRpcUrl(input.chainId), input.chainId)
+  const wallet = new Wallet(input.privateKey, provider)
+  const token = new Contract(input.tokenAddress, ERC20_ABI, provider)
+  const [
+    buyerNativeWei,
+    buyerTokenAtomic,
+    settlementNativeWei,
+  ] = await Promise.all([
+    provider.getBalance(wallet.address),
+    token.balanceOf(wallet.address) as Promise<bigint>,
+    provider.getBalance(input.recipientAddress),
+  ])
+  validateFundingReadiness({
+    buyerAddress: wallet.address,
+    settlementAddress: input.recipientAddress,
+    buyerNativeWei,
+    buyerTokenAtomic,
+    settlementNativeWei,
+    requiredTokenAtomic: BigInt(input.amountAtomic),
+  })
+  console.log(JSON.stringify({
+    step: "funding_preflight",
+    buyer_wallet: wallet.address,
+    settlement_wallet: input.recipientAddress,
+    buyer_native_wei: buyerNativeWei.toString(),
+    buyer_token_atomic: buyerTokenAtomic.toString(),
+    settlement_native_wei: settlementNativeWei.toString(),
+    required_token_atomic: input.amountAtomic,
+  }))
 }
 
 async function sendUsdcPayment(input: {
@@ -290,6 +352,14 @@ async function main(): Promise<void> {
     return
   }
   if (!privateKey) throw new Error(`${privateKeyEnv} is required for --claim`)
+
+  await preflightFunding({
+    privateKey,
+    chainId,
+    tokenAddress,
+    recipientAddress,
+    amountAtomic,
+  })
 
   const fundingTxRef = await sendUsdcPayment({
     privateKey,
