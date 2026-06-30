@@ -332,6 +332,7 @@ async function canStudyPost(input: {
     input.communityId,
     input.actor.userId,
     input.post.asset_id,
+    "asset_access",
   )
   return Boolean(entitlement)
 }

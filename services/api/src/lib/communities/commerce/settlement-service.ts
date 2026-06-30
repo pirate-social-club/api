@@ -202,6 +202,7 @@ async function finalizeLocalPurchaseSettlement(input: {
     input.communityId,
     input.buyer,
     entitlementTarget.targetRef,
+    entitlementTarget.entitlementKind,
   )
   if (!entitlement) {
     entitlement = {

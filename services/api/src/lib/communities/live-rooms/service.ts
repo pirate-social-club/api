@@ -1387,7 +1387,14 @@ export async function getLiveRoomReplayAccess(input: {
         }
       }
       const entitlementTarget = asset.access_mode === "paid" ? asset.replay_asset_id : room.id
-      const entitlement = await getActiveEntitlementForBuyer(db.client, input.communityId, input.userId, entitlementTarget)
+      const entitlementKind = asset.access_mode === "paid" ? "replay_access" : "live_room_access"
+      const entitlement = await getActiveEntitlementForBuyer(
+        db.client,
+        input.communityId,
+        input.userId,
+        entitlementTarget,
+        entitlementKind,
+      )
       if (entitlement) {
         return {
           live_room: room.id,
