@@ -15,6 +15,7 @@
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "deploy": "wrangler deploy",
+    "smoke:paid-booking": "bun run scripts/smoke-paid-booking.ts",
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
     "zkpassport:verifier": "bun run scripts/zkpassport-verifier-service.ts",
     "check:community-schema-guards": "bun run scripts/check-community-schema-guards.ts",

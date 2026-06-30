@@ -42,6 +42,9 @@ const spec = {
       "name": "Public Names"
     },
     {
+      "name": "Bookings"
+    },
+    {
       "name": "Communities"
     },
     {
@@ -51,6 +54,9 @@ const spec = {
       "name": "Posts"
     },
     {
+      "name": "Song Study"
+    },
+    {
       "name": "Comments"
     },
     {
@@ -58,9 +64,6 @@ const spec = {
     },
     {
       "name": "Questions"
-    },
-    {
-      "name": "Karaoke"
     },
     {
       "name": "Feeds"
@@ -2010,6 +2013,1440 @@ const spec = {
         "operationId": "get_public_names_by_label_status"
       }
     },
+    "/host-bookings/me/profile": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "get_host_bookings_me_profile"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Upsert the authenticated host booking profile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBookingProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_profile"
+      }
+    },
+    "/host-bookings/me/profile/publish": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Publish the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_profile_publish"
+      }
+    },
+    "/host-bookings/me/profile/unpublish": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Unpublish the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_profile_unpublish"
+      }
+    },
+    "/host-bookings/me/availability-rules": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List weekly availability rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AvailabilityRule"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_availability_rules"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a weekly availability rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAvailabilityRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_rules"
+      }
+    },
+    "/host-bookings/me/availability-rules/{rule_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a weekly availability rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAvailabilityRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityRule"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_rules_by_rule_id",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a weekly availability rule",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_availability_rules_by_rule_id",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/host-bookings/me/availability-exceptions": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List one-off availability exceptions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AvailabilityException"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_availability_exceptions"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a one-off availability exception",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAvailabilityExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityException"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_exceptions"
+      }
+    },
+    "/host-bookings/me/availability-exceptions/{exception_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a one-off availability exception",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAvailabilityExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityException"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_exceptions_by_exception_id",
+        "parameters": [
+          {
+            "name": "exception_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a one-off availability exception",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_availability_exceptions_by_exception_id",
+        "parameters": [
+          {
+            "name": "exception_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/host-bookings/me/price-rules": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List variable price rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceRule"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_price_rules"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a variable price rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRule"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_price_rules"
+      }
+    },
+    "/host-bookings/me/price-rules/{price_rule_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a variable price rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePriceRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRule"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_price_rules_by_price_rule_id",
+        "parameters": [
+          {
+            "name": "price_rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a variable price rule",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_price_rules_by_price_rule_id",
+        "parameters": [
+          {
+            "name": "price_rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List authenticated user's bookings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Booking"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings"
+      }
+    },
+    "/bookings/hosts/{host_user_id}/slots": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "security": [],
+        "summary": "Resolve public bookable slots for a host",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSlotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_hosts_by_host_user_id_slots",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-hosts/{host_user_id}/slots": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "security": [],
+        "summary": "Resolve public bookable slots for a host",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSlotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_booking_hosts_by_host_user_id_slots",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/hosts/{host_user_id}/holds": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a booking hold for a host slot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "hold"
+                  ],
+                  "properties": {
+                    "hold": {
+                      "$ref": "#/components/schemas/BookingHold"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_hosts_by_host_user_id_holds",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-hosts/{host_user_id}/holds": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a booking hold for a host slot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "hold"
+                  ],
+                  "properties": {
+                    "hold": {
+                      "$ref": "#/components/schemas/BookingHold"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_booking_hosts_by_host_user_id_holds",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/holds/{hold_id}/quote": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Quote a booking hold",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "quote"
+                  ],
+                  "properties": {
+                    "quote": {
+                      "$ref": "#/components/schemas/BookingQuote"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_holds_by_hold_id_quote",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-holds/{hold_id}/quote": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Quote a booking hold",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "quote"
+                  ],
+                  "properties": {
+                    "quote": {
+                      "$ref": "#/components/schemas/BookingQuote"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_booking_holds_by_hold_id_quote",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/holds/{hold_id}/confirm": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Confirm a paid booking hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_holds_by_hold_id_confirm",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-holds/{hold_id}/confirm": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Confirm a paid booking hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_booking_holds_by_hold_id_confirm",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get a booking visible to the authenticated party",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/cancel": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_cancel",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/start": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_start",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/complete": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_complete",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/no-show": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_no_show",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/session/attach": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Attach to a private booking video session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSessionAttachResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_session_attach",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/session/heartbeat": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Record a booking video session heartbeat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "session_id"
+                ],
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_session_heartbeat",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/settlement-review/pending": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List pending booking settlement reviews",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings_settlement_review_pending"
+      }
+    },
+    "/bookings/{booking_id}/settlement-review": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get a booking settlement review",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id_settlement_review",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/settlement-review/resolve": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Resolve an ambiguous booking settlement review",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBookingSettlementReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_settlement_review_resolve",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/communities": {
       "post": {
         "tags": [
@@ -3061,235 +4498,6 @@ const spec = {
         "operationId": "get_communities_by_community_id_posts"
       }
     },
-    "/communities/{community_id}/posts/{post_id}/karaoke": {
-      "get": {
-        "tags": [
-          "Posts"
-        ],
-        "summary": "Get karaoke payload for a song post",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/CommunityId"
-          },
-          {
-            "$ref": "#/components/parameters/PostId"
-          },
-          {
-            "$ref": "#/components/parameters/Locale"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SongKaraokePayload"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/AuthError"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          }
-        },
-        "operationId": "get_communities_by_community_id_posts_by_post_id_karaoke"
-      }
-    },
-    "/communities/{community_id}/posts/{post_id}/karaoke/sessions": {
-      "post": {
-        "tags": [
-          "Karaoke"
-        ],
-        "summary": "Create or replay a karaoke session for a post",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/CommunityId"
-          },
-          {
-            "$ref": "#/components/parameters/PostId"
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-request-id",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 256
-            }
-          },
-          {
-            "in": "header",
-            "name": "origin",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "201": {
-            "headers": {
-              "X-Request-Id": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/KaraokeSession"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AuthError"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_communities_by_community_id_posts_by_post_id_karaoke_sessions"
-      }
-    },
-    "/karaoke/sessions/{session_id}/websocket": {
-      "get": {
-        "tags": [
-          "Karaoke"
-        ],
-        "summary": "Upgrade to the karaoke session WebSocket",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/KaraokeSessionId"
-          },
-          {
-            "in": "query",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "upgrade",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "websocket"
-              ]
-            }
-          },
-          {
-            "in": "header",
-            "name": "origin",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-request-id",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "maxLength": 256
-            }
-          }
-        ],
-        "responses": {
-          "101": {},
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "426": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_karaoke_sessions_by_session_id_websocket"
-      }
-    },
     "/communities/{community_id}/posts/{post_id}/comments": {
       "get": {
         "tags": [
@@ -3510,6 +4718,264 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_reports"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/karaoke/sessions": {
+      "post": {
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Create or replay a karaoke session for a post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-request-id",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          {
+            "in": "header",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaraokeSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_karaoke_sessions"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study": {
+      "get": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Fetch the study pack for a song post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "query",
+            "name": "target_language",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStudyPayload"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_posts_by_post_id_study"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study/attempts": {
+      "post": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Submit a study attempt and receive the server verdict",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SongStudyAttemptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStudyAttemptResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_study_attempts"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study/transcriptions": {
+      "post": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Transcribe one study say-it-back recording",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStudyTranscriptionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_study_transcriptions"
       }
     },
     "/communities/{community_id}/comments/{comment_id}/reports": {
@@ -3919,6 +5385,56 @@ const spec = {
           }
         },
         "operationId": "get_communities_by_community_id_song_artifacts_by_song_artifact_bundle_id"
+      }
+    },
+    "/karaoke/sessions/{session_id}/websocket": {
+      "get": {
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Upgrade to the karaoke session WebSocket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "upgrade",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "websocket"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "101": {},
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_karaoke_sessions_by_session_id_websocket"
       }
     },
     "/posts/{post_id}": {
@@ -4832,6 +6348,12 @@ const spec = {
         "in": "header",
         "name": "Authorization",
         "description": "Payment credential sent as `Authorization: Payment ...` on retry after an MPP `402 Payment Required` challenge.\n"
+      },
+      "operatorCredentialAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Operator credential sent as `Authorization: Operator ...`."
       }
     },
     "parameters": {
@@ -4964,14 +6486,6 @@ const spec = {
           "type": "string"
         }
       },
-      "KaraokeSessionId": {
-        "in": "path",
-        "name": "session_id",
-        "required": true,
-        "schema": {
-          "type": "string"
-        }
-      },
       "CommentId": {
         "in": "path",
         "name": "comment_id",
@@ -5018,7 +6532,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5027,7 +6541,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5036,7 +6550,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5045,7 +6559,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5054,7 +6568,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5063,7 +6577,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5072,7 +6586,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5081,7 +6595,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5090,7 +6604,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5099,7 +6613,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5108,7 +6622,7 @@ const spec = {
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "./schemas/common.yaml#/Error"
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -5163,18 +6677,18 @@ const spec = {
             "type": "string"
           },
           "user": {
-            "$ref": "./users.yaml#/User"
+            "$ref": "#/components/schemas/User"
           },
           "profile": {
-            "$ref": "./profiles.yaml#/Profile"
+            "$ref": "#/components/schemas/Profile"
           },
           "onboarding": {
-            "$ref": "./onboarding.yaml#/OnboardingStatus"
+            "$ref": "#/components/schemas/OnboardingStatus"
           },
           "wallet_attachments": {
             "type": "array",
             "items": {
-              "$ref": "./auth.yaml#/WalletAttachmentSummary"
+              "$ref": "#/components/schemas/WalletAttachmentSummary"
             }
           }
         }
@@ -5454,14 +6968,14 @@ const spec = {
             "type": "array",
             "minItems": 1,
             "items": {
-              "$ref": "./verification.yaml#/RequestedVerificationCapability"
+              "$ref": "#/components/schemas/RequestedVerificationCapability"
             }
           },
           "verification_requirements": {
             "type": "array",
             "nullable": true,
             "items": {
-              "$ref": "./verification.yaml#/VerificationRequirement"
+              "$ref": "#/components/schemas/VerificationRequirement"
             }
           },
           "wallet_attachment": {
@@ -5469,7 +6983,7 @@ const spec = {
             "nullable": true
           },
           "verification_intent": {
-            "$ref": "./verification.yaml#/VerificationIntent",
+            "$ref": "#/components/schemas/VerificationIntent",
             "nullable": true
           },
           "policy": {
@@ -5530,17 +7044,17 @@ const spec = {
           "requested_capabilities": {
             "type": "array",
             "items": {
-              "$ref": "./verification.yaml#/RequestedVerificationCapability"
+              "$ref": "#/components/schemas/RequestedVerificationCapability"
             }
           },
           "verification_requirements": {
             "type": "array",
             "items": {
-              "$ref": "./verification.yaml#/VerificationRequirement"
+              "$ref": "#/components/schemas/VerificationRequirement"
             }
           },
           "verification_intent": {
-            "$ref": "./verification.yaml#/VerificationIntent",
+            "$ref": "#/components/schemas/VerificationIntent",
             "nullable": true
           },
           "policy": {
@@ -5557,7 +7071,7 @@ const spec = {
             ]
           },
           "launch": {
-            "$ref": "./verification.yaml#/VerificationSessionLaunch"
+            "$ref": "#/components/schemas/VerificationSessionLaunch"
           },
           "callback_path": {
             "type": "string",
@@ -5762,10 +7276,10 @@ const spec = {
         ],
         "properties": {
           "session_kind": {
-            "$ref": "./agents.yaml#/AgentOwnershipSessionKind"
+            "$ref": "#/components/schemas/AgentOwnershipSessionKind"
           },
           "ownership_provider": {
-            "$ref": "./agents.yaml#/AgentOwnershipProvider"
+            "$ref": "#/components/schemas/AgentOwnershipProvider"
           },
           "agent": {
             "type": "string",
@@ -5780,7 +7294,7 @@ const spec = {
             "nullable": true
           },
           "agent_challenge": {
-            "$ref": "./agents.yaml#/AgentChallenge"
+            "$ref": "#/components/schemas/AgentChallenge"
           }
         }
       },
@@ -5810,7 +7324,7 @@ const spec = {
             ]
           },
           "session_kind": {
-            "$ref": "./agents.yaml#/AgentOwnershipSessionKind"
+            "$ref": "#/components/schemas/AgentOwnershipSessionKind"
           },
           "owner_user": {
             "type": "string",
@@ -5821,10 +7335,10 @@ const spec = {
             "nullable": true
           },
           "ownership_provider": {
-            "$ref": "./agents.yaml#/AgentOwnershipProvider"
+            "$ref": "#/components/schemas/AgentOwnershipProvider"
           },
           "status": {
-            "$ref": "./agents.yaml#/AgentOwnershipSessionStatus"
+            "$ref": "#/components/schemas/AgentOwnershipSessionStatus"
           },
           "agent_challenge_ref": {
             "type": "string"
@@ -5834,7 +7348,7 @@ const spec = {
             "nullable": true
           },
           "launch": {
-            "$ref": "./agents.yaml#/AgentOwnershipSessionLaunch"
+            "$ref": "#/components/schemas/AgentOwnershipSessionLaunch"
           },
           "callback_path": {
             "type": "string",
@@ -5883,7 +7397,7 @@ const spec = {
             "type": "string"
           },
           "agent_challenge": {
-            "$ref": "./agents.yaml#/AgentChallenge"
+            "$ref": "#/components/schemas/AgentChallenge"
           }
         }
       },
@@ -5930,7 +7444,7 @@ const spec = {
         "additionalProperties": false,
         "properties": {
           "provider": {
-            "$ref": "./agents.yaml#/AgentOwnershipProvider"
+            "$ref": "#/components/schemas/AgentOwnershipProvider"
           },
           "event_type": {
             "type": "string",
@@ -5962,7 +7476,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./agents.yaml#/UserAgent"
+              "$ref": "#/components/schemas/UserAgent"
             }
           },
           "next_cursor": {
@@ -6001,18 +7515,18 @@ const spec = {
             "type": "string"
           },
           "handle": {
-            "$ref": "./agents.yaml#/AgentHandle",
+            "$ref": "#/components/schemas/AgentHandle",
             "nullable": true
           },
           "status": {
-            "$ref": "./agents.yaml#/UserAgentStatus"
+            "$ref": "#/components/schemas/UserAgentStatus"
           },
           "current_ownership_record": {
             "type": "string",
             "nullable": true
           },
           "current_ownership": {
-            "$ref": "./agents.yaml#/AgentOwnershipRecord",
+            "$ref": "#/components/schemas/AgentOwnershipRecord",
             "nullable": true
           },
           "created": {
@@ -6065,7 +7579,7 @@ const spec = {
             "type": "string"
           },
           "status": {
-            "$ref": "./agents.yaml#/AgentHandleStatus"
+            "$ref": "#/components/schemas/AgentHandleStatus"
           },
           "redirect_target_agent_handle": {
             "type": "string",
@@ -6220,10 +7734,10 @@ const spec = {
                 "nullable": true
               },
               "handle": {
-                "$ref": "./agents.yaml#/AgentHandle"
+                "$ref": "#/components/schemas/AgentHandle"
               },
               "ownership_provider": {
-                "$ref": "./agents.yaml#/AgentOwnershipProvider",
+                "$ref": "#/components/schemas/AgentOwnershipProvider",
                 "nullable": true
               },
               "created": {
@@ -6249,10 +7763,10 @@ const spec = {
                 "nullable": true
               },
               "global_handle": {
-                "$ref": "./profiles.yaml#/GlobalHandle"
+                "$ref": "#/components/schemas/GlobalHandle"
               },
               "primary_public_handle": {
-                "$ref": "./profiles.yaml#/LinkedHandle",
+                "$ref": "#/components/schemas/LinkedHandle",
                 "nullable": true
               }
             }
@@ -6374,7 +7888,7 @@ const spec = {
           "assertions": {
             "allOf": [
               {
-                "$ref": "./verification.yaml#/NamespaceVerificationAssertions"
+                "$ref": "#/components/schemas/NamespaceVerificationAssertions"
               }
             ],
             "nullable": true
@@ -6382,7 +7896,7 @@ const spec = {
           "capabilities": {
             "allOf": [
               {
-                "$ref": "./verification.yaml#/NamespaceVerificationCapabilities"
+                "$ref": "#/components/schemas/NamespaceVerificationCapabilities"
               }
             ],
             "nullable": true
@@ -6493,10 +8007,10 @@ const spec = {
             ]
           },
           "assertions": {
-            "$ref": "./verification.yaml#/NamespaceVerificationAssertions"
+            "$ref": "#/components/schemas/NamespaceVerificationAssertions"
           },
           "capabilities": {
-            "$ref": "./verification.yaml#/NamespaceVerificationCapabilities"
+            "$ref": "#/components/schemas/NamespaceVerificationCapabilities"
           },
           "control_class": {
             "type": "string",
@@ -6679,7 +8193,7 @@ const spec = {
         ],
         "properties": {
           "job": {
-            "$ref": "./jobs.yaml#/Job"
+            "$ref": "#/components/schemas/Job"
           }
         }
       },
@@ -6843,7 +8357,7 @@ const spec = {
             "nullable": true
           },
           "verification_capabilities": {
-            "$ref": "./verification.yaml#/VerificationCapabilities"
+            "$ref": "#/components/schemas/VerificationCapabilities"
           },
           "verified_at": {
             "type": "integer",
@@ -6935,13 +8449,13 @@ const spec = {
             "type": "array",
             "nullable": true,
             "items": {
-              "$ref": "./profiles.yaml#/LinkedHandle"
+              "$ref": "#/components/schemas/LinkedHandle"
             }
           },
           "primary_public_handle": {
             "allOf": [
               {
-                "$ref": "./profiles.yaml#/LinkedHandle"
+                "$ref": "#/components/schemas/LinkedHandle"
               }
             ],
             "nullable": true
@@ -6957,13 +8471,13 @@ const spec = {
           "verification_capabilities": {
             "allOf": [
               {
-                "$ref": "./verification.yaml#/VerificationCapabilities"
+                "$ref": "#/components/schemas/VerificationCapabilities"
               }
             ],
             "nullable": true
           },
           "global_handle": {
-            "$ref": "./profiles.yaml#/GlobalHandle"
+            "$ref": "#/components/schemas/GlobalHandle"
           },
           "created": {
             "type": "integer",
@@ -7089,7 +8603,7 @@ const spec = {
         ],
         "properties": {
           "profile": {
-            "$ref": "./profiles.yaml#/Profile"
+            "$ref": "#/components/schemas/Profile"
           },
           "requested_handle_label": {
             "type": "string"
@@ -7132,10 +8646,10 @@ const spec = {
       "WalletIdentityResponse": {
         "oneOf": [
           {
-            "$ref": "./profiles.yaml#/WalletIdentity"
+            "$ref": "#/components/schemas/WalletIdentity"
           },
           {
-            "$ref": "./profiles.yaml#/WalletIdentityRedirect"
+            "$ref": "#/components/schemas/WalletIdentityRedirect"
           }
         ],
         "discriminator": {
@@ -7383,16 +8897,731 @@ const spec = {
           }
         ]
       },
+      "BookingProfileResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/BookingProfile"
+          },
+          {
+            "$ref": "#/BookingProfileEmpty"
+          }
+        ]
+      },
+      "UpdateBookingProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host_timezone": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default_slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "display_headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
+            "type": "string",
+            "nullable": true
+          },
+          "topics": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro_video_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "platform_fee_bps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payout_wallet_address": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "BookingProfile": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "object",
+          "host",
+          "host_timezone",
+          "base_price_cents",
+          "default_slot_duration_seconds",
+          "platform_fee_bps",
+          "is_published",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "booking_profile"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "display_headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
+            "type": "string",
+            "nullable": true
+          },
+          "topics": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro_video_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "host_timezone": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default_slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "platform_fee_bps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payout_wallet_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_published": {
+            "type": "boolean"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "AvailabilityRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "by_weekday",
+          "start_local",
+          "end_local",
+          "slot_duration_seconds",
+          "effective_from",
+          "effective_until",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "availability_rule"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from": {
+            "type": "integer",
+            "nullable": true
+          },
+          "effective_until": {
+            "type": "integer",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateAvailabilityRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "by_weekday",
+          "start_local",
+          "end_local",
+          "slot_duration_seconds"
+        ],
+        "properties": {
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_until_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateAvailabilityRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_until_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AvailabilityException": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "kind",
+          "start",
+          "end",
+          "created"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "availability_exception"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start": {
+            "type": "integer"
+          },
+          "end": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateAvailabilityExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "start_utc",
+          "end_utc"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateAvailabilityExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PriceRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "match_weekday",
+          "match_local_start",
+          "match_local_end",
+          "match_duration_seconds",
+          "price_cents",
+          "priority",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "price_rule"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreatePriceRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "price_cents"
+        ],
+        "properties": {
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
+          }
+        }
+      },
+      "UpdatePriceRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
+          }
+        }
+      },
+      "Booking": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "booking_id",
+          "host_user_id",
+          "booker_user_id",
+          "slot_start_utc",
+          "slot_end_utc",
+          "gross_cents",
+          "platform_fee_cents",
+          "host_payout_cents",
+          "status"
+        ],
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/BookingStatus"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "booker_user_id": {
+            "type": "string"
+          },
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          }
+        }
+      },
+      "BookingSlotsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host_timezone",
+          "viewer_timezone",
+          "slots"
+        ],
+        "properties": {
+          "host_timezone": {
+            "type": "string"
+          },
+          "viewer_timezone": {
+            "type": "string"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/ResolvedBookingSlot"
+            }
+          }
+        }
+      },
+      "CreateBookingHoldRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slot_start_utc",
+          "slot_end_utc"
+        ],
+        "properties": {
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_community_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "BookingHold": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BookingQuote": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "hold_id",
+          "gross_cents",
+          "platform_fee_bps",
+          "platform_fee_cents",
+          "host_payout_cents",
+          "expires_at_utc",
+          "payment"
+        ],
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "platform_fee_bps": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          },
+          "expires_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payment": {
+            "$ref": "#/BookingPaymentInstructions"
+          }
+        }
+      },
+      "ConfirmBookingHoldRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "funding_tx_ref",
+          "wallet_attachment_id"
+        ],
+        "properties": {
+          "funding_tx_ref": {
+            "type": "string"
+          },
+          "wallet_attachment_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BookingSessionAttachResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "session_id",
+          "party",
+          "channel",
+          "agora"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "party": {
+            "type": "string",
+            "enum": [
+              "host",
+              "booker"
+            ]
+          },
+          "channel": {
+            "type": "string"
+          },
+          "agora": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "ResolveBookingSettlementReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resolution",
+          "expected_review_version"
+        ],
+        "properties": {
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_show_host",
+              "no_show_booker"
+            ]
+          },
+          "expected_review_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ResolveBookingSettlementReviewResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "booking",
+          "resolution",
+          "pending_settlement",
+          "replayed"
+        ],
+        "properties": {
+          "booking": {
+            "$ref": "#/Booking"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_show_host",
+              "no_show_booker"
+            ]
+          },
+          "pending_settlement": {
+            "type": "boolean"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
       "CreateCommunityRequest": {
         "oneOf": [
           {
-            "$ref": "./communities-governance.yaml#/CreateCentralizedCommunityRequest"
+            "$ref": "#/components/schemas/CreateCentralizedCommunityRequest"
           },
           {
-            "$ref": "./communities-governance.yaml#/CreateMultisigCommunityRequest"
+            "$ref": "#/components/schemas/CreateMultisigCommunityRequest"
           },
           {
-            "$ref": "./communities-governance.yaml#/CreateMajeurCommunityRequest"
+            "$ref": "#/components/schemas/CreateMajeurCommunityRequest"
           }
         ],
         "discriminator": {
@@ -7412,10 +9641,10 @@ const spec = {
         ],
         "properties": {
           "community": {
-            "$ref": "./communities-core.yaml#/Community"
+            "$ref": "#/components/schemas/Community"
           },
           "job": {
-            "$ref": "./jobs.yaml#/Job"
+            "$ref": "#/components/schemas/Job"
           }
         }
       },
@@ -7428,7 +9657,6 @@ const spec = {
           "status",
           "provisioning_state",
           "membership_mode",
-          "karaoke_enabled",
           "allow_anonymous_identity",
           "human_verification_lane",
           "human_verification_lane_origin",
@@ -7440,6 +9668,7 @@ const spec = {
           "governance_mode",
           "donation_policy_mode",
           "donation_partner_status",
+          "karaoke_enabled",
           "money_policy",
           "content_authenticity_policy",
           "content_authenticity_detection_policy",
@@ -7482,6 +9711,7 @@ const spec = {
           },
           "store_url": {
             "type": "string",
+            "format": "uri",
             "nullable": true
           },
           "store_label": {
@@ -7556,10 +9786,10 @@ const spec = {
             "nullable": true
           },
           "human_verification_lane": {
-            "$ref": "./communities-core.yaml#/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane"
           },
           "human_verification_lane_origin": {
-            "$ref": "./communities-core.yaml#/CommunityAgentResolutionOrigin"
+            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin"
           },
           "allowed_disclosed_qualifiers": {
             "type": "array",
@@ -7610,11 +9840,11 @@ const spec = {
             "nullable": true
           },
           "root_post_quota_by_trust_tier": {
-            "$ref": "./communities-core.yaml#/RootPostQuotaByTrustTier",
+            "$ref": "#/components/schemas/RootPostQuotaByTrustTier",
             "nullable": true
           },
           "reply_quota_by_trust_tier": {
-            "$ref": "./communities-core.yaml#/ReplyQuotaByTrustTier",
+            "$ref": "#/components/schemas/ReplyQuotaByTrustTier",
             "nullable": true
           },
           "probation_window_days": {
@@ -7637,7 +9867,7 @@ const spec = {
             ]
           },
           "gate_policy": {
-            "$ref": "./communities-core.yaml#/GatePolicy",
+            "$ref": "#/components/schemas/GatePolicy",
             "nullable": true
           },
           "agent_posting_policy": {
@@ -7681,11 +9911,11 @@ const spec = {
           "accepted_agent_ownership_providers": {
             "type": "array",
             "items": {
-              "$ref": "./agents.yaml#/AgentOwnershipProvider"
+              "$ref": "#/components/schemas/AgentOwnershipProvider"
             }
           },
           "accepted_agent_ownership_providers_origin": {
-            "$ref": "./communities-core.yaml#/CommunityAgentResolutionOrigin"
+            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin"
           },
           "civic_scale_tier": {
             "type": "string",
@@ -7713,44 +9943,44 @@ const spec = {
             ]
           },
           "donation_partner": {
-            "$ref": "./communities-community.yaml#/DonationPartnerSummary",
+            "$ref": "#/components/schemas/DonationPartnerSummary",
             "nullable": true
           },
           "money_policy": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyPolicy"
+            "$ref": "#/components/schemas/CommunityMoneyPolicy"
           },
           "content_authenticity_policy": {
-            "$ref": "./communities-community.yaml#/CommunityContentAuthenticityPolicy"
+            "$ref": "#/components/schemas/CommunityContentAuthenticityPolicy"
           },
           "content_authenticity_detection_policy": {
-            "$ref": "./communities-community.yaml#/CommunityContentAuthenticityDetectionPolicy"
+            "$ref": "#/components/schemas/CommunityContentAuthenticityDetectionPolicy"
           },
           "market_context_policy": {
-            "$ref": "./market-context.yaml#/CommunityMarketContextPolicy"
+            "$ref": "#/components/schemas/CommunityMarketContextPolicy"
           },
           "source_policy": {
-            "$ref": "./communities-community.yaml#/CommunitySourcePolicy"
+            "$ref": "#/components/schemas/CommunitySourcePolicy"
           },
           "capture_edit_policy": {
-            "$ref": "./communities-community.yaml#/CommunityCaptureEditPolicy"
+            "$ref": "#/components/schemas/CommunityCaptureEditPolicy"
           },
           "adult_content_policy": {
-            "$ref": "./communities-community.yaml#/CommunityAdultContentPolicy"
+            "$ref": "#/components/schemas/CommunityAdultContentPolicy"
           },
           "graphic_content_policy": {
-            "$ref": "./communities-community.yaml#/CommunityGraphicContentPolicy"
+            "$ref": "#/components/schemas/CommunityGraphicContentPolicy"
           },
           "motion_media_policy": {
-            "$ref": "./communities-community.yaml#/CommunityMotionMediaPolicy"
+            "$ref": "#/components/schemas/CommunityMotionMediaPolicy"
           },
           "language_policy": {
-            "$ref": "./communities-community.yaml#/CommunityLanguagePolicy"
+            "$ref": "#/components/schemas/CommunityLanguagePolicy"
           },
           "civility_policy": {
-            "$ref": "./communities-community.yaml#/CommunityCivilityPolicy"
+            "$ref": "#/components/schemas/CommunityCivilityPolicy"
           },
           "visual_policy_settings": {
-            "$ref": "./communities-core.yaml#/CommunityVisualPolicySettings"
+            "$ref": "#/components/schemas/CommunityVisualPolicySettings"
           },
           "openai_moderation_settings": {
             "type": "object",
@@ -7775,23 +10005,23 @@ const spec = {
             }
           },
           "provenance_policy": {
-            "$ref": "./communities-community.yaml#/CommunityProvenancePolicy"
+            "$ref": "#/components/schemas/CommunityProvenancePolicy"
           },
           "promotion_policy": {
-            "$ref": "./communities-community.yaml#/CommunityPromotionPolicy"
+            "$ref": "#/components/schemas/CommunityPromotionPolicy"
           },
           "label_policy": {
-            "$ref": "./communities-community.yaml#/CommunityLabelPolicy",
+            "$ref": "#/components/schemas/CommunityLabelPolicy",
             "nullable": true
           },
           "community_profile": {
-            "$ref": "./communities-community.yaml#/CommunityProfile",
+            "$ref": "#/components/schemas/CommunityProfile",
             "nullable": true
           },
           "reference_links": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityReferenceLinkPublic"
+              "$ref": "#/components/schemas/CommunityReferenceLinkPublic"
             },
             "nullable": true
           },
@@ -7823,13 +10053,13 @@ const spec = {
             ]
           },
           "governance_backend": {
-            "$ref": "./communities-governance.yaml#/CommunityGovernanceBackend",
+            "$ref": "#/components/schemas/CommunityGovernanceBackend",
             "nullable": true
           },
           "gate_rules": {
             "type": "array",
             "items": {
-              "$ref": "./communities-core.yaml#/GateRule"
+              "$ref": "#/components/schemas/GateRule"
             },
             "nullable": true
           },
@@ -7872,7 +10102,7 @@ const spec = {
             ]
           },
           "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
           },
           "funding_preference": {
             "type": "string"
@@ -7880,13 +10110,13 @@ const spec = {
           "accepted_funding_assets": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef"
+              "$ref": "#/components/schemas/CommunityMoneyAssetRef"
             }
           },
           "accepted_source_chains": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+              "$ref": "#/components/schemas/CommunityMoneyChainRef"
             }
           },
           "approved_route_providers": {
@@ -7897,7 +10127,7 @@ const spec = {
             "nullable": true
           },
           "destination_settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "destination_settlement_token": {
             "type": "string"
@@ -7918,7 +10148,7 @@ const spec = {
             "type": "boolean"
           },
           "route_status_policy": {
-            "$ref": "./communities-community.yaml#/CommunityFundingRouteStatusPolicy"
+            "$ref": "#/components/schemas/CommunityFundingRouteStatusPolicy"
           },
           "route_hop_tolerance": {
             "type": "integer",
@@ -7936,13 +10166,13 @@ const spec = {
           "accepted_funding_assets": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef"
+              "$ref": "#/components/schemas/CommunityMoneyAssetRef"
             }
           },
           "accepted_source_chains": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+              "$ref": "#/components/schemas/CommunityMoneyChainRef"
             }
           },
           "approved_route_providers": {
@@ -7953,7 +10183,7 @@ const spec = {
             "nullable": true
           },
           "destination_settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "destination_settlement_token": {
             "type": "string"
@@ -7974,7 +10204,7 @@ const spec = {
             "type": "boolean"
           },
           "route_status_policy": {
-            "$ref": "./communities-community.yaml#/CommunityFundingRouteStatusPolicy"
+            "$ref": "#/components/schemas/CommunityFundingRouteStatusPolicy"
           },
           "route_hop_tolerance": {
             "type": "integer",
@@ -8007,7 +10237,7 @@ const spec = {
             ]
           },
           "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
           },
           "pricing_policy_version": {
             "type": "string"
@@ -8016,7 +10246,7 @@ const spec = {
             "type": "boolean"
           },
           "verification_provider_requirement": {
-            "$ref": "./communities-community.yaml#/CommunityPricingVerificationProvider",
+            "$ref": "#/components/schemas/CommunityPricingVerificationProvider",
             "nullable": true
           },
           "default_tier_key": {
@@ -8026,13 +10256,13 @@ const spec = {
           "tiers": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityPricingTier"
+              "$ref": "#/components/schemas/CommunityPricingTier"
             }
           },
           "country_assignments": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityPricingCountryAssignment"
+              "$ref": "#/components/schemas/CommunityPricingCountryAssignment"
             }
           },
           "source_template": {
@@ -8053,7 +10283,7 @@ const spec = {
             "type": "boolean"
           },
           "verification_provider_requirement": {
-            "$ref": "./communities-community.yaml#/CommunityPricingVerificationProvider",
+            "$ref": "#/components/schemas/CommunityPricingVerificationProvider",
             "nullable": true
           },
           "default_tier_key": {
@@ -8063,13 +10293,13 @@ const spec = {
           "tiers": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityPricingTier"
+              "$ref": "#/components/schemas/CommunityPricingTier"
             }
           },
           "country_assignments": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityPricingCountryAssignment"
+              "$ref": "#/components/schemas/CommunityPricingCountryAssignment"
             }
           },
           "source_template": {
@@ -8093,7 +10323,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityListing"
+              "$ref": "#/components/schemas/CommunityListing"
             }
           },
           "next_cursor": {
@@ -8195,6 +10425,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "replay_asset": {
+            "type": "string",
+            "nullable": true
+          },
           "listing_mode": {
             "type": "string",
             "enum": [
@@ -8289,7 +10523,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityPurchase"
+              "$ref": "#/components/schemas/CommunityPurchase"
             }
           },
           "next_cursor": {
@@ -8345,6 +10579,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "replay_asset": {
+            "type": "string",
+            "nullable": true
+          },
           "buyer_user": {
             "type": "string"
           },
@@ -8360,10 +10598,10 @@ const spec = {
             "nullable": true
           },
           "settlement_mode": {
-            "$ref": "./communities-community.yaml#/CommunityPurchaseSettlementMode"
+            "$ref": "#/components/schemas/CommunityPurchaseSettlementMode"
           },
           "settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "settlement_token": {
             "type": "string"
@@ -8374,7 +10612,7 @@ const spec = {
           "allocations": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunitySaleAllocationLeg"
+              "$ref": "#/components/schemas/CommunitySaleAllocationLeg"
             }
           },
           "donation_partner": {
@@ -8437,11 +10675,11 @@ const spec = {
             "nullable": true
           },
           "funding_asset": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef",
+            "$ref": "#/components/schemas/CommunityMoneyAssetRef",
             "nullable": true
           },
           "source_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef",
+            "$ref": "#/components/schemas/CommunityMoneyChainRef",
             "nullable": true
           },
           "route_provider": {
@@ -8490,20 +10728,20 @@ const spec = {
             "type": "boolean"
           },
           "funding_mode": {
-            "$ref": "./communities-community.yaml#/CommunityPurchaseFundingMode"
+            "$ref": "#/components/schemas/CommunityPurchaseFundingMode"
           },
           "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
           },
           "funding_preference": {
             "type": "string"
           },
           "funding_asset": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef",
+            "$ref": "#/components/schemas/CommunityMoneyAssetRef",
             "nullable": true
           },
           "source_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef",
+            "$ref": "#/components/schemas/CommunityMoneyChainRef",
             "nullable": true
           },
           "route_provider": {
@@ -8511,7 +10749,7 @@ const spec = {
             "nullable": true
           },
           "destination_settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "destination_settlement_token": {
             "type": "string"
@@ -8532,7 +10770,7 @@ const spec = {
             "type": "boolean"
           },
           "route_status_policy": {
-            "$ref": "./communities-community.yaml#/CommunityFundingRouteStatusPolicy"
+            "$ref": "#/components/schemas/CommunityFundingRouteStatusPolicy"
           },
           "route_hop_tolerance": {
             "type": "integer",
@@ -8556,7 +10794,7 @@ const spec = {
             "nullable": true
           },
           "verification_required_provider": {
-            "$ref": "./communities-community.yaml#/CommunityPricingVerificationProvider",
+            "$ref": "#/components/schemas/CommunityPricingVerificationProvider",
             "nullable": true
           },
           "quoted_at": {
@@ -8582,11 +10820,11 @@ const spec = {
             "type": "string"
           },
           "funding_asset": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef",
+            "$ref": "#/components/schemas/CommunityMoneyAssetRef",
             "nullable": true
           },
           "source_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef",
+            "$ref": "#/components/schemas/CommunityMoneyChainRef",
             "nullable": true
           },
           "route_provider": {
@@ -8662,6 +10900,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "replay_asset": {
+            "type": "string",
+            "nullable": true
+          },
           "base_price_cents": {
             "type": "integer",
             "minimum": 0
@@ -8675,23 +10917,23 @@ const spec = {
             "minimum": 0
           },
           "settlement_mode": {
-            "$ref": "./communities-community.yaml#/CommunityPurchaseSettlementMode"
+            "$ref": "#/components/schemas/CommunityPurchaseSettlementMode"
           },
           "allocation_snapshot": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunitySaleAllocationSnapshot"
+              "$ref": "#/components/schemas/CommunitySaleAllocationSnapshot"
             }
           },
           "funding_mode": {
-            "$ref": "./communities-community.yaml#/CommunityPurchaseFundingMode"
+            "$ref": "#/components/schemas/CommunityPurchaseFundingMode"
           },
           "funding_asset": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyAssetRef",
+            "$ref": "#/components/schemas/CommunityMoneyAssetRef",
             "nullable": true
           },
           "source_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef",
+            "$ref": "#/components/schemas/CommunityMoneyChainRef",
             "nullable": true
           },
           "route_provider": {
@@ -8706,10 +10948,10 @@ const spec = {
             "nullable": true
           },
           "policy_origin": {
-            "$ref": "./communities-community.yaml#/CommunityPolicyOrigin"
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
           },
           "destination_settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "destination_settlement_token": {
             "type": "string"
@@ -8739,7 +10981,7 @@ const spec = {
             "type": "boolean"
           },
           "route_status_policy": {
-            "$ref": "./communities-community.yaml#/CommunityFundingRouteStatusPolicy"
+            "$ref": "#/components/schemas/CommunityFundingRouteStatusPolicy"
           },
           "route_hop_tolerance": {
             "type": "integer",
@@ -8842,6 +11084,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "replay_asset": {
+            "type": "string",
+            "nullable": true
+          },
           "settlement_wallet_attachment": {
             "type": "string"
           },
@@ -8854,10 +11100,10 @@ const spec = {
             "nullable": true
           },
           "settlement_mode": {
-            "$ref": "./communities-community.yaml#/CommunityPurchaseSettlementMode"
+            "$ref": "#/components/schemas/CommunityPurchaseSettlementMode"
           },
           "settlement_chain": {
-            "$ref": "./communities-community.yaml#/CommunityMoneyChainRef"
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
           },
           "settlement_chain_ref": {
             "type": "string"
@@ -8871,7 +11117,7 @@ const spec = {
           "allocations": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunitySaleAllocationLeg"
+              "$ref": "#/components/schemas/CommunitySaleAllocationLeg"
             }
           },
           "donation_partner": {
@@ -8904,7 +11150,8 @@ const spec = {
             "type": "string",
             "enum": [
               "asset_access",
-              "live_room_access"
+              "live_room_access",
+              "replay_access"
             ]
           },
           "entitlement_target_ref": {
@@ -9008,7 +11255,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./communities-core.yaml#/MembershipRequestSummary"
+              "$ref": "#/components/schemas/MembershipRequestSummary"
             }
           },
           "next_cursor": {
@@ -9054,7 +11301,7 @@ const spec = {
             "nullable": true
           },
           "status": {
-            "$ref": "./communities-core.yaml#/MembershipRequestStatus"
+            "$ref": "#/components/schemas/MembershipRequestStatus"
           },
           "note": {
             "type": "string",
@@ -9092,8 +11339,8 @@ const spec = {
           "object",
           "display_name",
           "membership_mode",
-          "karaoke_enabled",
           "human_verification_lane",
+          "karaoke_enabled",
           "moderators",
           "membership_gate_summaries",
           "rules",
@@ -9123,7 +11370,7 @@ const spec = {
             "type": "string"
           },
           "localized_text": {
-            "$ref": "./communities-core.yaml#/CommunityTextLocalization",
+            "$ref": "#/components/schemas/CommunityTextLocalization",
             "nullable": true
           },
           "avatar_ref": {
@@ -9136,6 +11383,7 @@ const spec = {
           },
           "store_url": {
             "type": "string",
+            "format": "uri",
             "nullable": true
           },
           "store_label": {
@@ -9214,11 +11462,11 @@ const spec = {
           "accepted_agent_ownership_providers": {
             "type": "array",
             "items": {
-              "$ref": "./agents.yaml#/AgentOwnershipProvider"
+              "$ref": "#/components/schemas/AgentOwnershipProvider"
             }
           },
           "human_verification_lane": {
-            "$ref": "./communities-core.yaml#/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane"
           },
           "member_count": {
             "type": "integer",
@@ -9237,44 +11485,44 @@ const spec = {
             "nullable": true
           },
           "donation_partner": {
-            "$ref": "./communities-community.yaml#/DonationPartnerSummary",
+            "$ref": "#/components/schemas/DonationPartnerSummary",
             "nullable": true
           },
           "owner": {
-            "$ref": "./communities-core.yaml#/CommunityRoleSummary",
+            "$ref": "#/components/schemas/CommunityRoleSummary",
             "nullable": true
           },
           "moderators": {
             "type": "array",
             "items": {
-              "$ref": "./communities-core.yaml#/CommunityRoleSummary"
+              "$ref": "#/components/schemas/CommunityRoleSummary"
             }
           },
           "reference_links": {
             "type": "array",
             "nullable": true,
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityReferenceLinkPublic"
+              "$ref": "#/components/schemas/CommunityReferenceLinkPublic"
             }
           },
           "membership_gate_summaries": {
             "type": "array",
             "items": {
-              "$ref": "./communities-core.yaml#/MembershipGateSummary"
+              "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
           "gate_match_mode": {
             "type": "string",
-            "nullable": true,
             "enum": [
               "all",
               "any"
-            ]
+            ],
+            "nullable": true
           },
           "rules": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/CommunityRule"
+              "$ref": "#/components/schemas/CommunityRule"
             }
           },
           "viewer_membership_status": {
@@ -9328,7 +11576,7 @@ const spec = {
             ]
           },
           "human_verification_lane": {
-            "$ref": "./communities-core.yaml#/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane"
           },
           "joinable_now": {
             "type": "boolean"
@@ -9348,7 +11596,7 @@ const spec = {
           "membership_gate_summaries": {
             "type": "array",
             "items": {
-              "$ref": "./communities-core.yaml#/MembershipGateSummary"
+              "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
           "missing_capabilities": {
@@ -9427,7 +11675,7 @@ const spec = {
             }
           },
           "gate_evaluation": {
-            "$ref": "./communities-core.yaml#/GatePolicyEvaluation",
+            "$ref": "#/components/schemas/GatePolicyEvaluation",
             "nullable": true
           }
         }
@@ -9512,7 +11760,7 @@ const spec = {
                 "type": "array",
                 "minItems": 1,
                 "items": {
-                  "$ref": "./posts.yaml#/ImageMediaDescriptor"
+                  "$ref": "#/components/schemas/ImageMediaDescriptor"
                 }
               }
             },
@@ -9578,7 +11826,7 @@ const spec = {
                 "type": "array",
                 "minItems": 1,
                 "items": {
-                  "$ref": "./posts.yaml#/VideoMediaDescriptor"
+                  "$ref": "#/components/schemas/VideoMediaDescriptor"
                 }
               }
             },
@@ -9717,7 +11965,7 @@ const spec = {
                 "type": "array",
                 "minItems": 1,
                 "items": {
-                  "$ref": "./posts.yaml#/AudioMediaDescriptor"
+                  "$ref": "#/components/schemas/AudioMediaDescriptor"
                 }
               }
             },
@@ -9745,9 +11993,10 @@ const spec = {
                 {
                   "allOf": [
                     {
-                      "required": null
+                      "required": [
+                        "song_artifact_bundle"
+                      ]
                     },
-                    "song_artifact_bundle",
                     {
                       "required": [
                         "lyrics"
@@ -9805,7 +12054,7 @@ const spec = {
             "nullable": true
           },
           "agent_action_proof": {
-            "$ref": "./agents.yaml#/AgentActionProof",
+            "$ref": "#/components/schemas/AgentActionProof",
             "nullable": true
           },
           "identity_mode": {
@@ -9875,15 +12124,15 @@ const spec = {
           "media_refs": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/MediaDescriptor"
+              "$ref": "#/components/schemas/MediaDescriptor"
             }
           },
           "creator_relation": {
-            "$ref": "./posts.yaml#/PostCreatorRelation",
+            "$ref": "#/components/schemas/PostCreatorRelation",
             "nullable": true
           },
           "promotion_disclosure": {
-            "$ref": "./posts.yaml#/PromotionDisclosureInput",
+            "$ref": "#/components/schemas/PromotionDisclosureInput",
             "nullable": true
           },
           "translation_policy": {
@@ -10054,7 +12303,7 @@ const spec = {
           "disclosed_qualifiers_json": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/DisclosedQualifierSnapshot"
+              "$ref": "#/components/schemas/DisclosedQualifierSnapshot"
             },
             "nullable": true
           },
@@ -10140,22 +12389,22 @@ const spec = {
           "embeds": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/PostEmbed"
+              "$ref": "#/components/schemas/PostEmbed"
             },
             "nullable": true
           },
           "media_refs": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/MediaDescriptor"
+              "$ref": "#/components/schemas/MediaDescriptor"
             }
           },
           "creator_relation": {
-            "$ref": "./posts.yaml#/PostCreatorRelation",
+            "$ref": "#/components/schemas/PostCreatorRelation",
             "nullable": true
           },
           "promotion_disclosure": {
-            "$ref": "./posts.yaml#/PromotionDisclosure",
+            "$ref": "#/components/schemas/PromotionDisclosure",
             "nullable": true
           },
           "source_language": {
@@ -10212,7 +12461,7 @@ const spec = {
             "nullable": true
           },
           "crosspost_source": {
-            "$ref": "./posts.yaml#/CrosspostSource",
+            "$ref": "#/components/schemas/CrosspostSource",
             "nullable": true
           },
           "anchor_live_room": {
@@ -10316,13 +12565,13 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./feeds.yaml#/FeedItem"
+              "$ref": "#/components/schemas/FeedItem"
             }
           },
           "top_communities": {
             "type": "array",
             "items": {
-              "$ref": "./feeds.yaml#/HomeFeedCommunitySummary"
+              "$ref": "#/components/schemas/HomeFeedCommunitySummary"
             }
           },
           "next_cursor": {
@@ -10330,179 +12579,6 @@ const spec = {
             "nullable": true
           }
         }
-      },
-      "SongKaraokePayload": {
-        "type": "object",
-        "required": [
-          "id",
-          "object"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "object": {
-            "type": "string",
-            "enum": [
-              "song_karaoke_payload"
-            ]
-          },
-          "song": {
-            "type": "string",
-            "nullable": true
-          },
-          "post": {
-            "type": "string",
-            "nullable": true
-          },
-          "community": {
-            "type": "string",
-            "nullable": true
-          },
-          "title": {
-            "type": "string",
-            "nullable": true
-          },
-          "artist_name": {
-            "type": "string",
-            "nullable": true
-          },
-          "artwork_src": {
-            "type": "string",
-            "nullable": true
-          },
-          "instrumental_audio_url": {
-            "type": "string",
-            "nullable": true
-          },
-          "karaoke_lines": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "index",
-                "kind",
-                "text",
-                "start_ms",
-                "end_ms",
-                "words"
-              ],
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "index": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "kind": {
-                  "type": "string",
-                  "enum": [
-                    "lyric",
-                    "section"
-                  ]
-                },
-                "text": {
-                  "type": "string"
-                },
-                "start_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "end_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "words": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "required": [
-                      "text",
-                      "start_ms",
-                      "end_ms"
-                    ],
-                    "properties": {
-                      "text": {
-                        "type": "string"
-                      },
-                      "start_ms": {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      "end_ms": {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      "confidence": {
-                        "type": "number",
-                        "nullable": true
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "raw_lines": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "object",
-              "additionalProperties": true
-            }
-          }
-        }
-      },
-      "KaraokeSession": {
-        "type": "object",
-        "required": [
-          "id",
-          "object",
-          "attempt",
-          "protocol_version",
-          "websocket_url",
-          "token_expires_at",
-          "session_expires_at",
-          "scoring_policy"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "object": {
-            "type": "string",
-            "enum": [
-              "karaoke_session"
-            ]
-          },
-          "attempt": {
-            "type": "string"
-          },
-          "protocol_version": {
-            "type": "integer",
-            "enum": [
-              1
-            ]
-          },
-          "websocket_url": {
-            "type": "string"
-          },
-          "token_expires_at": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "session_expires_at": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "scoring_policy": {
-            "$ref": "#/components/schemas/KaraokeScoringPolicy"
-          }
-        },
-        "additionalProperties": false
       },
       "CommentListResponse": {
         "type": "object",
@@ -10516,7 +12592,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./comments.yaml#/CommentListItem"
+              "$ref": "#/components/schemas/CommentListItem"
             }
           },
           "next_cursor": {
@@ -10524,7 +12600,7 @@ const spec = {
             "nullable": true
           },
           "thread_snapshot": {
-            "$ref": "./comments.yaml#/CommentThreadSnapshot",
+            "$ref": "#/components/schemas/CommentThreadSnapshot",
             "nullable": true
           }
         }
@@ -10544,7 +12620,7 @@ const spec = {
             "type": "array",
             "maxItems": 1,
             "items": {
-              "$ref": "./posts.yaml#/MediaDescriptor"
+              "$ref": "#/components/schemas/MediaDescriptor"
             }
           },
           "authorship_mode": {
@@ -10561,7 +12637,7 @@ const spec = {
             "nullable": true
           },
           "agent_action_proof": {
-            "$ref": "./agents.yaml#/AgentActionProof",
+            "$ref": "#/components/schemas/AgentActionProof",
             "nullable": true
           },
           "identity_mode": {
@@ -10684,7 +12760,7 @@ const spec = {
             "nullable": true
           },
           "agent_ownership_provider_snapshot": {
-            "$ref": "./agents.yaml#/AgentOwnershipProvider",
+            "$ref": "#/components/schemas/AgentOwnershipProvider",
             "nullable": true
           },
           "body": {
@@ -10694,7 +12770,7 @@ const spec = {
           "media_refs": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/MediaDescriptor"
+              "$ref": "#/components/schemas/MediaDescriptor"
             }
           },
           "source_language": {
@@ -10812,7 +12888,7 @@ const spec = {
         ],
         "properties": {
           "reason_code": {
-            "$ref": "./moderation.yaml#/UserReportReasonCode"
+            "$ref": "#/components/schemas/UserReportReasonCode"
           },
           "note": {
             "type": "string",
@@ -10859,7 +12935,7 @@ const spec = {
             "type": "string"
           },
           "reason_code": {
-            "$ref": "./moderation.yaml#/UserReportReasonCode"
+            "$ref": "#/components/schemas/UserReportReasonCode"
           },
           "note": {
             "type": "string",
@@ -10871,6 +12947,273 @@ const spec = {
           }
         }
       },
+      "KaraokeSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "protocol_version",
+          "websocket_url",
+          "token_expires_at",
+          "session_expires_at",
+          "scoring_policy"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "karaoke_session"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "websocket_url": {
+            "type": "string"
+          },
+          "token_expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session_expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scoring_policy": {
+            "$ref": "#/components/schemas/KaraokeScoringPolicy"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyPayload": {
+        "type": "object",
+        "required": [
+          "object",
+          "post_id",
+          "community_id",
+          "access",
+          "title",
+          "exercise_count",
+          "exercises"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "song_study_payload"
+            ]
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "access": {
+            "$ref": "#/components/schemas/SongStudyAccessState"
+          },
+          "title": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "artwork_src": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "target_language": {
+            "type": "string",
+            "nullable": true
+          },
+          "exercise_count": {
+            "type": "integer"
+          },
+          "exercises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongStudyExercise"
+            }
+          },
+          "study_pack_version": {
+            "type": "integer"
+          },
+          "generated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "locked_reason": {
+            "$ref": "#/components/schemas/SongStudyLockedReason"
+          },
+          "unavailable_reason": {
+            "$ref": "#/components/schemas/SongStudyUnavailableReason"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyAttemptRequest": {
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "exercise_id",
+          "type",
+          "attempt_number"
+        ],
+        "properties": {
+          "idempotency_key": {
+            "type": "string"
+          },
+          "exercise_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "say_it_back",
+              "translation_choice"
+            ]
+          },
+          "attempt_number": {
+            "type": "integer"
+          },
+          "selected_option_id": {
+            "type": "string"
+          },
+          "transcript": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyAttemptResult": {
+        "type": "object",
+        "required": [
+          "object",
+          "exercise_id",
+          "outcome",
+          "attempts_remaining"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "song_study_attempt_result"
+            ]
+          },
+          "exercise_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "correct",
+              "incorrect",
+              "revealed"
+            ]
+          },
+          "attempts_remaining": {
+            "type": "integer"
+          },
+          "correct_option_id": {
+            "type": "string"
+          },
+          "feedback": {
+            "type": "object",
+            "properties": {
+              "matched": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extra": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "next_review_hint": {
+            "type": "string",
+            "enum": [
+              "again",
+              "hard",
+              "good",
+              "easy"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyTranscriptionResponse": {
+        "type": "object",
+        "required": [
+          "object",
+          "provider",
+          "model",
+          "text"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "song_study_transcription"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "nullable": true
+          },
+          "language_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "language_probability": {
+            "type": "number",
+            "nullable": true
+          },
+          "duration_seconds": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ModerationCaseListResponse": {
         "type": "object",
         "required": [
@@ -10881,7 +13224,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./moderation.yaml#/ModerationCaseListItem"
+              "$ref": "#/components/schemas/ModerationCaseListItem"
             }
           },
           "next_cursor": {
@@ -10902,32 +13245,32 @@ const spec = {
         ],
         "properties": {
           "case": {
-            "$ref": "./moderation.yaml#/ModerationCase"
+            "$ref": "#/components/schemas/ModerationCase"
           },
           "post": {
-            "$ref": "./posts.yaml#/Post",
+            "$ref": "#/components/schemas/Post",
             "nullable": true
           },
           "comment": {
-            "$ref": "./comments.yaml#/Comment",
+            "$ref": "#/components/schemas/Comment",
             "nullable": true
           },
           "signals": {
             "type": "array",
             "items": {
-              "$ref": "./moderation.yaml#/ModerationSignal"
+              "$ref": "#/components/schemas/ModerationSignal"
             }
           },
           "reports": {
             "type": "array",
             "items": {
-              "$ref": "./moderation.yaml#/UserReport"
+              "$ref": "#/components/schemas/UserReport"
             }
           },
           "actions": {
             "type": "array",
             "items": {
-              "$ref": "./moderation.yaml#/ModerationAction"
+              "$ref": "#/components/schemas/ModerationAction"
             }
           }
         }
@@ -10940,7 +13283,7 @@ const spec = {
         ],
         "properties": {
           "action_type": {
-            "$ref": "./moderation.yaml#/ModerationActionType"
+            "$ref": "#/components/schemas/ModerationActionType"
           },
           "note": {
             "type": "string",
@@ -10986,11 +13329,11 @@ const spec = {
           },
           "upload_mode": {
             "type": "string",
-            "nullable": true,
             "enum": [
               "proxy",
               "direct_multipart"
-            ]
+            ],
+            "nullable": true
           }
         }
       },
@@ -11044,8 +13387,7 @@ const spec = {
             "enum": [
               "pending_upload",
               "uploaded",
-              "failed",
-              "cancelled"
+              "failed"
             ]
           },
           "storage_ref": {
@@ -11063,6 +13405,10 @@ const spec = {
             "nullable": true
           },
           "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "ipfs_cid": {
             "type": "string",
             "nullable": true
           },
@@ -11090,10 +13436,6 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "ipfs_cid": {
-            "type": "string",
-            "nullable": true
-          },
           "upload_url": {
             "type": "string"
           },
@@ -11103,55 +13445,24 @@ const spec = {
             "additionalProperties": false,
             "required": [
               "id",
-              "status",
-              "object_key",
               "upload_id",
               "part_size_bytes",
-              "total_parts",
-              "expires_at",
-              "sign_part_url",
-              "complete",
-              "abort"
+              "total_parts"
             ],
             "properties": {
               "id": {
-                "type": "string"
-              },
-              "status": {
-                "type": "string",
-                "enum": [
-                  "created",
-                  "parts_uploading",
-                  "completing",
-                  "head_verifying",
-                  "uploaded",
-                  "aborting",
-                  "aborted"
-                ]
-              },
-              "object_key": {
                 "type": "string"
               },
               "upload_id": {
                 "type": "string"
               },
               "part_size_bytes": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 1
               },
               "total_parts": {
-                "type": "integer"
-              },
-              "expires_at": {
-                "type": "string"
-              },
-              "sign_part_url": {
-                "type": "string"
-              },
-              "complete": {
-                "type": "string"
-              },
-              "abort": {
-                "type": "string"
+                "type": "integer",
+                "minimum": 1
               }
             }
           },
@@ -11183,7 +13494,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./song-artifacts.yaml#/SongArtifactBundle"
+              "$ref": "#/components/schemas/SongArtifactBundle"
             }
           },
           "next_cursor": {
@@ -11202,7 +13513,7 @@ const spec = {
         ],
         "properties": {
           "primary_audio": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef"
+            "$ref": "#/components/schemas/SongArtifactUploadRef"
           },
           "title": {
             "type": "string"
@@ -11215,27 +13526,27 @@ const spec = {
             "nullable": true
           },
           "cover_art": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
+            "$ref": "#/components/schemas/SongArtifactUploadRef",
             "nullable": true
           },
           "preview_audio": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
+            "$ref": "#/components/schemas/SongArtifactUploadRef",
             "nullable": true
           },
           "preview_window": {
-            "$ref": "./song-artifacts.yaml#/SongPreviewWindow",
+            "$ref": "#/components/schemas/SongPreviewWindow",
             "nullable": true
           },
           "canvas_video": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
+            "$ref": "#/components/schemas/SongArtifactUploadRef",
             "nullable": true
           },
           "instrumental_audio": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
+            "$ref": "#/components/schemas/SongArtifactUploadRef",
             "nullable": true
           },
           "vocal_audio": {
-            "$ref": "./song-artifacts.yaml#/SongArtifactUploadRef",
+            "$ref": "#/components/schemas/SongArtifactUploadRef",
             "nullable": true
           }
         }
@@ -11292,12 +13603,12 @@ const spec = {
             "type": "string"
           },
           "primary_audio": {
-            "$ref": "./song-artifacts.yaml#/SongAudioArtifactDescriptor"
+            "$ref": "#/components/schemas/SongAudioArtifactDescriptor"
           },
           "media_refs": {
             "type": "array",
             "items": {
-              "$ref": "./posts.yaml#/MediaDescriptor"
+              "$ref": "#/components/schemas/MediaDescriptor"
             }
           },
           "lyrics": {
@@ -11311,15 +13622,15 @@ const spec = {
             "nullable": true
           },
           "cover_art": {
-            "$ref": "./song-artifacts.yaml#/SongImageArtifactDescriptor",
+            "$ref": "#/components/schemas/SongImageArtifactDescriptor",
             "nullable": true
           },
           "preview_audio": {
-            "$ref": "./song-artifacts.yaml#/SongAudioArtifactDescriptor",
+            "$ref": "#/components/schemas/SongAudioArtifactDescriptor",
             "nullable": true
           },
           "preview_window": {
-            "$ref": "./song-artifacts.yaml#/SongPreviewWindow",
+            "$ref": "#/components/schemas/SongPreviewWindow",
             "nullable": true
           },
           "preview_status": {
@@ -11336,15 +13647,15 @@ const spec = {
             "nullable": true
           },
           "canvas_video": {
-            "$ref": "./song-artifacts.yaml#/SongVideoArtifactDescriptor",
+            "$ref": "#/components/schemas/SongVideoArtifactDescriptor",
             "nullable": true
           },
           "instrumental_audio": {
-            "$ref": "./song-artifacts.yaml#/SongAudioArtifactDescriptor",
+            "$ref": "#/components/schemas/SongAudioArtifactDescriptor",
             "nullable": true
           },
           "vocal_audio": {
-            "$ref": "./song-artifacts.yaml#/SongAudioArtifactDescriptor",
+            "$ref": "#/components/schemas/SongAudioArtifactDescriptor",
             "nullable": true
           },
           "translation_status": {
@@ -11436,10 +13747,14 @@ const spec = {
         ],
         "properties": {
           "post": {
-            "$ref": "./posts.yaml#/Post"
+            "$ref": "#/components/schemas/Post"
           },
           "community": {
-            "$ref": "./communities-core.yaml#/CommunityPreview",
+            "$ref": "#/components/schemas/CommunityPreview",
+            "nullable": true
+          },
+          "viewer_gate_state": {
+            "$ref": "#/components/schemas/PostViewerGateState",
             "nullable": true
           },
           "author_community_role": {
@@ -11451,15 +13766,15 @@ const spec = {
             "nullable": true
           },
           "thread_snapshot": {
-            "$ref": "./comments.yaml#/CommentThreadSnapshot",
+            "$ref": "#/components/schemas/CommentThreadSnapshot",
             "nullable": true
           },
           "market_context": {
-            "$ref": "./market-context.yaml#/MarketContextSummary",
+            "$ref": "#/components/schemas/MarketContextSummary",
             "nullable": true
           },
           "label": {
-            "$ref": "./communities-community.yaml#/PostLabel",
+            "$ref": "#/components/schemas/PostLabel",
             "nullable": true
           },
           "song_presentation": {
@@ -11470,29 +13785,9 @@ const spec = {
             "$ref": "#/components/schemas/SongStudyCapability",
             "nullable": true
           },
-          "viewer_gate_state": {
-            "type": "object",
-            "nullable": true,
-            "additionalProperties": true
-          },
           "asset_story": {
-            "type": "object",
-            "nullable": true,
-            "properties": {
-              "story_ip": {
-                "type": "string",
-                "nullable": true
-              },
-              "story_royalty_registration_status": {
-                "type": "string",
-                "enum": [
-                  "none",
-                  "pending",
-                  "registered",
-                  "failed"
-                ]
-              }
-            }
+            "$ref": "#/components/schemas/PostAssetStorySummary",
+            "nullable": true
           },
           "derivative_sources": {
             "type": "array",
@@ -11576,7 +13871,7 @@ const spec = {
             "type": "array",
             "nullable": true,
             "items": {
-              "$ref": "./posts.yaml#/LocalizedPostEmbedTranslation"
+              "$ref": "#/components/schemas/LocalizedPostEmbedTranslation"
             }
           },
           "source_hash": {
@@ -11618,16 +13913,16 @@ const spec = {
           "ancestors": {
             "type": "array",
             "items": {
-              "$ref": "./comments.yaml#/CommentListItem"
+              "$ref": "#/components/schemas/CommentListItem"
             }
           },
           "comment": {
-            "$ref": "./comments.yaml#/CommentListItem"
+            "$ref": "#/components/schemas/CommentListItem"
           },
           "replies": {
             "type": "array",
             "items": {
-              "$ref": "./comments.yaml#/CommentListItem"
+              "$ref": "#/components/schemas/CommentListItem"
             }
           },
           "next_replies_cursor": {
@@ -11635,7 +13930,7 @@ const spec = {
             "nullable": true
           },
           "thread_snapshot": {
-            "$ref": "./comments.yaml#/CommentThreadSnapshot",
+            "$ref": "#/components/schemas/CommentThreadSnapshot",
             "nullable": true
           }
         }
@@ -11689,7 +13984,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./notifications.yaml#/UserTask"
+              "$ref": "#/components/schemas/UserTask"
             }
           },
           "next_cursor": {
@@ -11708,7 +14003,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./notifications.yaml#/NotificationFeedItem"
+              "$ref": "#/components/schemas/NotificationFeedItem"
             }
           },
           "next_cursor": {
@@ -11769,7 +14064,7 @@ const spec = {
             "type": "string"
           },
           "type": {
-            "$ref": "./notifications.yaml#/UserTaskType"
+            "$ref": "#/components/schemas/UserTaskType"
           },
           "subject_type": {
             "type": "string"
@@ -11778,7 +14073,7 @@ const spec = {
             "type": "string"
           },
           "status": {
-            "$ref": "./notifications.yaml#/UserTaskStatus"
+            "$ref": "#/components/schemas/UserTaskStatus"
           },
           "priority": {
             "type": "integer"
@@ -11884,19 +14179,19 @@ const spec = {
         ],
         "properties": {
           "community": {
-            "$ref": "./communities-community.yaml#/PublicCommunityIdentity"
+            "$ref": "#/components/schemas/PublicCommunityIdentity"
           },
           "stats": {
-            "$ref": "./communities-community.yaml#/PublicCommunityStats"
+            "$ref": "#/components/schemas/PublicCommunityStats"
           },
           "omitted_surfaces": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/OmittedStructuredSurface"
+              "$ref": "#/components/schemas/OmittedStructuredSurface"
             }
           },
           "links": {
-            "$ref": "./communities-community.yaml#/StructuredAccessLinks"
+            "$ref": "#/components/schemas/StructuredAccessLinks"
           }
         }
       },
@@ -11913,7 +14208,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/StructuredPostCard"
+              "$ref": "#/components/schemas/StructuredPostCard"
             }
           },
           "next_cursor": {
@@ -11923,11 +14218,11 @@ const spec = {
           "omitted_surfaces": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/OmittedStructuredSurface"
+              "$ref": "#/components/schemas/OmittedStructuredSurface"
             }
           },
           "links": {
-            "$ref": "./communities-community.yaml#/StructuredAccessLinks"
+            "$ref": "#/components/schemas/StructuredAccessLinks"
           }
         }
       },
@@ -11941,16 +14236,16 @@ const spec = {
         ],
         "properties": {
           "post": {
-            "$ref": "./communities-community.yaml#/StructuredPostCard"
+            "$ref": "#/components/schemas/StructuredPostCard"
           },
           "omitted_surfaces": {
             "type": "array",
             "items": {
-              "$ref": "./communities-community.yaml#/OmittedStructuredSurface"
+              "$ref": "#/components/schemas/OmittedStructuredSurface"
             }
           },
           "links": {
-            "$ref": "./communities-community.yaml#/StructuredAccessLinks"
+            "$ref": "#/components/schemas/StructuredAccessLinks"
           }
         }
       },
@@ -11967,7 +14262,7 @@ const spec = {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "./comments.yaml#/CommentListItem"
+              "$ref": "#/components/schemas/CommentListItem"
             }
           },
           "next_cursor": {
@@ -11979,9 +14274,2535 @@ const spec = {
             "minimum": 0
           },
           "links": {
-            "$ref": "./communities-community.yaml#/StructuredAccessLinks"
+            "$ref": "#/components/schemas/StructuredAccessLinks"
           }
         }
+      },
+      "WalletAttachmentSummary": {
+        "type": "object",
+        "required": [
+          "wallet_attachment",
+          "chain_namespace",
+          "wallet_address",
+          "is_primary"
+        ],
+        "properties": {
+          "wallet_attachment": {
+            "type": "string"
+          },
+          "chain_namespace": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string"
+          },
+          "is_primary": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RequestedVerificationCapability": {
+        "type": "string",
+        "enum": [
+          "unique_human",
+          "age_over_18",
+          "minimum_age",
+          "nationality",
+          "gender"
+        ]
+      },
+      "VerificationRequirement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "proof_type"
+            ],
+            "properties": {
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "minimum_age"
+                ]
+              },
+              "minimum_age": {
+                "type": "integer",
+                "minimum": 18,
+                "maximum": 125
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proof_type"
+            ],
+            "properties": {
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "nationality"
+                ]
+              },
+              "required_values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "VerificationIntent": {
+        "type": "string",
+        "enum": [
+          "profile_verification",
+          "community_creation",
+          "community_join",
+          "post_create",
+          "comment_create",
+          "post_access_18_plus",
+          "commerce_pricing",
+          "qualifier_disclosure"
+        ]
+      },
+      "VerificationSessionLaunch": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "qr_deeplink",
+              "widget",
+              "native_sdk",
+              "web_sdk",
+              "none"
+            ]
+          },
+          "self_app": {
+            "$ref": "#/components/schemas/SelfVerificationLaunch"
+          },
+          "very_widget": {
+            "$ref": "#/components/schemas/VeryWidgetLaunch"
+          },
+          "zkpassport": {
+            "$ref": "#/components/schemas/ZkPassportVerificationLaunch"
+          }
+        }
+      },
+      "AgentOwnershipSessionKind": {
+        "type": "string",
+        "enum": [
+          "register",
+          "refresh",
+          "transfer",
+          "deregister"
+        ]
+      },
+      "AgentOwnershipProvider": {
+        "type": "string",
+        "enum": [
+          "self_agent_id",
+          "clawkey"
+        ]
+      },
+      "AgentChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device",
+          "public_key",
+          "message",
+          "signature",
+          "timestamp"
+        ],
+        "properties": {
+          "device": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AgentOwnershipSessionStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "awaiting_owner",
+          "proof_submitted",
+          "verified",
+          "failed",
+          "expired",
+          "cancelled"
+        ]
+      },
+      "AgentOwnershipSessionLaunch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "qr_deeplink",
+              "registration_url",
+              "none"
+            ]
+          },
+          "self_agent": {
+            "$ref": "#/components/schemas/SelfAgentOwnershipLaunch"
+          },
+          "clawkey_registration": {
+            "$ref": "#/components/schemas/ClawkeyRegistrationLaunch"
+          }
+        }
+      },
+      "UserAgentStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "active",
+          "suspended",
+          "revoked",
+          "transferred",
+          "deregistered"
+        ]
+      },
+      "AgentOwnershipRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "object",
+          "agent",
+          "owner_user",
+          "ownership_provider",
+          "ownership_state",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "agent_ownership_record"
+            ]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "owner_user": {
+            "type": "string"
+          },
+          "ownership_provider": {
+            "$ref": "#/components/schemas/AgentOwnershipProvider"
+          },
+          "provider_subject": {
+            "type": "string",
+            "nullable": true
+          },
+          "device": {
+            "type": "string",
+            "nullable": true
+          },
+          "public_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "ownership_state": {
+            "$ref": "#/components/schemas/AgentOwnershipState"
+          },
+          "source_session": {
+            "type": "string",
+            "nullable": true
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "ended_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "evidence_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AgentHandleStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "redirect",
+          "retired"
+        ]
+      },
+      "LinkedHandle": {
+        "type": "object",
+        "required": [
+          "linked_handle",
+          "label",
+          "kind",
+          "verification_state"
+        ],
+        "properties": {
+          "linked_handle": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "pirate",
+              "ens"
+            ]
+          },
+          "verification_state": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified",
+              "stale"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          }
+        }
+      },
+      "NamespaceVerificationAssertions": {
+        "type": "object",
+        "properties": {
+          "root_exists": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "root_control_verified": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "expiry_horizon_sufficient": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "routing_enabled": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "pirate_dns_authority_verified": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "root_key_proof_verified": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "fabric_publish_verified": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "anchor_fresh_enough": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "owner_signed_updates_verified": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      },
+      "NamespaceVerificationCapabilities": {
+        "type": "object",
+        "properties": {
+          "club_attach_allowed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "pirate_web_routing_allowed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "pirate_subdomain_issuance_allowed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "owner_signed_record_updates_allowed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "pirate_subspace_issuance_allowed": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      },
+      "VerificationCapabilities": {
+        "type": "object",
+        "required": [
+          "unique_human",
+          "age_over_18",
+          "minimum_age",
+          "nationality",
+          "gender",
+          "wallet_score"
+        ],
+        "properties": {
+          "unique_human": {
+            "$ref": "#/components/schemas/VerificationCapabilityState"
+          },
+          "age_over_18": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerifiedCapabilityState"
+              }
+            ],
+            "type": "object",
+            "properties": {
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "age_over_18"
+                ],
+                "nullable": true
+              }
+            }
+          },
+          "minimum_age": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerifiedCapabilityState"
+              }
+            ],
+            "type": "object",
+            "properties": {
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "minimum_age"
+                ],
+                "nullable": true
+              },
+              "value": {
+                "type": "integer",
+                "nullable": true
+              }
+            }
+          },
+          "nationality": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerifiedCapabilityState"
+              }
+            ],
+            "type": "object",
+            "properties": {
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "nationality"
+                ],
+                "nullable": true
+              },
+              "value": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "gender": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerifiedCapabilityState"
+              }
+            ],
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "M",
+                  "F"
+                ],
+                "nullable": true
+              },
+              "proof_type": {
+                "type": "string",
+                "enum": [
+                  "gender"
+                ],
+                "nullable": true
+              }
+            }
+          },
+          "wallet_score": {
+            "$ref": "#/components/schemas/WalletScoreCapabilityState"
+          }
+        }
+      },
+      "WalletIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "chain_ref",
+          "wallet_address",
+          "display_label",
+          "public_names"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "wallet_identity"
+            ]
+          },
+          "chain_ref": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string"
+          },
+          "display_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "public_names": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WalletIdentityPublicName"
+            }
+          }
+        }
+      },
+      "WalletIdentityRedirect": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "chain_ref",
+          "wallet_address",
+          "profile",
+          "profile_handle"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "wallet_identity_redirect"
+            ]
+          },
+          "chain_ref": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "profile_handle": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCentralizedCommunityRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateCommunityRequestBase"
+          },
+          {
+            "type": "object",
+            "required": [
+              "governance_mode"
+            ],
+            "properties": {
+              "governance_mode": {
+                "type": "string",
+                "enum": [
+                  "centralized"
+                ],
+                "default": "centralized"
+              }
+            }
+          }
+        ]
+      },
+      "CreateMultisigCommunityRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateCommunityRequestBase"
+          },
+          {
+            "type": "object",
+            "required": [
+              "governance_mode",
+              "governance_backend"
+            ],
+            "properties": {
+              "governance_mode": {
+                "type": "string",
+                "enum": [
+                  "multisig"
+                ]
+              },
+              "governance_backend": {
+                "$ref": "#/components/schemas/MultisigGovernanceAttachmentInput"
+              }
+            }
+          }
+        ]
+      },
+      "CreateMajeurCommunityRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateCommunityRequestBase"
+          },
+          {
+            "type": "object",
+            "required": [
+              "governance_mode",
+              "governance_backend"
+            ],
+            "properties": {
+              "governance_mode": {
+                "type": "string",
+                "enum": [
+                  "majeur"
+                ]
+              },
+              "governance_backend": {
+                "$ref": "#/components/schemas/MajeurGovernanceCreateInput"
+              }
+            }
+          }
+        ]
+      },
+      "HumanVerificationLane": {
+        "type": "string",
+        "enum": [
+          "very",
+          "self"
+        ]
+      },
+      "CommunityAgentResolutionOrigin": {
+        "type": "string",
+        "enum": [
+          "derived",
+          "explicit"
+        ]
+      },
+      "RootPostQuotaByTrustTier": {
+        "type": "object",
+        "properties": {
+          "new": {
+            "$ref": "#/components/schemas/RootPostQuotaRule"
+          },
+          "established": {
+            "$ref": "#/components/schemas/RootPostQuotaRule"
+          },
+          "trusted": {
+            "$ref": "#/components/schemas/RootPostQuotaRule"
+          },
+          "high_trust": {
+            "$ref": "#/components/schemas/RootPostQuotaRule"
+          }
+        }
+      },
+      "ReplyQuotaByTrustTier": {
+        "type": "object",
+        "properties": {
+          "new": {
+            "$ref": "#/components/schemas/ReplyQuotaRule"
+          },
+          "established": {
+            "$ref": "#/components/schemas/ReplyQuotaRule"
+          },
+          "trusted": {
+            "$ref": "#/components/schemas/ReplyQuotaRule"
+          },
+          "high_trust": {
+            "$ref": "#/components/schemas/ReplyQuotaRule"
+          }
+        }
+      },
+      "GatePolicy": {
+        "type": "object",
+        "required": [
+          "version",
+          "expression"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "expression": {
+            "$ref": "#/components/schemas/GateExpression"
+          }
+        }
+      },
+      "DonationPartnerSummary": {
+        "type": "object",
+        "required": [
+          "donation_partner",
+          "display_name",
+          "provider",
+          "review_status",
+          "status"
+        ],
+        "properties": {
+          "donation_partner": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "endaoment"
+            ]
+          },
+          "provider_partner_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "review_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "retired"
+            ]
+          }
+        }
+      },
+      "CommunityContentAuthenticityPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "authenticity_stance",
+          "text_policy",
+          "image_policy",
+          "video_policy",
+          "song_policy"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "authenticity_stance": {
+            "$ref": "#/components/schemas/CommunityContentAuthenticityStance"
+          },
+          "text_policy": {
+            "$ref": "#/components/schemas/CommunityTextAuthenticityPolicySettings"
+          },
+          "image_policy": {
+            "$ref": "#/components/schemas/CommunityImageAuthenticityPolicySettings"
+          },
+          "video_policy": {
+            "$ref": "#/components/schemas/CommunityVideoAuthenticityPolicySettings"
+          },
+          "song_policy": {
+            "$ref": "#/components/schemas/CommunitySongAuthenticityPolicySettings"
+          }
+        }
+      },
+      "CommunityContentAuthenticityDetectionPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "selection_mode",
+          "resolved_profile"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "selection_mode": {
+            "$ref": "#/components/schemas/CommunityContentAuthenticityDetectionSelectionMode"
+          },
+          "resolved_profile": {
+            "$ref": "#/components/schemas/CommunityAuthenticityDetectionProfileSummary"
+          }
+        }
+      },
+      "CommunityMarketContextPolicy": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "policy_origin",
+          "mode",
+          "enabled_post_types",
+          "max_markets_per_post",
+          "provider_set",
+          "resolved_profile"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_market_context_policy"
+            ]
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/CommunityMarketContextMode"
+          },
+          "enabled_post_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "link",
+                "image",
+                "video"
+              ]
+            }
+          },
+          "max_markets_per_post": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "provider_set": {
+            "$ref": "#/components/schemas/CommunityMarketContextProviderSet"
+          },
+          "resolved_profile": {
+            "$ref": "#/components/schemas/MarketContextProfileSummary"
+          }
+        }
+      },
+      "CommunitySourcePolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "identified_person_media_scope",
+          "require_source_url_for_reposts",
+          "allow_human_made_fan_art_of_real_people",
+          "require_fan_art_disclosure"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "identified_person_media_scope": {
+            "$ref": "#/components/schemas/CommunityIdentifiedPersonMediaScope"
+          },
+          "require_source_url_for_reposts": {
+            "type": "boolean"
+          },
+          "allow_human_made_fan_art_of_real_people": {
+            "type": "boolean"
+          },
+          "require_fan_art_disclosure": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityCaptureEditPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "basic_adjustments",
+          "retouching",
+          "compositing",
+          "documentary_editing",
+          "require_edit_disclosure"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "basic_adjustments": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "retouching": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "compositing": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "documentary_editing": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "require_edit_disclosure": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityAdultContentPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "suggestive",
+          "artistic_nudity",
+          "explicit_nudity",
+          "explicit_sexual_content",
+          "fetish_content"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "suggestive": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "artistic_nudity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "explicit_nudity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "explicit_sexual_content": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "fetish_content": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CommunityGraphicContentPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "injury_medical",
+          "gore",
+          "extreme_gore",
+          "body_horror_disturbing",
+          "animal_harm"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "injury_medical": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "gore": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "extreme_gore": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "body_horror_disturbing": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "animal_harm": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CommunityMotionMediaPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "allow_animated_images",
+          "allow_silent_looping_video",
+          "allow_audio_video",
+          "require_video_transcription"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "allow_animated_images": {
+            "type": "boolean"
+          },
+          "allow_silent_looping_video": {
+            "type": "boolean"
+          },
+          "allow_audio_video": {
+            "type": "boolean"
+          },
+          "max_video_duration_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "require_video_transcription": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityLanguagePolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "profanity",
+          "slurs"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "profanity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "slurs": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CommunityCivilityPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "group_directed_demeaning_language",
+          "targeted_insults",
+          "targeted_harassment",
+          "threatening_language"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "group_directed_demeaning_language": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "targeted_insults": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "targeted_harassment": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "threatening_language": {
+            "$ref": "#/components/schemas/CommunityEscalationDecisionLevel"
+          }
+        }
+      },
+      "CommunityVisualPolicySettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "community",
+          "policy_origin",
+          "topless",
+          "visible_nipples",
+          "visible_buttocks",
+          "visible_genitals",
+          "bottomless_obscured",
+          "implied_sexual_activity",
+          "explicit_sexual_activity",
+          "sexualized_contact",
+          "masturbation",
+          "oral_sex",
+          "sex_toy_packaging",
+          "sex_toy_visible",
+          "sex_toy_in_use",
+          "anime_manga",
+          "furry_anthro",
+          "fictional_nudity",
+          "fictional_explicit_sex",
+          "ambiguous_fictional_age_with_adult_content",
+          "possible_minor_with_adult_content",
+          "ai_generated_images",
+          "ai_generated_adult_images",
+          "deepfake_or_face_swap_risk",
+          "celebrity_adult_likeness",
+          "voyeuristic_or_hidden_camera",
+          "watermark",
+          "adult_platform_watermark",
+          "product_promotion",
+          "affiliate_or_sales_link",
+          "qr_code",
+          "payment_handle",
+          "urls_in_image",
+          "weapons",
+          "gore_or_injury",
+          "drugs",
+          "hate_symbols",
+          "personal_documents",
+          "uncertain_age_with_adult_content",
+          "low_quality_adult_image",
+          "model_uncertain"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "topless": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "visible_nipples": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "visible_buttocks": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "visible_genitals": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "bottomless_obscured": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "implied_sexual_activity": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "explicit_sexual_activity": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "sexualized_contact": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "masturbation": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "oral_sex": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "sex_toy_packaging": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "sex_toy_visible": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "sex_toy_in_use": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "anime_manga": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "furry_anthro": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "fictional_nudity": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "fictional_explicit_sex": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "ambiguous_fictional_age_with_adult_content": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "possible_minor_with_adult_content": {
+            "type": "string",
+            "enum": [
+              "reject"
+            ]
+          },
+          "ai_generated_images": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "ai_generated_adult_images": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "deepfake_or_face_swap_risk": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "celebrity_adult_likeness": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "voyeuristic_or_hidden_camera": {
+            "type": "string",
+            "enum": [
+              "reject"
+            ]
+          },
+          "watermark": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "adult_platform_watermark": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "product_promotion": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyDisclosureAction"
+          },
+          "affiliate_or_sales_link": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyDisclosureAction"
+          },
+          "qr_code": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "payment_handle": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "urls_in_image": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "weapons": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "gore_or_injury": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "drugs": {
+            "$ref": "#/components/schemas/CommunityVisualPolicyAction"
+          },
+          "hate_symbols": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "personal_documents": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "uncertain_age_with_adult_content": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "low_quality_adult_image": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          },
+          "model_uncertain": {
+            "type": "string",
+            "enum": [
+              "queue",
+              "reject"
+            ]
+          }
+        }
+      },
+      "CommunityProvenancePolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "allowed_creator_relations",
+          "require_creator_relation",
+          "false_claim_consequence",
+          "allow_oc_claim",
+          "require_proof_for_original"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "allowed_creator_relations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/CommunityCreatorRelation"
+            }
+          },
+          "require_creator_relation": {
+            "type": "boolean"
+          },
+          "false_claim_consequence": {
+            "$ref": "#/components/schemas/CommunityFalseClaimConsequence"
+          },
+          "allow_oc_claim": {
+            "type": "boolean"
+          },
+          "require_proof_for_original": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityPromotionPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "policy_origin",
+          "self_promotion_mode",
+          "require_affiliation_disclosure"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "policy_origin": {
+            "$ref": "#/components/schemas/CommunityPolicyOrigin"
+          },
+          "self_promotion_mode": {
+            "$ref": "#/components/schemas/CommunitySelfPromotionMode"
+          },
+          "require_affiliation_disclosure": {
+            "type": "boolean"
+          },
+          "max_promotional_posts_per_week": {
+            "type": "integer",
+            "nullable": true
+          },
+          "promotional_participation_ratio_decimal": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
+            "nullable": true
+          },
+          "require_minimum_membership_days": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "CommunityLabelPolicy": {
+        "type": "object",
+        "required": [
+          "label_enabled",
+          "require_label_on_top_level_posts",
+          "definitions"
+        ],
+        "properties": {
+          "label_enabled": {
+            "type": "boolean"
+          },
+          "require_label_on_top_level_posts": {
+            "type": "boolean"
+          },
+          "definitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityLabelDefinition"
+            }
+          }
+        }
+      },
+      "CommunityProfile": {
+        "type": "object",
+        "required": [
+          "rules",
+          "resource_links"
+        ],
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityRule"
+            }
+          },
+          "resource_links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityResourceLink"
+            }
+          }
+        }
+      },
+      "CommunityReferenceLinkPublic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "community_reference_link",
+          "platform",
+          "url",
+          "link_status",
+          "verified",
+          "metadata",
+          "position"
+        ],
+        "properties": {
+          "community_reference_link": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/CommunityReferenceLinkPlatform"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "external": {
+            "type": "string",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "link_status": {
+            "$ref": "#/components/schemas/CommunityReferenceLinkStatus"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/CommunityReferenceLinkMetadata"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CommunityGovernanceBackend": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CentralizedGovernanceBackend"
+          },
+          {
+            "$ref": "#/components/schemas/MultisigGovernanceBackend"
+          },
+          {
+            "$ref": "#/components/schemas/MajeurGovernanceBackend"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "governance_mode",
+          "mapping": {
+            "centralized": "#/components/schemas/CentralizedGovernanceBackend",
+            "multisig": "#/components/schemas/MultisigGovernanceBackend",
+            "majeur": "#/components/schemas/MajeurGovernanceBackend"
+          }
+        }
+      },
+      "GateRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "community",
+          "scope",
+          "gate_family",
+          "gate_type",
+          "status",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "gate_rule"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "membership",
+              "viewer",
+              "posting"
+            ]
+          },
+          "gate_family": {
+            "type": "string",
+            "enum": [
+              "token_holding",
+              "identity_proof"
+            ]
+          },
+          "gate_type": {
+            "type": "string",
+            "enum": [
+              "unique_human",
+              "age_over_18",
+              "minimum_age",
+              "nationality",
+              "gender",
+              "wallet_score",
+              "erc721_holding",
+              "erc721_inventory_match"
+            ]
+          },
+          "proof_requirements": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/ProofRequirement"
+            }
+          },
+          "chain_namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "gate_config": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CommunityPolicyOrigin": {
+        "type": "string",
+        "enum": [
+          "default",
+          "explicit"
+        ]
+      },
+      "CommunityMoneyAssetRef": {
+        "type": "object",
+        "required": [
+          "asset_symbol"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "asset_symbol": {
+            "type": "string"
+          },
+          "chain_namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "chain_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CommunityMoneyChainRef": {
+        "type": "object",
+        "required": [
+          "chain_namespace"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "chain_namespace": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CommunityFundingRouteStatusPolicy": {
+        "type": "string",
+        "enum": [
+          "fail",
+          "fallback_display",
+          "queue"
+        ]
+      },
+      "CommunityPricingVerificationProvider": {
+        "type": "string",
+        "enum": [
+          "self"
+        ]
+      },
+      "CommunityPricingTier": {
+        "type": "object",
+        "required": [
+          "tier_key",
+          "adjustment_type",
+          "adjustment_value"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "tier_key": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "adjustment_type": {
+            "$ref": "#/components/schemas/CommunityPricingAdjustmentType"
+          },
+          "adjustment_value": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "CommunityPricingCountryAssignment": {
+        "type": "object",
+        "required": [
+          "country_code",
+          "tier_key"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "country_code": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2
+          },
+          "tier_key": {
+            "type": "string"
+          }
+        }
+      },
+      "CommunityPurchaseSettlementMode": {
+        "type": "string",
+        "enum": [
+          "delivery_only_story_settlement",
+          "royalty_native_story_payment"
+        ]
+      },
+      "CommunitySaleAllocationLeg": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CommunitySaleAllocationSnapshot"
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "$ref": "#/components/schemas/CommunitySaleAllocationStatus"
+              },
+              "settlement_ref": {
+                "type": "string",
+                "nullable": true
+              },
+              "failure_reason": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "CommunityPurchaseFundingMode": {
+        "type": "string",
+        "enum": [
+          "direct",
+          "routed"
+        ]
+      },
+      "CommunitySaleAllocationSnapshot": {
+        "type": "object",
+        "required": [
+          "recipient_type",
+          "waterfall_position",
+          "share_bps",
+          "amount_cents",
+          "settlement_strategy"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "recipient_type": {
+            "$ref": "#/components/schemas/CommunitySaleAllocationRecipientType"
+          },
+          "recipient_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "waterfall_position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "share_bps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "settlement_strategy": {
+            "$ref": "#/components/schemas/CommunitySaleAllocationSettlementStrategy"
+          }
+        }
+      },
+      "MembershipRequestStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired"
+        ]
+      },
+      "CommunityTextLocalization": {
+        "type": "object",
+        "required": [
+          "resolved_locale",
+          "items"
+        ],
+        "properties": {
+          "resolved_locale": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityTextLocalizationItem"
+            }
+          }
+        }
+      },
+      "CommunityRoleSummary": {
+        "type": "object",
+        "required": [
+          "user",
+          "display_name",
+          "handle",
+          "role"
+        ],
+        "properties": {
+          "user": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "nationality_badge_country": {
+            "type": "string",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "moderator"
+            ]
+          }
+        }
+      },
+      "MembershipGateSummary": {
+        "type": "object",
+        "required": [
+          "gate_type"
+        ],
+        "properties": {
+          "gate_type": {
+            "type": "string",
+            "enum": [
+              "nationality",
+              "gender",
+              "unique_human",
+              "age_over_18",
+              "minimum_age",
+              "wallet_score",
+              "altcha_pow",
+              "erc721_holding",
+              "erc721_inventory_match"
+            ]
+          },
+          "accepted_providers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "self",
+                "zkpassport",
+                "very",
+                "passport"
+              ]
+            }
+          },
+          "required_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "required_values": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "excluded_values": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_minimum_age": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 18,
+            "maximum": 125
+          },
+          "minimum_score": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "chain_namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "contract_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "inventory_provider": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "courtyard"
+            ]
+          },
+          "min_quantity": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "asset_filter_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset_category": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CommunityRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "title",
+          "body",
+          "report_reason",
+          "position",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_rule"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "report_reason": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          }
+        }
+      },
+      "GatePolicyEvaluation": {
+        "type": "object",
+        "required": [
+          "passed",
+          "trace",
+          "required_action_set"
+        ],
+        "properties": {
+          "passed": {
+            "type": "boolean"
+          },
+          "trace": {
+            "$ref": "#/components/schemas/GateTraceNode"
+          },
+          "required_action_set": {
+            "$ref": "#/components/schemas/RequiredActionSet",
+            "nullable": true
+          }
+        }
+      },
+      "ImageMediaDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string",
+            "pattern": "^image/"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "VideoMediaDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string",
+            "pattern": "^video/"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "poster_mime_type": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^image/"
+          },
+          "poster_size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_height": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_frame_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "preview_video": {
+            "$ref": "#/components/schemas/SongVideoArtifactDescriptor",
+            "nullable": true
+          }
+        }
+      },
+      "AudioMediaDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string",
+            "pattern": "^audio/"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "AgentActionProof": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "nonce",
+          "signed_at",
+          "canonical_request_hash",
+          "signature"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string"
+          },
+          "signed_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "canonical_request_hash": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
+      },
+      "MediaDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "decentralized_storage": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "poster_mime_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "poster_size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_height": {
+            "type": "integer",
+            "nullable": true
+          },
+          "poster_frame_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "preview_video": {
+            "$ref": "#/components/schemas/SongVideoArtifactDescriptor",
+            "nullable": true
+          }
+        }
+      },
+      "PostCreatorRelation": {
+        "type": "string",
+        "enum": [
+          "captured",
+          "created",
+          "subject",
+          "authorized_repost",
+          "fan_work",
+          "found"
+        ]
+      },
+      "PromotionDisclosureInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "is_promotional",
+          "affiliation_kind"
+        ],
+        "properties": {
+          "is_promotional": {
+            "type": "boolean"
+          },
+          "affiliation_kind": {
+            "$ref": "#/components/schemas/PromotionAffiliationKind"
+          }
+        }
+      },
+      "DisclosedQualifierSnapshot": {
+        "type": "object",
+        "required": [
+          "qualifier_template",
+          "rendered_label",
+          "qualifier_kind",
+          "qualifier_source"
+        ],
+        "properties": {
+          "qualifier_template": {
+            "type": "string"
+          },
+          "rendered_label": {
+            "type": "string"
+          },
+          "qualifier_kind": {
+            "type": "string",
+            "enum": [
+              "verification_capability",
+              "provider_attestation"
+            ]
+          },
+          "qualifier_source": {
+            "type": "string"
+          },
+          "sensitivity_level": {
+            "type": "string",
+            "enum": [
+              "low",
+              "high"
+            ],
+            "nullable": true
+          },
+          "redundancy_key": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PostEmbed": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/XPostEmbed"
+          },
+          {
+            "$ref": "#/components/schemas/YouTubeVideoEmbed"
+          },
+          {
+            "$ref": "#/components/schemas/KalshiMarketEmbed"
+          },
+          {
+            "$ref": "#/components/schemas/PolymarketMarketEmbed"
+          }
+        ]
+      },
+      "PromotionDisclosure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "is_promotional",
+          "affiliation_kind"
+        ],
+        "properties": {
+          "is_promotional": {
+            "type": "boolean"
+          },
+          "affiliation_kind": {
+            "$ref": "#/components/schemas/PromotionAffiliationKind"
+          }
+        }
+      },
+      "CrosspostSource": {
+        "type": "object",
+        "required": [
+          "status",
+          "post",
+          "community"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrosspostSourceStatus"
+          },
+          "post": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "captured_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "post_type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "video",
+              "link",
+              "song"
+            ],
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "community_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "community_route_slug": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "thumbnail_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "FeedItem": {
+        "type": "object",
+        "required": [
+          "community",
+          "post"
+        ],
+        "properties": {
+          "community": {
+            "$ref": "#/components/schemas/HomeFeedCommunitySummary"
+          },
+          "post": {
+            "$ref": "#/components/schemas/LocalizedPostResponse"
+          }
+        }
+      },
+      "HomeFeedCommunitySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "object",
+          "display_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "home_feed_community_summary"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "route_slug": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "member_count": {
+            "type": "integer",
+            "nullable": true
+          },
+          "follower_count": {
+            "type": "integer",
+            "nullable": true
+          },
+          "view_count": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "CommentListItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "object",
+          "comment",
+          "viewer_vote",
+          "resolved_locale",
+          "translation_state",
+          "machine_translated",
+          "source_hash"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "comment_list_item"
+            ]
+          },
+          "comment": {
+            "$ref": "#/components/schemas/Comment"
+          },
+          "viewer_vote": {
+            "type": "integer",
+            "enum": [
+              -1,
+              1
+            ],
+            "nullable": true
+          },
+          "viewer_can_delete": {
+            "type": "boolean"
+          },
+          "resolved_locale": {
+            "type": "string"
+          },
+          "translation_state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending",
+              "same_language",
+              "policy_blocked"
+            ]
+          },
+          "machine_translated": {
+            "type": "boolean"
+          },
+          "translated_body": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "CommentThreadSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_root_post",
+          "snapshot_seq",
+          "published_through_comment_created",
+          "comment_count",
+          "swarm_manifest_ref",
+          "swarm_feed_ref",
+          "created"
+        ],
+        "properties": {
+          "thread_root_post": {
+            "type": "string"
+          },
+          "snapshot_seq": {
+            "type": "integer"
+          },
+          "published_through_comment_created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "comment_count": {
+            "type": "integer"
+          },
+          "swarm_manifest_ref": {
+            "type": "string"
+          },
+          "swarm_feed_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "UserReportReasonCode": {
+        "type": "string",
+        "enum": [
+          "spam",
+          "harassment",
+          "hate",
+          "sexual_content",
+          "graphic_content",
+          "misleading",
+          "other"
+        ]
       },
       "KaraokeScoringPolicy": {
         "type": "object",
@@ -12045,6 +16866,612 @@ const spec = {
           }
         ]
       },
+      "SongStudyAccessState": {
+        "type": "string",
+        "enum": [
+          "ready",
+          "locked",
+          "processing",
+          "unavailable"
+        ]
+      },
+      "SongStudyExercise": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "SongStudySayItBackExercise",
+            "required": [
+              "id",
+              "type",
+              "line_id",
+              "line_index",
+              "prompt_text",
+              "reference_text",
+              "max_attempts"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "say_it_back"
+                ]
+              },
+              "line_id": {
+                "type": "string"
+              },
+              "line_index": {
+                "type": "integer"
+              },
+              "prompt_text": {
+                "type": "string"
+              },
+              "reference_text": {
+                "type": "string"
+              },
+              "translation_text": {
+                "type": "string",
+                "nullable": true
+              },
+              "max_attempts": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "title": "SongStudyTranslationChoiceExercise",
+            "required": [
+              "id",
+              "type",
+              "line_id",
+              "line_index",
+              "prompt_text",
+              "question",
+              "options",
+              "max_attempts"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "translation_choice"
+                ]
+              },
+              "line_id": {
+                "type": "string"
+              },
+              "line_index": {
+                "type": "integer"
+              },
+              "prompt_text": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "text"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "max_attempts": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "SongStudyLockedReason": {
+        "type": "string",
+        "enum": [
+          "purchase_required",
+          "membership_required",
+          "age_required"
+        ]
+      },
+      "SongStudyUnavailableReason": {
+        "type": "string",
+        "enum": [
+          "not_song",
+          "no_lyrics",
+          "unsupported_language",
+          "generation_failed"
+        ]
+      },
+      "ModerationCaseListItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ModerationCase"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "post"
+            ],
+            "properties": {
+              "post": {
+                "$ref": "#/components/schemas/ModerationCasePostPreview",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "ModerationCase": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "community",
+          "post",
+          "comment",
+          "status",
+          "queue_scope",
+          "priority",
+          "opened_by",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "moderation_case"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string",
+            "nullable": true
+          },
+          "comment": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/ModerationCaseStatus"
+          },
+          "queue_scope": {
+            "$ref": "#/components/schemas/ModerationQueueScope"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/ModerationSignalSeverity"
+          },
+          "opened_by": {
+            "$ref": "#/components/schemas/ModerationCaseOpenedBy"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "resolved_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "ModerationSignal": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "community",
+          "post",
+          "comment",
+          "analysis_result_ref",
+          "source",
+          "signal_type",
+          "severity",
+          "provider",
+          "provider_label",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "moderation_signal"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string",
+            "nullable": true
+          },
+          "comment": {
+            "type": "string",
+            "nullable": true
+          },
+          "analysis_result_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "platform_analysis"
+            ]
+          },
+          "signal_type": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/ModerationSignalSeverity"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provider_label": {
+            "type": "string"
+          },
+          "evidence_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ModerationAction": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "moderation_case",
+          "community",
+          "post",
+          "comment",
+          "actor_user",
+          "action_type",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "moderation_action"
+            ]
+          },
+          "moderation_case": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string",
+            "nullable": true
+          },
+          "comment": {
+            "type": "string",
+            "nullable": true
+          },
+          "actor_user": {
+            "type": "string"
+          },
+          "action_type": {
+            "$ref": "#/components/schemas/ModerationActionType"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ModerationActionType": {
+        "type": "string",
+        "enum": [
+          "dismiss",
+          "hide",
+          "remove",
+          "restore",
+          "age_gate"
+        ]
+      },
+      "SongArtifactUploadRef": {
+        "type": "object",
+        "required": [
+          "song_artifact_upload"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "song_artifact_upload": {
+            "type": "string"
+          }
+        }
+      },
+      "SongPreviewWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "start_ms",
+          "duration_ms"
+        ],
+        "properties": {
+          "start_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SongAudioArtifactDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "clip_start_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "clip_duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "decentralized_storage": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "SongImageArtifactDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "SongVideoArtifactDescriptor": {
+        "type": "object",
+        "required": [
+          "storage_ref",
+          "mime_type"
+        ],
+        "properties": {
+          "storage_ref": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "content_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "clip_start_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "clip_duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "height": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "PostViewerGateState": {
+        "type": "object",
+        "required": [
+          "community_id",
+          "community_display_name",
+          "viewer_community_role",
+          "viewer_membership_status",
+          "membership_gate_summaries"
+        ],
+        "properties": {
+          "community_id": {
+            "type": "string"
+          },
+          "community_display_name": {
+            "type": "string"
+          },
+          "viewer_community_role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "moderator"
+            ],
+            "nullable": true
+          },
+          "viewer_membership_status": {
+            "type": "string",
+            "enum": [
+              "member",
+              "not_member",
+              "banned"
+            ],
+            "nullable": true
+          },
+          "membership_gate_summaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MembershipGateSummary"
+            }
+          },
+          "gate_match_mode": {
+            "type": "string",
+            "enum": [
+              "all",
+              "any"
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "MarketContextSummary": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "attached",
+              "no_match"
+            ]
+          },
+          "claim_summary": {
+            "type": "string",
+            "nullable": true
+          },
+          "markets": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/MarketContextMarket"
+            }
+          }
+        }
+      },
+      "PostLabel": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "label",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "post_label"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "color_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          }
+        }
+      },
       "SongPresentation": {
         "type": "object",
         "required": [
@@ -12065,73 +17492,11 @@ const spec = {
             "type": "integer",
             "minimum": 0,
             "nullable": true
-          },
-          "downloadable_audio": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "object",
-              "required": [
-                "kind",
-                "storage_ref",
-                "mime_type"
-              ],
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "enum": [
-                    "original",
-                    "instrumental",
-                    "vocals",
-                    "preview"
-                  ]
-                },
-                "storage_ref": {
-                  "type": "string"
-                },
-                "mime_type": {
-                  "type": "string"
-                },
-                "size_bytes": {
-                  "type": "integer",
-                  "nullable": true
-                },
-                "duration_ms": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "nullable": true
-                },
-                "filename": {
-                  "type": "string",
-                  "nullable": true
-                },
-                "decentralized_storage": {
-                  "type": "object",
-                  "nullable": true,
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "alignment_status": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "pending",
-              "processing",
-              "completed",
-              "failed"
-            ]
-          },
-          "has_timed_lyrics": {
-            "type": "boolean",
-            "nullable": true
           }
         }
       },
       "SongStudyCapability": {
         "type": "object",
-        "description": "Viewer-specific display capability for the Study CTA on post cards. This is an entitlement-aware summary only; exercise content and answer validation remain exclusively behind the study endpoints.",
         "additionalProperties": false,
         "required": [
           "status"
@@ -12161,6 +17526,28 @@ const spec = {
           }
         }
       },
+      "PostAssetStorySummary": {
+        "type": "object",
+        "required": [
+          "story_ip",
+          "story_royalty_registration_status"
+        ],
+        "properties": {
+          "story_ip": {
+            "type": "string",
+            "nullable": true
+          },
+          "story_royalty_registration_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "pending",
+              "registered",
+              "failed"
+            ]
+          }
+        }
+      },
       "PostDerivativeSource": {
         "type": "object",
         "required": [
@@ -12180,7 +17567,8 @@ const spec = {
             "type": "string",
             "enum": [
               "song",
-              "video"
+              "video",
+              "external"
             ]
           },
           "relationship_type": {
@@ -12215,12 +17603,12 @@ const spec = {
           },
           "license_preset": {
             "type": "string",
-            "nullable": true,
             "enum": [
               "non-commercial",
               "commercial-use",
               "commercial-remix"
-            ]
+            ],
+            "nullable": true
           },
           "commercial_rev_share_pct": {
             "type": "integer",
@@ -12238,6 +17626,3735 @@ const spec = {
           },
           "creator_display_name": {
             "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LocalizedPostEmbedTranslation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "embed_key",
+          "source_hash"
+        ],
+        "properties": {
+          "embed_key": {
+            "type": "string"
+          },
+          "translated_question": {
+            "type": "string",
+            "nullable": true
+          },
+          "translated_title": {
+            "type": "string",
+            "nullable": true
+          },
+          "translated_outcomes": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "translated_label",
+                "source_hash"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "translated_label": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "source_hash": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "source_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "NotificationFeedItem": {
+        "type": "object",
+        "required": [
+          "event",
+          "receipt"
+        ],
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/NotificationEvent"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/NotificationReceipt"
+          }
+        }
+      },
+      "UserTaskType": {
+        "type": "string",
+        "enum": [
+          "namespace_verification_required",
+          "namespace_verification_pending",
+          "unique_human_verification_required",
+          "profile_completion_suggested",
+          "global_handle_cleanup_suggested",
+          "payout_setup_required",
+          "royalty_claim_available",
+          "membership_review"
+        ]
+      },
+      "UserTaskStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "completed",
+          "dismissed"
+        ]
+      },
+      "PublicCommunityIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "community",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "join_requirements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "PublicCommunityStats": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "member_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "post_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recent_activity": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "OmittedStructuredSurface": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "surface",
+          "reason"
+        ],
+        "properties": {
+          "surface": {
+            "type": "string",
+            "enum": [
+              "community_stats",
+              "thread_cards",
+              "thread_bodies",
+              "top_comments",
+              "events"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "community_opt_out",
+              "platform_disabled",
+              "not_visible",
+              "not_in_v0"
+            ]
+          }
+        }
+      },
+      "StructuredAccessLinks": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/StructuredAccessLink"
+        }
+      },
+      "StructuredPostCard": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "post",
+          "community",
+          "title",
+          "created",
+          "reply_count",
+          "links"
+        ],
+        "properties": {
+          "post": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author_handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "vote_count": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reply_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "body": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "links": {
+            "$ref": "#/components/schemas/StructuredAccessLinks"
+          }
+        }
+      },
+      "SelfVerificationLaunch": {
+        "type": "object",
+        "required": [
+          "app_name",
+          "endpoint",
+          "endpoint_type",
+          "scope",
+          "session_id",
+          "user_id",
+          "user_id_type",
+          "disclosures"
+        ],
+        "properties": {
+          "app_name": {
+            "type": "string"
+          },
+          "logo_base64": {
+            "type": "string",
+            "nullable": true
+          },
+          "header": {
+            "type": "string",
+            "nullable": true
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "endpoint_type": {
+            "type": "string",
+            "enum": [
+              "https",
+              "staging_https",
+              "celo",
+              "staging_celo"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "user_id_type": {
+            "type": "string",
+            "enum": [
+              "uuid",
+              "hex"
+            ]
+          },
+          "disclosures": {
+            "$ref": "#/components/schemas/SelfVerificationDisclosures"
+          },
+          "deeplink_callback": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "nullable": true
+          },
+          "user_defined_data": {
+            "type": "string",
+            "nullable": true
+          },
+          "chain_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "dev_mode": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      },
+      "VeryWidgetLaunch": {
+        "type": "object",
+        "required": [
+          "app_id",
+          "context",
+          "type_id",
+          "query",
+          "verify_url"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "type_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "verify_url": {
+            "type": "string"
+          },
+          "session_binding": {
+            "$ref": "#/components/schemas/VerySessionBinding"
+          }
+        }
+      },
+      "ZkPassportVerificationLaunch": {
+        "type": "object",
+        "required": [
+          "domain",
+          "name",
+          "purpose",
+          "scope",
+          "binding",
+          "requested_capabilities",
+          "verification_requirements"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "logo": {
+            "type": "string",
+            "nullable": true
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "binding": {
+            "type": "string"
+          },
+          "validity_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "dev_mode": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "requested_capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequestedVerificationCapability"
+            }
+          },
+          "verification_requirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerificationRequirement"
+            }
+          }
+        }
+      },
+      "SelfAgentOwnershipLaunch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deep_link": {
+            "type": "string",
+            "nullable": true
+          },
+          "qr_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "session_token_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ClawkeyRegistrationLaunch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session",
+          "registration_url"
+        ],
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "registration_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "AgentOwnershipState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "verified",
+          "expired",
+          "revoked",
+          "transferred"
+        ]
+      },
+      "VerificationCapabilityState": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "pending",
+              "verified",
+              "expired"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "very"
+            ],
+            "nullable": true
+          },
+          "proof_type": {
+            "type": "string",
+            "enum": [
+              "unique_human"
+            ],
+            "nullable": true
+          },
+          "mechanism": {
+            "type": "string",
+            "nullable": true
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "VerifiedCapabilityState": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "expired"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport"
+            ],
+            "nullable": true
+          },
+          "proof_type": {
+            "type": "string",
+            "enum": [
+              "age_over_18",
+              "minimum_age",
+              "nationality",
+              "gender"
+            ],
+            "nullable": true
+          },
+          "mechanism": {
+            "type": "string",
+            "nullable": true
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "WalletIdentityPublicName": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "label_normalized",
+          "status",
+          "owner_kind",
+          "owner_wallet_address",
+          "chain_ref",
+          "price_paid_cents",
+          "currency",
+          "issued_at",
+          "expires_at",
+          "pirate_user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "label_normalized": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active"
+            ]
+          },
+          "owner_kind": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "owner_wallet_address": {
+            "type": "string"
+          },
+          "chain_ref": {
+            "type": "string"
+          },
+          "price_paid_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD"
+            ]
+          },
+          "issued_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "pirate_user_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityRequestBase": {
+        "type": "object",
+        "required": [
+          "display_name",
+          "membership_mode",
+          "allow_anonymous_identity",
+          "handle_policy"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "database_region": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "auto",
+              "aws-us-east-1",
+              "aws-us-east-2",
+              "aws-us-west-2",
+              "aws-eu-west-1",
+              "aws-ap-south-1",
+              "aws-ap-northeast-1"
+            ]
+          },
+          "localized_text": {
+            "$ref": "#/components/schemas/CommunityTextLocalization",
+            "nullable": true
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "banner_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "artist_identity": {
+            "type": "string",
+            "nullable": true
+          },
+          "membership_mode": {
+            "type": "string",
+            "enum": [
+              "open",
+              "request",
+              "gated"
+            ]
+          },
+          "allow_anonymous_identity": {
+            "type": "boolean"
+          },
+          "anonymous_identity_scope": {
+            "type": "string",
+            "enum": [
+              "community_stable",
+              "thread_stable",
+              "post_ephemeral"
+            ],
+            "nullable": true
+          },
+          "allowed_disclosed_qualifiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "allow_qualifiers_on_anonymous_posts": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "guest_comment_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "altcha_required"
+            ],
+            "nullable": true
+          },
+          "root_post_min_trust_tier": {
+            "type": "string",
+            "enum": [
+              "new",
+              "established",
+              "trusted",
+              "high_trust"
+            ],
+            "nullable": true
+          },
+          "reply_min_trust_tier": {
+            "type": "string",
+            "enum": [
+              "new",
+              "established",
+              "trusted",
+              "high_trust"
+            ],
+            "nullable": true
+          },
+          "anonymous_posting_min_trust_tier": {
+            "type": "string",
+            "enum": [
+              "new",
+              "established",
+              "trusted",
+              "high_trust"
+            ],
+            "nullable": true
+          },
+          "root_post_quota_by_trust_tier": {
+            "$ref": "#/components/schemas/RootPostQuotaByTrustTier",
+            "nullable": true
+          },
+          "reply_quota_by_trust_tier": {
+            "$ref": "#/components/schemas/ReplyQuotaByTrustTier",
+            "nullable": true
+          },
+          "probation_window_days": {
+            "type": "integer",
+            "nullable": true
+          },
+          "link_post_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "require_established"
+            ],
+            "nullable": true
+          },
+          "default_age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ],
+            "default": "none"
+          },
+          "gate_policy": {
+            "$ref": "#/components/schemas/GatePolicy",
+            "nullable": true
+          },
+          "agent_posting_policy": {
+            "type": "string",
+            "enum": [
+              "disallow",
+              "review",
+              "allow_with_disclosure",
+              "allow"
+            ],
+            "nullable": true
+          },
+          "agent_posting_scope": {
+            "type": "string",
+            "enum": [
+              "replies_only",
+              "top_level_and_replies"
+            ],
+            "nullable": true
+          },
+          "agent_daily_post_cap": {
+            "type": "integer",
+            "nullable": true
+          },
+          "agent_daily_reply_cap": {
+            "type": "integer",
+            "nullable": true
+          },
+          "agent_min_owner_trust_tier": {
+            "type": "string",
+            "enum": [
+              "new",
+              "established",
+              "trusted",
+              "high_trust"
+            ],
+            "nullable": true
+          },
+          "agent_owner_active_limit": {
+            "type": "integer",
+            "nullable": true
+          },
+          "human_verification_lane": {
+            "type": "string",
+            "enum": [
+              "very",
+              "self"
+            ],
+            "nullable": true
+          },
+          "accepted_agent_ownership_providers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/AgentOwnershipProvider"
+            }
+          },
+          "namespace": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceAttachmentInput"
+              }
+            ],
+            "nullable": true
+          },
+          "handle_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HandlePolicyInput"
+              }
+            ]
+          },
+          "donation_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityDonationPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "content_authenticity_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityContentAuthenticityPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "source_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunitySourcePolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "capture_edit_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityCaptureEditPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "adult_content_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityAdultContentPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "graphic_content_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityGraphicContentPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "motion_media_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityMotionMediaPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "language_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityLanguagePolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "civility_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityCivilityPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "provenance_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityProvenancePolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "promotion_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityPromotionPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "content_authenticity_detection_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityContentAuthenticityDetectionPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "market_context_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityMarketContextPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "money_policy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateCommunityMoneyPolicyInput"
+              }
+            ],
+            "type": "object",
+            "nullable": true
+          },
+          "community_bootstrap": {
+            "$ref": "#/components/schemas/CreateCommunityBootstrapInput",
+            "nullable": true
+          },
+          "gate_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateRuleInput"
+            },
+            "nullable": true
+          }
+        }
+      },
+      "MultisigGovernanceAttachmentInput": {
+        "type": "object",
+        "required": [
+          "chain",
+          "contract_address",
+          "attachment_proof"
+        ],
+        "properties": {
+          "chain": {
+            "type": "integer"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "treasury_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "attachment_proof": {
+            "$ref": "#/components/schemas/MultisigAttachmentProofInput"
+          }
+        }
+      },
+      "MajeurGovernanceCreateInput": {
+        "type": "object",
+        "required": [
+          "chain",
+          "summon"
+        ],
+        "properties": {
+          "chain": {
+            "type": "integer"
+          },
+          "summon": {
+            "$ref": "#/components/schemas/MajeurSafeSummonInput"
+          }
+        }
+      },
+      "RootPostQuotaRule": {
+        "type": "object",
+        "required": [
+          "window_hours",
+          "max_root_posts",
+          "max_song_posts",
+          "max_video_posts"
+        ],
+        "properties": {
+          "window_hours": {
+            "type": "integer"
+          },
+          "max_root_posts": {
+            "type": "integer"
+          },
+          "max_song_posts": {
+            "type": "integer"
+          },
+          "max_video_posts": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReplyQuotaRule": {
+        "type": "object",
+        "required": [
+          "window_hours",
+          "max_replies",
+          "burst_window_minutes",
+          "max_replies_per_burst"
+        ],
+        "properties": {
+          "window_hours": {
+            "type": "integer"
+          },
+          "max_replies": {
+            "type": "integer"
+          },
+          "burst_window_minutes": {
+            "type": "integer"
+          },
+          "max_replies_per_burst": {
+            "type": "integer"
+          }
+        }
+      },
+      "GateExpression": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "and",
+              "or",
+              "gate"
+            ]
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateAtom"
+          }
+        }
+      },
+      "CommunityContentAuthenticityStance": {
+        "type": "string",
+        "enum": [
+          "human_only",
+          "human_first",
+          "ai_allowed_with_disclosure",
+          "ai_allowed"
+        ]
+      },
+      "CommunityTextAuthenticityPolicySettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow_ai_assisted_editing",
+          "allow_ai_generated"
+        ],
+        "properties": {
+          "allow_ai_assisted_editing": {
+            "type": "boolean"
+          },
+          "allow_ai_generated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityImageAuthenticityPolicySettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow_ai_upscale",
+          "allow_ai_restoration",
+          "allow_generative_editing",
+          "allow_ai_generated"
+        ],
+        "properties": {
+          "allow_ai_upscale": {
+            "type": "boolean"
+          },
+          "allow_ai_restoration": {
+            "type": "boolean"
+          },
+          "allow_generative_editing": {
+            "type": "boolean"
+          },
+          "allow_ai_generated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityVideoAuthenticityPolicySettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow_ai_upscale",
+          "allow_ai_restoration",
+          "allow_ai_frame_interpolation",
+          "allow_generative_editing",
+          "allow_ai_generated"
+        ],
+        "properties": {
+          "allow_ai_upscale": {
+            "type": "boolean"
+          },
+          "allow_ai_restoration": {
+            "type": "boolean"
+          },
+          "allow_ai_frame_interpolation": {
+            "type": "boolean"
+          },
+          "allow_generative_editing": {
+            "type": "boolean"
+          },
+          "allow_ai_generated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunitySongAuthenticityPolicySettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow_ai_assisted_mastering",
+          "allow_ai_stem_separation",
+          "allow_ai_generated_instrumentals",
+          "allow_ai_generated_lyrics",
+          "allow_ai_generated_vocals"
+        ],
+        "properties": {
+          "allow_ai_assisted_mastering": {
+            "type": "boolean"
+          },
+          "allow_ai_stem_separation": {
+            "type": "boolean"
+          },
+          "allow_ai_generated_instrumentals": {
+            "type": "boolean"
+          },
+          "allow_ai_generated_lyrics": {
+            "type": "boolean"
+          },
+          "allow_ai_generated_vocals": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityContentAuthenticityDetectionSelectionMode": {
+        "type": "string",
+        "enum": [
+          "platform_default",
+          "approved_profile"
+        ]
+      },
+      "CommunityAuthenticityDetectionProfileSummary": {
+        "type": "object",
+        "required": [
+          "authenticity_detection_profile",
+          "profile_key",
+          "provider_key",
+          "supported_capabilities",
+          "status"
+        ],
+        "properties": {
+          "authenticity_detection_profile": {
+            "type": "string"
+          },
+          "profile_key": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "supported_capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "image_authenticity",
+                "video_authenticity",
+                "audio_authenticity",
+                "deepfake_detection"
+              ]
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/CommunityAuthenticityDetectionProfileStatus"
+          }
+        }
+      },
+      "CommunityMarketContextMode": {
+        "type": "string",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "CommunityMarketContextProviderSet": {
+        "type": "string",
+        "enum": [
+          "platform_default",
+          "approved_profile"
+        ]
+      },
+      "MarketContextProfileSummary": {
+        "type": "object",
+        "required": [
+          "market_context_profile",
+          "profile_key",
+          "provider_keys",
+          "status"
+        ],
+        "properties": {
+          "market_context_profile": {
+            "type": "string"
+          },
+          "profile_key": {
+            "type": "string"
+          },
+          "provider_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/MarketContextProfileStatus"
+          }
+        }
+      },
+      "CommunityIdentifiedPersonMediaScope": {
+        "type": "string",
+        "enum": [
+          "subject_only",
+          "subject_or_authorized",
+          "public_source_allowed"
+        ]
+      },
+      "CommunityDisclosureDecisionLevel": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "require_disclosure",
+          "disallow"
+        ]
+      },
+      "CommunityModerationDecisionLevel": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "review",
+          "disallow"
+        ]
+      },
+      "CommunityEscalationDecisionLevel": {
+        "type": "string",
+        "enum": [
+          "review",
+          "disallow"
+        ]
+      },
+      "CommunityVisualPolicyAction": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "queue",
+          "reject"
+        ]
+      },
+      "CommunityVisualPolicyDisclosureAction": {
+        "type": "string",
+        "enum": [
+          "allow",
+          "allow_with_disclosure",
+          "queue",
+          "reject"
+        ]
+      },
+      "CommunityCreatorRelation": {
+        "type": "string",
+        "enum": [
+          "captured",
+          "created",
+          "subject",
+          "authorized_repost",
+          "fan_work",
+          "found"
+        ]
+      },
+      "CommunityFalseClaimConsequence": {
+        "type": "string",
+        "enum": [
+          "warning",
+          "post_removed",
+          "temporary_ban",
+          "permanent_ban"
+        ]
+      },
+      "CommunitySelfPromotionMode": {
+        "type": "string",
+        "enum": [
+          "disallow",
+          "limited_with_disclosure",
+          "allowed_with_participation",
+          "creator_friendly"
+        ]
+      },
+      "CommunityLabelDefinition": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "label",
+          "status",
+          "position"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_label_definition"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "color_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "allowed_post_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text",
+                "image",
+                "video",
+                "song"
+              ]
+            },
+            "nullable": true
+          }
+        }
+      },
+      "CommunityResourceLink": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "label",
+          "url",
+          "resource_kind",
+          "position",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_resource_link"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "resource_kind": {
+            "type": "string",
+            "enum": [
+              "link",
+              "playlist",
+              "document",
+              "discord",
+              "website",
+              "other"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          }
+        }
+      },
+      "CommunityReferenceLinkPlatform": {
+        "type": "string",
+        "enum": [
+          "musicbrainz",
+          "genius",
+          "spotify",
+          "apple_music",
+          "wikipedia",
+          "instagram",
+          "tiktok",
+          "x",
+          "official_website",
+          "youtube",
+          "bandcamp",
+          "soundcloud",
+          "other"
+        ]
+      },
+      "CommunityReferenceLinkStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "archived"
+        ]
+      },
+      "CommunityReferenceLinkMetadata": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "CentralizedGovernanceBackend": {
+        "type": "object",
+        "required": [
+          "governance_mode",
+          "governance_verification_state"
+        ],
+        "properties": {
+          "governance_mode": {
+            "type": "string",
+            "enum": [
+              "centralized"
+            ]
+          },
+          "governance_verification_state": {
+            "$ref": "#/components/schemas/GovernanceVerificationState"
+          },
+          "governance_display_label": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MultisigGovernanceBackend": {
+        "type": "object",
+        "required": [
+          "governance_mode",
+          "governance_chain",
+          "governance_contract_address",
+          "governance_verification_state",
+          "governance_metadata"
+        ],
+        "properties": {
+          "governance_mode": {
+            "type": "string",
+            "enum": [
+              "multisig"
+            ]
+          },
+          "governance_chain": {
+            "type": "integer"
+          },
+          "governance_contract_address": {
+            "type": "string"
+          },
+          "governance_treasury_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "governance_verification_state": {
+            "$ref": "#/components/schemas/GovernanceVerificationState"
+          },
+          "governance_display_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "governance_attached_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "governance_last_verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "governance_metadata": {
+            "$ref": "#/components/schemas/MultisigGovernanceMetadata"
+          }
+        }
+      },
+      "MajeurGovernanceBackend": {
+        "type": "object",
+        "required": [
+          "governance_mode",
+          "governance_chain",
+          "governance_contract_address",
+          "governance_verification_state",
+          "governance_metadata"
+        ],
+        "properties": {
+          "governance_mode": {
+            "type": "string",
+            "enum": [
+              "majeur"
+            ]
+          },
+          "governance_chain": {
+            "type": "integer"
+          },
+          "governance_contract_address": {
+            "type": "string"
+          },
+          "governance_treasury_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "governance_verification_state": {
+            "$ref": "#/components/schemas/GovernanceVerificationState"
+          },
+          "governance_display_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "governance_attached_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "governance_last_verified_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "governance_metadata": {
+            "$ref": "#/components/schemas/MajeurGovernanceMetadata"
+          }
+        }
+      },
+      "ProofRequirement": {
+        "type": "object",
+        "required": [
+          "proof_type"
+        ],
+        "x-valid-providers-by-proof-type": {
+          "unique_human": [
+            "self",
+            "very"
+          ],
+          "age_over_18": [
+            "self"
+          ],
+          "minimum_age": [
+            "self",
+            "zkpassport"
+          ],
+          "nationality": [
+            "self",
+            "zkpassport"
+          ],
+          "gender": [
+            "self",
+            "zkpassport"
+          ],
+          "wallet_score": [
+            "passport"
+          ],
+          "sanctions_clear": [
+            "passport"
+          ]
+        },
+        "x-unvalidated-proof-types": [
+          "biometric_liveness",
+          "gov_id",
+          "phone"
+        ],
+        "properties": {
+          "proof_type": {
+            "type": "string",
+            "enum": [
+              "unique_human",
+              "biometric_liveness",
+              "wallet_score",
+              "sanctions_clear",
+              "gov_id",
+              "age_over_18",
+              "minimum_age",
+              "nationality",
+              "gender",
+              "phone"
+            ]
+          },
+          "accepted_providers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "self",
+                "zkpassport",
+                "very",
+                "passport"
+              ]
+            }
+          },
+          "accepted_mechanisms": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "config": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "CommunityPricingAdjustmentType": {
+        "type": "string",
+        "enum": [
+          "multiplier"
+        ]
+      },
+      "CommunitySaleAllocationStatus": {
+        "type": "string",
+        "enum": [
+          "quoted",
+          "pending",
+          "confirmed",
+          "failed"
+        ]
+      },
+      "CommunitySaleAllocationRecipientType": {
+        "type": "string",
+        "enum": [
+          "creator",
+          "performer",
+          "charity",
+          "community_treasury"
+        ]
+      },
+      "CommunitySaleAllocationSettlementStrategy": {
+        "type": "string",
+        "enum": [
+          "story_payout",
+          "provider_payout",
+          "treasury_payout"
+        ]
+      },
+      "CommunityTextLocalizationItem": {
+        "type": "object",
+        "required": [
+          "field_key",
+          "translation_state",
+          "machine_translated",
+          "source_hash"
+        ],
+        "properties": {
+          "field_key": {
+            "type": "string"
+          },
+          "translation_state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending",
+              "same_language",
+              "policy_blocked"
+            ]
+          },
+          "machine_translated": {
+            "type": "boolean"
+          },
+          "translated_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "GateTraceNode": {
+        "type": "object",
+        "required": [
+          "kind",
+          "passed"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "op",
+              "gate"
+            ]
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "and",
+              "or"
+            ]
+          },
+          "gate_type": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "required_score": {
+            "type": "number",
+            "nullable": true
+          },
+          "actual_score": {
+            "type": "number",
+            "nullable": true
+          },
+          "required_age": {
+            "type": "integer",
+            "nullable": true
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "RequiredActionSet": {
+        "type": "object",
+        "required": [
+          "kind",
+          "mode",
+          "items"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "set"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "all",
+              "any"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequiredActionNode"
+            }
+          }
+        }
+      },
+      "PromotionAffiliationKind": {
+        "type": "string",
+        "enum": [
+          "self",
+          "brand",
+          "client",
+          "partner",
+          "employer",
+          "other"
+        ]
+      },
+      "XPostEmbed": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "embed",
+          "embed_key",
+          "provider",
+          "canonical_url",
+          "original_url",
+          "state"
+        ],
+        "properties": {
+          "embed": {
+            "type": "string"
+          },
+          "embed_key": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "x"
+            ]
+          },
+          "provider_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "canonical_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "original_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "preview",
+              "embed",
+              "unavailable"
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/XEmbedPreview",
+            "nullable": true
+          },
+          "oembed_html": {
+            "type": "string",
+            "nullable": true
+          },
+          "oembed_cache_age": {
+            "type": "integer",
+            "nullable": true
+          },
+          "unavailable_reason": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "withheld",
+              "private",
+              "unsupported",
+              "unknown"
+            ],
+            "nullable": true
+          },
+          "last_checked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "YouTubeVideoEmbed": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "embed",
+          "embed_key",
+          "provider",
+          "canonical_url",
+          "original_url",
+          "state"
+        ],
+        "properties": {
+          "embed": {
+            "type": "string"
+          },
+          "embed_key": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "youtube"
+            ]
+          },
+          "provider_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "canonical_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "original_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "preview",
+              "embed",
+              "unavailable"
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/YouTubeEmbedPreview",
+            "nullable": true
+          },
+          "oembed_html": {
+            "type": "string",
+            "nullable": true
+          },
+          "oembed_cache_age": {
+            "type": "integer",
+            "nullable": true
+          },
+          "unavailable_reason": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "withheld",
+              "private",
+              "unsupported",
+              "unknown"
+            ],
+            "nullable": true
+          },
+          "last_checked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "KalshiMarketEmbed": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "embed",
+          "embed_key",
+          "provider",
+          "canonical_url",
+          "original_url",
+          "state"
+        ],
+        "properties": {
+          "embed": {
+            "type": "string"
+          },
+          "embed_key": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "kalshi"
+            ]
+          },
+          "provider_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "canonical_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "original_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "preview",
+              "embed",
+              "unavailable"
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/PredictionMarketEmbedPreview",
+            "nullable": true
+          },
+          "oembed_html": {
+            "type": "string",
+            "nullable": true
+          },
+          "oembed_cache_age": {
+            "type": "integer",
+            "nullable": true
+          },
+          "unavailable_reason": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "withheld",
+              "private",
+              "unsupported",
+              "unknown"
+            ],
+            "nullable": true
+          },
+          "last_checked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "PolymarketMarketEmbed": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "embed",
+          "embed_key",
+          "provider",
+          "canonical_url",
+          "original_url",
+          "state"
+        ],
+        "properties": {
+          "embed": {
+            "type": "string"
+          },
+          "embed_key": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "polymarket"
+            ]
+          },
+          "provider_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "canonical_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "original_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "preview",
+              "embed",
+              "unavailable"
+            ]
+          },
+          "preview": {
+            "$ref": "#/components/schemas/PredictionMarketEmbedPreview",
+            "nullable": true
+          },
+          "oembed_html": {
+            "type": "string",
+            "nullable": true
+          },
+          "oembed_cache_age": {
+            "type": "integer",
+            "nullable": true
+          },
+          "unavailable_reason": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "withheld",
+              "private",
+              "unsupported",
+              "unknown"
+            ],
+            "nullable": true
+          },
+          "last_checked_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "CrosspostSourceStatus": {
+        "type": "string",
+        "enum": [
+          "available",
+          "deleted",
+          "removed",
+          "unavailable"
+        ]
+      },
+      "ModerationCasePostPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "post_id",
+          "post_type",
+          "status",
+          "title",
+          "body",
+          "caption",
+          "media_refs_json",
+          "author_handle"
+        ],
+        "properties": {
+          "post_id": {
+            "type": "string"
+          },
+          "post_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "body": {
+            "type": "string",
+            "nullable": true
+          },
+          "caption": {
+            "type": "string",
+            "nullable": true
+          },
+          "media_refs_json": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_handle": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ModerationCaseStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "resolved"
+        ]
+      },
+      "ModerationQueueScope": {
+        "type": "string",
+        "enum": [
+          "community",
+          "platform"
+        ]
+      },
+      "ModerationSignalSeverity": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "ModerationCaseOpenedBy": {
+        "type": "string",
+        "enum": [
+          "platform_analysis",
+          "user_report",
+          "mixed"
+        ]
+      },
+      "MarketContextMarket": {
+        "type": "object",
+        "required": [
+          "provider_key",
+          "question",
+          "outcome_yes_price",
+          "market_url",
+          "snapshot_at"
+        ],
+        "properties": {
+          "provider_key": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "outcome_yes_price": {
+            "type": "string"
+          },
+          "liquidity_score": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolve_date": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "market_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "snapshot_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "NotificationEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "type",
+          "actor_user",
+          "subject_type",
+          "subject",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "notification_event"
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/NotificationEventType"
+          },
+          "actor_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "object_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "NotificationReceipt": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "recipient_user",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "notification_receipt"
+            ]
+          },
+          "recipient_user": {
+            "type": "string"
+          },
+          "seen_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "read_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StructuredAccessLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "href",
+          "type"
+        ],
+        "properties": {
+          "href": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "application/json",
+              "text/html",
+              "text/markdown"
+            ]
+          },
+          "auth_required": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "SelfVerificationDisclosures": {
+        "type": "object",
+        "properties": {
+          "issuing_state": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "name": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "passport_number": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "nationality": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "date_of_birth": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "gender": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "expiry_date": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "excluded_countries": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "minimum_age": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "VerySessionBinding": {
+        "type": "object",
+        "required": [
+          "uniqueness_domain",
+          "binding_value",
+          "challenge_expires_at"
+        ],
+        "properties": {
+          "uniqueness_domain": {
+            "type": "string"
+          },
+          "binding_value": {
+            "type": "string"
+          },
+          "binding_field": {
+            "type": "string",
+            "enum": [
+              "pseudonym",
+              "challenge"
+            ],
+            "nullable": true
+          },
+          "challenge_expires_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "NamespaceAttachmentInput": {
+        "type": "object",
+        "required": [
+          "namespace_verification"
+        ],
+        "properties": {
+          "namespace_verification": {
+            "type": "string"
+          },
+          "display_label": {
+            "type": "string"
+          },
+          "normalized_label": {
+            "type": "string"
+          },
+          "resolver_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "route_family": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "HandlePolicyInput": {
+        "type": "object",
+        "required": [
+          "policy_template"
+        ],
+        "properties": {
+          "policy_template": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "premium",
+              "membership_gated",
+              "custom"
+            ]
+          },
+          "pricing_model": {
+            "type": "string",
+            "enum": [
+              "free",
+              "flat_by_length",
+              "custom_curve",
+              "gated_then_flat"
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityDonationPolicyInput": {
+        "type": "object",
+        "required": [
+          "donation_policy_mode"
+        ],
+        "properties": {
+          "donation_policy_mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "optional_creator_sidecar",
+              "fundraiser_default"
+            ]
+          },
+          "donation_partner": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityContentAuthenticityPolicyInput": {
+        "type": "object",
+        "required": [
+          "authenticity_stance",
+          "text_policy",
+          "image_policy",
+          "video_policy",
+          "song_policy"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "authenticity_stance": {
+            "$ref": "#/components/schemas/CommunityContentAuthenticityStance"
+          },
+          "text_policy": {
+            "$ref": "#/components/schemas/CommunityTextAuthenticityPolicySettings"
+          },
+          "image_policy": {
+            "$ref": "#/components/schemas/CommunityImageAuthenticityPolicySettings"
+          },
+          "video_policy": {
+            "$ref": "#/components/schemas/CommunityVideoAuthenticityPolicySettings"
+          },
+          "song_policy": {
+            "$ref": "#/components/schemas/CommunitySongAuthenticityPolicySettings"
+          }
+        }
+      },
+      "CreateCommunitySourcePolicyInput": {
+        "type": "object",
+        "required": [
+          "identified_person_media_scope",
+          "require_source_url_for_reposts",
+          "allow_human_made_fan_art_of_real_people",
+          "require_fan_art_disclosure"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "identified_person_media_scope": {
+            "$ref": "#/components/schemas/CommunityIdentifiedPersonMediaScope"
+          },
+          "require_source_url_for_reposts": {
+            "type": "boolean"
+          },
+          "allow_human_made_fan_art_of_real_people": {
+            "type": "boolean"
+          },
+          "require_fan_art_disclosure": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateCommunityCaptureEditPolicyInput": {
+        "type": "object",
+        "required": [
+          "basic_adjustments",
+          "retouching",
+          "compositing",
+          "documentary_editing",
+          "require_edit_disclosure"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "basic_adjustments": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "retouching": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "compositing": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "documentary_editing": {
+            "$ref": "#/components/schemas/CommunityDisclosureDecisionLevel"
+          },
+          "require_edit_disclosure": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateCommunityAdultContentPolicyInput": {
+        "type": "object",
+        "required": [
+          "suggestive",
+          "artistic_nudity",
+          "explicit_nudity",
+          "explicit_sexual_content",
+          "fetish_content"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "suggestive": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "artistic_nudity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "explicit_nudity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "explicit_sexual_content": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "fetish_content": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CreateCommunityGraphicContentPolicyInput": {
+        "type": "object",
+        "required": [
+          "injury_medical",
+          "gore",
+          "extreme_gore",
+          "body_horror_disturbing",
+          "animal_harm"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "injury_medical": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "gore": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "extreme_gore": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "body_horror_disturbing": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "animal_harm": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CreateCommunityMotionMediaPolicyInput": {
+        "type": "object",
+        "required": [
+          "allow_animated_images",
+          "allow_silent_looping_video",
+          "allow_audio_video"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "allow_animated_images": {
+            "type": "boolean"
+          },
+          "allow_silent_looping_video": {
+            "type": "boolean"
+          },
+          "allow_audio_video": {
+            "type": "boolean"
+          },
+          "max_video_duration_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "require_video_transcription": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateCommunityLanguagePolicyInput": {
+        "type": "object",
+        "required": [
+          "profanity",
+          "slurs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "profanity": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "slurs": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          }
+        }
+      },
+      "CreateCommunityCivilityPolicyInput": {
+        "type": "object",
+        "required": [
+          "group_directed_demeaning_language",
+          "targeted_insults",
+          "targeted_harassment",
+          "threatening_language"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "group_directed_demeaning_language": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "targeted_insults": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "targeted_harassment": {
+            "$ref": "#/components/schemas/CommunityModerationDecisionLevel"
+          },
+          "threatening_language": {
+            "$ref": "#/components/schemas/CommunityEscalationDecisionLevel"
+          }
+        }
+      },
+      "CreateCommunityProvenancePolicyInput": {
+        "type": "object",
+        "required": [
+          "allowed_creator_relations",
+          "require_creator_relation",
+          "false_claim_consequence",
+          "allow_oc_claim",
+          "require_proof_for_original"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "allowed_creator_relations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/CommunityCreatorRelation"
+            }
+          },
+          "require_creator_relation": {
+            "type": "boolean"
+          },
+          "false_claim_consequence": {
+            "$ref": "#/components/schemas/CommunityFalseClaimConsequence"
+          },
+          "allow_oc_claim": {
+            "type": "boolean"
+          },
+          "require_proof_for_original": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateCommunityPromotionPolicyInput": {
+        "type": "object",
+        "required": [
+          "self_promotion_mode",
+          "require_affiliation_disclosure"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "self_promotion_mode": {
+            "$ref": "#/components/schemas/CommunitySelfPromotionMode"
+          },
+          "require_affiliation_disclosure": {
+            "type": "boolean"
+          },
+          "max_promotional_posts_per_week": {
+            "type": "integer",
+            "nullable": true
+          },
+          "promotional_participation_ratio_decimal": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
+            "nullable": true
+          },
+          "require_minimum_membership_days": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityContentAuthenticityDetectionPolicyInput": {
+        "type": "object",
+        "required": [
+          "selection_mode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "selection_mode": {
+            "$ref": "#/components/schemas/CommunityContentAuthenticityDetectionSelectionMode"
+          },
+          "authenticity_detection_profile": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityMarketContextPolicyInput": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/CommunityMarketContextMode"
+          },
+          "enabled_post_types": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "link",
+                "image",
+                "video"
+              ]
+            }
+          },
+          "max_markets_per_post": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3,
+            "nullable": true
+          },
+          "provider_set": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityMarketContextProviderSet"
+              }
+            ],
+            "nullable": true
+          },
+          "market_context_profile": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CreateCommunityMoneyPolicyInput": {
+        "type": "object",
+        "required": [
+          "funding_preference",
+          "accepted_funding_assets",
+          "accepted_source_chains",
+          "destination_settlement_chain",
+          "destination_settlement_token",
+          "max_slippage_bps",
+          "quote_ttl_seconds",
+          "route_required",
+          "route_status_policy",
+          "route_hop_tolerance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "funding_preference": {
+            "type": "string"
+          },
+          "accepted_funding_assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityMoneyAssetRef"
+            }
+          },
+          "accepted_source_chains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityMoneyChainRef"
+            }
+          },
+          "approved_route_providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "destination_settlement_chain": {
+            "$ref": "#/components/schemas/CommunityMoneyChainRef"
+          },
+          "destination_settlement_token": {
+            "type": "string"
+          },
+          "treasury_denomination": {
+            "type": "string",
+            "nullable": true
+          },
+          "max_slippage_bps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "quote_ttl_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "route_required": {
+            "type": "boolean"
+          },
+          "route_status_policy": {
+            "$ref": "#/components/schemas/CommunityFundingRouteStatusPolicy"
+          },
+          "route_hop_tolerance": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CreateCommunityBootstrapInput": {
+        "type": "object",
+        "properties": {
+          "label_policy": {
+            "$ref": "#/components/schemas/CreateCommunityLabelPolicyInput",
+            "nullable": true
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateCommunityRuleInput"
+            }
+          },
+          "resource_links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateCommunityResourceLinkInput"
+            }
+          }
+        }
+      },
+      "GateRuleInput": {
+        "type": "object",
+        "required": [
+          "scope",
+          "gate_family",
+          "gate_type"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "membership",
+              "viewer",
+              "posting"
+            ]
+          },
+          "gate_family": {
+            "type": "string",
+            "enum": [
+              "token_holding",
+              "identity_proof"
+            ]
+          },
+          "gate_type": {
+            "type": "string",
+            "enum": [
+              "unique_human",
+              "age_over_18",
+              "minimum_age",
+              "nationality",
+              "gender",
+              "wallet_score",
+              "altcha_pow",
+              "erc721_holding",
+              "erc721_inventory_match"
+            ]
+          },
+          "proof_requirements": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/ProofRequirement"
+            }
+          },
+          "chain_namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "gate_config": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "MultisigAttachmentProofInput": {
+        "type": "object",
+        "required": [
+          "proof_kind",
+          "challenge",
+          "signature"
+        ],
+        "properties": {
+          "proof_kind": {
+            "type": "string",
+            "enum": [
+              "eip1271"
+            ]
+          },
+          "challenge": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        }
+      },
+      "MajeurSafeSummonInput": {
+        "type": "object",
+        "required": [
+          "org_name",
+          "org_symbol",
+          "ragequittable",
+          "init_holders",
+          "init_shares",
+          "config"
+        ],
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": [
+              "founder",
+              "standard",
+              "fast",
+              "custom"
+            ],
+            "nullable": true
+          },
+          "org_name": {
+            "type": "string"
+          },
+          "org_symbol": {
+            "type": "string"
+          },
+          "org_uri": {
+            "type": "string",
+            "nullable": true
+          },
+          "quorum_bps": {
+            "type": "integer",
+            "nullable": true
+          },
+          "ragequittable": {
+            "type": "boolean"
+          },
+          "renderer": {
+            "type": "string",
+            "nullable": true
+          },
+          "init_holders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "init_shares": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "init_loot": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "config": {
+            "$ref": "#/components/schemas/MajeurSafeConfigInput"
+          }
+        }
+      },
+      "GateAtom": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "unique_human",
+              "minimum_age",
+              "nationality",
+              "gender",
+              "wallet_score",
+              "altcha_pow",
+              "erc721_holding",
+              "erc721_inventory_match"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very",
+              "passport",
+              "courtyard",
+              "altcha"
+            ],
+            "nullable": true
+          },
+          "accepted_providers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "self",
+                "zkpassport"
+              ]
+            }
+          },
+          "minimum_age": {
+            "type": "integer"
+          },
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "minimum_score": {
+            "type": "number"
+          },
+          "chain_namespace": {
+            "type": "string"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "min_quantity": {
+            "type": "integer"
+          },
+          "match": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CommunityAuthenticityDetectionProfileStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "archived"
+        ]
+      },
+      "MarketContextProfileStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "archived"
+        ]
+      },
+      "GovernanceVerificationState": {
+        "type": "string",
+        "enum": [
+          "not_required",
+          "pending",
+          "verified",
+          "broken"
+        ]
+      },
+      "MultisigGovernanceMetadata": {
+        "type": "object",
+        "required": [
+          "owners",
+          "threshold",
+          "is_safe_compatible"
+        ],
+        "properties": {
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "threshold": {
+            "type": "integer"
+          },
+          "is_safe_compatible": {
+            "type": "boolean"
+          },
+          "version_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "master_copy_address": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MajeurGovernanceMetadata": {
+        "type": "object",
+        "required": [
+          "shares_address",
+          "loot_address",
+          "badges_address",
+          "ragequittable",
+          "proposal_threshold",
+          "proposal_ttl_seconds",
+          "shares_locked",
+          "loot_locked",
+          "config_version"
+        ],
+        "properties": {
+          "shares_address": {
+            "type": "string"
+          },
+          "loot_address": {
+            "type": "string"
+          },
+          "badges_address": {
+            "type": "string"
+          },
+          "renderer_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "ragequittable": {
+            "type": "boolean"
+          },
+          "proposal_threshold": {
+            "type": "string"
+          },
+          "proposal_ttl_seconds": {
+            "type": "integer"
+          },
+          "timelock_delay_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quorum_bps": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quorum_absolute": {
+            "type": "string",
+            "nullable": true
+          },
+          "min_yes_votes_absolute": {
+            "type": "string",
+            "nullable": true
+          },
+          "shares_locked": {
+            "type": "boolean"
+          },
+          "loot_locked": {
+            "type": "boolean"
+          },
+          "auto_futarchy_param": {
+            "type": "string",
+            "nullable": true
+          },
+          "auto_futarchy_cap": {
+            "type": "string",
+            "nullable": true
+          },
+          "futarchy_reward_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "config_version": {
+            "type": "integer"
+          }
+        }
+      },
+      "RequiredActionNode": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "action",
+              "set"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "all",
+              "any"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very",
+              "passport",
+              "wallet",
+              "altcha"
+            ]
+          },
+          "accepted_providers": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "self",
+                "zkpassport"
+              ]
+            }
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "minimum_age",
+              "nationality",
+              "gender",
+              "unique_human",
+              "wallet_score",
+              "altcha_pow",
+              "erc721_holding",
+              "erc721_inventory_match"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "required_age": {
+            "type": "integer"
+          },
+          "allowed_countries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_markers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "M",
+                "F"
+              ]
+            }
+          },
+          "minimum_score": {
+            "type": "number"
+          },
+          "actual_score": {
+            "type": "number",
+            "nullable": true
+          },
+          "chain_namespace": {
+            "type": "string"
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "min_quantity": {
+            "type": "integer"
+          }
+        }
+      },
+      "XEmbedPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "author_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "has_media": {
+            "type": "boolean"
+          },
+          "media_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "created": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "YouTubeEmbedPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "author_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "thumbnail_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "thumbnail_width": {
+            "type": "integer",
+            "nullable": true
+          },
+          "thumbnail_height": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "PredictionMarketEmbedPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "yes_price": {
+            "type": "number",
+            "nullable": true
+          },
+          "yes_bid": {
+            "type": "number",
+            "nullable": true
+          },
+          "yes_ask": {
+            "type": "number",
+            "nullable": true
+          },
+          "no_bid": {
+            "type": "number",
+            "nullable": true
+          },
+          "no_ask": {
+            "type": "number",
+            "nullable": true
+          },
+          "last_price": {
+            "type": "number",
+            "nullable": true
+          },
+          "volume": {
+            "type": "number",
+            "nullable": true
+          },
+          "volume_24h": {
+            "type": "number",
+            "nullable": true
+          },
+          "liquidity": {
+            "type": "number",
+            "nullable": true
+          },
+          "open_interest": {
+            "type": "number",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "yes",
+              "no"
+            ],
+            "nullable": true
+          },
+          "resolved_outcome": {
+            "type": "string",
+            "nullable": true
+          },
+          "close_time": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "chart": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/PredictionMarketChartPoint"
+            }
+          },
+          "outcomes": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/PredictionMarketOutcome"
+            }
+          }
+        }
+      },
+      "NotificationEventType": {
+        "type": "string",
+        "enum": [
+          "comment_reply",
+          "post_commented",
+          "mention",
+          "mod_event",
+          "community_update",
+          "xmtp_message",
+          "royalty_earned"
+        ]
+      },
+      "CreateCommunityLabelPolicyInput": {
+        "type": "object",
+        "properties": {
+          "label_enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "require_label_on_top_level_posts": {
+            "type": "boolean",
+            "default": false
+          },
+          "definitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateCommunityLabelDefinitionInput"
+            }
+          }
+        }
+      },
+      "CreateCommunityRuleInput": {
+        "type": "object",
+        "required": [
+          "title",
+          "body",
+          "position"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "report_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CreateCommunityResourceLinkInput": {
+        "type": "object",
+        "required": [
+          "label",
+          "url",
+          "resource_kind",
+          "position"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "resource_kind": {
+            "type": "string",
+            "enum": [
+              "link",
+              "playlist",
+              "document",
+              "discord",
+              "website",
+              "other"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "MajeurSafeConfigInput": {
+        "type": "object",
+        "required": [
+          "proposal_threshold",
+          "proposal_ttl_seconds"
+        ],
+        "properties": {
+          "proposal_threshold": {
+            "type": "string"
+          },
+          "proposal_ttl_seconds": {
+            "type": "integer"
+          },
+          "timelock_delay_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "quorum_absolute": {
+            "type": "string",
+            "nullable": true
+          },
+          "min_yes_votes_absolute": {
+            "type": "string",
+            "nullable": true
+          },
+          "lock_shares": {
+            "type": "boolean",
+            "default": false
+          },
+          "lock_loot": {
+            "type": "boolean",
+            "default": false
+          },
+          "rollback_guardian": {
+            "type": "string",
+            "nullable": true
+          },
+          "rollback_singleton": {
+            "type": "string",
+            "nullable": true
+          },
+          "rollback_expiry": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "PredictionMarketChartPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ts"
+        ],
+        "properties": {
+          "ts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "volume": {
+            "type": "number",
+            "nullable": true
+          },
+          "open_interest": {
+            "type": "number",
+            "nullable": true
+          }
+        }
+      },
+      "PredictionMarketOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "probability"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "probability": {
+            "type": "number"
+          }
+        }
+      },
+      "CreateCommunityLabelDefinitionInput": {
+        "type": "object",
+        "required": [
+          "label",
+          "position"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "color_token": {
+            "type": "string",
+            "nullable": true
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "allowed_post_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text",
+                "image",
+                "video",
+                "song"
+              ]
+            },
             "nullable": true
           }
         }

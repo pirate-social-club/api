@@ -427,6 +427,29 @@ describe("host-bookings — availability exceptions", () => {
     expect(updated.start).toBe(created.start)
     expect(updated.end).toBe(created.end)
   })
+
+  test("partial update changes kind and time range", async () => {
+    const { ctx, accessToken } = await setup()
+    await postProfile(ctx.env, accessToken, VALID_PROFILE)
+    const createRes = await postException(ctx.env, accessToken, {
+      kind: "block",
+      start_utc: "2026-07-06T00:00:00Z",
+      end_utc: "2026-07-06T01:00:00Z",
+    })
+    const created = await json(createRes) as { id: string }
+
+    const updateRes = await updateException(ctx.env, accessToken, created.id, {
+      kind: "open",
+      start_utc: "2026-07-06T02:00:00Z",
+      end_utc: "2026-07-06T03:00:00Z",
+    })
+    expect(updateRes.status).toBe(200)
+    const updated = await json(updateRes) as { id: string; kind: string; start: number; end: number }
+    expect(updated.id).toBe(created.id)
+    expect(updated.kind).toBe("open")
+    expect(updated.start).toBe(Math.floor(Date.parse("2026-07-06T02:00:00Z") / 1000))
+    expect(updated.end).toBe(Math.floor(Date.parse("2026-07-06T03:00:00Z") / 1000))
+  })
 })
 
 describe("host-bookings — price rules", () => {
@@ -487,6 +510,20 @@ describe("host-bookings — price rules", () => {
     const body = await json(res) as { error: string; fields: Array<{ field: string }> }
     expect(body.error).toBe("validation_failed")
     expect(body.fields).toEqual([{ field: "priority", reason: "must be an integer" }])
+  })
+
+  test("partial update changes price and priority", async () => {
+    const { ctx, accessToken } = await setup()
+    await postProfile(ctx.env, accessToken, VALID_PROFILE)
+    const createRes = await postPriceRule(ctx.env, accessToken, { price_cents: 5000 })
+    const created = await json(createRes) as { id: string }
+
+    const res = await updatePriceRule(ctx.env, accessToken, created.id, { price_cents: 7000, priority: 3 })
+    expect(res.status).toBe(200)
+    const body = await json(res) as { id: string; price_cents: number; priority: number }
+    expect(body.id).toBe(created.id)
+    expect(body.price_cents).toBe(7000)
+    expect(body.priority).toBe(3)
   })
 
   test("create with zero price returns 400", async () => {
