@@ -209,6 +209,7 @@ function classifyStudyGenerationError(error: unknown): string {
   if (/unexpected line_id|schema_line_id/iu.test(message)) return "schema_line_id"
   if (/missing translation distractors|schema_missing_distractors/iu.test(message)) return "schema_missing_distractors"
   if (/invalid translation distractors|schema_invalid_distractors/iu.test(message)) return "schema_invalid_distractors"
+  if (/schema_source_mismatch|source_text/iu.test(message)) return "schema_source_mismatch"
   if (/expected object|lines must be an array|invalid line|no valid generated lines|no generated lines|schema_shape/iu.test(message)) return "schema_shape"
   if (/schema mismatch/iu.test(message)) return "schema_mismatch"
   if (/timed out|timeout|abort/iu.test(message)) return "timeout"
@@ -716,10 +717,8 @@ async function createReadyStudyPack(input: {
       .filter((unit) => wordCount(unit.prompt_text) >= 3)
       .map((unit) => {
         const previous = units.find((candidate) => candidate.line_index === unit.line_index - 1)
-        const next = units.find((candidate) => candidate.line_index === unit.line_index + 1)
         return {
           lineId: unit.line_id,
-          next: next?.prompt_text ?? null,
           previous: previous?.prompt_text ?? null,
           text: unit.prompt_text,
         }

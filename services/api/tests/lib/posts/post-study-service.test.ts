@@ -877,6 +877,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Esta opción conserva el sentido de perderse en las olas.",
                     distractors: [
@@ -887,6 +888,7 @@ describe("post study service", () => {
                   },
                   {
                     line_id: "line_002",
+                    source_text: "Hold me close until the morning",
                     translation: "Abrázame fuerte hasta la mañana",
                     explanation: "Esta opción expresa cercanía hasta la mañana.",
                     distractors: [
@@ -977,6 +979,7 @@ describe("post study service", () => {
                   lines: [
                     {
                       line_id: "line_001",
+                      source_text: "I was lost in the midnight waves",
                       translation: "Me perdí en las olas de medianoche",
                       explanation: "Esta opción conserva el sentido de perderse.",
                       distractors: [
@@ -1066,6 +1069,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Esta opción conserva el sentido de perderse.",
                     distractors: [
@@ -1076,6 +1080,7 @@ describe("post study service", () => {
                   },
                   {
                     line_id: "line_002",
+                    source_text: "Hold me close until the morning",
                     translation: "Abrázame fuerte hasta la mañana",
                     explanation: "Esta línea falla por distractores iguales a la respuesta.",
                     distractors: [
@@ -1117,6 +1122,102 @@ describe("post study service", () => {
       "say_it_back",
       "translation_choice",
       "say_it_back",
+    ])
+  })
+
+  test("rejects a line whose echoed source_text belongs to a different line (chunk drift)", async () => {
+    await seedMultilineSongPost()
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_STUDY_GENERATION_CHUNK_SIZE: "10",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    // line_001 echoes line_002's source text — the off-by-one drift. Its translation
+    // ("Abrázame fuerte…") is actually line_002's answer, so serving it would be a wrong key.
+    const jobResult = await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    source_text: "Hold me close until the morning",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Traducción desalineada respecto a la línea solicitada.",
+                    distractors: [
+                      "Déjame ir antes del amanecer",
+                      "Canta conmigo toda la noche",
+                      "Espera hasta que cambie el viento",
+                    ],
+                  },
+                  {
+                    line_id: "line_002",
+                    source_text: "Hold me close until the morning",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta opción expresa cercanía hasta la mañana.",
+                    distractors: [
+                      "Déjame ir antes del amanecer",
+                      "Canta conmigo toda la noche",
+                      "Espera hasta que cambie el viento",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(jobResult).toContain("ready_partial:es")
+    expect(jobResult).toContain("skipped=1")
+    expect(jobResult).toContain("skip_errors=schema_source_mismatch")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    // No MCQ for the drifted line_001; only the correctly-aligned line_002 gets one.
+    const choiceLineIds = payload.exercises
+      .filter((exercise) => exercise.type === "translation_choice")
+      .map((exercise) => exercise.line_id)
+    expect(choiceLineIds).toEqual(["line_002"])
+    expect(JSON.stringify(payload)).not.toContain("correct_option_id")
+
+    const statusRows = await client!.execute(`
+      SELECT u.line_id, l.status
+      FROM song_study_unit u
+      JOIN song_study_unit_localization l ON l.unit_id = u.id
+      WHERE l.target_language = 'es'
+      ORDER BY u.line_index
+    `)
+    expect(statusRows.rows).toEqual([
+      { line_id: "line_001", status: "unavailable" },
+      { line_id: "line_002", status: "ready" },
     ])
   })
 
@@ -1246,6 +1347,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Explica el sentido de estar perdido.",
                     distractors: [
@@ -1330,6 +1432,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Esta opción conserva el sentido de perderse.",
                     distractors: [
@@ -1340,6 +1443,7 @@ describe("post study service", () => {
                   },
                   {
                     line_id: "line_002",
+                    source_text: "Hold me close until the morning",
                     translation: "Abrázame fuerte hasta la mañana",
                     explanation: "Esta opción expresa cercanía hasta la mañana.",
                     distractors: [

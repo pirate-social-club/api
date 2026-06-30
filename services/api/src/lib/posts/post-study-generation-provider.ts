@@ -14,7 +14,7 @@ export type StudyGeneratedLine = {
 
 export type StudyGenerationSkippedLine = {
   lineId: string | null
-  reason: "schema_shape" | "schema_line_id" | "schema_missing_distractors" | "schema_invalid_distractors"
+  reason: "schema_shape" | "schema_line_id" | "schema_missing_distractors" | "schema_invalid_distractors" | "schema_source_mismatch"
 }
 
 export type StudyPackGenerationResult = {
@@ -50,7 +50,19 @@ function normalizeGeneratedChoice(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase()
 }
 
-function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>): {
+// Tolerant comparison for the echoed source line: ignore case, punctuation, and
+// whitespace differences, but still detect when the model translated a *different*
+// line than the one a given line_id requested (the chunk-drift / off-by-one failure).
+function normalizeSourceForEcho(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+}
+
+function validateStudyGeneration(value: unknown, requestedLines: Map<string, string>): {
   lines: ParsedGeneratedLine[]
   skipped: StudyGenerationSkippedLine[]
 } {
@@ -72,13 +84,23 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
     }
     const line = item as Record<string, unknown>
     const lineId = typeof line.line_id === "string" ? line.line_id.trim() : ""
+    const sourceText = typeof line.source_text === "string" ? line.source_text.trim() : ""
     const translation = typeof line.translation === "string" ? line.translation.trim() : ""
     const explanation = typeof line.explanation === "string" ? line.explanation.trim() : null
     const distractors = isStringArray(line.distractors)
       ? line.distractors.map((distractor) => distractor.trim()).filter(Boolean)
       : []
-    if (!lineId || !requestedLineIds.has(lineId) || seen.has(lineId)) {
+    if (!lineId || !requestedLines.has(lineId) || seen.has(lineId)) {
       skipped.push({ lineId: lineId || null, reason: "schema_line_id" })
+      continue
+    }
+    // Guard against chunk-drift: the model must echo the exact source line it
+    // translated for this line_id. A mismatch means it translated a neighbouring
+    // line (the off-by-one shift) — reject rather than serve a wrong answer key.
+    const expectedSource = requestedLines.get(lineId) ?? ""
+    if (!sourceText || normalizeSourceForEcho(sourceText) !== normalizeSourceForEcho(expectedSource)) {
+      skipped.push({ lineId, reason: "schema_source_mismatch" })
+      seen.add(lineId)
       continue
     }
     if (!translation || distractors.length < 3) {
@@ -123,7 +145,7 @@ export function canGenerateStudyTranslations(env: Env): boolean {
 
 export async function requestStudyPackGeneration(input: {
   env: Env
-  lines: Array<{ lineId: string; next?: string | null; previous?: string | null; text: string }>
+  lines: Array<{ lineId: string; previous?: string | null; text: string }>
   sourceLanguage?: string | null
   targetLanguage: string
 }): Promise<StudyPackGenerationResult> {
@@ -139,7 +161,7 @@ export async function requestStudyPackGeneration(input: {
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
   const maxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)
     ?? DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS
-  const requestedLineIds = new Set(input.lines.map((line) => line.lineId))
+  const requestedLines = new Map(input.lines.map((line) => [line.lineId, line.text]))
 
   const { content } = await requestOpenRouterChatCompletion({
     apiKey,
@@ -165,9 +187,10 @@ export async function requestStudyPackGeneration(input: {
                 items: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["line_id", "translation", "distractors", "explanation"],
+                  required: ["line_id", "source_text", "translation", "distractors", "explanation"],
                   properties: {
                     line_id: { type: "string" },
+                    source_text: { type: "string" },
                     translation: { type: "string" },
                     explanation: { type: "string" },
                     distractors: {
@@ -188,9 +211,11 @@ export async function requestStudyPackGeneration(input: {
           role: "system",
           content:
             "Generate language-learning exercises from lyric lines. " +
-            "For each supplied source line, produce a natural meaning-based answer in the requested target language, exactly three plausible but incorrect target-language distractors, and a brief explanation in the target language. " +
+            "Translate ONLY the `text` value of each supplied line. " +
+            "`context_previous_line` is provided solely for disambiguation — never translate it. " +
+            "For each line, return its `line_id`, a `source_text` field that copies the `text` value you translated EXACTLY (verbatim, unchanged), a natural meaning-based `translation` in the requested target language, exactly three plausible but incorrect target-language distractors, and a brief explanation in the target language. " +
             "Answers and distractors must be written entirely in the target language, not transliteration or mixed lyric style. " +
-            "Use previous/next source lines only as context. Keep translations concise and appropriate for music lyrics. Do not add lines or change line_id values.",
+            "Keep translations concise and appropriate for music lyrics. Do not add lines, drop lines, reorder lines, or change line_id values.",
         },
         {
           role: "user",
@@ -199,8 +224,7 @@ export async function requestStudyPackGeneration(input: {
             target_language: input.targetLanguage,
             lines: input.lines.map((line) => ({
               line_id: line.lineId,
-              next_line: line.next ?? null,
-              previous_line: line.previous ?? null,
+              context_previous_line: line.previous ?? null,
               text: line.text,
             })),
           }),
@@ -209,7 +233,7 @@ export async function requestStudyPackGeneration(input: {
     },
   })
 
-  const validated = validateStudyGeneration(parseStudyGenerationJson(content), requestedLineIds)
+  const validated = validateStudyGeneration(parseStudyGenerationJson(content), requestedLines)
   return {
     provider: "openrouter",
     model,
