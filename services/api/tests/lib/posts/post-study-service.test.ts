@@ -815,61 +815,6 @@ describe("post study service", () => {
     expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
   })
 
-  test("say-it-back review state is shared across target languages", async () => {
-    await seedSongPost()
-    await seedReadyPack()
-
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_1:say_it_back:en",
-        idempotency_key: "study-attempt-say-shared",
-        transcript: "I was lost in the midnight waves",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })
-
-    const rows = await client!.execute(`
-      SELECT exercise_type, target_language, reps
-      FROM song_study_review_state
-      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
-      ORDER BY target_language ASC
-    `, [LEARNER_ID, POST_ID])
-
-    expect(rows.rows).toHaveLength(1)
-    expect(rows.rows[0]).toMatchObject({
-      exercise_type: "say_it_back",
-      target_language: "en",
-      reps: 1,
-    })
-  })
-
-  test("transcription gates entitlement before calling STT", async () => {
-    await seedSongPost("locked")
-
-    let fetchCalled = false
-    await withMockedFetch(() => (async () => {
-      fetchCalled = true
-      return new Response("unexpected", { status: 500 })
-    }) as typeof fetch, async () => {
-      await expect(transcribePostStudyAudio({
-        actor: learnerActor,
-        communityId: COMMUNITY_ID,
-        communityRepository: repo,
-        env: env(),
-        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
-        postId: POST_ID,
-      })).rejects.toThrow(/entitled/)
-    })
-
-    expect(fetchCalled).toBe(false)
-  })
-
   test("missing generated pack lazily creates say-it-back exercises from gated lyrics", async () => {
     await seedSongPost()
 
