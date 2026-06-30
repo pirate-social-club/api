@@ -462,7 +462,7 @@ export async function updateDraftLiveRoomReplayAsset(input: {
           allocation.role,
           allocation.shareBps,
           allocation.rightsBasis ?? "host_draft",
-          allocation.approvalStatus ?? "approved",
+          allocation.approvalStatus ?? (allocation.externalPartyRef ? "pending" : "approved"),
           input.now,
         ],
       })

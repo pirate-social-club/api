@@ -86,6 +86,9 @@ function resolveReplayQuoteAllocationSnapshot(input: {
     ? roundUsd(input.finalPriceUsd * (charityShareBps / 10_000))
     : 0
   const payableAmountUsd = roundUsd(input.finalPriceUsd - charityAmountUsd)
+  if (input.replayAllocations.some((allocation) => allocation.external_party_ref !== null)) {
+    throw badRequestError("Paid replay cannot be sold while an allocation names an external rightsholder without a payable Pirate identity")
+  }
   const approvedReplayAllocations = input.replayAllocations.filter((allocation) => allocation.approval_status === "approved")
   const replayShareBps = approvedReplayAllocations.reduce((sum, allocation) => sum + allocation.share_bps, 0)
   if (approvedReplayAllocations.length === 0 || replayShareBps !== 10_000) {

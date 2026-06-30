@@ -2162,7 +2162,7 @@ describe("community live-room routes", () => {
               role: "venue",
               share_bps: 1500,
               rights_basis: "host_draft",
-              approval_status: "approved",
+              approval_status: "pending",
             },
           ],
         },
@@ -3266,6 +3266,222 @@ describe("community live-room routes", () => {
       const replayContentBytes = new Uint8Array(await replayContent.arrayBuffer())
       expect(Array.from(replayContentBytes)).toEqual(Array.from(lockedReplayObject.body))
       expect(new TextDecoder().decode(replayContentBytes)).not.toBe("separately paid captured replay")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("paid replay quote rejects external rightsholder allocations", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const compositeReadConditionAddress = "0x9999999999999999999999999999999999999999"
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+      FILEBASE_S3_ENDPOINT: "https://filebase.test",
+      FILEBASE_S3_REGION: "us-east-1",
+      FILEBASE_MEDIA_BUCKET: "media",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      STORY_CONTRACT_OWNER_PRIVATE_KEY: "0x1000000000000000000000000000000000000000000000000000000000000001",
+      STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
+      STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: compositeReadConditionAddress,
+    })
+    const originalFetch = globalThis.fetch
+    const storageObjects = new Map<string, { body: Uint8Array; contentType: string }>()
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryCdrUploaderForTests(async () => ({
+      cdrVaultUuid: 9292,
+      writerAddress: "0x0000000000000000000000000000000000000cd2",
+      txHashes: {
+        allocate: "0xalloc-external-replay",
+        write: "0xwrite-external-replay",
+      },
+    }))
+    setStoryAccessProofSignerForTests(async (input) => ({
+      digest: "0xd1e570000000000000000000000000000000000000000000000000000000003",
+      signature: `0x${"33".repeat(65)}` as `0x${string}`,
+      signerAddress: "0x0000000000000000000000000000000000000acc",
+      proof: {
+        vaultUuid: input.vaultUuid,
+        caller: input.callerAddress,
+        accessRef: input.accessRef,
+        scope: "0xb8c1a2b531e7c9d996686b1cc6dcd49d2d7037be365b6d380ebaf489440d4f18",
+        expiry: input.expiry,
+        namespace: input.namespace,
+      },
+    }))
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = url instanceof Request ? url : new Request(url, init)
+      const href = request.url
+      if (href.startsWith("https://capture-storage.test/")) {
+        return new Response(new TextEncoder().encode("external rightsholder captured replay"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      }
+      if (href.startsWith("https://filebase.test/")) {
+        const objectKey = new URL(href).pathname.replace(/^\/media\//, "")
+        if (request.method === "PUT") {
+          storageObjects.set(objectKey, {
+            body: new Uint8Array(await request.arrayBuffer()),
+            contentType: request.headers.get("content-type") ?? "application/octet-stream",
+          })
+          return new Response("", {
+            status: 200,
+            headers: {
+              "x-amz-meta-cid": objectKey.startsWith("locked-replays/")
+                ? "bafy-external-replay-locked"
+                : "bafy-external-replay-raw",
+            },
+          })
+        }
+        if (request.method === "GET") {
+          const stored = storageObjects.get(objectKey)
+          if (!stored) {
+            return new Response(`missing object ${objectKey}`, { status: 404 })
+          }
+          return new Response(stored.body.slice().buffer, {
+            status: 200,
+            headers: { "content-type": stored.contentType },
+          })
+        }
+      }
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(request)
+      }
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-external-replay" })
+      }
+      if (href.endsWith("/start")) {
+        return Response.json({ resourceId: "resource-external-replay", sid: "sid-external-replay" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-external-replay",
+          sid: "sid-external-replay",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/external-replay.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-external-replay-owner")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const buyer = await exchangeJwt(ctx.env, "live-room-external-replay-buyer")
+      await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      await addCommunityMember(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT), communityId, buyer.userId)
+      const body = readySoloRoomBody()
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string }
+
+      const attach = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        { method: "POST", headers: { authorization: `Bearer ${owner.accessToken}` } },
+        ctx.env,
+      )
+      expect(attach.status).toBe(200)
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        { method: "POST", headers: { authorization: `Bearer ${owner.accessToken}` } },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+
+      const updateDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            access_mode: "paid",
+            allocations: [
+              { participant_user: `usr_${owner.userId}`, role: "host", share_bps: 8500 },
+              { external_party_ref: "wallet:0x1111111111111111111111111111111111111111", role: "venue", share_bps: 1500 },
+            ],
+          }),
+        },
+        ctx.env,
+      )
+      expect(updateDraft.status).toBe(200)
+      // External rightsholder rows must not be born approved.
+      expect(await json(updateDraft)).toMatchObject({
+        replay_asset: {
+          allocations: expect.arrayContaining([
+            expect.objectContaining({
+              external_party_ref: "wallet:0x1111111111111111111111111111111111111111",
+              approval_status: "pending",
+            }),
+          ]),
+        },
+      })
+
+      const publish = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft/publish`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${owner.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            access_mode: "paid",
+            listing: { price_cents: 700, regional_pricing_enabled: false, status: "active" },
+          }),
+        },
+        ctx.env,
+      )
+      expect(publish.status).toBe(200)
+
+      const commerceRow = await readLiveRoomCommerceRow({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(commerceRow.replay_listing_id).toMatch(/^lst_/)
+
+      // The money-path gate: a buyer cannot quote a paid replay whose split
+      // routes to an external party with no payable Pirate identity.
+      const quoteCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-quotes`,
+        {
+          listing: `lst_${commerceRow.replay_listing_id}`,
+          ...routedCheckoutQuoteFields,
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(quoteCreate.status).toBe(400)
+      expect(JSON.stringify(await json(quoteCreate))).toContain("external rightsholder")
     } finally {
       globalThis.fetch = originalFetch
     }
