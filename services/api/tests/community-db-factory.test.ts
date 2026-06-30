@@ -868,6 +868,9 @@ describe("openCommunityDb", () => {
       expect(afterTableNames).toContain("live_room_setlist_items")
       expect(afterTableNames).toContain("live_room_guest_invites")
       expect(afterTableNames).toContain("live_room_viewer_sessions")
+      expect(afterTableNames).toContain("live_room_recordings")
+      expect(afterTableNames).toContain("live_room_replay_assets")
+      expect(afterTableNames).toContain("live_room_replay_allocations")
 
       const afterIndexNames = await listIndexNames(databasePath)
       expect(afterIndexNames).toContain("idx_live_rooms_community_status")
@@ -875,9 +878,38 @@ describe("openCommunityDb", () => {
       expect(afterIndexNames).toContain("idx_live_room_guest_invites_active")
       expect(afterIndexNames).toContain("idx_live_room_viewer_sessions_uid")
       expect(afterIndexNames).toContain("idx_live_room_viewer_sessions_viewer")
+      expect(afterIndexNames).toContain("idx_live_room_recordings_room")
+      expect(afterIndexNames).toContain("idx_live_room_replay_assets_room")
+      expect(afterIndexNames).toContain("idx_live_room_replay_allocations_asset")
 
       const setlistItemColumns = await getTableColumns(databasePath, "live_room_setlist_items")
       expect(setlistItemColumns).toContain("source_asset_ref")
+      const replayAssetColumns = await getTableColumns(databasePath, "live_room_replay_assets")
+      expect(replayAssetColumns).toEqual([
+        "replay_asset_id",
+        "community_id",
+        "live_room_id",
+        "source_recording_id",
+        "publication_status",
+        "title",
+        "caption",
+        "duration_ms",
+        "preview_ref",
+        "access_mode",
+        "primary_content_ref",
+        "locked_delivery_status",
+        "locked_delivery_storage_ref",
+        "story_cdr_vault_uuid",
+        "published_at",
+        "created_at",
+        "updated_at",
+        "locked_delivery_secret_json",
+        "story_namespace",
+        "story_entitlement_token_id",
+        "story_read_condition",
+        "story_write_condition",
+        "locked_delivery_error",
+      ])
 
       const checksum = await getMigrationChecksum(databasePath, "1070_live_rooms.sql")
       expect(checksum).toBe("47dcdd32d64789c6f93e6162f137b7238c75914532256aa0d186d5a8b68fa179")
@@ -885,6 +917,14 @@ describe("openCommunityDb", () => {
       expect(sourceAssetRefChecksum).toBe("55f125162ffc23a107556a295b1456a74065100e6a98895a11b2560b2540baab")
       const viewerSessionsChecksum = await getMigrationChecksum(databasePath, "1078_live_room_viewer_sessions.sql")
       expect(viewerSessionsChecksum).toBe("e56e39e1529e9fcd282795a6df8cc05639529aa59b535ef0c84261336b3ec5bc")
+      const recordingEnabledChecksum = await getMigrationChecksum(databasePath, "1110_live_room_recording_enabled.sql")
+      expect(recordingEnabledChecksum).toBe("f5c9413b994ff0ae278201b45c31510874209b07d699332e99912959146f6ae3")
+      const recordingsChecksum = await getMigrationChecksum(databasePath, "1111_live_room_recordings.sql")
+      expect(recordingsChecksum).toBe("c57f9e69547141e64d9c2425af4dedae0928fe42ac5350c6ee76855de3d73683")
+      const replayAssetsChecksum = await getMigrationChecksum(databasePath, "1112_live_room_replay_assets.sql")
+      expect(replayAssetsChecksum).toBe("3cd34e171f36eb93b508684645782bbee8690fc660108c23e38e934806a01475")
+      const replayLockedDeliveryChecksum = await getMigrationChecksum(databasePath, "1113_live_room_replay_locked_delivery.sql")
+      expect(replayLockedDeliveryChecksum).toBe("3b631159e77ed088823ac192f18e4945dc37a43c6f2f0cb2f3a26cf6ab38fb4a")
 
       await ensureRemoteLiveRoomTables(client)
     } finally {
