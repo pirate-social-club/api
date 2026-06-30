@@ -988,6 +988,70 @@ describe("community live-room routes", () => {
       communityDbAfterDonationCheck.close()
     }
 
+    const legacyDonationQuoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(legacyDonationQuoteCreate.status).toBe(201)
+    const legacyDonationQuoteBody = await json(legacyDonationQuoteCreate) as { id: string }
+    const legacyDonationQuoteId = legacyDonationQuoteBody.id.replace(/^pq_/, "")
+    const communityDbForLegacyDonationQuote = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      await communityDbForLegacyDonationQuote.execute({
+        sql: `
+          UPDATE purchase_quotes
+          SET allocation_snapshot_json = ?3
+          WHERE community_id = ?1
+            AND quote_id = ?2
+        `,
+        args: [
+          communityId,
+          legacyDonationQuoteId,
+          JSON.stringify([
+            {
+              recipient_type: "charity",
+              recipient_ref: "don_live_room_charity",
+              waterfall_position: 60,
+              share_bps: 1000,
+              amount_usd: 1.2,
+              settlement_strategy: "provider_payout",
+            },
+            {
+              recipient_type: "creator",
+              recipient_ref: owner.userId,
+              waterfall_position: 70,
+              share_bps: 9000,
+              amount_usd: 10.8,
+              settlement_strategy: "story_payout",
+            },
+          ]),
+        ],
+      })
+    } finally {
+      communityDbForLegacyDonationQuote.close()
+    }
+
+    const legacyDonationSettlement = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: legacyDonationQuoteBody.id,
+        settlement_wallet_attachment: "wal_legacy_live_room_donation",
+        funding_tx_ref: "0xfunding-legacy-live-room-donation",
+        settlement_tx_ref: "tx-legacy-live-room-donation",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(legacyDonationSettlement.status).toBe(400)
+    expect(JSON.stringify(await json(legacyDonationSettlement))).toContain("Non-asset purchase donations are not supported")
+
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
