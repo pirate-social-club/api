@@ -583,7 +583,13 @@ async function canAccessKaraokeForPost(input: {
 
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const entitlement = await getActiveEntitlementForBuyer(db.client, input.communityId, actor.userId, assetId)
+    const entitlement = await getActiveEntitlementForBuyer(
+      db.client,
+      input.communityId,
+      actor.userId,
+      assetId,
+      "asset_access",
+    )
     return Boolean(entitlement)
   } finally {
     db.close()

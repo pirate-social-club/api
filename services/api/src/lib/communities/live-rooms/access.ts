@@ -99,7 +99,7 @@ export async function resolveLiveRoomViewerAccess(input: {
     : null
   const activeListing = listing?.status === "active" ? listing : null
   const entitlement = room.access_mode === "paid"
-    ? await getActiveEntitlementForBuyer(input.client, input.communityId, input.userId, room.id)
+    ? await getActiveEntitlementForBuyer(input.client, input.communityId, input.userId, room.id, "live_room_access")
     : null
   if (room.access_mode === "paid" && !entitlement) {
     return {

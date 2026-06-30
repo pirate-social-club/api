@@ -426,7 +426,9 @@ export async function getActiveEntitlementForBuyer(
   communityId: string,
   userId: string,
   targetRef: string,
+  entitlementKind?: PurchaseEntitlementRow["entitlement_kind"],
 ): Promise<PurchaseEntitlementRow | null> {
+  const entitlementKindClause = entitlementKind ? "AND entitlement_kind = ?4" : ""
   const row = await executeFirst(client, {
     sql: `
       SELECT purchase_entitlement_id, purchase_id, community_id,
@@ -438,11 +440,12 @@ export async function getActiveEntitlementForBuyer(
       WHERE community_id = ?1
         AND buyer_user_id = ?2
         AND target_ref = ?3
+        ${entitlementKindClause}
         AND status = 'active'
       ORDER BY created_at DESC
       LIMIT 1
     `,
-    args: [communityId, userId, targetRef],
+    args: entitlementKind ? [communityId, userId, targetRef, entitlementKind] : [communityId, userId, targetRef],
   })
   return row ? toPurchaseEntitlementRow(row) : null
 }
@@ -452,10 +455,12 @@ export async function getActiveEntitlementForBuyerIdentity(
   communityId: string,
   buyer: BuyerIdentity,
   targetRef: string,
+  entitlementKind?: PurchaseEntitlementRow["entitlement_kind"],
 ): Promise<PurchaseEntitlementRow | null> {
   if (buyer.kind === "user") {
-    return getActiveEntitlementForBuyer(client, communityId, buyer.userId, targetRef)
+    return getActiveEntitlementForBuyer(client, communityId, buyer.userId, targetRef, entitlementKind)
   }
+  const entitlementKindClause = entitlementKind ? "AND entitlement_kind = ?5" : ""
   const row = await executeFirst(client, {
     sql: `
       SELECT purchase_entitlement_id, purchase_id, community_id,
@@ -469,11 +474,14 @@ export async function getActiveEntitlementForBuyerIdentity(
         AND buyer_chain_ref = ?2
         AND buyer_wallet_address_normalized = ?3
         AND target_ref = ?4
+        ${entitlementKindClause}
         AND status = 'active'
       ORDER BY created_at DESC
       LIMIT 1
     `,
-    args: [communityId, buyer.chainRef, buyer.walletAddressNormalized, targetRef],
+    args: entitlementKind
+      ? [communityId, buyer.chainRef, buyer.walletAddressNormalized, targetRef, entitlementKind]
+      : [communityId, buyer.chainRef, buyer.walletAddressNormalized, targetRef],
   })
   return row ? toPurchaseEntitlementRow(row) : null
 }

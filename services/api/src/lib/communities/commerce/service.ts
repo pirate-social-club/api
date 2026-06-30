@@ -1363,7 +1363,13 @@ export async function resolveCommunityAssetAccess(input: {
     const previewState = asset.locked_delivery_status === "ready"
       ? await resolveLockedSongPreviewState({ asset, communityId: input.communityId, env: input.env })
       : { bundlePreviewStatus: null, previewReady: true }
-    const entitlement = await getActiveEntitlementForBuyer(db.client, input.communityId, input.userId, asset.asset_id)
+    const entitlement = await getActiveEntitlementForBuyer(
+      db.client,
+      input.communityId,
+      input.userId,
+      asset.asset_id,
+      "asset_access",
+    )
     if (entitlement && asset.locked_delivery_status === "ready" && previewState.previewReady) {
       const callerWalletAddress = await resolvePrimaryWalletAddress({
         env: input.env,
@@ -1460,6 +1466,7 @@ export async function resolvePublicCommunityAssetAccess(input: {
       input.communityId,
       input.buyer,
       asset.asset_id,
+      "asset_access",
     )
     const previewState = asset.locked_delivery_status === "ready"
       ? await resolveLockedSongPreviewState({ asset, communityId: input.communityId, env: input.env })

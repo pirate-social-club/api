@@ -315,6 +315,7 @@ async function canStudyLockedSongPost(input: {
     input.post.community_id,
     input.viewerUserId,
     input.post.asset_id,
+    "asset_access",
   )
   return Boolean(entitlement)
 }
