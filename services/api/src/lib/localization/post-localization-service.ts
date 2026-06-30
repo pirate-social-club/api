@@ -91,6 +91,66 @@ function parseJsonAudioDescriptor(value: unknown): Omit<SongPresentationDownload
   }
 }
 
+function parseJsonValue(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value
+  }
+  if (!value.trim()) {
+    return null
+  }
+
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function hasTimedLyricsLine(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasTimedLyricsLine)
+  }
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const record = value as Record<string, unknown>
+  if (
+    Array.isArray(record.words)
+    || record.start_ms !== undefined
+    || record.end_ms !== undefined
+    || record.startMs !== undefined
+    || record.endMs !== undefined
+    || record.start !== undefined
+    || record.end !== undefined
+    || record.text !== undefined
+    || record.original_text !== undefined
+  ) {
+    return true
+  }
+
+  return hasTimedLyricsLine(
+    record.raw_lines
+      ?? record.rawLines
+      ?? record.full_karaoke_lines
+      ?? record.fullKaraokeLines
+      ?? record.lines
+      ?? record.lyrics
+      ?? record.segments,
+  )
+}
+
+function hasTimedLyrics(input: {
+  inline: unknown
+  ref: unknown
+}): boolean {
+  if (stringValue(input.ref)) {
+    return true
+  }
+
+  return hasTimedLyricsLine(parseJsonValue(input.inline))
+}
+
 function buildDefaultIpfsGatewayUrl(cid: string): string {
   return `${DEFAULT_IPFS_GATEWAY_URL}/${encodeURIComponent(cid)}`
 }
@@ -223,7 +283,10 @@ async function getPublicDownloadableAudio(input: {
   return {
     alignment_status: alignmentStatusValue(row.alignment_status),
     downloadable_audio: downloadableAudio,
-    has_timed_lyrics: Boolean(stringValue(row.timed_lyrics_ref) || stringValue(row.timed_lyrics_json)),
+    has_timed_lyrics: hasTimedLyrics({
+      inline: row.timed_lyrics_json,
+      ref: row.timed_lyrics_ref,
+    }),
   }
 }
 

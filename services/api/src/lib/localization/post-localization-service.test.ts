@@ -96,8 +96,15 @@ function songArtifactExecutor(): DbExecutor {
             duration_ms: 120000,
           },
           alignment_status: "completed",
-          timed_lyrics_ref: "r2://karaoke/pst_song.json",
-          timed_lyrics_json: null,
+          timed_lyrics_ref: null,
+          timed_lyrics_json: {
+            provider: "elevenlabs",
+            segments: [{
+              start_ms: 100,
+              end_ms: 500,
+              text: "hello",
+            }],
+          },
         }],
       }
     },
