@@ -5,9 +5,11 @@ import { createClient } from "@libsql/client"
 import { describe, expect, test } from "bun:test"
 import {
   getCommunityStudyPolicy,
+  updateStudyPolicyRow,
   updateCommunityStudyPolicy,
 } from "./community-study-policy-service"
 import type { CommunityDatabaseBindingRow, CommunityRow } from "../auth/auth-db-rows"
+import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 
 async function setup() {
@@ -137,5 +139,30 @@ describe("community study policy", () => {
         study_enabled: 1,
       },
     ])
+  })
+
+  test("updates study policy without schema widening when study_enabled already exists", async () => {
+    const statements: string[] = []
+    const client = {
+      async execute(statement: string | { sql: string }) {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        statements.push(sql)
+        if (/ALTER\s+TABLE/iu.test(sql)) {
+          throw new Error("Statement rejected by shard write guard: ALTER")
+        }
+        return { rows: [], rowsAffected: 1 }
+      },
+    } as unknown as Client
+
+    await updateStudyPolicyRow({
+      client,
+      communityId: "cmt_policy_d1",
+      studyEnabled: true,
+      updatedAt: "2026-06-30T00:00:00.000Z",
+    })
+
+    expect(statements).toHaveLength(1)
+    expect(statements[0]).toContain("UPDATE communities")
+    expect(statements[0]).toContain("study_enabled")
   })
 })
