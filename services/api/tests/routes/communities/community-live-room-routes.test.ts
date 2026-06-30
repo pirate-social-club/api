@@ -15,6 +15,8 @@ import { badRequestError } from "../../../src/lib/errors"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
+import { DatabaseCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { processNextCommunityJob } from "../../../src/lib/communities/jobs/runner"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -466,6 +468,56 @@ async function readLiveRoomReplayAssetRows(input: {
   } finally {
     client.close()
   }
+}
+
+async function readCommunityJobRows(input: {
+  communityDbRoot: string
+  communityId: string
+}): Promise<Array<{
+  job_type: string
+  subject_type: string
+  subject_id: string
+  status: string
+  result_ref: string | null
+  error_code: string | null
+  attempt_count: number
+}>> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT job_type, subject_type, subject_id, status, result_ref, error_code, attempt_count
+        FROM community_jobs
+        WHERE community_id = ?1
+        ORDER BY created_at ASC, job_id ASC
+      `,
+      args: [input.communityId],
+    })
+    return result.rows.map((row) => ({
+      job_type: String(row.job_type),
+      subject_type: String(row.subject_type),
+      subject_id: String(row.subject_id),
+      status: String(row.status),
+      result_ref: row.result_ref == null ? null : String(row.result_ref),
+      error_code: row.error_code == null ? null : String(row.error_code),
+      attempt_count: Number(row.attempt_count),
+    }))
+  } finally {
+    client.close()
+  }
+}
+
+async function processNextRouteCommunityJob(input: {
+  ctx: Awaited<ReturnType<typeof createRouteTestContext>>
+  communityId: string
+}) {
+  return await processNextCommunityJob({
+    env: input.ctx.env,
+    communityId: input.communityId,
+    communityRepository: new DatabaseCommunityRepository(input.ctx.client),
+  })
 }
 
 async function readLiveRoomCommerceRow(input: {
@@ -2052,7 +2104,36 @@ describe("community live-room routes", () => {
       expect(end.status).toBe(200)
       const ended = await json(end) as { ended_at: number; replay_status: string; status: string }
       expect(ended.status).toBe("ended")
-      expect(ended.replay_status).toBe("review_pending")
+      expect(ended.replay_status).toBe("processing")
+      const recordingRowsAfterEnd = await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(recordingRowsAfterEnd).toHaveLength(1)
+      expect(recordingRowsAfterEnd[0]).toMatchObject({
+        provider: "agora",
+        provider_resource_id: "resource-live-room",
+        provider_session_id: "sid-live-room",
+        status: "captured",
+        stopped_at: ended.ended_at,
+        raw_artifact_ref: null,
+        failure_reason: null,
+      })
+      expect(await readCommunityJobRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+      })).toMatchObject([{
+        job_type: "live_room_recording_ingest",
+        subject_type: "live_room",
+        subject_id: room.id,
+        status: "queued",
+        attempt_count: 0,
+      }])
+
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("succeeded")
+      expect(processedIngest?.result_ref).toBe(`live_room_recording_ingested:${room.id}`)
       const recordingRows = await readLiveRoomRecordingRows({
         communityDbRoot: ctx.communityDbRoot,
         communityId,
@@ -2060,11 +2141,7 @@ describe("community live-room routes", () => {
       })
       expect(recordingRows).toHaveLength(1)
       expect(recordingRows[0]).toMatchObject({
-        provider: "agora",
-        provider_resource_id: "resource-live-room",
-        provider_session_id: "sid-live-room",
         status: "captured",
-        stopped_at: ended.ended_at,
         failure_reason: null,
       })
       expect(recordingRows[0]?.raw_artifact_ref).toContain("\"provider\":\"filebase\"")
@@ -2286,7 +2363,7 @@ describe("community live-room routes", () => {
     }
   })
 
-  test("recording ingest failure marks the replay failed without creating a replay asset", async () => {
+  test("recording ingest failure leaves replay processing and retries through the job runner", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     Object.assign(ctx.env, {
@@ -2380,8 +2457,12 @@ describe("community live-room routes", () => {
       expect(end.status).toBe(200)
       const ended = await json(end) as { replay_status: string; replay_asset_id: string | null; status: string }
       expect(ended.status).toBe("ended")
-      expect(ended.replay_status).toBe("failed")
+      expect(ended.replay_status).toBe("processing")
       expect(ended.replay_asset_id).toBeNull()
+
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("failed")
+      expect(processedIngest?.error_code).toContain("Filebase object upload failed with status 503")
 
       const recordingRows = await readLiveRoomRecordingRows({
         communityDbRoot: ctx.communityDbRoot,
@@ -2393,10 +2474,20 @@ describe("community live-room routes", () => {
         provider: "agora",
         provider_resource_id: "resource-live-room",
         provider_session_id: "sid-live-room",
-        status: "failed",
+        status: "ingesting",
         raw_artifact_ref: null,
+        failure_reason: null,
       })
-      expect(recordingRows[0]?.failure_reason).toContain("Filebase object upload failed with status 503")
+      expect(await readCommunityJobRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+      })).toMatchObject([{
+        job_type: "live_room_recording_ingest",
+        subject_type: "live_room",
+        subject_id: room.id,
+        status: "failed",
+        attempt_count: 1,
+      }])
 
       const replayAssets = await readLiveRoomReplayAssetRows({
         communityDbRoot: ctx.communityDbRoot,
@@ -2416,12 +2507,12 @@ describe("community live-room routes", () => {
       expect(await json(draft)).toMatchObject({
         object: "live_room_replay_draft",
         live_room: room.id,
-        replay_status: "failed",
-        status: "failed",
+        replay_status: "processing",
+        status: "processing",
         replay_asset: null,
         recording: {
           provider: "agora",
-          status: "failed",
+          status: "ingesting",
           raw_artifact: null,
         },
       })
@@ -2774,8 +2865,11 @@ describe("community live-room routes", () => {
       expect(end.status).toBe(200)
       expect(await json(end)).toMatchObject({
         status: "ended",
-        replay_status: "review_pending",
+        replay_status: "processing",
       })
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("succeeded")
+      expect(processedIngest?.result_ref).toBe(`live_room_recording_ingested:${room.id}`)
 
       const updateDraft = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
@@ -3023,8 +3117,11 @@ describe("community live-room routes", () => {
       expect(end.status).toBe(200)
       expect(await json(end)).toMatchObject({
         status: "ended",
-        replay_status: "review_pending",
+        replay_status: "processing",
       })
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("succeeded")
+      expect(processedIngest?.result_ref).toBe(`live_room_recording_ingested:${room.id}`)
 
       const updateDraft = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
@@ -3222,6 +3319,13 @@ describe("community live-room routes", () => {
         ctx.env,
       )
       expect(end.status).toBe(200)
+      expect(await json(end)).toMatchObject({
+        status: "ended",
+        replay_status: "processing",
+      })
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("succeeded")
+      expect(processedIngest?.result_ref).toBe(`live_room_recording_ingested:${room.id}`)
 
       const updateDraft = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
@@ -3565,6 +3669,13 @@ describe("community live-room routes", () => {
         ctx.env,
       )
       expect(end.status).toBe(200)
+      expect(await json(end)).toMatchObject({
+        status: "ended",
+        replay_status: "processing",
+      })
+      const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
+      expect(processedIngest?.status).toBe("succeeded")
+      expect(processedIngest?.result_ref).toBe(`live_room_recording_ingested:${room.id}`)
 
       const updateDraft = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
