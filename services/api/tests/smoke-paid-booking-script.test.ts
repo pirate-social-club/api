@@ -3,6 +3,7 @@ import { Wallet } from "ethers"
 
 import {
   isProbablyAddress,
+  PAID_BOOKING_SMOKE_USAGE,
   parseAddress,
   parsePositiveAtomic,
   parsePositiveInt,
@@ -16,6 +17,14 @@ const OTHER_VALID_ADDRESS = "0x2222222222222222222222222222222222222222"
 const BUYER_PRIVATE_KEY = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 describe("smoke-paid-booking script guards", () => {
+  test("documents prod preflight and canary commands", () => {
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("--funding-preflight-only")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("--claim")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("https://api.pirate.sc")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("0xbBA024600cba5F375AfdCeC401f7dcCB3D515829")
+  })
+
   test("validates EVM address-shaped values", () => {
     expect(isProbablyAddress(VALID_ADDRESS)).toBe(true)
     expect(isProbablyAddress("0x123")).toBe(false)

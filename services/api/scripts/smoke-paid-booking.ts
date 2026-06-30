@@ -18,6 +18,35 @@ type JsonResult = {
   body: unknown
 }
 
+export const PAID_BOOKING_SMOKE_USAGE = `Usage:
+  bun run smoke:paid-booking -- [options]
+
+Modes:
+  quote-only (default): creates a host, availability, hold, and quote without sending funds.
+  --claim: sends USDC, confirms the booking, attaches both sessions, and records heartbeats.
+  --funding-preflight-only: checks buyer gas, buyer USDC, and settlement-operator gas before creating booking records.
+
+Common options:
+  --origin URL                         API origin. Defaults to https://api-staging.pirate.sc.
+  --run-id ID                          Stable suffix for smoke users/profile labels.
+  --private-key-env NAME               Buyer private key env var. Defaults to PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY.
+  --allow-checkout-operator-buyer      Use PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY if the buyer key env is absent.
+  --host-payout-wallet ADDRESS         Override host payout wallet. Defaults to buyer wallet when a buyer key is present.
+  --wait-for-completion                After confirm/attach/heartbeat, wait for slot start and call complete.
+
+Funding preflight options:
+  --chain-id 8453
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829
+  --amount-atomic 1000000
+
+Prod funding preflight:
+  bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
+
+Prod full canary:
+  bun run smoke:paid-booking -- --origin https://api.pirate.sc --run-id 20260630-prod-paid-canary --claim
+`
+
 function arg(name: string): string | null {
   const args = process.argv.slice(2)
   const index = args.indexOf(name)
@@ -255,6 +284,10 @@ function weekdayInTimeZone(timeZone: string): number {
 }
 
 async function main(): Promise<void> {
+  if (flag("--help") || flag("-h")) {
+    console.log(PAID_BOOKING_SMOKE_USAGE)
+    return
+  }
   const origin = (arg("--origin") || "https://api-staging.pirate.sc").replace(/\/+$/, "")
   const runId = arg("--run-id") || String(Date.now())
   const claim = flag("--claim")
