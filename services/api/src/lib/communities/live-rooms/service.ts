@@ -64,6 +64,7 @@ import {
   createDraftLiveRoomReplayAsset,
   getLiveRoomReplayAsset,
   listLiveRoomReplayAllocations,
+  markLiveRoomReplayAssetLockedDeliveryFailed,
   publishFreeLiveRoomReplayAsset,
   publishLockedIncludedTicketLiveRoomReplayAsset,
   publishLockedPaidLiveRoomReplayAsset,
@@ -834,27 +835,39 @@ export async function publishLiveRoomReplayDraft(input: {
       if (!recording || recording.status !== "captured" || !recording.raw_artifact_ref?.trim()) {
         throw conflictError("Replay recording is not ready for locked delivery")
       }
-      const lockedDelivery = await prepareIncludedTicketReplayDelivery({
-        env: input.env,
-        communityId: input.communityId,
-        liveRoomId: input.liveRoomId,
-        replayAsset: asset,
-        rawArtifactRefJson: recording.raw_artifact_ref,
-      })
-      published = await publishLockedIncludedTicketLiveRoomReplayAsset({
-        client: db.client,
-        communityId: input.communityId,
-        liveRoomId: input.liveRoomId,
-        replayAssetId: asset.replay_asset_id,
-        lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
-        lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
-        storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
-        storyNamespace: lockedDelivery.storyNamespace,
-        storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
-        storyReadCondition: lockedDelivery.storyReadCondition,
-        storyWriteCondition: lockedDelivery.storyWriteCondition,
-        now,
-      })
+      try {
+        const lockedDelivery = await prepareIncludedTicketReplayDelivery({
+          env: input.env,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAsset: asset,
+          rawArtifactRefJson: recording.raw_artifact_ref,
+        })
+        published = await publishLockedIncludedTicketLiveRoomReplayAsset({
+          client: db.client,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAssetId: asset.replay_asset_id,
+          lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
+          lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
+          storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
+          storyNamespace: lockedDelivery.storyNamespace,
+          storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
+          storyReadCondition: lockedDelivery.storyReadCondition,
+          storyWriteCondition: lockedDelivery.storyWriteCondition,
+          now,
+        })
+      } catch (error) {
+        await markLiveRoomReplayAssetLockedDeliveryFailed({
+          client: db.client,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAssetId: asset.replay_asset_id,
+          error: lockedReplayPublishErrorMessage(error),
+          now,
+        })
+        throw error
+      }
     } else {
       if (asset.access_mode !== "paid") {
         throw badRequestError("Replay draft access_mode must be paid before publishing")
@@ -884,31 +897,43 @@ export async function publishLiveRoomReplayDraft(input: {
         userRepository: input.userRepository,
         client: db.client,
       })
-      const lockedDelivery = await prepareIncludedTicketReplayDelivery({
-        env: input.env,
-        communityId: input.communityId,
-        liveRoomId: input.liveRoomId,
-        replayAsset: asset,
-        rawArtifactRefJson: recording.raw_artifact_ref,
-      })
-      await withTransaction(db.client, "write", async (tx) => {
-        await insertCommunityListingRow(tx, input.communityId, preparedListing)
-        published = await publishLockedPaidLiveRoomReplayAsset({
-          client: tx,
+      try {
+        const lockedDelivery = await prepareIncludedTicketReplayDelivery({
+          env: input.env,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
+          replayAsset: asset,
+          rawArtifactRefJson: recording.raw_artifact_ref,
+        })
+        await withTransaction(db.client, "write", async (tx) => {
+          await insertCommunityListingRow(tx, input.communityId, preparedListing)
+          published = await publishLockedPaidLiveRoomReplayAsset({
+            client: tx,
+            communityId: input.communityId,
+            liveRoomId: input.liveRoomId,
+            replayAssetId: asset.replay_asset_id,
+            replayListingId: preparedListing.listingId,
+            lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
+            lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
+            storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
+            storyNamespace: lockedDelivery.storyNamespace,
+            storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
+            storyReadCondition: lockedDelivery.storyReadCondition,
+            storyWriteCondition: lockedDelivery.storyWriteCondition,
+            now,
+          })
+        })
+      } catch (error) {
+        await markLiveRoomReplayAssetLockedDeliveryFailed({
+          client: db.client,
           communityId: input.communityId,
           liveRoomId: input.liveRoomId,
           replayAssetId: asset.replay_asset_id,
-          replayListingId: preparedListing.listingId,
-          lockedDeliveryStorageRef: lockedDelivery.lockedDeliveryStorageRef,
-          lockedDeliveryMetadataJson: lockedDelivery.lockedDeliveryMetadataJson,
-          storyCdrVaultUuid: lockedDelivery.storyCdrVaultUuid,
-          storyNamespace: lockedDelivery.storyNamespace,
-          storyEntitlementTokenId: lockedDelivery.storyEntitlementTokenId,
-          storyReadCondition: lockedDelivery.storyReadCondition,
-          storyWriteCondition: lockedDelivery.storyWriteCondition,
+          error: lockedReplayPublishErrorMessage(error),
           now,
         })
-      })
+        throw error
+      }
     }
     if (!published) {
       throw conflictError("Replay draft is missing or not publishable")
@@ -923,6 +948,18 @@ export async function publishLiveRoomReplayDraft(input: {
   } finally {
     db.close()
   }
+}
+
+function lockedReplayPublishErrorMessage(error: unknown): string {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "Locked replay delivery publish failed"
+  return message
+    .replace(/0x[0-9a-fA-F]{64}/g, "0x[redacted]")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, 1000)
 }
 
 function normalizeReplayDraftUpdate(body: UpdateLiveRoomReplayDraftRequest): NormalizedReplayDraftUpdate {
