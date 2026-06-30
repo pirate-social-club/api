@@ -32,6 +32,24 @@ function env(name: string): string {
   return String(process.env[name] ?? "").trim()
 }
 
+export function parsePositiveInt(value: string | null, label: string): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive integer`)
+  return parsed
+}
+
+export function parsePositiveAtomic(value: string | null, label: string): string {
+  const text = String(value ?? "").trim()
+  if (!/^[1-9]\d*$/u.test(text)) throw new Error(`${label} must be a positive integer atomic amount`)
+  return text
+}
+
+export function parseAddress(value: string | null, label: string): string {
+  const text = String(value ?? "").trim()
+  if (!isProbablyAddress(text)) throw new Error(`${label} must be an EVM address`)
+  return text
+}
+
 export function isProbablyAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/u.test(value.trim())
 }
@@ -245,6 +263,17 @@ async function main(): Promise<void> {
   let privateKey = env(privateKeyEnv)
   if (!privateKey && flag("--allow-checkout-operator-buyer")) {
     privateKey = env("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY")
+  }
+  if (flag("--funding-preflight-only")) {
+    if (!privateKey) throw new Error(`${privateKeyEnv} is required for --funding-preflight-only`)
+    await preflightFunding({
+      privateKey,
+      chainId: parsePositiveInt(arg("--chain-id"), "--chain-id"),
+      tokenAddress: parseAddress(arg("--token-address"), "--token-address"),
+      recipientAddress: parseAddress(arg("--settlement-address") || arg("--recipient-address"), "--settlement-address"),
+      amountAtomic: parsePositiveAtomic(arg("--amount-atomic"), "--amount-atomic"),
+    })
+    return
   }
   const buyerWallet = privateKey ? new Wallet(privateKey).address : "0x1111111111111111111111111111111111111111"
   const hostPayoutWallet = resolveHostPayoutWallet({
