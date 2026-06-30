@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash, randomBytes } from "node:crypto"
+import { chmodSync, writeFileSync } from "node:fs"
 import { SQL } from "bun"
 
 const ALLOWED_SCOPES = new Set(["bookings:settlement:resolve"])
@@ -17,6 +18,7 @@ type Options = {
   credentialId: string | null
   rotateCredentialId: string | null
   revokeCredentialId: string | null
+  credentialEnvFile: string | null
 }
 
 function usage(exitCode = 1): never {
@@ -26,7 +28,10 @@ function usage(exitCode = 1): never {
   bun scripts/operator-credentials.ts revoke --credential-id opc_...
 
 Uses CONTROL_PLANE_MIGRATOR_DATABASE_URL by default. This is operator tooling only; never expose
-issuance, rotation, or revocation through the public API runtime.`)
+issuance, rotation, or revocation through the public API runtime.
+
+Use --credential-env-file /path/to/file with issue/rotate to write
+PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL without printing the secret.`)
   process.exit(exitCode)
 }
 
@@ -55,6 +60,7 @@ function parseArgs(argv: string[]): Options {
   const scopes: string[] = []
   let expiresAt = ""
   let credentialId: string | null = null
+  let credentialEnvFile: string | null = null
 
   for (let index = 1; index < argv.length;) {
     const arg = argv[index]
@@ -81,6 +87,10 @@ function parseArgs(argv: string[]): Options {
         break
       case "--credential-id":
         credentialId = readValue(argv, index, arg)
+        index += 2
+        break
+      case "--credential-env-file":
+        credentialEnvFile = readValue(argv, index, arg)
         index += 2
         break
       default:
@@ -120,6 +130,7 @@ function parseArgs(argv: string[]): Options {
     credentialId: null,
     rotateCredentialId: mode === "rotate" ? credentialId : null,
     revokeCredentialId: mode === "revoke" ? credentialId : null,
+    credentialEnvFile,
   }
 }
 
@@ -133,6 +144,21 @@ function makeSecret(): string {
 
 function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex")
+}
+
+function writeCredentialEnvFile(path: string, credential: string): void {
+  writeFileSync(path, `PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL=${credential}\n`, { mode: 0o600 })
+  chmodSync(path, 0o600)
+}
+
+function printIssuedCredential(created: { id: string; secret: string }, options: Options): void {
+  console.log(`operator_credential_id=${created.id}`)
+  if (options.credentialEnvFile) {
+    writeCredentialEnvFile(options.credentialEnvFile, `${created.id}.${created.secret}`)
+    console.log(`operator_credential_env_file=${options.credentialEnvFile}`)
+    return
+  }
+  console.log(`operator_credential=${created.id}.${created.secret}`)
 }
 
 async function issue(sql: SQL, options: Options): Promise<{ id: string; secret: string }> {
@@ -199,12 +225,10 @@ const sql = new SQL({ url: databaseUrl, max: 1 })
 try {
   if (options.mode === "issue") {
     const created = await issue(sql, options)
-    console.log(`operator_credential_id=${created.id}`)
-    console.log(`operator_credential=${created.id}.${created.secret}`)
+    printIssuedCredential(created, options)
   } else if (options.mode === "rotate") {
     const created = await rotate(sql, options)
-    console.log(`operator_credential_id=${created.id}`)
-    console.log(`operator_credential=${created.id}.${created.secret}`)
+    printIssuedCredential(created, options)
   } else {
     await revoke(sql, options)
     console.log("operator_credential_revoked=true")
