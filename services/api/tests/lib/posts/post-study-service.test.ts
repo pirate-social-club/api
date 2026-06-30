@@ -989,6 +989,57 @@ describe("post study service", () => {
     expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
   })
 
+  test("lazy generation does not re-mark current unavailable localizations as processing", async () => {
+    await seedMultilineSongPost()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ lines: [] }) } }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    const unavailableBefore = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'unavailable'")
+    expect(Number(unavailableBefore.rows[0]?.count ?? 0)).toBe(2)
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    const statusRows = await client!.execute(`
+      SELECT status, COUNT(*) AS count
+      FROM song_study_unit_localization
+      GROUP BY status
+      ORDER BY status
+    `)
+    expect(statusRows.rows).toEqual([{ status: "unavailable", count: 2 }])
+  })
+
   test("lazy generation rejects answer-equal and duplicate distractors", async () => {
     await seedMultilineSongPost()
     const generationEnv = env({

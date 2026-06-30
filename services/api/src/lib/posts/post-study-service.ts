@@ -796,7 +796,7 @@ async function markStudyLocalizationsProcessing(input: {
         ON CONFLICT(unit_id, target_language) DO UPDATE SET
           localization_version = excluded.localization_version,
           status = CASE
-            WHEN song_study_unit_localization.status = 'ready'
+            WHEN song_study_unit_localization.status IN ('ready', 'unavailable')
              AND song_study_unit_localization.localization_version >= excluded.localization_version
             THEN song_study_unit_localization.status
             ELSE 'processing'
