@@ -1,5 +1,6 @@
 import { getUserRepository } from "../../auth/repositories"
 import { nowIso } from "../../helpers"
+import { logPipelineError } from "../../observability/pipeline-log"
 import { requiredString } from "../../sql-row"
 import { prepareRequestedLockedAssetDelivery } from "../commerce/service"
 import { openCommunityWriteClient } from "../community-read-access"
@@ -12,10 +13,16 @@ type LockedAssetDeliveryReconcileCommunitySummary = {
   enqueued_jobs: number
 }
 
+type LockedAssetDeliveryReconcileCommunityFailureSummary = {
+  community_id: string
+  error: string
+}
+
 type LockedAssetDeliveryReconcileSummary = {
   checked_communities: number
   enqueued_jobs: number
   communities: LockedAssetDeliveryReconcileCommunitySummary[]
+  failed_communities: LockedAssetDeliveryReconcileCommunityFailureSummary[]
 }
 
 export async function runLockedAssetDeliveryPrepare(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -49,10 +56,12 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
     .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
   const maxAssetsPerCommunity = Math.max(1, Math.trunc(input.maxAssetsPerCommunity ?? 25))
   const communities: LockedAssetDeliveryReconcileCommunitySummary[] = []
+  const failedCommunities: LockedAssetDeliveryReconcileCommunityFailureSummary[] = []
 
   for (const communityId of communityIds) {
-    const db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+    let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
+      db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
       const missingJobs = await db.client.execute({
         sql: `
           SELECT asset_id, source_post_id
@@ -99,8 +108,16 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
           enqueued_jobs: enqueuedJobs,
         })
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failedCommunities.push({ community_id: communityId, error: message })
+      logPipelineError("[community-job] failed to reconcile locked delivery jobs for community", {
+        community_id: communityId,
+        error: message,
+      })
+      continue
     } finally {
-      db.close()
+      await db?.close()
     }
   }
 
@@ -108,5 +125,6 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
     checked_communities: communityIds.length,
     enqueued_jobs: communities.reduce((sum, community) => sum + community.enqueued_jobs, 0),
     communities,
+    failed_communities: failedCommunities,
   }
 }

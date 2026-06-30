@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import { reconcileRequestedLockedAssetDeliveryJobs } from "../src/lib/communities/jobs/locked-asset-delivery-handler"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import { processAvailableCommunityJobs, processNextCommunityJob, runCommunityJobWorkerLoop } from "../src/lib/communities/jobs/runner"
 import type { CommunityJobRepository } from "../src/lib/communities/jobs/runner-types"
@@ -1753,6 +1754,94 @@ describe("community-job-runner", () => {
       },
     ])
     expect(summary.processed_jobs).toBe(0)
+  })
+
+  test("continues locked delivery reconciliation when one community binding is unusable", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-locked-reconcile-failure-")
+
+    const communityId = "cmt_job_locked_reconcile_healthy"
+    const failedCommunityId = "cmt_job_locked_reconcile_decommissioned"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const healthyRepo = buildCommunityRepository(join(rootDir, "healthy-locked-reconcile.db"), communityId)
+    await seedCommunityState({
+      env,
+      repo: healthyRepo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+    const healthyCommunity = await healthyRepo.getCommunityById(communityId)
+    expect(healthyCommunity).not.toBeNull()
+
+    const combinedRepo = {
+      async getCommunityById(id: string) {
+        if (id === failedCommunityId) {
+          return {
+            ...healthyCommunity!,
+            community_id: failedCommunityId,
+            primary_database_binding_id: "cdb_decommissioned",
+          }
+        }
+        return healthyRepo.getCommunityById(id)
+      },
+      async listActiveCommunities() {
+        return [
+          {
+            ...healthyCommunity!,
+            community_id: failedCommunityId,
+            primary_database_binding_id: "cdb_decommissioned",
+          },
+          healthyCommunity!,
+        ]
+      },
+      async getPrimaryCommunityDatabaseBinding(id: string) {
+        if (id === failedCommunityId) {
+          throw new Error("Community database binding has been decommissioned")
+        }
+        return healthyRepo.getPrimaryCommunityDatabaseBinding(id)
+      },
+      async getActiveCommunityDbCredential(bindingId: string) {
+        return healthyRepo.getActiveCommunityDbCredential(bindingId)
+      },
+      async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
+        return healthyRepo.recordCommunityPostProjection(input)
+      },
+      async getCommunityPostProjectionByPostId(postId: string) {
+        return healthyRepo.getCommunityPostProjectionByPostId(postId)
+      },
+      async updateCommunityPostProjectionStatus(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionStatus"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionStatus(input)
+      },
+      async updateCommunityPostProjectionPayload(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionPayload"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionPayload(input)
+      },
+      async updateCommunityPostProjectionMetrics(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionMetrics"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionMetrics(input)
+      },
+      async recordCommunityCommentProjection(input: Parameters<TestCommunityRepository["recordCommunityCommentProjection"]>[0]) {
+        return healthyRepo.recordCommunityCommentProjection(input)
+      },
+      async getCommunityCommentProjectionByCommentId(commentId: string) {
+        return healthyRepo.getCommunityCommentProjectionByCommentId(commentId)
+      },
+    } satisfies CommunityJobRepository
+
+    const summary = await reconcileRequestedLockedAssetDeliveryJobs({
+      env,
+      communityRepository: combinedRepo,
+      communityIds: [failedCommunityId, communityId],
+      maxAssetsPerCommunity: 1,
+    })
+
+    expect(summary.checked_communities).toBe(2)
+    expect(summary.enqueued_jobs).toBe(0)
+    expect(summary.failed_communities).toEqual([
+      {
+        community_id: failedCommunityId,
+        error: "Community database binding has been decommissioned",
+      },
+    ])
   })
 
 })
