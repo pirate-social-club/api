@@ -377,6 +377,35 @@ export async function publishLockedPaidLiveRoomReplayAsset(input: {
   })
 }
 
+export async function markLiveRoomReplayAssetLockedDeliveryFailed(input: {
+  client: LiveRoomExecutor
+  communityId: string
+  liveRoomId: string
+  replayAssetId: string
+  error: string
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE live_room_replay_assets
+      SET locked_delivery_status = 'failed',
+          locked_delivery_error = ?4,
+          updated_at = ?5
+      WHERE community_id = ?1
+        AND live_room_id = ?2
+        AND replay_asset_id = ?3
+        AND publication_status = 'draft'
+    `,
+    args: [
+      input.communityId,
+      input.liveRoomId,
+      input.replayAssetId,
+      input.error,
+      input.now,
+    ],
+  })
+}
+
 export async function updateDraftLiveRoomReplayAsset(input: {
   client: LiveRoomExecutor
   communityId: string
