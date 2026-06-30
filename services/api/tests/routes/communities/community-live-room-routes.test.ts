@@ -2003,6 +2003,15 @@ describe("community live-room routes", () => {
           sid: "sid-live-room",
           serverResponse: {
             fileListMode: "json",
+          },
+        })
+      }
+      if (href.endsWith("/query")) {
+        return Response.json({
+          resourceId: "resource-live-room",
+          sid: "sid-live-room",
+          serverResponse: {
+            fileListMode: "json",
             fileList: [{ fileName: "pirate/live/replay.mp4" }],
           },
         })
@@ -2352,6 +2361,7 @@ describe("community live-room routes", () => {
         "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/acquire",
         "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/mode/mix/start",
         "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/sid/sid-live-room/mode/mix/stop",
+        "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/sid/sid-live-room/mode/mix/query",
       ])
       expect(storageRequests[0]).toContain("https://capture-storage.test/capture-bucket/pirate/live/replay.mp4")
       expect(storageRequests[1]).toContain("https://filebase.test/media/livestream-recordings/")
@@ -3164,6 +3174,24 @@ describe("community live-room routes", () => {
         locked_delivery_status: "failed",
       })
       expect(replayAssets[0]?.locked_delivery_error).toContain("STORY_COMPOSITE_READ_CONDITION_ADDRESS")
+
+      const failedDraft = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
+        {
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(failedDraft.status).toBe(200)
+      expect(await json(failedDraft)).toMatchObject({
+        replay_status: "review_pending",
+        status: "failed",
+        replay_asset: {
+          publication_status: "draft",
+          access_mode: "included_with_ticket",
+          locked_delivery_status: "failed",
+        },
+      })
     } finally {
       globalThis.fetch = originalFetch
     }

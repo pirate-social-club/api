@@ -42,11 +42,13 @@ import {
 } from "./create-input"
 import {
   agoraCloudRecordingConfigFromEnv,
+  queryAgoraCloudRecording,
   startAgoraCloudRecording,
   stopAgoraCloudRecording,
 } from "./agora-cloud-recording"
 import {
   ingestAgoraRecordingToFilebase,
+  selectAgoraRecordingObjectKey,
   serializeLiveRoomRecordingRawArtifactRef,
   type LiveRoomRecordingRawArtifactRef,
 } from "./recording-ingest"
@@ -213,6 +215,9 @@ type SerializedReplayAsset = {
     approval_status: string
   }>
 }
+
+const AGORA_RECORDING_QUERY_MAX_ATTEMPTS = 6
+const AGORA_RECORDING_QUERY_RETRY_DELAY_MS = 2_000
 
 export type PublishLiveRoomReplayDraftRequest = {
   access_mode?: LiveRoomReplayAssetAccessMode
@@ -715,7 +720,7 @@ export async function getLiveRoomRecordingDraft(input: {
           replayAssetId: replayAsset.replay_asset_id,
         })
       : []
-    const status = recordingDraftStatus({ room, recording })
+    const status = recordingDraftStatus({ room, recording, replayAsset })
     return {
       object: "live_room_replay_draft",
       live_room: room.id,
@@ -1065,6 +1070,7 @@ function normalizeReplayDraftAllocations(value: unknown): Array<{
 function recordingDraftStatus(input: {
   room: LiveRoom
   recording: Awaited<ReturnType<typeof getLiveRoomRecording>>
+  replayAsset: LiveRoomReplayAsset | null
 }): LiveRoomRecordingDraftResponse["status"] {
   if (!input.room.recording_enabled && !input.recording) {
     return "not_recorded"
@@ -1073,6 +1079,9 @@ function recordingDraftStatus(input: {
     return "processing"
   }
   if (input.recording.status === "failed" || input.room.replay_status === "failed") {
+    return "failed"
+  }
+  if (input.replayAsset?.locked_delivery_status === "failed") {
     return "failed"
   }
   if (input.room.replay_status === "published") {
@@ -1108,6 +1117,10 @@ function safeRawArtifact(rawArtifactRef: string | null): LiveRoomRecordingDraftR
     mime_type: parsed.mime_type,
     size_bytes: parsed.size_bytes,
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function serializeReplayAsset(asset: LiveRoomReplayAsset, allocations: LiveRoomReplayAllocation[]): SerializedReplayAsset {
@@ -2240,12 +2253,17 @@ export async function ingestCapturedLiveRoomRecording(input: {
     liveRoomId: input.room.id,
     updatedAt: now,
   })
+  const agoraRecordingResponse = await resolveAgoraRecordingResponseForIngest({
+    env: input.env,
+    recording,
+    initialResponse: input.agoraStopResponse,
+  })
   const rawArtifact = await ingestAgoraRecordingToFilebase({
     env: input.env,
     communityId: input.communityId,
     liveRoomId: input.room.id,
     recordingId: recording.recording_id,
-    agoraStopResponse: input.agoraStopResponse,
+    agoraStopResponse: agoraRecordingResponse,
   })
   const rawArtifactRef = serializeLiveRoomRecordingRawArtifactRef(rawArtifact)
   await markLiveRoomRecordingIngested({
@@ -2275,6 +2293,44 @@ export async function ingestCapturedLiveRoomRecording(input: {
     `,
     args: [input.communityId, input.room.id, nowIso()],
   })
+}
+
+async function resolveAgoraRecordingResponseForIngest(input: {
+  env: Env
+  recording: Awaited<ReturnType<typeof getLiveRoomRecording>>
+  initialResponse: Record<string, unknown> | null
+}): Promise<Record<string, unknown> | null> {
+  if (selectAgoraRecordingObjectKey(input.initialResponse)) {
+    return input.initialResponse
+  }
+  const config = agoraCloudRecordingConfigFromEnv(input.env)
+  if (!config || !input.recording?.provider_resource_id || !input.recording.provider_session_id) {
+    return input.initialResponse
+  }
+  let lastResponse: Record<string, unknown> | null = input.initialResponse
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < AGORA_RECORDING_QUERY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const queried = await queryAgoraCloudRecording({
+        config,
+        resourceId: input.recording.provider_resource_id,
+        sid: input.recording.provider_session_id,
+      })
+      lastResponse = queried
+      if (selectAgoraRecordingObjectKey(queried)) {
+        return queried
+      }
+    } catch (error) {
+      lastError = error
+    }
+    if (attempt < AGORA_RECORDING_QUERY_MAX_ATTEMPTS - 1) {
+      await sleep(AGORA_RECORDING_QUERY_RETRY_DELAY_MS)
+    }
+  }
+  if (lastError && !lastResponse) {
+    throw lastError
+  }
+  return lastResponse
 }
 
 export async function failLiveRoomRecordingAndReplay(input: {
