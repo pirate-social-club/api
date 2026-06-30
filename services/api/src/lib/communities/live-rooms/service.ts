@@ -2193,12 +2193,16 @@ async function stopLiveRoomCloudRecording(input: {
       stoppedAt: input.stoppedAt,
       updatedAt: nowIso(),
     })
-    await ingestCapturedLiveRoomRecording({
-      env: input.env,
+    await enqueueCommunityJob({
       client: input.client,
       communityId: input.communityId,
-      room: input.room,
-      agoraStopResponse: stopped.serverResponse,
+      jobType: "live_room_recording_ingest",
+      subjectType: "live_room",
+      subjectId: input.room.id,
+      payloadJson: JSON.stringify({
+        agora_stop_response: stopped.serverResponse,
+      }),
+      createdAt: nowIso(),
     })
   } catch (error) {
     await failLiveRoomRecordingAndReplay({
@@ -2210,7 +2214,7 @@ async function stopLiveRoomCloudRecording(input: {
   }
 }
 
-async function ingestCapturedLiveRoomRecording(input: {
+export async function ingestCapturedLiveRoomRecording(input: {
   env: Env
   client: LiveRoomExecutor
   communityId: string
@@ -2222,7 +2226,11 @@ async function ingestCapturedLiveRoomRecording(input: {
     communityId: input.communityId,
     liveRoomId: input.room.id,
   })
-  if (!recording || recording.raw_artifact_ref || recording.status !== "captured") {
+  if (
+    !recording
+    || recording.raw_artifact_ref
+    || (recording.status !== "captured" && recording.status !== "ingesting")
+  ) {
     return
   }
   const now = nowIso()
@@ -2269,7 +2277,7 @@ async function ingestCapturedLiveRoomRecording(input: {
   })
 }
 
-async function failLiveRoomRecordingAndReplay(input: {
+export async function failLiveRoomRecordingAndReplay(input: {
   client: LiveRoomExecutor
   communityId: string
   liveRoomId: string
