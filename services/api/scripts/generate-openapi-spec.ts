@@ -263,6 +263,22 @@ function collectRefs(value: unknown, refs: Set<string>): void {
   }
 }
 
+function normalizeLocalSchemaRefs(value: unknown): void {
+  if (!value || typeof value !== "object") {
+    return
+  }
+  const record = value as OpenApiRecord
+  if (typeof record.$ref === "string") {
+    const match = record.$ref.match(/^(?:\.\/[^#]+|(?:\.\.\/)*components\/schemas\/[^#]+)#\/([^/]+)$/u)
+    if (match) {
+      record.$ref = `#/components/schemas/${match[1].replace(/~/gu, "~0").replace(/\//gu, "~1")}`
+    }
+  }
+  for (const child of Object.values(record)) {
+    normalizeLocalSchemaRefs(child)
+  }
+}
+
 function stripReviewNoise(value: unknown): void {
   if (!value || typeof value !== "object") {
     return
@@ -357,6 +373,7 @@ const completeSpec = {
   },
 }
 addReviewMetadata(completeSpec)
+normalizeLocalSchemaRefs(completeSpec)
 const spec = reviewServiceSpec(completeSpec)
 addReviewMetadata(spec)
 
