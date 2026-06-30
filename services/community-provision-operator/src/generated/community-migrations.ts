@@ -3948,489 +3948,136 @@ ADD COLUMN vinyl_release_url TEXT;
     checksum: "04680b4600a34ce5275e33294b2e8d91d2fd869d66d0d82583dc1fe03d60cf1b",
   },
   {
-    name: "1099_asset_royalty_allocations.sql",
-    sql: `-- Royalty allocation ("ownership split"): per-recipient initial allocation
--- agreement + asset-level lifecycle state. Model proven on Aeneid (see
--- core/specs/domain/royalty-allocation.md). RTs distribute atomically at
--- registration. This table is the immutable agreement/audit, not live ownership.
-
--- Asset-level allocation lifecycle + observed Story vault facts.
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_status TEXT NOT NULL DEFAULT 'none' CHECK (
-    royalty_allocation_status IN (
-        'none',
-        'draft',
-        'registration_pending',
-        'verification_pending',
-        'verified',
-        'registration_failed',
-        'verification_failed',
-        'legacy_unverified'
-    )
-);
-
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_fingerprint TEXT;
-
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_version INTEGER NOT NULL DEFAULT 1;
-
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_effect_key TEXT;
-
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_tx_hash TEXT;
-
-ALTER TABLE assets
-ADD COLUMN ip_royalty_vault TEXT;
-
--- bigint stored as TEXT (SQLite INTEGER is 64-bit but RT math is bigint upstream).
-ALTER TABLE assets
-ADD COLUMN royalty_vault_total_supply TEXT;
-
-ALTER TABLE assets
-ADD COLUMN royalty_vault_decimals INTEGER;
-
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_registered_at TEXT;
-
--- Per-recipient initial allocation agreement.
-CREATE TABLE initial_royalty_allocations (
-    allocation_id TEXT PRIMARY KEY,
-    asset_id TEXT NOT NULL,
-    community_id TEXT NOT NULL,
-    recipient_kind TEXT NOT NULL CHECK (
-        recipient_kind IN ('creator', 'collaborator')
+    name: "1109_song_study.sql",
+    sql: `CREATE TABLE song_study_unit (
+    id TEXT PRIMARY KEY,
+    post_id TEXT NOT NULL,
+    line_id TEXT NOT NULL,
+    line_index INTEGER NOT NULL,
+    source_language TEXT,
+    prompt_text TEXT NOT NULL,
+    reference_text TEXT NOT NULL,
+    say_it_back_status TEXT NOT NULL DEFAULT 'ready' CHECK (
+        say_it_back_status IN ('ready', 'unavailable')
     ),
-    recipient_user_id TEXT,
-    -- Wallet snapshot frozen at create time. Registration mints/distributes to this.
-    wallet_attachment_id TEXT,
-    wallet_address_normalized TEXT NOT NULL,
-    wallet_address_display TEXT NOT NULL,
-    chain_id INTEGER NOT NULL,
-    role_label TEXT,
-    share_bps INTEGER NOT NULL CHECK (
-        share_bps > 0 AND share_bps <= 10000
-    ),
-    -- bps is the agreement. expected_rt_units is DERIVED after registration from
-    -- the observed vault supply (= observed_total_supply * share_bps / 10000),
-    -- so it is NULL during draft/registration_pending. bigint as TEXT.
-    expected_rt_units TEXT,
-    position INTEGER NOT NULL CHECK (
-        position >= 0
-    ),
-    distribution_status TEXT NOT NULL DEFAULT 'pending' CHECK (
-        distribution_status IN ('pending', 'verified', 'failed')
-    ),
-    -- Observed on-chain RT balance at verification (bigint as TEXT).
-    verified_rt_units TEXT,
-    -- Fingerprint = hash(version, chainId, sort_by_address(address, share_bps)).
-    -- Identity is per-asset via assets.royalty_allocation_effect_key, not per row.
-    allocation_fingerprint TEXT NOT NULL,
-    failure_reason TEXT,
-    created_at TEXT NOT NULL,
-    registered_at TEXT,
-    FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
-    FOREIGN KEY (community_id) REFERENCES communities(community_id)
-);
-
--- One allocation per wallet per asset (no duplicate recipients).
-CREATE UNIQUE INDEX idx_initial_royalty_allocations_asset_wallet
-    ON initial_royalty_allocations(asset_id, wallet_address_normalized);
-
--- Exactly one creator allocation per asset.
-CREATE UNIQUE INDEX idx_initial_royalty_allocations_one_creator
-    ON initial_royalty_allocations(asset_id)
-    WHERE recipient_kind = 'creator';
-
--- Stable, unique positions per asset.
-CREATE UNIQUE INDEX idx_initial_royalty_allocations_asset_position
-    ON initial_royalty_allocations(asset_id, position);
-
-CREATE INDEX idx_initial_royalty_allocations_asset
-    ON initial_royalty_allocations(asset_id, position ASC);
-
-CREATE INDEX idx_initial_royalty_allocations_recipient_user
-    ON initial_royalty_allocations(recipient_user_id)
-    WHERE recipient_user_id IS NOT NULL;
-
-CREATE INDEX idx_initial_royalty_allocations_wallet
-    ON initial_royalty_allocations(wallet_address_normalized);
-`,
-    checksum: "bf1c48d67188efb374fcd37979799de047b2e66026763fd1c7da969b0051318e",
-  },
-  {
-    name: "1100_asset_royalty_allocation_projection_synced.sql",
-    sql: `-- Durable marker for royalty-allocation control-plane projection publication.
--- Set to 0 (atomically with the asset + allocation rows) when a verified
--- allocation still needs its global projection published. A scheduled
--- reconciler republishes from this community DB and flips it to 1, so a
--- transient control-plane outage cannot permanently hide collaborators from
--- discovery and notifications. Defaults to 1 (synced / not applicable) for
--- existing and single-owner assets. See core/specs/domain/royalty-allocation.md.
-ALTER TABLE assets
-ADD COLUMN royalty_allocation_projection_synced INTEGER NOT NULL DEFAULT 1 CHECK (
-    royalty_allocation_projection_synced IN (0, 1)
-);
-`,
-    checksum: "d0930df7b5f6f42657a97b03719279c95fa56f6633dbf04dbed237ba6404fb0a",
-  },
-  {
-    name: "1101_booking_holds_and_bookings.sql",
-    sql: `-- Paid 1:1 video bookings — per-community transaction data (community D1).
---
--- An individual booking is a transaction WITHIN a community: its settlement,
--- access entitlement, and 1:1 video session are all community-scoped, so the rows
--- are co-located with purchases/live_rooms in the per-community DB.
--- Host profile / availability / pricing are host-owned and live in the control
--- plane — see control-plane migration 0120.
---
--- Cross-DB ids (host_user_id, booker_user_id) reference control-plane users and
--- therefore carry NO foreign key — joins are enforced in service code.
--- Money is integer cents, fee is bps (NO REAL). Booking \`status\` mirrors the
--- @pirate/bookings-domain BookingState FSM exactly. See
--- core/specs/domain/paid-bookings.md.
-
--- Short-lived slot reservation held while the booker pays (FSM hold/quoted phase).
--- Auto-expires, consumed when a booking row is created from it.
-CREATE TABLE booking_holds (
-    hold_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    host_user_id TEXT NOT NULL,         -- control-plane user id (no FK, cross-DB)
-    booker_user_id TEXT NOT NULL,       -- control-plane user id (no FK, cross-DB)
-    slot_start_utc TEXT NOT NULL,       -- RFC3339 UTC
-    slot_end_utc TEXT NOT NULL,
-    price_cents INTEGER NOT NULL CHECK (price_cents > 0),   -- every booking is paid
-    status TEXT NOT NULL CHECK (status IN ('active', 'consumed', 'expired')),
-    expires_at_utc TEXT NOT NULL,
+    unit_version INTEGER NOT NULL DEFAULT 1,
+    max_attempts INTEGER NOT NULL DEFAULT 2,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    CHECK (slot_end_utc > slot_start_utc),
-    CHECK (expires_at_utc > created_at),
-    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
+    CHECK (max_attempts > 0),
+    UNIQUE (post_id, line_id)
 );
 
--- Exactly one ACTIVE hold per (host, exact slot start) within a community — stops
--- two bookers reserving the same slot. Arbitrary time-range overlap is enforced in
--- service code (resolveSlots busy intervals), since SQLite/D1 has no EXCLUDE.
-CREATE UNIQUE INDEX idx_booking_holds_active_slot
-    ON booking_holds(community_id, host_user_id, slot_start_utc)
-    WHERE status = 'active';
+CREATE INDEX idx_song_study_unit_post
+    ON song_study_unit(post_id, line_index);
 
-CREATE INDEX idx_booking_holds_expiry
-    ON booking_holds(status, expires_at_utc);
-
-CREATE INDEX idx_booking_holds_booker
-    ON booking_holds(community_id, booker_user_id, slot_start_utc);
-
--- The durable booking lifecycle. Money fields are an integer snapshot taken at
--- confirmation. Custody/settlement refs reuse the PR0 server-verified funding path:
--- funding_tx_ref is the verified on-chain pay-in, payout/refund refs are the
--- operator-controlled custody outflows. quote_id/purchase_id reference the
--- per-community commerce rows (same DB) but are intentionally FK-free to avoid
--- coupling booking creation order to settlement.
-CREATE TABLE bookings (
-    booking_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    hold_id TEXT,                       -- community-local hold this was created from
-    host_user_id TEXT NOT NULL,         -- control-plane user id (no FK, cross-DB)
-    booker_user_id TEXT NOT NULL,       -- control-plane user id (no FK, cross-DB)
-    slot_start_utc TEXT NOT NULL,
-    slot_end_utc TEXT NOT NULL,
-    -- money snapshot (integer cents / bps, no REAL)
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),   -- every booking is paid
-    platform_fee_bps INTEGER NOT NULL CHECK (platform_fee_bps >= 0 AND platform_fee_bps <= 10000),
-    platform_fee_cents INTEGER NOT NULL CHECK (platform_fee_cents >= 0),
-    host_payout_cents INTEGER NOT NULL CHECK (host_payout_cents >= 0),
-    refund_cents INTEGER CHECK (refund_cents IS NULL OR (refund_cents >= 0 AND refund_cents <= gross_cents)),
-    -- lifecycle state — mirrors @pirate/bookings-domain BookingState exactly
-    status TEXT NOT NULL CHECK (status IN (
-        'hold',
-        'quoted',
-        'pending_payment',
-        'confirmed',
-        'live',
-        'completed',
-        'settled',
-        'expired_hold',
-        'cancelled_before_payment',
-        'cancelled_by_host',
-        'cancelled_by_booker',
-        'no_show_host',
-        'no_show_booker',
-        'refunded',
-        'disputed'
-    )),
-    -- commerce + custody/settlement refs (server-verified, reuses PR0 funding gate)
-    quote_id TEXT,                      -- per-community purchase_quotes.quote_id
-    purchase_id TEXT,                   -- per-community purchases.purchase_id once settled
-    funding_tx_ref TEXT,                -- verified on-chain pay-in receipt (custody-in)
-    payout_tx_ref TEXT,                 -- operator payout to host (custody-out)
-    refund_tx_ref TEXT,                 -- operator refund to booker (custody-out)
-    -- 1:1 video session, created only on \`confirmed\`
-    live_room_id TEXT,                  -- per-community live_rooms.live_room_id
-    confirmed_at TEXT,
-    completed_at TEXT,
-    settled_at TEXT,
-    cancelled_at TEXT,
+CREATE TABLE song_study_unit_localization (
+    id TEXT PRIMARY KEY,
+    unit_id TEXT NOT NULL,
+    target_language TEXT NOT NULL,
+    localization_version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL CHECK (
+        status IN ('ready', 'processing', 'unavailable')
+    ),
+    question TEXT,
+    translation_text TEXT,
+    options_json TEXT,
+    correct_option_id TEXT,
+    explanation_text TEXT,
+    max_attempts INTEGER NOT NULL DEFAULT 1,
+    generated_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    CHECK (slot_end_utc > slot_start_utc),
-    -- money snapshot must balance: fee + payout == gross (matches @pirate/bookings-domain
-    -- computeAllocation, where hostPayout = gross - platformFee)
-    CHECK (platform_fee_cents + host_payout_cents = gross_cents),
-    FOREIGN KEY (community_id) REFERENCES communities(community_id),
-    FOREIGN KEY (hold_id) REFERENCES booking_holds(hold_id)
+    FOREIGN KEY (unit_id) REFERENCES song_study_unit(id) ON DELETE CASCADE,
+    CHECK (max_attempts > 0),
+    UNIQUE (unit_id, target_language)
 );
 
--- One forward/active booking per (host, exact slot start) within a community.
--- Excludes terminal/cancelled states so a released slot can be rebooked.
-CREATE UNIQUE INDEX idx_bookings_active_slot
-    ON bookings(community_id, host_user_id, slot_start_utc)
-    WHERE status IN ('pending_payment', 'confirmed', 'live', 'completed', 'settled');
+CREATE INDEX idx_song_study_unit_localization_lookup
+    ON song_study_unit_localization(target_language, status);
 
--- A consumed hold may produce at most one booking row (no fan-out).
-CREATE UNIQUE INDEX idx_bookings_hold
-    ON bookings(hold_id)
-    WHERE hold_id IS NOT NULL;
-
-CREATE INDEX idx_bookings_host
-    ON bookings(community_id, host_user_id, slot_start_utc);
-
-CREATE INDEX idx_bookings_booker
-    ON bookings(community_id, booker_user_id, slot_start_utc);
-
-CREATE INDEX idx_bookings_status
-    ON bookings(community_id, status);
-`,
-    checksum: "93569664b19a6b6a365ebd1164429b456a739a499baa2af0a62f71bd5790d7ea",
-  },
-  {
-    name: "1102_booking_settlement_and_attendance.sql",
-    sql: `-- Slice D1 data contract: durable money-OUT ledger, refund/payout destination snapshots, and
--- identity-bound attendance for paid bookings.
-
--- Durable operator custody ledger for booking payouts/refunds. Booking-shaped on purpose: the
--- commerce purchase_settlement_effects table requires non-null quote_id/purchase_id with a FK to
--- purchase_quotes, and bookings never create those rows. idempotency_key is the dedup handle the
--- adapter keys on (booking_refund:ID / booking_payout:ID) so a retry never double-sends.
-CREATE TABLE booking_settlement_effects (
-    booking_settlement_effect_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    effect_kind TEXT NOT NULL CHECK (effect_kind IN ('booking_payout', 'booking_refund')),
-    idempotency_key TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('submitted', 'confirmed', 'failed')),
-    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
-    recipient_address TEXT NOT NULL,
-    settlement_ref TEXT,                 -- on-chain tx hash once confirmed
-    failure_reason TEXT,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    submitted_at TEXT,
-    confirmed_at TEXT,
-    failed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
-);
-
-CREATE UNIQUE INDEX idx_booking_settlement_effects_idempotency
-    ON booking_settlement_effects(idempotency_key);
-
-CREATE INDEX idx_booking_settlement_effects_booking
-    ON booking_settlement_effects(booking_id, status);
-
--- Durable destination snapshots captured at confirm. Refund goes back to the address that actually
--- paid (verified on-chain sender). Host payout goes to the profile payout wallet snapshotted here.
--- Neither is re-resolved later, so changing a wallet after payment cannot redirect funds.
-ALTER TABLE bookings ADD COLUMN funding_wallet_address TEXT;
-ALTER TABLE bookings ADD COLUMN host_payout_wallet_address TEXT;
-
--- Identity-bound attendance for the booking 1:1 session. Each attach (or reconnect after a stale
--- gap) is a session row. Heartbeats extend last_seen_at. The evaluator derives host/booker OVERLAP
--- from these intervals -- not from a single attach timestamp -- so it can prove a real shared call.
-CREATE TABLE booking_attendance_sessions (
-    session_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    party TEXT NOT NULL CHECK (party IN ('host', 'booker')),
+CREATE TABLE song_study_attempt (
+    id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    agora_uid INTEGER,
-    attached_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    ended_at TEXT,
+    post_id TEXT NOT NULL,
+    exercise_id TEXT NOT NULL,
+    line_id TEXT NOT NULL,
+    exercise_type TEXT NOT NULL CHECK (
+        exercise_type IN ('say_it_back', 'translation_choice')
+    ),
+    target_language TEXT NOT NULL,
+    study_pack_version INTEGER NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    selected_option_id TEXT,
+    transcript TEXT,
+    outcome TEXT NOT NULL CHECK (
+        outcome IN ('correct', 'incorrect', 'revealed')
+    ),
+    feedback_json TEXT,
+    fsrs_rating TEXT CHECK (
+        fsrs_rating IS NULL OR fsrs_rating IN ('again', 'hard', 'good', 'easy')
+    ),
     created_at TEXT NOT NULL,
+    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
+    CHECK (attempt_number > 0),
+    UNIQUE (user_id, exercise_id, attempt_number),
+    UNIQUE (user_id, idempotency_key)
+);
+
+CREATE INDEX idx_song_study_attempt_review_unit
+    ON song_study_attempt(
+        user_id,
+        post_id,
+        line_id,
+        exercise_type,
+        target_language,
+        created_at
+    );
+
+CREATE TABLE song_study_review_state (
+    user_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    line_id TEXT NOT NULL,
+    exercise_type TEXT NOT NULL CHECK (
+        exercise_type IN ('say_it_back', 'translation_choice')
+    ),
+    target_language TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (
+        state IN ('new', 'learning', 'review', 'relearning')
+    ),
+    stability REAL NOT NULL,
+    difficulty REAL NOT NULL,
+    due_at TEXT NOT NULL,
+    last_reviewed_at TEXT,
+    reps INTEGER NOT NULL DEFAULT 0,
+    lapses INTEGER NOT NULL DEFAULT 0,
+    fsrs_params_version INTEGER NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
+    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
+    PRIMARY KEY (
+        user_id,
+        post_id,
+        line_id,
+        exercise_type,
+        target_language
+    ),
+    CHECK (reps >= 0),
+    CHECK (lapses >= 0)
 );
 
-CREATE INDEX idx_booking_attendance_sessions_booking
-    ON booking_attendance_sessions(booking_id, party);
-
--- Optional fine-grained liveness samples (one row per heartbeat) for audit and gap-aware overlap.
-CREATE TABLE booking_attendance_heartbeats (
-    heartbeat_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    seen_at TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES booking_attendance_sessions(session_id)
-);
-
-CREATE INDEX idx_booking_attendance_heartbeats_session
-    ON booking_attendance_heartbeats(session_id, seen_at);
+CREATE INDEX idx_song_study_review_due
+    ON song_study_review_state(user_id, due_at);
 `,
-    checksum: "03761307e1d738dce33d5294d949ca5e8e605548b9ca3c344abf617b58a9e9b4",
+    checksum: "00266e131ba9ee043134551063b65beb007632c7de35d9d75a98608902ea130c",
   },
   {
-    name: "1103_booking_settlement_durable_submission.sql",
-    sql: `-- Slice D5 Finding 2: durable submission for booking settlement effects.
--- The operator signs the USDC transfer and persists the raw signed transaction (and its nonce)
--- BEFORE broadcasting. A crash in the broadcast window is then recoverable: a retry re-broadcasts
--- the identical signed tx, which is idempotent by nonce (the network mines at most one), so money
--- is never moved twice and the ledger is never permanently stuck without a reference.
-ALTER TABLE booking_settlement_effects ADD COLUMN signed_tx TEXT;
-ALTER TABLE booking_settlement_effects ADD COLUMN broadcast_nonce INTEGER;
+    name: "1115_community_study_enabled.sql",
+    sql: `ALTER TABLE communities
+  ADD COLUMN study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1));
 `,
-    checksum: "30268004897c560b16fcfa3e01c94ccafd252c962ec06bad3236212dfeb521ed",
-  },
-  {
-    name: "1104_booking_settlement_coordinator_mirror.sql",
-    sql: `-- Slice D5 Finding 2 (DO coordinator): the wallet-scoped operator signing coordinator (a Durable
--- Object) owns the authoritative signed transaction + nonce. The community booking_settlement_effects
--- row becomes a booking-scoped MIRROR that points at the coordinator record and reflects its state.
--- coordinator_ref is the coordinator effect identity. coordinator_state mirrors the coordinator
--- outcome (broadcast/confirmed/replaced/failed_onchain) WITHOUT overloading signed_tx (which stays
--- owned by the DO) or the row status (so terminal coordinator failures are never eligible for the
--- failed -> retry path).
-ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_ref TEXT;
-ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_state TEXT;
-`,
-    checksum: "c615b132b35e32dc904e95036cf888f7c154dc811fc358b4d8f98d2dbd884725",
-  },
-  {
-    name: "1105_booking_payment_intents.sql",
-    sql: `-- Slice C payment hardening: a durable, immutable PAYMENT INTENT snapshotted at quote time so
--- confirmation validates the submitted transaction against what was quoted (chain/token/recipient/
--- amount), never mutable runtime config or client-provided fields. recipient_address is the custody
--- DEPOSIT (pay-in) address only -- never an operator key, signed transaction, or payout destination.
--- Addresses and transaction hashes are normalized (checksum/case) in application code. Timestamps are
--- ISO8601 UTC strings (the project canonical format).
-CREATE TABLE booking_payment_intents (
-    payment_intent_id TEXT PRIMARY KEY,                         -- deterministic bpi:<hold_id>
-    hold_id TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
-    chain_id INTEGER NOT NULL CHECK (chain_id > 0),
-    token_address TEXT NOT NULL,
-    token_decimals INTEGER NOT NULL CHECK (token_decimals >= 0 AND token_decimals <= 36),
-    token_symbol TEXT NOT NULL,
-    recipient_address TEXT NOT NULL,                            -- custody deposit address only
-    -- amount_atomic is a decimal-digit string: non-empty, non-negative, non-fractional, non-decimal.
-    amount_atomic TEXT NOT NULL CHECK (length(amount_atomic) >= 1 AND amount_atomic NOT GLOB '*[^0-9]*'),
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),
-    quote_expires_at TEXT NOT NULL,
-    hold_expires_at TEXT NOT NULL,
-    wallet_attachment_required INTEGER NOT NULL DEFAULT 1 CHECK (wallet_attachment_required IN (0, 1)),
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'consumed', 'expired', 'superseded')),
-    -- consumption audit: which transaction + wallet attachment consumed it, and when
-    consumed_tx_ref TEXT,
-    consumed_wallet_attachment_id TEXT,
-    consumed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (hold_id) REFERENCES booking_holds (hold_id)
-);
-
--- Exactly one intent per hold. The deterministic PK already implies it plus an explicit unique guard.
-CREATE UNIQUE INDEX idx_booking_payment_intents_hold
-    ON booking_payment_intents (hold_id);
-
--- Reused-transaction protection: a funding transaction may consume AT MOST ONE intent. SQLite treats
--- NULLs as distinct in a unique index, so the many unconsumed (NULL) rows coexist while every
--- non-null consuming hash is unique.
-CREATE UNIQUE INDEX idx_booking_payment_intents_consumed_tx
-    ON booking_payment_intents (consumed_tx_ref);
-`,
-    checksum: "06ecb7714427a76943e4e70c7e8b0fa9ee62dda9a5dc873f2cc3621d3ebf71a0",
-  },
-  {
-    name: "1106_booking_payment_intent_verification.sql",
-    sql: `-- Confirmation reservation/CAS state machine: extend booking_payment_intents with the verifying and
--- verification_failed states and the reservation fields so a confirmation can atomically claim an
--- intent for chain verification WITHOUT holding a DB transaction across the RPC. A crash mid-verify
--- is recoverable by claim expiry, and a successful on-chain payment is resumable without re-paying.
--- SQLite cannot alter a CHECK constraint in place, so the table is recreated (it is not yet deployed,
--- so the copy is a safe no-op in practice). claimed_tx_ref subsumes the old consumed_tx_ref and is the
--- single normalized funding hash claimed by an intent (reserved at verifying, kept at consumed) with a
--- UNIQUE index for reused-transaction protection across intents.
-ALTER TABLE booking_payment_intents RENAME TO booking_payment_intents_v1;
-
-CREATE TABLE booking_payment_intents (
-    payment_intent_id TEXT PRIMARY KEY,
-    hold_id TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
-    chain_id INTEGER NOT NULL CHECK (chain_id > 0),
-    token_address TEXT NOT NULL,
-    token_decimals INTEGER NOT NULL CHECK (token_decimals >= 0 AND token_decimals <= 36),
-    token_symbol TEXT NOT NULL,
-    recipient_address TEXT NOT NULL,
-    amount_atomic TEXT NOT NULL CHECK (length(amount_atomic) >= 1 AND amount_atomic NOT GLOB '*[^0-9]*'),
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),
-    quote_expires_at TEXT NOT NULL,
-    hold_expires_at TEXT NOT NULL,
-    wallet_attachment_required INTEGER NOT NULL DEFAULT 1 CHECK (wallet_attachment_required IN (0, 1)),
-    -- States: active (quoted) -> verifying (claimed, RPC in flight) -> verified (durable, evidence
-    -- recorded, ready to finalize) -> consumed (booking created + hold consumed). verification_failed
-    -- is a retryable transient/pending outcome that keeps the claimed hash. verification_rejected is
-    -- a terminal definitive mismatch (a new payment requires a superseded/new intent). The verified
-    -- state lets a crash after the RPC resume finalization WITHOUT another RPC or payment.
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'verifying', 'verified', 'verification_failed', 'verification_rejected', 'consumed', 'expired', 'superseded')),
-    -- verification reservation (CAS): a single confirmation claims the intent before chain RPC.
-    -- Claim token + expiry are cleared once the intent reaches verified (finalization no longer needs them).
-    verification_claim_token TEXT,
-    verification_claim_expires_at TEXT,
-    claimed_tx_ref TEXT,
-    -- durable verification evidence recorded at the verifying -> verified transition, so finalization
-    -- needs no further RPC: the verified on-chain sender (= booking refund destination) and timestamp.
-    verified_sender_address TEXT,
-    verified_at TEXT,
-    consumed_wallet_attachment_id TEXT,
-    consumed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (hold_id) REFERENCES booking_holds (hold_id)
-);
-
-INSERT INTO booking_payment_intents (
-    payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
-    recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
-    wallet_attachment_required, status, claimed_tx_ref, consumed_wallet_attachment_id, consumed_at,
-    created_at, updated_at
-)
-SELECT
-    payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
-    recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
-    wallet_attachment_required, status, consumed_tx_ref, consumed_wallet_attachment_id, consumed_at,
-    created_at, updated_at
-FROM booking_payment_intents_v1;
-
-DROP TABLE booking_payment_intents_v1;
-
-CREATE UNIQUE INDEX idx_booking_payment_intents_hold ON booking_payment_intents (hold_id);
-CREATE UNIQUE INDEX idx_booking_payment_intents_claimed_tx ON booking_payment_intents (claimed_tx_ref);
-`,
-    checksum: "d2fee57b0754cfde03da24983552b80a8e306a924b7534fce0eff8f3f2f00eb8",
-  },
-  {
-    name: "1107_booking_payment_intent_fee_snapshot.sql",
-    sql: `-- Snapshot the fee allocation durably on the payment intent so finalization persists the exact
--- allocation the booker accepted at quote time, never recomputed from the mutable host platform_fee_bps
--- after payment. A profile fee change between quote and confirmation can no longer alter the booking.
--- Additive nullable columns (ADD COLUMN, no recreation). Populated at intent creation (quote time).
-ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_bps INTEGER;
-ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_cents INTEGER;
-ALTER TABLE booking_payment_intents ADD COLUMN host_payout_cents INTEGER;
-`,
-    checksum: "643c13dc4bb79f2dfed70b4693a0760e39cdf94a65fc8483a2bd0cbfa7606f9f",
+    checksum: "03cb33f7b405fecee4948ecbde416cbf57acec55e955f0674f049bcfe20a1b00",
   },
   {
     name: "1108_booking_settlement_review.sql",
