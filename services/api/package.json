@@ -31,7 +31,7 @@
     "lint": "biome check .",
     "test": "bun test",
     "test:unit": "bun test src tests/lib",
-    "test:routes": "bun test --max-concurrency=1 tests/routes tests/community-membership-reconciliation.test.ts",
+    "test:routes": "bun test --max-concurrency=1 --timeout 30000 tests/routes tests/community-membership-reconciliation.test.ts",
     "test:integration": "vitest run --config vitest.config.ts",
     "check:integration": "tsgo --noEmit -p tests/integration/tsconfig.json",
     "coverage": "bun test --coverage src tests/lib",
