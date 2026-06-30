@@ -7,6 +7,7 @@ import {
   parseAddress,
   parsePositiveAtomic,
   parsePositiveInt,
+  resolveFundingPreflightBuyerAddress,
   resolveHostPayoutWallet,
   validateCompletedCanaryBooking,
   validateFundingReadiness,
@@ -36,6 +37,41 @@ describe("smoke-paid-booking script guards", () => {
     expect(parsePositiveInt("8453", "--chain-id")).toBe(8453)
     expect(parsePositiveAtomic("1000000", "--amount-atomic")).toBe("1000000")
     expect(parseAddress(VALID_ADDRESS, "--settlement-address")).toBe(VALID_ADDRESS)
+  })
+
+  test("resolves preflight buyer address without loading a private key", () => {
+    expect(resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: VALID_ADDRESS,
+      buyerPrivateKey: "",
+      privateKeyEnv: "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY",
+    })).toBe(VALID_ADDRESS)
+  })
+
+  test("derives preflight buyer address from private key and rejects mismatches", () => {
+    const derived = new Wallet(BUYER_PRIVATE_KEY).address
+    expect(resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: null,
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      privateKeyEnv: "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY",
+    })).toBe(derived)
+    expect(resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: derived.toLowerCase(),
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      privateKeyEnv: "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY",
+    })).toBe(derived.toLowerCase())
+    expect(() => resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: VALID_ADDRESS,
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      privateKeyEnv: "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY",
+    })).toThrow("--buyer-address does not match")
+  })
+
+  test("requires a buyer address or private key for funding preflight", () => {
+    expect(() => resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: null,
+      buyerPrivateKey: "",
+      privateKeyEnv: "PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY",
+    })).toThrow("PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY or --buyer-address")
   })
 
   test("rejects malformed manual funding preflight arguments", () => {

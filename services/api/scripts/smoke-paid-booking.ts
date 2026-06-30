@@ -30,6 +30,7 @@ Common options:
   --origin URL                         API origin. Defaults to https://api-staging.pirate.sc.
   --run-id ID                          Stable suffix for smoke users/profile labels.
   --private-key-env NAME               Buyer private key env var. Defaults to PIRATE_BOOKING_SMOKE_BUYER_PRIVATE_KEY.
+  --buyer-address ADDRESS              Buyer wallet to inspect for --funding-preflight-only without loading a private key.
   --allow-checkout-operator-buyer      Use PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY if the buyer key env is absent.
   --host-payout-wallet ADDRESS         Override host payout wallet. Defaults to buyer wallet when a buyer key is present.
   --wait-for-completion                After confirm/attach/heartbeat, wait for slot start and call complete.
@@ -42,6 +43,9 @@ Funding preflight options:
 
 Prod funding preflight:
   bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
+
+Prod address-only funding preflight:
+  bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --buyer-address 0x1111111111111111111111111111111111111111 --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
 
 Prod full canary:
   bun run smoke:paid-booking -- --origin https://api.pirate.sc --run-id 20260630-prod-paid-canary --claim --wait-for-completion
@@ -133,6 +137,21 @@ export function validateFundingReadiness(input: {
   if (failures.length > 0) {
     throw new Error(`paid booking canary funding preflight failed: ${failures.join("; ")}`)
   }
+}
+
+export function resolveFundingPreflightBuyerAddress(input: {
+  explicitBuyerAddress: string | null
+  buyerPrivateKey: string
+  privateKeyEnv: string
+}): string {
+  const explicitBuyerAddress = input.explicitBuyerAddress ? parseAddress(input.explicitBuyerAddress, "--buyer-address") : null
+  const derivedBuyerAddress = input.buyerPrivateKey ? new Wallet(input.buyerPrivateKey).address : null
+  if (explicitBuyerAddress && derivedBuyerAddress && explicitBuyerAddress.toLowerCase() !== derivedBuyerAddress.toLowerCase()) {
+    throw new Error(`--buyer-address does not match ${input.privateKeyEnv}`)
+  }
+  const buyerAddress = explicitBuyerAddress ?? derivedBuyerAddress
+  if (!buyerAddress) throw new Error(`${input.privateKeyEnv} or --buyer-address is required for --funding-preflight-only`)
+  return buyerAddress
 }
 
 export function validateCompletedCanaryBooking(input: {
@@ -255,26 +274,25 @@ function resolveRpcUrl(chainId: number): string {
 }
 
 async function preflightFunding(input: {
-  privateKey: string
+  buyerAddress: string
   chainId: number
   tokenAddress: string
   recipientAddress: string
   amountAtomic: string
 }): Promise<void> {
   const provider = new JsonRpcProvider(resolveRpcUrl(input.chainId), input.chainId)
-  const wallet = new Wallet(input.privateKey, provider)
   const token = new Contract(input.tokenAddress, ERC20_ABI, provider)
   const [
     buyerNativeWei,
     buyerTokenAtomic,
     settlementNativeWei,
   ] = await Promise.all([
-    provider.getBalance(wallet.address),
-    token.balanceOf(wallet.address) as Promise<bigint>,
+    provider.getBalance(input.buyerAddress),
+    token.balanceOf(input.buyerAddress) as Promise<bigint>,
     provider.getBalance(input.recipientAddress),
   ])
   validateFundingReadiness({
-    buyerAddress: wallet.address,
+    buyerAddress: input.buyerAddress,
     settlementAddress: input.recipientAddress,
     buyerNativeWei,
     buyerTokenAtomic,
@@ -283,7 +301,7 @@ async function preflightFunding(input: {
   })
   console.log(JSON.stringify({
     step: "funding_preflight",
-    buyer_wallet: wallet.address,
+    buyer_wallet: input.buyerAddress,
     settlement_wallet: input.recipientAddress,
     buyer_native_wei: buyerNativeWei.toString(),
     buyer_token_atomic: buyerTokenAtomic.toString(),
@@ -328,9 +346,13 @@ async function main(): Promise<void> {
     privateKey = env("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY")
   }
   if (flag("--funding-preflight-only")) {
-    if (!privateKey) throw new Error(`${privateKeyEnv} is required for --funding-preflight-only`)
+    const buyerAddress = resolveFundingPreflightBuyerAddress({
+      explicitBuyerAddress: arg("--buyer-address"),
+      buyerPrivateKey: privateKey,
+      privateKeyEnv,
+    })
     await preflightFunding({
-      privateKey,
+      buyerAddress,
       chainId: parsePositiveInt(arg("--chain-id"), "--chain-id"),
       tokenAddress: parseAddress(arg("--token-address"), "--token-address"),
       recipientAddress: parseAddress(arg("--settlement-address") || arg("--recipient-address"), "--settlement-address"),
@@ -446,7 +468,7 @@ async function main(): Promise<void> {
   if (!privateKey) throw new Error(`${privateKeyEnv} is required for --claim`)
 
   await preflightFunding({
-    privateKey,
+    buyerAddress: new Wallet(privateKey).address,
     chainId,
     tokenAddress,
     recipientAddress,
