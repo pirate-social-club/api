@@ -1366,7 +1366,7 @@ export async function fetchLiveRoomReplayContent(input: {
     if (!asset || asset.publication_status !== "published") {
       throw notFoundError("Live room replay content not found")
     }
-    if (asset.access_mode === "included_with_ticket") {
+    if (asset.access_mode === "included_with_ticket" || asset.access_mode === "paid") {
       if (!asset.locked_delivery_storage_ref) {
         throw notFoundError("Live room replay content not found")
       }

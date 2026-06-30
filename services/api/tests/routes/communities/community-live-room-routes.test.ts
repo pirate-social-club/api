@@ -3128,6 +3128,15 @@ describe("community live-room routes", () => {
       })
       const replayAssetId = replayAssets[0]?.replay_asset_id
       expect(replayAssetId).toMatch(/^lra_/)
+      const lockedReplayObjectKey = replayAssets[0]?.locked_delivery_storage_ref
+      expect(lockedReplayObjectKey).toMatch(/^locked-replays\//)
+      if (!lockedReplayObjectKey) {
+        throw new Error("paid replay did not store locked replay object key")
+      }
+      const lockedReplayObject = storageObjects.get(lockedReplayObjectKey)
+      if (!lockedReplayObject) {
+        throw new Error(`paid replay locked object was not uploaded: ${lockedReplayObjectKey}`)
+      }
 
       const hostReplayAccess = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
@@ -3244,6 +3253,19 @@ describe("community live-room routes", () => {
       expect(replayAccessBody.story_cdr_access.access_scope).toBe("asset.share")
       expect(replayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
       expect(replayAccessBody.story_cdr_access.vault_uuid).toBe(9191)
+
+      const replayContent = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/content`,
+        {
+          headers: { authorization: `Bearer ${buyer.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(replayContent.status).toBe(200)
+      expect(replayContent.headers.get("content-type")).toContain("application/octet-stream")
+      const replayContentBytes = new Uint8Array(await replayContent.arrayBuffer())
+      expect(Array.from(replayContentBytes)).toEqual(Array.from(lockedReplayObject.body))
+      expect(new TextDecoder().decode(replayContentBytes)).not.toBe("separately paid captured replay")
     } finally {
       globalThis.fetch = originalFetch
     }
