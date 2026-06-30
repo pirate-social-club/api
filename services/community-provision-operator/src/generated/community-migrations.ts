@@ -3948,6 +3948,106 @@ ADD COLUMN vinyl_release_url TEXT;
     checksum: "04680b4600a34ce5275e33294b2e8d91d2fd869d66d0d82583dc1fe03d60cf1b",
   },
   {
+    name: "1095_community_assistant_telegram_preview_prompt_suffix.sql",
+    sql: `ALTER TABLE community_assistant_policy
+    ADD COLUMN telegram_preview_prompt_suffix_json TEXT;
+`,
+    checksum: "6c25fbcefa827925255388d2addc7a28741a7086f4255ee909def9e30c75cb24",
+  },
+  {
+    name: "1096_community_karaoke_enabled.sql",
+    sql: `ALTER TABLE communities
+  ADD COLUMN karaoke_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_enabled IN (0, 1));
+`,
+    checksum: "d93d7ae6bdc91ac050a09db78b1922d7cc26f619d13616baffb47c4cd579f9a4",
+  },
+  {
+    name: "1097_purchase_allocation_legs_performer.sql",
+    sql: `ALTER TABLE purchase_allocation_legs RENAME TO purchase_allocation_legs_old;
+
+CREATE TABLE purchase_allocation_legs (
+    purchase_allocation_leg_id TEXT PRIMARY KEY,
+    purchase_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    recipient_type TEXT NOT NULL CHECK (
+        recipient_type IN ('creator', 'performer', 'charity', 'community_treasury')
+    ),
+    recipient_ref TEXT,
+    waterfall_position INTEGER NOT NULL CHECK (
+        waterfall_position >= 0
+    ),
+    share_bps INTEGER NOT NULL CHECK (
+        share_bps >= 0 AND share_bps <= 10000
+    ),
+    amount_usd REAL NOT NULL CHECK (
+        amount_usd >= 0
+    ),
+    settlement_strategy TEXT NOT NULL CHECK (
+        settlement_strategy IN ('story_payout', 'provider_payout', 'treasury_payout')
+    ),
+    status TEXT NOT NULL CHECK (
+        status IN ('quoted', 'pending', 'confirmed', 'failed')
+    ),
+    settlement_ref TEXT,
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    provider_receipt_ref TEXT,
+    tax_receipt_ref TEXT,
+    submitted_at TEXT,
+    confirmed_at TEXT,
+    failed_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(purchase_id),
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
+);
+
+INSERT INTO purchase_allocation_legs (
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+)
+SELECT
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+FROM purchase_allocation_legs_old;
+
+DROP TABLE purchase_allocation_legs_old;
+
+CREATE INDEX idx_purchase_allocation_legs_purchase
+    ON purchase_allocation_legs(purchase_id, waterfall_position ASC, created_at ASC);
+`,
+    checksum: "9241231ec42e3f4260dc5532d640394676acae744f40985d842f8c8467934071",
+  },
+  {
+    name: "1098_community_karaoke_scoring_policy.sql",
+    sql: `ALTER TABLE communities
+  ADD COLUMN karaoke_scoring_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_scoring_enabled IN (0, 1));
+
+ALTER TABLE communities
+  ADD COLUMN karaoke_stt_provider TEXT NOT NULL DEFAULT 'assistant' CHECK (
+    karaoke_stt_provider IN ('assistant', 'elevenlabs', 'mistral', 'openai', 'none')
+  );
+
+ALTER TABLE communities
+  ADD COLUMN karaoke_stt_model TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE communities
+  ADD COLUMN karaoke_voice_coach_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_voice_coach_enabled IN (0, 1));
+
+ALTER TABLE communities
+  ADD COLUMN karaoke_audio_retention TEXT NOT NULL DEFAULT 'not_stored' CHECK (
+    karaoke_audio_retention = 'not_stored'
+  );
+`,
+    checksum: "e18b7b05b513c56587249eec8b22eb59b20192c2873b9132a89b64372ba93946",
+  },
+  {
     name: "1099_asset_royalty_allocations.sql",
     sql: `-- Royalty allocation ("ownership split"): per-recipient initial allocation
 -- agreement + asset-level lifecycle state. Model proven on Aeneid (see
@@ -4076,521 +4176,447 @@ ADD COLUMN royalty_allocation_projection_synced INTEGER NOT NULL DEFAULT 1 CHECK
     checksum: "d0930df7b5f6f42657a97b03719279c95fa56f6633dbf04dbed237ba6404fb0a",
   },
   {
-    name: "1101_booking_holds_and_bookings.sql",
-    sql: `-- Paid 1:1 video bookings — per-community transaction data (community D1).
---
--- An individual booking is a transaction WITHIN a community: its settlement,
--- access entitlement, and 1:1 video session are all community-scoped, so the rows
--- are co-located with purchases/live_rooms in the per-community DB.
--- Host profile / availability / pricing are host-owned and live in the control
--- plane — see control-plane migration 0120.
---
--- Cross-DB ids (host_user_id, booker_user_id) reference control-plane users and
--- therefore carry NO foreign key — joins are enforced in service code.
--- Money is integer cents, fee is bps (NO REAL). Booking \`status\` mirrors the
--- @pirate/bookings-domain BookingState FSM exactly. See
--- core/specs/domain/paid-bookings.md.
-
--- Short-lived slot reservation held while the booker pays (FSM hold/quoted phase).
--- Auto-expires, consumed when a booking row is created from it.
-CREATE TABLE booking_holds (
-    hold_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    host_user_id TEXT NOT NULL,         -- control-plane user id (no FK, cross-DB)
-    booker_user_id TEXT NOT NULL,       -- control-plane user id (no FK, cross-DB)
-    slot_start_utc TEXT NOT NULL,       -- RFC3339 UTC
-    slot_end_utc TEXT NOT NULL,
-    price_cents INTEGER NOT NULL CHECK (price_cents > 0),   -- every booking is paid
-    status TEXT NOT NULL CHECK (status IN ('active', 'consumed', 'expired')),
-    expires_at_utc TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (slot_end_utc > slot_start_utc),
-    CHECK (expires_at_utc > created_at),
-    FOREIGN KEY (community_id) REFERENCES communities(community_id)
-);
-
--- Exactly one ACTIVE hold per (host, exact slot start) within a community — stops
--- two bookers reserving the same slot. Arbitrary time-range overlap is enforced in
--- service code (resolveSlots busy intervals), since SQLite/D1 has no EXCLUDE.
-CREATE UNIQUE INDEX idx_booking_holds_active_slot
-    ON booking_holds(community_id, host_user_id, slot_start_utc)
-    WHERE status = 'active';
-
-CREATE INDEX idx_booking_holds_expiry
-    ON booking_holds(status, expires_at_utc);
-
-CREATE INDEX idx_booking_holds_booker
-    ON booking_holds(community_id, booker_user_id, slot_start_utc);
-
--- The durable booking lifecycle. Money fields are an integer snapshot taken at
--- confirmation. Custody/settlement refs reuse the PR0 server-verified funding path:
--- funding_tx_ref is the verified on-chain pay-in, payout/refund refs are the
--- operator-controlled custody outflows. quote_id/purchase_id reference the
--- per-community commerce rows (same DB) but are intentionally FK-free to avoid
--- coupling booking creation order to settlement.
-CREATE TABLE bookings (
-    booking_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    hold_id TEXT,                       -- community-local hold this was created from
-    host_user_id TEXT NOT NULL,         -- control-plane user id (no FK, cross-DB)
-    booker_user_id TEXT NOT NULL,       -- control-plane user id (no FK, cross-DB)
-    slot_start_utc TEXT NOT NULL,
-    slot_end_utc TEXT NOT NULL,
-    -- money snapshot (integer cents / bps, no REAL)
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),   -- every booking is paid
-    platform_fee_bps INTEGER NOT NULL CHECK (platform_fee_bps >= 0 AND platform_fee_bps <= 10000),
-    platform_fee_cents INTEGER NOT NULL CHECK (platform_fee_cents >= 0),
-    host_payout_cents INTEGER NOT NULL CHECK (host_payout_cents >= 0),
-    refund_cents INTEGER CHECK (refund_cents IS NULL OR (refund_cents >= 0 AND refund_cents <= gross_cents)),
-    -- lifecycle state — mirrors @pirate/bookings-domain BookingState exactly
-    status TEXT NOT NULL CHECK (status IN (
-        'hold',
-        'quoted',
-        'pending_payment',
-        'confirmed',
-        'live',
-        'completed',
-        'settled',
-        'expired_hold',
-        'cancelled_before_payment',
-        'cancelled_by_host',
-        'cancelled_by_booker',
-        'no_show_host',
-        'no_show_booker',
-        'refunded',
-        'disputed'
-    )),
-    -- commerce + custody/settlement refs (server-verified, reuses PR0 funding gate)
-    quote_id TEXT,                      -- per-community purchase_quotes.quote_id
-    purchase_id TEXT,                   -- per-community purchases.purchase_id once settled
-    funding_tx_ref TEXT,                -- verified on-chain pay-in receipt (custody-in)
-    payout_tx_ref TEXT,                 -- operator payout to host (custody-out)
-    refund_tx_ref TEXT,                 -- operator refund to booker (custody-out)
-    -- 1:1 video session, created only on \`confirmed\`
-    live_room_id TEXT,                  -- per-community live_rooms.live_room_id
-    confirmed_at TEXT,
-    completed_at TEXT,
-    settled_at TEXT,
-    cancelled_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    CHECK (slot_end_utc > slot_start_utc),
-    -- money snapshot must balance: fee + payout == gross (matches @pirate/bookings-domain
-    -- computeAllocation, where hostPayout = gross - platformFee)
-    CHECK (platform_fee_cents + host_payout_cents = gross_cents),
-    FOREIGN KEY (community_id) REFERENCES communities(community_id),
-    FOREIGN KEY (hold_id) REFERENCES booking_holds(hold_id)
-);
-
--- One forward/active booking per (host, exact slot start) within a community.
--- Excludes terminal/cancelled states so a released slot can be rebooked.
-CREATE UNIQUE INDEX idx_bookings_active_slot
-    ON bookings(community_id, host_user_id, slot_start_utc)
-    WHERE status IN ('pending_payment', 'confirmed', 'live', 'completed', 'settled');
-
--- A consumed hold may produce at most one booking row (no fan-out).
-CREATE UNIQUE INDEX idx_bookings_hold
-    ON bookings(hold_id)
-    WHERE hold_id IS NOT NULL;
-
-CREATE INDEX idx_bookings_host
-    ON bookings(community_id, host_user_id, slot_start_utc);
-
-CREATE INDEX idx_bookings_booker
-    ON bookings(community_id, booker_user_id, slot_start_utc);
-
-CREATE INDEX idx_bookings_status
-    ON bookings(community_id, status);
+    name: "1110_live_room_recording_enabled.sql",
+    sql: `ALTER TABLE live_rooms ADD COLUMN recording_enabled INTEGER DEFAULT 0 CHECK (recording_enabled IS NULL OR recording_enabled IN (0, 1));
 `,
-    checksum: "93569664b19a6b6a365ebd1164429b456a739a499baa2af0a62f71bd5790d7ea",
+    checksum: "f5c9413b994ff0ae278201b45c31510874209b07d699332e99912959146f6ae3",
   },
   {
-    name: "1102_booking_settlement_and_attendance.sql",
-    sql: `-- Slice D1 data contract: durable money-OUT ledger, refund/payout destination snapshots, and
--- identity-bound attendance for paid bookings.
-
--- Durable operator custody ledger for booking payouts/refunds. Booking-shaped on purpose: the
--- commerce purchase_settlement_effects table requires non-null quote_id/purchase_id with a FK to
--- purchase_quotes, and bookings never create those rows. idempotency_key is the dedup handle the
--- adapter keys on (booking_refund:ID / booking_payout:ID) so a retry never double-sends.
-CREATE TABLE booking_settlement_effects (
-    booking_settlement_effect_id TEXT PRIMARY KEY,
+    name: "1111_live_room_recordings.sql",
+    sql: `CREATE TABLE live_room_recordings (
+    recording_id TEXT PRIMARY KEY,
     community_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    effect_kind TEXT NOT NULL CHECK (effect_kind IN ('booking_payout', 'booking_refund')),
-    idempotency_key TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('submitted', 'confirmed', 'failed')),
-    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
-    recipient_address TEXT NOT NULL,
-    settlement_ref TEXT,                 -- on-chain tx hash once confirmed
+    live_room_id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'agora' CHECK (provider IN ('agora')),
+    provider_resource_id TEXT,
+    provider_session_id TEXT,
+    status TEXT NOT NULL CHECK (status IN ('starting', 'recording', 'stopping', 'captured', 'ingesting', 'failed')),
+    started_at INTEGER,
+    stopped_at INTEGER,
+    raw_artifact_ref TEXT,
     failure_reason TEXT,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    submitted_at TEXT,
-    confirmed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_recordings_room
+    ON live_room_recordings(live_room_id);
+
+CREATE INDEX idx_live_room_recordings_community_status
+    ON live_room_recordings(community_id, status, updated_at DESC);
+`,
+    checksum: "c57f9e69547141e64d9c2425af4dedae0928fe42ac5350c6ee76855de3d73683",
+  },
+  {
+    name: "1112_live_room_replay_assets.sql",
+    sql: `ALTER TABLE live_rooms ADD COLUMN replay_asset_id TEXT;
+ALTER TABLE live_rooms ADD COLUMN replay_listing_id TEXT;
+
+CREATE TABLE live_room_replay_assets (
+    replay_asset_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    live_room_id TEXT NOT NULL,
+    source_recording_id TEXT NOT NULL,
+    publication_status TEXT NOT NULL CHECK (publication_status IN ('draft', 'published', 'failed')),
+    title TEXT NOT NULL,
+    caption TEXT,
+    duration_ms INTEGER,
+    preview_ref TEXT,
+    access_mode TEXT NOT NULL CHECK (access_mode IN ('free', 'included_with_ticket', 'paid')),
+    primary_content_ref TEXT NOT NULL,
+    locked_delivery_status TEXT NOT NULL DEFAULT 'none' CHECK (locked_delivery_status IN ('none', 'requested', 'ready', 'failed')),
+    locked_delivery_storage_ref TEXT,
+    story_cdr_vault_uuid TEXT,
+    published_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (live_room_id) REFERENCES live_rooms(live_room_id),
+    FOREIGN KEY (source_recording_id) REFERENCES live_room_recordings(recording_id)
+);
+
+CREATE UNIQUE INDEX idx_live_room_replay_assets_room
+    ON live_room_replay_assets(live_room_id);
+
+CREATE INDEX idx_live_room_replay_assets_community_status
+    ON live_room_replay_assets(community_id, publication_status, updated_at DESC);
+
+CREATE TABLE live_room_replay_allocations (
+    allocation_id TEXT PRIMARY KEY,
+    replay_asset_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    participant_user_id TEXT,
+    external_party_ref TEXT,
+    role TEXT NOT NULL,
+    share_bps INTEGER NOT NULL CHECK (share_bps >= 0 AND share_bps <= 10000),
+    rights_basis TEXT NOT NULL DEFAULT 'performer_default',
+    approval_status TEXT NOT NULL DEFAULT 'approved' CHECK (approval_status IN ('pending', 'approved', 'rejected')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (replay_asset_id) REFERENCES live_room_replay_assets(replay_asset_id),
+    CHECK (participant_user_id IS NOT NULL OR external_party_ref IS NOT NULL)
+);
+
+CREATE INDEX idx_live_room_replay_allocations_asset
+    ON live_room_replay_allocations(replay_asset_id);
+`,
+    checksum: "3cd34e171f36eb93b508684645782bbee8690fc660108c23e38e934806a01475",
+  },
+  {
+    name: "1113_live_room_replay_locked_delivery.sql",
+    sql: `ALTER TABLE live_room_replay_assets ADD COLUMN locked_delivery_secret_json TEXT;
+ALTER TABLE live_room_replay_assets ADD COLUMN story_namespace TEXT;
+ALTER TABLE live_room_replay_assets ADD COLUMN story_entitlement_token_id TEXT;
+ALTER TABLE live_room_replay_assets ADD COLUMN story_read_condition TEXT;
+ALTER TABLE live_room_replay_assets ADD COLUMN story_write_condition TEXT;
+ALTER TABLE live_room_replay_assets ADD COLUMN locked_delivery_error TEXT;
+`,
+    checksum: "3b631159e77ed088823ac192f18e4945dc37a43c6f2f0cb2f3a26cf6ab38fb4a",
+  },
+  {
+    name: "1114_live_room_replay_commerce_targets.sql",
+    sql: `PRAGMA foreign_keys = OFF;
+PRAGMA legacy_alter_table = ON;
+
+ALTER TABLE listings RENAME TO listings_old;
+
+CREATE TABLE listings (
+    listing_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    asset_id TEXT,
+    live_room_id TEXT,
+    replay_asset_id TEXT,
+    listing_mode TEXT NOT NULL CHECK (
+        listing_mode IN ('fixed_price')
+    ),
+    status TEXT NOT NULL CHECK (
+        status IN ('draft', 'active', 'paused', 'archived')
+    ),
+    price_usd REAL NOT NULL CHECK (
+        price_usd >= 0
+    ),
+    regional_pricing_policy_json TEXT,
+    vinyl_release_provider TEXT CHECK (
+        vinyl_release_provider IS NULL OR vinyl_release_provider IN ('elasticstage')
+    ),
+    vinyl_release_url TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    CHECK (
+        (asset_id IS NOT NULL AND live_room_id IS NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NOT NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NULL AND replay_asset_id IS NOT NULL)
+    )
+);
+
+INSERT INTO listings (
+    listing_id, community_id, asset_id, live_room_id, replay_asset_id,
+    listing_mode, status, price_usd, regional_pricing_policy_json,
+    vinyl_release_provider, vinyl_release_url, created_by_user_id, created_at, updated_at
+)
+SELECT
+    listing_id, community_id, asset_id, live_room_id, NULL,
+    listing_mode, status, price_usd, regional_pricing_policy_json,
+    vinyl_release_provider, vinyl_release_url, created_by_user_id, created_at, updated_at
+FROM listings_old;
+
+DROP TABLE listings_old;
+
+CREATE INDEX idx_listings_community_status
+    ON listings(community_id, status, created_at DESC);
+
+CREATE INDEX idx_listings_asset
+    ON listings(asset_id)
+    WHERE asset_id IS NOT NULL;
+
+CREATE INDEX idx_listings_live_room
+    ON listings(live_room_id)
+    WHERE live_room_id IS NOT NULL;
+
+CREATE INDEX idx_listings_replay_asset
+    ON listings(replay_asset_id)
+    WHERE replay_asset_id IS NOT NULL;
+
+ALTER TABLE purchase_quotes RENAME TO purchase_quotes_old;
+
+CREATE TABLE purchase_quotes (
+    quote_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
+    ),
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    asset_id TEXT,
+    live_room_id TEXT,
+    replay_asset_id TEXT,
+    base_price_usd REAL NOT NULL CHECK (
+        base_price_usd >= 0
+    ),
+    pricing_tier TEXT,
+    final_price_usd REAL NOT NULL CHECK (
+        final_price_usd >= 0
+    ),
+    funding_mode TEXT NOT NULL CHECK (
+        funding_mode IN ('direct', 'routed')
+    ),
+    funding_asset_json TEXT,
+    source_chain_json TEXT,
+    route_provider TEXT,
+    route_policy_compliant INTEGER NOT NULL CHECK (
+        route_policy_compliant IN (0, 1)
+    ),
+    route_live_available INTEGER CHECK (
+        route_live_available IN (0, 1)
+    ),
+    policy_origin TEXT NOT NULL CHECK (
+        policy_origin IN ('default', 'explicit')
+    ),
+    destination_settlement_chain_json TEXT NOT NULL,
+    destination_settlement_token TEXT NOT NULL,
+    treasury_denomination TEXT,
+    quote_ttl_seconds INTEGER NOT NULL CHECK (
+        quote_ttl_seconds > 0
+    ),
+    route_required INTEGER NOT NULL CHECK (
+        route_required IN (0, 1)
+    ),
+    route_status_policy TEXT NOT NULL CHECK (
+        route_status_policy IN ('fail', 'fallback_display', 'queue')
+    ),
+    route_hop_tolerance INTEGER NOT NULL CHECK (
+        route_hop_tolerance >= 0
+    ),
+    verification_snapshot_ref TEXT,
+    pricing_policy_version TEXT,
+    status TEXT NOT NULL CHECK (
+        status IN ('active', 'expired', 'consumed', 'failed')
+    ),
+    quoted_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
     failed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
+    allocation_snapshot_json TEXT,
+    destination_settlement_amount_atomic TEXT,
+    destination_settlement_decimals INTEGER,
+    settlement_mode TEXT NOT NULL DEFAULT 'delivery_only_story_settlement' CHECK (
+        settlement_mode IN ('delivery_only_story_settlement', 'royalty_native_story_payment')
+    ),
+    funding_destination_address TEXT,
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    FOREIGN KEY (listing_id) REFERENCES listings(listing_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    ),
+    CHECK (
+        (asset_id IS NOT NULL AND live_room_id IS NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NOT NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NULL AND replay_asset_id IS NOT NULL)
+    )
 );
 
-CREATE UNIQUE INDEX idx_booking_settlement_effects_idempotency
-    ON booking_settlement_effects(idempotency_key);
-
-CREATE INDEX idx_booking_settlement_effects_booking
-    ON booking_settlement_effects(booking_id, status);
-
--- Durable destination snapshots captured at confirm. Refund goes back to the address that actually
--- paid (verified on-chain sender). Host payout goes to the profile payout wallet snapshotted here.
--- Neither is re-resolved later, so changing a wallet after payment cannot redirect funds.
-ALTER TABLE bookings ADD COLUMN funding_wallet_address TEXT;
-ALTER TABLE bookings ADD COLUMN host_payout_wallet_address TEXT;
-
--- Identity-bound attendance for the booking 1:1 session. Each attach (or reconnect after a stale
--- gap) is a session row. Heartbeats extend last_seen_at. The evaluator derives host/booker OVERLAP
--- from these intervals -- not from a single attach timestamp -- so it can prove a real shared call.
-CREATE TABLE booking_attendance_sessions (
-    session_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    party TEXT NOT NULL CHECK (party IN ('host', 'booker')),
-    user_id TEXT NOT NULL,
-    agora_uid INTEGER,
-    attached_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    ended_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (booking_id) REFERENCES bookings(booking_id)
-);
-
-CREATE INDEX idx_booking_attendance_sessions_booking
-    ON booking_attendance_sessions(booking_id, party);
-
--- Optional fine-grained liveness samples (one row per heartbeat) for audit and gap-aware overlap.
-CREATE TABLE booking_attendance_heartbeats (
-    heartbeat_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    booking_id TEXT NOT NULL,
-    seen_at TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES booking_attendance_sessions(session_id)
-);
-
-CREATE INDEX idx_booking_attendance_heartbeats_session
-    ON booking_attendance_heartbeats(session_id, seen_at);
-`,
-    checksum: "03761307e1d738dce33d5294d949ca5e8e605548b9ca3c344abf617b58a9e9b4",
-  },
-  {
-    name: "1103_booking_settlement_durable_submission.sql",
-    sql: `-- Slice D5 Finding 2: durable submission for booking settlement effects.
--- The operator signs the USDC transfer and persists the raw signed transaction (and its nonce)
--- BEFORE broadcasting. A crash in the broadcast window is then recoverable: a retry re-broadcasts
--- the identical signed tx, which is idempotent by nonce (the network mines at most one), so money
--- is never moved twice and the ledger is never permanently stuck without a reference.
-ALTER TABLE booking_settlement_effects ADD COLUMN signed_tx TEXT;
-ALTER TABLE booking_settlement_effects ADD COLUMN broadcast_nonce INTEGER;
-`,
-    checksum: "30268004897c560b16fcfa3e01c94ccafd252c962ec06bad3236212dfeb521ed",
-  },
-  {
-    name: "1104_booking_settlement_coordinator_mirror.sql",
-    sql: `-- Slice D5 Finding 2 (DO coordinator): the wallet-scoped operator signing coordinator (a Durable
--- Object) owns the authoritative signed transaction + nonce. The community booking_settlement_effects
--- row becomes a booking-scoped MIRROR that points at the coordinator record and reflects its state.
--- coordinator_ref is the coordinator effect identity. coordinator_state mirrors the coordinator
--- outcome (broadcast/confirmed/replaced/failed_onchain) WITHOUT overloading signed_tx (which stays
--- owned by the DO) or the row status (so terminal coordinator failures are never eligible for the
--- failed -> retry path).
-ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_ref TEXT;
-ALTER TABLE booking_settlement_effects ADD COLUMN coordinator_state TEXT;
-`,
-    checksum: "c615b132b35e32dc904e95036cf888f7c154dc811fc358b4d8f98d2dbd884725",
-  },
-  {
-    name: "1105_booking_payment_intents.sql",
-    sql: `-- Slice C payment hardening: a durable, immutable PAYMENT INTENT snapshotted at quote time so
--- confirmation validates the submitted transaction against what was quoted (chain/token/recipient/
--- amount), never mutable runtime config or client-provided fields. recipient_address is the custody
--- DEPOSIT (pay-in) address only -- never an operator key, signed transaction, or payout destination.
--- Addresses and transaction hashes are normalized (checksum/case) in application code. Timestamps are
--- ISO8601 UTC strings (the project canonical format).
-CREATE TABLE booking_payment_intents (
-    payment_intent_id TEXT PRIMARY KEY,                         -- deterministic bpi:<hold_id>
-    hold_id TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
-    chain_id INTEGER NOT NULL CHECK (chain_id > 0),
-    token_address TEXT NOT NULL,
-    token_decimals INTEGER NOT NULL CHECK (token_decimals >= 0 AND token_decimals <= 36),
-    token_symbol TEXT NOT NULL,
-    recipient_address TEXT NOT NULL,                            -- custody deposit address only
-    -- amount_atomic is a decimal-digit string: non-empty, non-negative, non-fractional, non-decimal.
-    amount_atomic TEXT NOT NULL CHECK (length(amount_atomic) >= 1 AND amount_atomic NOT GLOB '*[^0-9]*'),
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),
-    quote_expires_at TEXT NOT NULL,
-    hold_expires_at TEXT NOT NULL,
-    wallet_attachment_required INTEGER NOT NULL DEFAULT 1 CHECK (wallet_attachment_required IN (0, 1)),
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'consumed', 'expired', 'superseded')),
-    -- consumption audit: which transaction + wallet attachment consumed it, and when
-    consumed_tx_ref TEXT,
-    consumed_wallet_attachment_id TEXT,
-    consumed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (hold_id) REFERENCES booking_holds (hold_id)
-);
-
--- Exactly one intent per hold. The deterministic PK already implies it plus an explicit unique guard.
-CREATE UNIQUE INDEX idx_booking_payment_intents_hold
-    ON booking_payment_intents (hold_id);
-
--- Reused-transaction protection: a funding transaction may consume AT MOST ONE intent. SQLite treats
--- NULLs as distinct in a unique index, so the many unconsumed (NULL) rows coexist while every
--- non-null consuming hash is unique.
-CREATE UNIQUE INDEX idx_booking_payment_intents_consumed_tx
-    ON booking_payment_intents (consumed_tx_ref);
-`,
-    checksum: "06ecb7714427a76943e4e70c7e8b0fa9ee62dda9a5dc873f2cc3621d3ebf71a0",
-  },
-  {
-    name: "1106_booking_payment_intent_verification.sql",
-    sql: `-- Confirmation reservation/CAS state machine: extend booking_payment_intents with the verifying and
--- verification_failed states and the reservation fields so a confirmation can atomically claim an
--- intent for chain verification WITHOUT holding a DB transaction across the RPC. A crash mid-verify
--- is recoverable by claim expiry, and a successful on-chain payment is resumable without re-paying.
--- SQLite cannot alter a CHECK constraint in place, so the table is recreated (it is not yet deployed,
--- so the copy is a safe no-op in practice). claimed_tx_ref subsumes the old consumed_tx_ref and is the
--- single normalized funding hash claimed by an intent (reserved at verifying, kept at consumed) with a
--- UNIQUE index for reused-transaction protection across intents.
-ALTER TABLE booking_payment_intents RENAME TO booking_payment_intents_v1;
-
-CREATE TABLE booking_payment_intents (
-    payment_intent_id TEXT PRIMARY KEY,
-    hold_id TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
-    chain_id INTEGER NOT NULL CHECK (chain_id > 0),
-    token_address TEXT NOT NULL,
-    token_decimals INTEGER NOT NULL CHECK (token_decimals >= 0 AND token_decimals <= 36),
-    token_symbol TEXT NOT NULL,
-    recipient_address TEXT NOT NULL,
-    amount_atomic TEXT NOT NULL CHECK (length(amount_atomic) >= 1 AND amount_atomic NOT GLOB '*[^0-9]*'),
-    gross_cents INTEGER NOT NULL CHECK (gross_cents > 0),
-    quote_expires_at TEXT NOT NULL,
-    hold_expires_at TEXT NOT NULL,
-    wallet_attachment_required INTEGER NOT NULL DEFAULT 1 CHECK (wallet_attachment_required IN (0, 1)),
-    -- States: active (quoted) -> verifying (claimed, RPC in flight) -> verified (durable, evidence
-    -- recorded, ready to finalize) -> consumed (booking created + hold consumed). verification_failed
-    -- is a retryable transient/pending outcome that keeps the claimed hash. verification_rejected is
-    -- a terminal definitive mismatch (a new payment requires a superseded/new intent). The verified
-    -- state lets a crash after the RPC resume finalization WITHOUT another RPC or payment.
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'verifying', 'verified', 'verification_failed', 'verification_rejected', 'consumed', 'expired', 'superseded')),
-    -- verification reservation (CAS): a single confirmation claims the intent before chain RPC.
-    -- Claim token + expiry are cleared once the intent reaches verified (finalization no longer needs them).
-    verification_claim_token TEXT,
-    verification_claim_expires_at TEXT,
-    claimed_tx_ref TEXT,
-    -- durable verification evidence recorded at the verifying -> verified transition, so finalization
-    -- needs no further RPC: the verified on-chain sender (= booking refund destination) and timestamp.
-    verified_sender_address TEXT,
-    verified_at TEXT,
-    consumed_wallet_attachment_id TEXT,
-    consumed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (hold_id) REFERENCES booking_holds (hold_id)
-);
-
-INSERT INTO booking_payment_intents (
-    payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
-    recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
-    wallet_attachment_required, status, claimed_tx_ref, consumed_wallet_attachment_id, consumed_at,
-    created_at, updated_at
+INSERT INTO purchase_quotes (
+    quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
+    buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+    asset_id, live_room_id, replay_asset_id, base_price_usd, pricing_tier, final_price_usd,
+    allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
+    route_provider, funding_destination_address, route_policy_compliant, route_live_available,
+    policy_origin, destination_settlement_chain_json, destination_settlement_token,
+    destination_settlement_amount_atomic, destination_settlement_decimals, treasury_denomination,
+    quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
+    settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at,
+    expires_at, consumed_at, failed_at, created_at, updated_at
 )
 SELECT
-    payment_intent_id, hold_id, version, chain_id, token_address, token_decimals, token_symbol,
-    recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
-    wallet_attachment_required, status, consumed_tx_ref, consumed_wallet_attachment_id, consumed_at,
-    created_at, updated_at
-FROM booking_payment_intents_v1;
+    quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
+    buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
+    asset_id, live_room_id, NULL, base_price_usd, pricing_tier, final_price_usd,
+    allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
+    route_provider, funding_destination_address, route_policy_compliant, route_live_available,
+    policy_origin, destination_settlement_chain_json, destination_settlement_token,
+    destination_settlement_amount_atomic, destination_settlement_decimals, treasury_denomination,
+    quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
+    settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at,
+    expires_at, consumed_at, failed_at, created_at, updated_at
+FROM purchase_quotes_old;
 
-DROP TABLE booking_payment_intents_v1;
+DROP TABLE purchase_quotes_old;
 
-CREATE UNIQUE INDEX idx_booking_payment_intents_hold ON booking_payment_intents (hold_id);
-CREATE UNIQUE INDEX idx_booking_payment_intents_claimed_tx ON booking_payment_intents (claimed_tx_ref);
-`,
-    checksum: "d2fee57b0754cfde03da24983552b80a8e306a924b7534fce0eff8f3f2f00eb8",
-  },
-  {
-    name: "1107_booking_payment_intent_fee_snapshot.sql",
-    sql: `-- Snapshot the fee allocation durably on the payment intent so finalization persists the exact
--- allocation the booker accepted at quote time, never recomputed from the mutable host platform_fee_bps
--- after payment. A profile fee change between quote and confirmation can no longer alter the booking.
--- Additive nullable columns (ADD COLUMN, no recreation). Populated at intent creation (quote time).
-ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_bps INTEGER;
-ALTER TABLE booking_payment_intents ADD COLUMN platform_fee_cents INTEGER;
-ALTER TABLE booking_payment_intents ADD COLUMN host_payout_cents INTEGER;
-`,
-    checksum: "643c13dc4bb79f2dfed70b4693a0760e39cdf94a65fc8483a2bd0cbfa7606f9f",
-  },
-  {
-    name: "1108_booking_settlement_review.sql",
-    sql: `-- Durable operator review state for attendance-ambiguous booking settlement.
---
--- The unattended evaluator moves ambiguous paid bookings to status='disputed' with a pending
--- settlement review. Operator resolution CASes on settlement_review_version, records attribution,
--- then transitions to one of the existing unfinished settlement intent states for canonical
--- idempotency-keyed payout/refund reconciliation.
+CREATE INDEX idx_purchase_quotes_buyer_status
+    ON purchase_quotes(buyer_user_id, status, expires_at DESC)
+    WHERE buyer_kind = 'user';
 
-ALTER TABLE bookings ADD COLUMN settlement_review_status TEXT
-    CHECK (settlement_review_status IS NULL OR settlement_review_status IN ('pending', 'resolved'));
-ALTER TABLE bookings ADD COLUMN settlement_review_reason TEXT
-    CHECK (settlement_review_reason IS NULL OR settlement_review_reason IN ('attendance_ambiguous'));
-ALTER TABLE bookings ADD COLUMN settlement_review_resolution TEXT
-    CHECK (settlement_review_resolution IS NULL OR settlement_review_resolution IN ('completed', 'no_show_host', 'no_show_booker'));
-ALTER TABLE bookings ADD COLUMN settlement_review_opened_at TEXT;
-ALTER TABLE bookings ADD COLUMN settlement_review_resolved_at TEXT;
-ALTER TABLE bookings ADD COLUMN settlement_review_operator_credential_id TEXT;
-ALTER TABLE bookings ADD COLUMN settlement_review_operator_actor_id TEXT;
-ALTER TABLE bookings ADD COLUMN settlement_review_note TEXT;
-ALTER TABLE bookings ADD COLUMN settlement_review_version INTEGER NOT NULL DEFAULT 0
-    CHECK (settlement_review_version >= 0);
+CREATE INDEX idx_purchase_quotes_wallet_status
+    ON purchase_quotes(buyer_chain_ref, buyer_wallet_address_normalized, status, expires_at DESC)
+    WHERE buyer_kind = 'wallet';
 
-CREATE INDEX idx_bookings_settlement_review_pending
-    ON bookings(community_id, settlement_review_status, updated_at)
-    WHERE settlement_review_status = 'pending';
-`,
-    checksum: "f00844bb6ed1a40a768f1cde862548e49147dea9d49f1ae290982b467b3351a1",
-  },
-  {
-    name: "1109_song_study.sql",
-    sql: `CREATE TABLE song_study_unit (
-    id TEXT PRIMARY KEY,
-    post_id TEXT NOT NULL,
-    line_id TEXT NOT NULL,
-    line_index INTEGER NOT NULL,
-    source_language TEXT,
-    prompt_text TEXT NOT NULL,
-    reference_text TEXT NOT NULL,
-    say_it_back_status TEXT NOT NULL DEFAULT 'ready' CHECK (
-        say_it_back_status IN ('ready', 'unavailable')
+CREATE INDEX idx_purchase_quotes_listing_status
+    ON purchase_quotes(listing_id, status, expires_at DESC);
+
+CREATE INDEX idx_purchase_quotes_community_status
+    ON purchase_quotes(community_id, status, expires_at DESC);
+
+CREATE INDEX idx_purchase_quotes_status_expires
+    ON purchase_quotes(status, expires_at DESC);
+
+ALTER TABLE purchases RENAME TO purchases_old;
+
+CREATE TABLE purchases (
+    purchase_id TEXT PRIMARY KEY,
+    community_id TEXT NOT NULL,
+    listing_id TEXT NOT NULL,
+    asset_id TEXT,
+    live_room_id TEXT,
+    replay_asset_id TEXT,
+    buyer_kind TEXT NOT NULL DEFAULT 'user' CHECK (
+        buyer_kind IN ('user', 'wallet')
     ),
-    unit_version INTEGER NOT NULL DEFAULT 1,
-    max_attempts INTEGER NOT NULL DEFAULT 2,
+    buyer_user_id TEXT,
+    buyer_wallet_address TEXT,
+    buyer_wallet_address_normalized TEXT,
+    buyer_chain_ref TEXT,
+    settlement_wallet_attachment_id TEXT NOT NULL,
+    purchase_price_usd REAL NOT NULL CHECK (
+        purchase_price_usd >= 0
+    ),
+    pricing_tier TEXT,
+    settlement_chain TEXT NOT NULL,
+    settlement_token TEXT NOT NULL,
+    settlement_tx_ref TEXT NOT NULL,
+    donation_partner_id TEXT,
+    donation_share_pct REAL CHECK (
+        donation_share_pct IS NULL OR (donation_share_pct >= 0 AND donation_share_pct <= 100)
+    ),
+    donation_amount_usd REAL CHECK (
+        donation_amount_usd IS NULL OR donation_amount_usd >= 0
+    ),
+    donation_settlement_ref TEXT,
+    vinyl_release_provider TEXT CHECK (
+        vinyl_release_provider IS NULL OR vinyl_release_provider IN ('elasticstage')
+    ),
+    vinyl_release_url TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
-    CHECK (max_attempts > 0),
-    UNIQUE (post_id, line_id)
+    settlement_mode TEXT NOT NULL DEFAULT 'delivery_only_story_settlement' CHECK (
+        settlement_mode IN ('delivery_only_story_settlement', 'royalty_native_story_payment')
+    ),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id),
+    CHECK (
+        buyer_user_id IS NOT NULL OR buyer_wallet_address_normalized IS NOT NULL
+    ),
+    CHECK (
+        (buyer_kind = 'user' AND buyer_user_id IS NOT NULL AND buyer_wallet_address_normalized IS NULL) OR
+        (buyer_kind = 'wallet' AND buyer_user_id IS NULL AND buyer_wallet_address_normalized IS NOT NULL)
+    ),
+    CHECK (
+        (asset_id IS NOT NULL AND live_room_id IS NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NOT NULL AND replay_asset_id IS NULL) OR
+        (asset_id IS NULL AND live_room_id IS NULL AND replay_asset_id IS NOT NULL)
+    )
 );
 
-CREATE INDEX idx_song_study_unit_post
-    ON song_study_unit(post_id, line_index);
+INSERT INTO purchases (
+    purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id,
+    buyer_kind, buyer_user_id, buyer_wallet_address, buyer_wallet_address_normalized,
+    buyer_chain_ref, settlement_wallet_attachment_id, purchase_price_usd, pricing_tier,
+    settlement_chain, settlement_token, settlement_tx_ref, donation_partner_id,
+    donation_share_pct, donation_amount_usd, donation_settlement_ref,
+    vinyl_release_provider, vinyl_release_url, created_at, settlement_mode
+)
+SELECT
+    purchase_id, community_id, listing_id, asset_id, live_room_id, NULL,
+    buyer_kind, buyer_user_id, buyer_wallet_address, buyer_wallet_address_normalized,
+    buyer_chain_ref, settlement_wallet_attachment_id, purchase_price_usd, pricing_tier,
+    settlement_chain, settlement_token, settlement_tx_ref, donation_partner_id,
+    donation_share_pct, donation_amount_usd, donation_settlement_ref,
+    vinyl_release_provider, vinyl_release_url, created_at, settlement_mode
+FROM purchases_old;
 
-CREATE TABLE song_study_unit_localization (
-    id TEXT PRIMARY KEY,
-    unit_id TEXT NOT NULL,
-    target_language TEXT NOT NULL,
-    localization_version INTEGER NOT NULL DEFAULT 1,
+DROP TABLE purchases_old;
+
+CREATE INDEX idx_purchases_buyer_created
+    ON purchases(buyer_user_id, created_at DESC)
+    WHERE buyer_kind = 'user';
+
+CREATE INDEX idx_purchases_wallet_created
+    ON purchases(buyer_chain_ref, buyer_wallet_address_normalized, created_at DESC)
+    WHERE buyer_kind = 'wallet';
+
+CREATE INDEX idx_purchases_community_created
+    ON purchases(community_id, created_at DESC);
+
+ALTER TABLE purchase_allocation_legs RENAME TO purchase_allocation_legs_old;
+
+CREATE TABLE purchase_allocation_legs (
+    purchase_allocation_leg_id TEXT PRIMARY KEY,
+    purchase_id TEXT NOT NULL,
+    quote_id TEXT NOT NULL,
+    community_id TEXT NOT NULL,
+    recipient_type TEXT NOT NULL CHECK (
+        recipient_type IN ('creator', 'performer', 'charity', 'community_treasury')
+    ),
+    recipient_ref TEXT,
+    waterfall_position INTEGER NOT NULL CHECK (
+        waterfall_position >= 0
+    ),
+    share_bps INTEGER NOT NULL CHECK (
+        share_bps >= 0 AND share_bps <= 10000
+    ),
+    amount_usd REAL NOT NULL CHECK (
+        amount_usd >= 0
+    ),
+    settlement_strategy TEXT NOT NULL CHECK (
+        settlement_strategy IN ('story_payout', 'provider_payout', 'treasury_payout')
+    ),
     status TEXT NOT NULL CHECK (
-        status IN ('ready', 'processing', 'unavailable')
+        status IN ('quoted', 'pending', 'confirmed', 'failed')
     ),
-    question TEXT,
-    translation_text TEXT,
-    options_json TEXT,
-    correct_option_id TEXT,
-    explanation_text TEXT,
-    max_attempts INTEGER NOT NULL DEFAULT 1,
-    generated_at TEXT,
+    settlement_ref TEXT,
+    failure_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    FOREIGN KEY (unit_id) REFERENCES song_study_unit(id) ON DELETE CASCADE,
-    CHECK (max_attempts > 0),
-    UNIQUE (unit_id, target_language)
+    provider_receipt_ref TEXT,
+    tax_receipt_ref TEXT,
+    submitted_at TEXT,
+    confirmed_at TEXT,
+    failed_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (purchase_id) REFERENCES purchases(purchase_id),
+    FOREIGN KEY (quote_id) REFERENCES purchase_quotes(quote_id),
+    FOREIGN KEY (community_id) REFERENCES communities(community_id)
 );
 
-CREATE INDEX idx_song_study_unit_localization_lookup
-    ON song_study_unit_localization(target_language, status);
+INSERT INTO purchase_allocation_legs (
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+)
+SELECT
+    purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
+    waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+    failure_reason, created_at, updated_at, provider_receipt_ref, tax_receipt_ref,
+    submitted_at, confirmed_at, failed_at, attempt_count
+FROM purchase_allocation_legs_old;
 
-CREATE TABLE song_study_attempt (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    post_id TEXT NOT NULL,
-    exercise_id TEXT NOT NULL,
-    line_id TEXT NOT NULL,
-    exercise_type TEXT NOT NULL CHECK (
-        exercise_type IN ('say_it_back', 'translation_choice')
-    ),
-    target_language TEXT NOT NULL,
-    study_pack_version INTEGER NOT NULL,
-    attempt_number INTEGER NOT NULL,
-    idempotency_key TEXT NOT NULL,
-    selected_option_id TEXT,
-    transcript TEXT,
-    outcome TEXT NOT NULL CHECK (
-        outcome IN ('correct', 'incorrect', 'revealed')
-    ),
-    feedback_json TEXT,
-    fsrs_rating TEXT CHECK (
-        fsrs_rating IS NULL OR fsrs_rating IN ('again', 'hard', 'good', 'easy')
-    ),
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
-    CHECK (attempt_number > 0),
-    UNIQUE (user_id, exercise_id, attempt_number),
-    UNIQUE (user_id, idempotency_key)
-);
+DROP TABLE purchase_allocation_legs_old;
 
-CREATE INDEX idx_song_study_attempt_review_unit
-    ON song_study_attempt(
-        user_id,
-        post_id,
-        line_id,
-        exercise_type,
-        target_language,
-        created_at
-    );
+CREATE INDEX idx_purchase_allocation_legs_purchase
+    ON purchase_allocation_legs(purchase_id, waterfall_position ASC, created_at ASC);
 
-CREATE TABLE song_study_review_state (
-    user_id TEXT NOT NULL,
-    post_id TEXT NOT NULL,
-    line_id TEXT NOT NULL,
-    exercise_type TEXT NOT NULL CHECK (
-        exercise_type IN ('say_it_back', 'translation_choice')
-    ),
-    target_language TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (
-        state IN ('new', 'learning', 'review', 'relearning')
-    ),
-    stability REAL NOT NULL,
-    difficulty REAL NOT NULL,
-    due_at TEXT NOT NULL,
-    last_reviewed_at TEXT,
-    reps INTEGER NOT NULL DEFAULT 0,
-    lapses INTEGER NOT NULL DEFAULT 0,
-    fsrs_params_version INTEGER NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
-    PRIMARY KEY (
-        user_id,
-        post_id,
-        line_id,
-        exercise_type,
-        target_language
-    ),
-    CHECK (reps >= 0),
-    CHECK (lapses >= 0)
-);
-
-CREATE INDEX idx_song_study_review_due
-    ON song_study_review_state(user_id, due_at);
+PRAGMA legacy_alter_table = OFF;
+PRAGMA foreign_keys = ON;
 `,
-    checksum: "00266e131ba9ee043134551063b65beb007632c7de35d9d75a98608902ea130c",
-  },
-  {
-    name: "1115_community_study_enabled.sql",
-    sql: `ALTER TABLE communities
-  ADD COLUMN study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1));
-`,
-    checksum: "03cb33f7b405fecee4948ecbde416cbf57acec55e955f0674f049bcfe20a1b00",
+    checksum: "72f709732cfcc33cc746a7f17d693e51bc35b4600998e487c0178f2162160fcf",
   },
 ] as const;

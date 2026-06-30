@@ -57,6 +57,7 @@ export type ListingRow = {
   community_id: string
   asset_id: string | null
   live_room_id: string | null
+  replay_asset_id: string | null
   listing_mode: CommunityListing["listing_mode"]
   status: CommunityListing["status"]
   price_usd: number
@@ -93,6 +94,7 @@ export type PurchaseQuoteRow = {
   buyer_chain_ref: string | null
   asset_id: string | null
   live_room_id: string | null
+  replay_asset_id: string | null
   base_price_usd: number
   pricing_tier: string | null
   final_price_usd: number
@@ -156,6 +158,7 @@ export type PurchaseRow = {
   listing_id: string
   asset_id: string | null
   live_room_id: string | null
+  replay_asset_id: string | null
   buyer_kind: "user" | "wallet"
   buyer_user_id: string | null
   buyer_wallet_address: string | null

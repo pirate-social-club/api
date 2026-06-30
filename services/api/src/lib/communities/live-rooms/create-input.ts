@@ -19,6 +19,7 @@ export type PreparedLiveRoomCreate = {
   guestUserId: string | null
   eventStartAt: number | null
   coverRef: string | null
+  recordingEnabled: boolean
   allocations: Array<{ userId: string; role: "host" | "guest"; shareBps: number }>
   setlist: PreparedLiveRoomSetlist
 }
@@ -63,6 +64,7 @@ export function normalizeLiveRoomCreateRequest(input: {
     guestUserId,
     eventStartAt,
     coverRef: cleanString(input.body.cover_ref),
+    recordingEnabled: normalizeRecordingEnabled(input.body.recording_enabled),
     allocations: normalizeAllocations({
       body: input.body,
       hostUserId: input.hostUserId,
@@ -71,6 +73,12 @@ export function normalizeLiveRoomCreateRequest(input: {
     }),
     setlist: normalizeSetlist(input.body),
   }
+}
+
+function normalizeRecordingEnabled(value: unknown): boolean {
+  if (value == null) return false
+  if (value === true || value === false) return value
+  throw badRequestError("recording_enabled must be a boolean")
 }
 
 function cleanString(value: unknown): string | null {

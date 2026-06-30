@@ -18,7 +18,10 @@ import {
   runPostTranslationMaterialize,
 } from "./content-materialization-handlers"
 import { runEmbedHydrate } from "./embed-hydration-handler"
-import { runLiveRoomViewerSessionsPrune } from "./live-room-maintenance-handler"
+import {
+  runLiveRoomRecordingIngest,
+  runLiveRoomViewerSessionsPrune,
+} from "./live-room-maintenance-handler"
 import { runLockedAssetDeliveryPrepare } from "./locked-asset-delivery-handler"
 import { runSongArtifactSessionReaper } from "./song-artifact-session-reaper-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
@@ -55,6 +58,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runLockedAssetDeliveryPrepare(input)
     case "song_artifact_session_reaper":
       return runSongArtifactSessionReaper(input)
+    case "live_room_recording_ingest":
+      return runLiveRoomRecordingIngest(input)
     case "live_room_viewer_sessions_prune":
       return runLiveRoomViewerSessionsPrune(input)
     default:

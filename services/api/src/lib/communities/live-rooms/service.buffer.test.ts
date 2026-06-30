@@ -30,6 +30,7 @@ const PREPARED: PreparedLiveRoomCreate = {
   guestUserId: null,
   eventStartAt: null,
   coverRef: null,
+  recordingEnabled: false,
   allocations: [{ userId: "usr_host", role: "host", shareBps: 10_000 }],
   setlist: { status: "draft", items: [] },
 }

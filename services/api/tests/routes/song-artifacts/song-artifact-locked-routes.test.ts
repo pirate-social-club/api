@@ -68,6 +68,8 @@ const routedCheckoutQuoteFields = {
   client_estimated_hop_count: 1,
 }
 
+const compositeReadConditionAddress = "0xc0ffee0000000000000000000000000000000000"
+
 async function markGeneratedPreviewReady(input: {
   env: Env
   communityId: string
@@ -832,6 +834,7 @@ describe("song artifact locked routes", () => {
       STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
       STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: compositeReadConditionAddress,
     })
     cleanup = ctx.cleanup
 
@@ -987,12 +990,22 @@ describe("song artifact locked routes", () => {
       access_granted: boolean
       bundle_preview_status: string | null
       decision_reason: string
-      story_cdr_access?: { vault_uuid?: number } | null
+      story_cdr_access?: {
+        vault_uuid?: number
+        read_condition_address?: string
+        access_aux_data_hex?: string
+        access_proof?: { mode?: string }
+      } | null
     }
     expect(creatorAccessAfterPreviewBody.access_granted).toBe(true)
     expect(creatorAccessAfterPreviewBody.decision_reason).toBe("creator")
     expect(creatorAccessAfterPreviewBody.bundle_preview_status).toBe("completed")
     expect(creatorAccessAfterPreviewBody.story_cdr_access?.vault_uuid).toBe(6161)
+    expect(creatorAccessAfterPreviewBody.story_cdr_access?.read_condition_address?.toLowerCase()).toBe(
+      compositeReadConditionAddress,
+    )
+    expect(creatorAccessAfterPreviewBody.story_cdr_access?.access_aux_data_hex).not.toBe("0x")
+    expect(creatorAccessAfterPreviewBody.story_cdr_access?.access_proof?.mode).toBeUndefined()
 
     const buyerAccessAfterPreview = await app.request(
       `http://pirate.test/communities/${communityId}/assets/${assetId}/access`,
@@ -3624,6 +3637,7 @@ describe("song artifact locked routes", () => {
       STORY_OPERATOR_PRIVATE_KEY: "0x2000000000000000000000000000000000000000000000000000000000000002",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
       STORY_ACCESS_CONTROLLER_PRIVATE_KEY: "0x4000000000000000000000000000000000000000000000000000000000000004",
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: compositeReadConditionAddress,
     })
     cleanup = ctx.cleanup
 
@@ -3952,12 +3966,16 @@ describe("song artifact locked routes", () => {
         vault_uuid: number
         mime_type: string
         ciphertext_ref: string
+        read_condition_address: string
+        access_aux_data_hex: string
       } | null
     }
     expect(accessBody.access_granted).toBe(true)
     expect(accessBody.delivery_kind).toBe("story_cdr_ref")
     expect(accessBody.story_cdr_access?.vault_uuid).toBe(9090)
     expect(accessBody.story_cdr_access?.mime_type).toBe("video/mp4")
+    expect(accessBody.story_cdr_access?.read_condition_address.toLowerCase()).toBe(compositeReadConditionAddress)
+    expect(accessBody.story_cdr_access?.access_aux_data_hex).not.toBe("0x")
     expect(accessBody.story_cdr_access?.ciphertext_ref).toContain(`/assets/${postBody.asset.replace(/^asset_/, "")}/content`)
 
     const contentResponse = await app.request(
