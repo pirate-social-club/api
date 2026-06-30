@@ -1008,7 +1008,7 @@ describe("post study service", () => {
 
     expect(callCount).toBe(2)
     expect(jobResult).toContain("ready_partial:es")
-    expect(jobResult).toContain("schema_mismatch")
+    expect(jobResult).toContain("schema_shape")
 
     const payload = await getPostStudyPayload({
       actor: learnerActor,
@@ -1034,6 +1034,89 @@ describe("post study service", () => {
     expect(statusRows.rows).toEqual([
       { status: "ready", count: 1 },
       { status: "unavailable", count: 1 },
+    ])
+  })
+
+  test("lazy generation keeps valid lines when another line in the same chunk fails validation", async () => {
+    await seedMultilineSongPost()
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_STUDY_GENERATION_CHUNK_SIZE: "10",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    let callCount = 0
+    const jobResult = await withMockedFetch(() => (async () => {
+      callCount += 1
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    translation: "Me perdí en las olas de medianoche",
+                    explanation: "Esta opción conserva el sentido de perderse.",
+                    distractors: [
+                      "Me encontré junto a las olas de medianoche",
+                      "Me perdí entre luces al amanecer",
+                      "Nadé tranquilo bajo la luna",
+                    ],
+                  },
+                  {
+                    line_id: "line_002",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta línea falla por distractores iguales a la respuesta.",
+                    distractors: [
+                      "Abrázame fuerte hasta la mañana",
+                      "Abrázame fuerte hasta la mañana",
+                      "Abrázame fuerte hasta la mañana",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(callCount).toBe(1)
+    expect(jobResult).toContain("ready_partial:es")
+    expect(jobResult).toContain("skipped=1")
+    expect(jobResult).toContain("skip_errors=schema_invalid_distractors")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "translation_choice",
+      "say_it_back",
     ])
   })
 
@@ -1296,7 +1379,7 @@ describe("post study service", () => {
       WHERE target_language = 'es' AND status = 'ready'
     `)
     expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
-    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(2)
+    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(3)
   })
 
   test("canonicalizes regional target languages before enqueueing generation", async () => {

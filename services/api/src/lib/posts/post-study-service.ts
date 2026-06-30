@@ -24,7 +24,7 @@ type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
 
 const STUDY_UNIT_GENERATION_VERSION = 1
-const STUDY_LOCALIZATION_GENERATION_VERSION = 2
+const STUDY_LOCALIZATION_GENERATION_VERSION = 3
 const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
@@ -206,6 +206,10 @@ function readString(value: unknown): string | null {
 function classifyStudyGenerationError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (/malformed JSON/iu.test(message)) return "malformed_json"
+  if (/unexpected line_id|schema_line_id/iu.test(message)) return "schema_line_id"
+  if (/missing translation distractors|schema_missing_distractors/iu.test(message)) return "schema_missing_distractors"
+  if (/invalid translation distractors|schema_invalid_distractors/iu.test(message)) return "schema_invalid_distractors"
+  if (/expected object|lines must be an array|invalid line|no valid generated lines|no generated lines|schema_shape/iu.test(message)) return "schema_shape"
   if (/schema mismatch/iu.test(message)) return "schema_mismatch"
   if (/timed out|timeout|abort/iu.test(message)) return "timeout"
   if (/OpenRouter|HTTP|status|fetch|network/iu.test(message)) return "provider_error"
@@ -216,13 +220,25 @@ function compactGenerationResultRef(input: {
   failedChunks: number
   failureCodes: string[]
   generatedLineCount: number
+  skippedLineCount: number
+  skippedReasonCodes: string[]
   targetLanguage: string
   totalChunks: number
   unavailableLineCount: number
 }): string {
   const failureCodes = [...new Set(input.failureCodes)].slice(0, 3)
+  const skippedReasonCodes = [...new Set(input.skippedReasonCodes)].slice(0, 3)
+  const diagnosticParts = [
+    failureCodes.length ? `errors=${failureCodes.join("+")}` : null,
+    input.skippedLineCount > 0 ? `skipped=${input.skippedLineCount}` : null,
+    skippedReasonCodes.length ? `skip_errors=${skippedReasonCodes.join("+")}` : null,
+  ]
   if (input.failedChunks === 0 && input.unavailableLineCount === 0) {
-    return `ready:${input.targetLanguage}`
+    return [
+      "ready",
+      input.targetLanguage,
+      ...diagnosticParts,
+    ].filter(Boolean).join(":")
   }
   if (input.generatedLineCount > 0) {
     return [
@@ -231,7 +247,7 @@ function compactGenerationResultRef(input: {
       `generated=${input.generatedLineCount}`,
       `unavailable=${input.unavailableLineCount}`,
       `failed_chunks=${input.failedChunks}/${input.totalChunks}`,
-      failureCodes.length ? `errors=${failureCodes.join("+")}` : null,
+      ...diagnosticParts,
     ].filter(Boolean).join(":")
   }
   return [
@@ -239,7 +255,7 @@ function compactGenerationResultRef(input: {
     input.targetLanguage,
     `unavailable=${input.unavailableLineCount}`,
     `failed_chunks=${input.failedChunks}/${input.totalChunks}`,
-    failureCodes.length ? `errors=${failureCodes.join("+")}` : null,
+    ...diagnosticParts,
   ].filter(Boolean).join(":")
 }
 
@@ -691,6 +707,8 @@ async function createReadyStudyPack(input: {
 
   const generatedLines = new Map<string, StudyGeneratedLine>()
   const generationFailureCodes: string[] = []
+  const skippedGenerationReasonCodes: string[] = []
+  let skippedGenerationLineCount = 0
   let failedGenerationChunks = 0
   let totalGenerationChunks = 0
   if (canGenerateStudyTranslations(input.env)) {
@@ -718,6 +736,10 @@ async function createReadyStudyPack(input: {
         })
         for (const line of generated.lines) {
           generatedLines.set(line.lineId, line)
+        }
+        if (generated.skipped.length > 0) {
+          skippedGenerationLineCount += generated.skipped.length
+          skippedGenerationReasonCodes.push(...generated.skipped.map((line) => line.reason))
         }
       } catch (error) {
         const errorCode = classifyStudyGenerationError(error)
@@ -827,6 +849,8 @@ async function createReadyStudyPack(input: {
       failedChunks: failedGenerationChunks,
       failureCodes: generationFailureCodes,
       generatedLineCount: generatedLines.size,
+      skippedLineCount: skippedGenerationLineCount,
+      skippedReasonCodes: skippedGenerationReasonCodes,
       targetLanguage: input.targetLanguage,
       totalChunks: totalGenerationChunks,
       unavailableLineCount,

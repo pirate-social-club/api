@@ -12,10 +12,16 @@ export type StudyGeneratedLine = {
   distractors: string[]
 }
 
+export type StudyGenerationSkippedLine = {
+  lineId: string | null
+  reason: "schema_shape" | "schema_line_id" | "schema_missing_distractors" | "schema_invalid_distractors"
+}
+
 export type StudyPackGenerationResult = {
   model: string
   provider: "openrouter"
   lines: StudyGeneratedLine[]
+  skipped: StudyGenerationSkippedLine[]
 }
 
 type ParsedGeneratedLine = {
@@ -44,16 +50,10 @@ function normalizeGeneratedChoice(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase()
 }
 
-function isPlausibleDistractorLength(answer: string, distractor: string): boolean {
-  const answerLength = [...answer].length
-  const distractorLength = [...distractor].length
-  if (answerLength <= 0 || distractorLength <= 0) return false
-  if (answerLength < 8) return distractorLength <= 48
-  return distractorLength >= Math.max(3, Math.floor(answerLength * 0.4))
-    && distractorLength <= Math.ceil(answerLength * 2.2)
-}
-
-function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>): ParsedGeneratedLine[] {
+function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>): {
+  lines: ParsedGeneratedLine[]
+  skipped: StudyGenerationSkippedLine[]
+} {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("OpenRouter study generation response schema mismatch: expected object")
   }
@@ -64,9 +64,11 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
 
   const seen = new Set<string>()
   const lines: ParsedGeneratedLine[] = []
+  const skipped: StudyGenerationSkippedLine[] = []
   for (const item of record.lines) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error("OpenRouter study generation response schema mismatch: invalid line")
+      skipped.push({ lineId: null, reason: "schema_shape" })
+      continue
     }
     const line = item as Record<string, unknown>
     const lineId = typeof line.line_id === "string" ? line.line_id.trim() : ""
@@ -76,10 +78,13 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
       ? line.distractors.map((distractor) => distractor.trim()).filter(Boolean)
       : []
     if (!lineId || !requestedLineIds.has(lineId) || seen.has(lineId)) {
-      throw new Error("OpenRouter study generation response schema mismatch: unexpected line_id")
+      skipped.push({ lineId: lineId || null, reason: "schema_line_id" })
+      continue
     }
     if (!translation || distractors.length < 3) {
-      throw new Error("OpenRouter study generation response schema mismatch: missing translation distractors")
+      skipped.push({ lineId, reason: "schema_missing_distractors" })
+      seen.add(lineId)
+      continue
     }
     const normalizedTranslation = normalizeGeneratedChoice(translation)
     const seenDistractors = new Set<string>()
@@ -88,14 +93,13 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
       if (!normalized || normalized === normalizedTranslation || seenDistractors.has(normalized)) {
         return false
       }
-      if (!isPlausibleDistractorLength(translation, distractor)) {
-        return false
-      }
       seenDistractors.add(normalized)
       return true
     })
     if (validDistractors.length < 3) {
-      throw new Error("OpenRouter study generation response schema mismatch: invalid translation distractors")
+      skipped.push({ lineId, reason: "schema_invalid_distractors" })
+      seen.add(lineId)
+      continue
     }
     seen.add(lineId)
     lines.push({
@@ -107,9 +111,10 @@ function validateStudyGeneration(value: unknown, requestedLineIds: Set<string>):
   }
 
   if (lines.length === 0) {
-    throw new Error("OpenRouter study generation response schema mismatch: no generated lines")
+    const reasons = [...new Set(skipped.map((line) => line.reason))]
+    throw new Error(`OpenRouter study generation response schema mismatch: no valid generated lines${reasons.length ? ` (${reasons.join("+")})` : ""}`)
   }
-  return lines
+  return { lines, skipped }
 }
 
 export function canGenerateStudyTranslations(env: Env): boolean {
@@ -204,10 +209,12 @@ export async function requestStudyPackGeneration(input: {
     },
   })
 
+  const validated = validateStudyGeneration(parseStudyGenerationJson(content), requestedLineIds)
   return {
     provider: "openrouter",
     model,
-    lines: validateStudyGeneration(parseStudyGenerationJson(content), requestedLineIds).map((line) => ({
+    skipped: validated.skipped,
+    lines: validated.lines.map((line) => ({
       lineId: line.line_id,
       explanation: line.explanation,
       translation: line.translation,
