@@ -1,5 +1,6 @@
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
 import { processAvailableCommunityJobs } from "../src/lib/communities/jobs/runner"
+import { withRequestControlPlaneClients } from "../src/lib/runtime-deps"
 import type { CommunityJobType } from "../src/lib/communities/jobs/store"
 import type { Env } from "../src/types"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
@@ -138,30 +139,35 @@ async function main(): Promise<void> {
     )
   }
 
-  const communityRepository = getCommunityRepository(env)
-
   while (!abortController.signal.aborted) {
     const localCommunityIds = await discoverLocalCommunityIds(localDevStorage.communityDbRoot)
-    let activeCommunityIds: string[] = []
-    try {
-      activeCommunityIds = (await communityRepository.listActiveCommunities()).map((community) => community.community_id)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn(`community job worker: failed to list active communities (${message}); falling back to local db scan`)
-    }
-
-    const communityIds = (explicitCommunityIds.length ? explicitCommunityIds : [...new Set([...activeCommunityIds, ...localCommunityIds])])
-      .slice(0, maxCommunitiesPerTick)
-
     let summary: Awaited<ReturnType<typeof processAvailableCommunityJobs>>
     try {
-      summary = await processAvailableCommunityJobs({
-        env,
-        communityRepository,
-        communityIds,
-        maxCommunities: maxCommunitiesPerTick,
-        maxJobsPerCommunity,
-        skipJobTypes,
+      summary = await withRequestControlPlaneClients(async () => {
+        const communityRepository = getCommunityRepository(env)
+        try {
+          let activeCommunityIds: string[] = []
+          try {
+            activeCommunityIds = (await communityRepository.listActiveCommunities()).map((community) => community.community_id)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.warn(`community job worker: failed to list active communities (${message}); falling back to local db scan`)
+          }
+
+          const communityIds = (explicitCommunityIds.length ? explicitCommunityIds : [...new Set([...activeCommunityIds, ...localCommunityIds])])
+            .slice(0, maxCommunitiesPerTick)
+
+          return await processAvailableCommunityJobs({
+            env,
+            communityRepository,
+            communityIds,
+            maxCommunities: maxCommunitiesPerTick,
+            maxJobsPerCommunity,
+            skipJobTypes,
+          })
+        } finally {
+          await communityRepository.close?.()
+        }
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
