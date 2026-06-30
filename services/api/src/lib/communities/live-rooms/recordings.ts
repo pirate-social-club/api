@@ -78,11 +78,11 @@ export async function markLiveRoomRecordingStarted(input: {
   sessionId: string
   startedAt: number
   updatedAt: string
-}): Promise<void> {
+}): Promise<LiveRoomRecordingRow | null> {
   await input.client.execute({
     sql: `
       UPDATE live_room_recordings
-      SET status = 'recording',
+      SET status = CASE WHEN status = 'starting' THEN 'recording' ELSE status END,
           provider_resource_id = ?3,
           provider_session_id = ?4,
           started_at = ?5,
@@ -90,9 +90,14 @@ export async function markLiveRoomRecordingStarted(input: {
           updated_at = ?6
       WHERE community_id = ?1
         AND live_room_id = ?2
-        AND status = 'starting'
+        AND status IN ('starting', 'stopping')
     `,
     args: [input.communityId, input.liveRoomId, input.resourceId, input.sessionId, input.startedAt, input.updatedAt],
+  })
+  return await getLiveRoomRecording({
+    client: input.client,
+    communityId: input.communityId,
+    liveRoomId: input.liveRoomId,
   })
 }
 

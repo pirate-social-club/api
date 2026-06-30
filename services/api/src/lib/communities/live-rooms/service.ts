@@ -2190,7 +2190,7 @@ async function startLiveRoomCloudRecording(input: {
         token: recorderAgora.token ?? "",
       },
     })
-    await markLiveRoomRecordingStarted({
+    const recordingAfterStart = await markLiveRoomRecordingStarted({
       client: input.client,
       communityId: input.communityId,
       liveRoomId: input.room.id,
@@ -2199,6 +2199,28 @@ async function startLiveRoomCloudRecording(input: {
       startedAt: Math.floor(Date.now() / 1000),
       updatedAt: nowIso(),
     })
+    if (recordingAfterStart?.status === "stopping" && recordingAfterStart.stopped_at != null) {
+      await stopStartedRecordingAfterEnd({
+        env: input.env,
+        client: input.client,
+        communityId: input.communityId,
+        room: input.room,
+        channel: input.channel,
+        resourceId: started.resourceId,
+        sessionId: started.sid,
+        stoppedAt: recordingAfterStart.stopped_at,
+      })
+    } else if (!recordingAfterStart || recordingAfterStart.provider_resource_id !== started.resourceId) {
+      await stopAgoraCloudRecording({
+        config,
+        cname: input.channel,
+        uid: String(liveRoomRecordingAgoraUid(input.room.id)),
+        resourceId: started.resourceId,
+        sid: started.sid,
+      }).catch((stopError) => {
+        console.warn("[live-room-recording] stopped orphaned Agora recording after start race failed", stopError)
+      })
+    }
   } catch (error) {
     await markLiveRoomRecordingFailed({
       client: input.client,
@@ -2206,6 +2228,62 @@ async function startLiveRoomCloudRecording(input: {
       liveRoomId: input.room.id,
       failureReason: error instanceof Error ? error.message : String(error),
       updatedAt: nowIso(),
+    })
+  }
+}
+
+async function stopStartedRecordingAfterEnd(input: {
+  env: Env
+  client: LiveRoomExecutor
+  communityId: string
+  room: LiveRoom
+  channel: string
+  resourceId: string
+  sessionId: string
+  stoppedAt: number
+}): Promise<void> {
+  const config = agoraCloudRecordingConfigFromEnv(input.env)
+  if (!config) {
+    await failLiveRoomRecordingAndReplay({
+      client: input.client,
+      communityId: input.communityId,
+      liveRoomId: input.room.id,
+      reason: "missing_agora_cloud_recording_configuration",
+    })
+    return
+  }
+  try {
+    const stopped = await stopAgoraCloudRecording({
+      config,
+      cname: input.channel,
+      uid: String(liveRoomRecordingAgoraUid(input.room.id)),
+      resourceId: input.resourceId,
+      sid: input.sessionId,
+    })
+    await markLiveRoomRecordingCaptured({
+      client: input.client,
+      communityId: input.communityId,
+      liveRoomId: input.room.id,
+      stoppedAt: input.stoppedAt,
+      updatedAt: nowIso(),
+    })
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.communityId,
+      jobType: "live_room_recording_ingest",
+      subjectType: "live_room",
+      subjectId: input.room.id,
+      payloadJson: JSON.stringify({
+        agora_stop_response: stopped.serverResponse,
+      }),
+      createdAt: nowIso(),
+    })
+  } catch (error) {
+    await failLiveRoomRecordingAndReplay({
+      client: input.client,
+      communityId: input.communityId,
+      liveRoomId: input.room.id,
+      reason: error instanceof Error ? error.message : String(error),
     })
   }
 }
@@ -2237,6 +2315,9 @@ async function stopLiveRoomCloudRecording(input: {
     return
   }
   if (!recording.provider_resource_id || !recording.provider_session_id) {
+    if (recording.status === "stopping") {
+      return
+    }
     await failLiveRoomRecordingAndReplay({
       client: input.client,
       communityId: input.communityId,

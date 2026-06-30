@@ -2433,6 +2433,133 @@ describe("community live-room routes", () => {
     }
   })
 
+  test("recording end during Agora start stops the newly started resource", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    Object.assign(ctx.env, {
+      AGORA_APP_ID: "0123456789abcdef0123456789abcdef",
+      AGORA_APP_CERTIFICATE: "abcdef0123456789abcdef0123456789",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora-recording.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+      AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX: "pirate/live",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT: "https://capture-storage.test",
+      AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION: "us-east-1",
+    })
+    const originalFetch = globalThis.fetch
+    let releaseStart = () => {}
+    const startMayReturn = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let startWasRequested!: () => void
+    const startRequested = new Promise<void>((resolve) => {
+      startWasRequested = resolve
+    })
+    const agoraRequests: string[] = []
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const href = url instanceof Request ? url.url : String(url)
+      if (!href.startsWith("https://agora-recording.test/")) {
+        return await originalFetch(url, init)
+      }
+      agoraRequests.push(href)
+      if (href.endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-start-race" })
+      }
+      if (href.endsWith("/start")) {
+        startWasRequested()
+        await startMayReturn
+        return Response.json({ resourceId: "resource-start-race", sid: "sid-start-race" })
+      }
+      if (href.endsWith("/stop")) {
+        return Response.json({
+          resourceId: "resource-start-race",
+          sid: "sid-start-race",
+          serverResponse: {
+            fileListMode: "json",
+            fileList: [{ fileName: "pirate/live/start-race.mp4" }],
+          },
+        })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const owner = await exchangeJwt(ctx.env, "live-room-recording-start-end-race")
+      await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
+      const body = readySoloRoomBody()
+      body.performer_allocations[0].user = `usr_${owner.userId}`
+
+      const create = await postLiveRoom({
+        env: ctx.env,
+        accessToken: owner.accessToken,
+        communityId,
+        body: { ...body, recording_enabled: true },
+      })
+      expect(create.status).toBe(201)
+      const room = await json(create) as { id: string }
+
+      const attachPromise = app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      await startRequested
+
+      const end = await app.request(
+        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/end`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+        },
+        ctx.env,
+      )
+      expect(end.status).toBe(200)
+      const endBody = await json(end) as { replay_status: string; status: string }
+      expect(endBody.status).toBe("ended")
+      expect(endBody.replay_status).toBe("processing")
+
+      releaseStart()
+      const attach = await attachPromise
+      expect(attach.status).toBe(200)
+      expect(agoraRequests.some((request) => request.endsWith("/stop"))).toBe(true)
+
+      const recordingRows = await readLiveRoomRecordingRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+        liveRoomId: room.id,
+      })
+      expect(recordingRows).toHaveLength(1)
+      expect(recordingRows[0]).toMatchObject({
+        provider_resource_id: "resource-start-race",
+        provider_session_id: "sid-start-race",
+        status: "captured",
+        failure_reason: null,
+      })
+      expect(await readCommunityJobRows({
+        communityDbRoot: ctx.communityDbRoot,
+        communityId,
+      })).toMatchObject([{
+        job_type: "live_room_recording_ingest",
+        subject_type: "live_room",
+        subject_id: room.id,
+        status: "queued",
+        attempt_count: 0,
+      }])
+    } finally {
+      releaseStart()
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("recording ingest failure leaves replay processing and retries through the job runner", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
