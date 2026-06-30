@@ -8,6 +8,7 @@ import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
+type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
 
@@ -17,6 +18,19 @@ function stringValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function alignmentStatusValue(value: unknown): SongPresentationAlignmentStatus {
+  const status = stringValue(value)
+  switch (status) {
+    case "pending":
+    case "processing":
+    case "completed":
+    case "failed":
+      return status
+    default:
+      return null
+  }
 }
 
 function parseDecentralizedStorageProof(value: unknown): SongPresentationDownloadableAudio["decentralized_storage"] {
@@ -152,7 +166,11 @@ async function enrichDownloadableAudioWithUploadProofs(input: {
 async function getPublicDownloadableAudio(input: {
   executor: DbExecutor
   post: Post
-}): Promise<SongPresentationDownloadableAudio[] | null> {
+}): Promise<{
+  alignment_status: SongPresentationAlignmentStatus
+  downloadable_audio: SongPresentationDownloadableAudio[] | null
+  has_timed_lyrics: boolean
+} | null> {
   const accessMode = input.post.access_mode ?? "public"
   if (
     input.post.post_type !== "song"
@@ -164,7 +182,8 @@ async function getPublicDownloadableAudio(input: {
 
   const row = await executeFirst(input.executor, {
     sql: `
-      SELECT primary_audio_json, instrumental_audio_json, vocal_audio_json
+      SELECT primary_audio_json, instrumental_audio_json, vocal_audio_json,
+             alignment_status, timed_lyrics_ref, timed_lyrics_json
       FROM song_artifact_bundles
       WHERE community_id = ?1
         AND song_artifact_bundle_id = ?2
@@ -193,13 +212,19 @@ async function getPublicDownloadableAudio(input: {
     entries.push({ kind: "vocals", ...vocals })
   }
 
-  return entries.length
+  const downloadableAudio = entries.length
     ? await enrichDownloadableAudioWithUploadProofs({
         executor: input.executor,
         post: input.post,
         entries,
       })
     : null
+
+  return {
+    alignment_status: alignmentStatusValue(row.alignment_status),
+    downloadable_audio: downloadableAudio,
+    has_timed_lyrics: Boolean(stringValue(row.timed_lyrics_ref) || stringValue(row.timed_lyrics_json)),
+  }
 }
 
 async function buildSongPresentation(input: {
@@ -213,18 +238,20 @@ async function buildSongPresentation(input: {
   const postTitle = stringValue(input.post.song_title)
   const postCoverArtRef = stringValue(input.post.song_cover_art_ref)
   const postDurationMs = numberValue(input.post.song_duration_ms)
-  const downloadableAudio = input.songArtifactExecutor
+  const artifactPresentation = input.songArtifactExecutor
     ? await getPublicDownloadableAudio({
         executor: input.songArtifactExecutor,
         post: input.post,
       })
     : null
-  return postTitle || postCoverArtRef || postDurationMs !== null || downloadableAudio
+  return postTitle || postCoverArtRef || postDurationMs !== null || artifactPresentation
     ? {
         title: postTitle,
         cover_art_ref: postCoverArtRef,
         duration_ms: postDurationMs,
-        downloadable_audio: downloadableAudio,
+        downloadable_audio: artifactPresentation?.downloadable_audio ?? null,
+        alignment_status: artifactPresentation?.alignment_status ?? null,
+        has_timed_lyrics: artifactPresentation?.has_timed_lyrics ?? null,
       }
     : null
 }

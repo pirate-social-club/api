@@ -95,6 +95,9 @@ function songArtifactExecutor(): DbExecutor {
             size_bytes: 800,
             duration_ms: 120000,
           },
+          alignment_status: "completed",
+          timed_lyrics_ref: "r2://karaoke/pst_song.json",
+          timed_lyrics_json: null,
         }],
       }
     },
@@ -194,6 +197,30 @@ describe("buildLocalizedPostResponse", () => {
         duration_ms: 120000,
       },
     ])
+    expect(response.song_presentation?.alignment_status).toBe("completed")
+    expect(response.song_presentation?.has_timed_lyrics).toBe(true)
+    expect("timed_lyrics_ref" in (response.song_presentation ?? {})).toBe(false)
+    expect("timed_lyrics" in (response.song_presentation ?? {})).toBe(false)
+  })
+
+  test("keeps karaoke readiness redacted for locked songs", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: emptyExecutor(),
+      songArtifactExecutor: songArtifactExecutor(),
+      post: {
+        ...makeSongPost(),
+        access_mode: "locked",
+      },
+    })
+
+    expect(response.song_presentation).toEqual({
+      title: "Arkansas Blues",
+      cover_art_ref: "https://media.test/cover.jpg",
+      duration_ms: null,
+      downloadable_audio: null,
+      alignment_status: null,
+      has_timed_lyrics: null,
+    })
   })
 
   test("enriches legacy song audio descriptors from upload IPFS CIDs", async () => {

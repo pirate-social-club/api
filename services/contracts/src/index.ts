@@ -1823,6 +1823,8 @@ export type SongPresentation = {
   cover_art_ref: string | null;
   duration_ms: number | null;
   downloadable_audio?: Array<SongPresentationDownloadableAudio> | null;
+  alignment_status?: "pending" | "processing" | "completed" | "failed" | null;
+  has_timed_lyrics?: boolean | null;
 };
 
 export type PostDerivativeSource = {

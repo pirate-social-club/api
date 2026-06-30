@@ -12123,14 +12123,9 @@ const spec = {
               "failed"
             ]
           },
-          "timed_lyrics_ref": {
-            "type": "string",
+          "has_timed_lyrics": {
+            "type": "boolean",
             "nullable": true
-          },
-          "timed_lyrics": {
-            "type": "object",
-            "nullable": true,
-            "additionalProperties": true
           }
         }
       },
