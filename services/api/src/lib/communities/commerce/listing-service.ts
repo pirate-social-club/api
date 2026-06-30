@@ -170,6 +170,26 @@ async function resolveListingDonationConfig(input: {
   }
 }
 
+function assertListingDonationsSupportedForTarget(input: {
+  assetId?: string | null
+  liveRoomId?: string | null
+  replayAssetId?: string | null
+  donationPartnerId?: string | null
+}): void {
+  if (!input.donationPartnerId?.trim()) {
+    return
+  }
+  if (input.assetId?.trim()) {
+    return
+  }
+  if (input.liveRoomId?.trim()) {
+    throw badRequestError("Live-room ticket donations are not supported until charity payout routing is enabled")
+  }
+  if (input.replayAssetId?.trim()) {
+    throw badRequestError("Replay donations are not supported until charity payout routing is enabled")
+  }
+}
+
 async function assertRegionalPricingEnabledIfRequested(input: {
   env: Env
   communityId: string
@@ -333,6 +353,12 @@ export async function prepareCommunityListingWrite(input: {
     requestedPartnerId: input.body.donation_partner,
     requestedShareBps: input.body.donation_share_bps,
   })
+  assertListingDonationsSupportedForTarget({
+    assetId,
+    liveRoomId: creatingLiveRoomInTx ? "create-in-tx" : liveRoomId,
+    replayAssetId,
+    donationPartnerId: donationConfig.donation_partner_id,
+  })
   const vinylReleaseConfig = resolveListingVinylReleaseConfig({
     assetKind,
     provider: input.body.vinyl_release_provider,
@@ -493,6 +519,12 @@ export async function updateCommunityListing(input: {
       },
       requestedPartnerId: input.body.donation_partner,
       requestedShareBps: input.body.donation_share_bps,
+    })
+    assertListingDonationsSupportedForTarget({
+      assetId: listing.asset_id,
+      liveRoomId: listing.live_room_id,
+      replayAssetId: listing.replay_asset_id,
+      donationPartnerId: donationConfig.donation_partner_id,
     })
     await assertRegionalPricingEnabledIfRequested({
       env: input.env,

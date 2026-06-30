@@ -130,6 +130,26 @@ function resolveReplayQuoteAllocationSnapshot(input: {
   return allocations
 }
 
+function assertDonationsSupportedForListingTarget(input: {
+  assetId?: string | null
+  liveRoomId?: string | null
+  replayAssetId?: string | null
+  donationPartnerId?: string | null
+}): void {
+  if (!input.donationPartnerId?.trim()) {
+    return
+  }
+  if (input.assetId?.trim()) {
+    return
+  }
+  if (input.liveRoomId?.trim()) {
+    throw eligibilityFailed("Live-room ticket donations are not supported until charity payout routing is enabled")
+  }
+  if (input.replayAssetId?.trim()) {
+    throw eligibilityFailed("Replay donations are not supported until charity payout routing is enabled")
+  }
+}
+
 export async function preflightCommunityPurchaseQuote(input: {
   env: Env
   userId: string
@@ -303,6 +323,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
     const expiresAt = new Date(Date.now() + moneyPolicy.quote_ttl_seconds * 1000).toISOString()
     const verificationSnapshotRef = resolvedPrice.verificationSnapshot ? makeId("qvs") : null
     const listingPolicy = parseListingPolicy(listing)
+    assertDonationsSupportedForListingTarget({
+      assetId: listing.asset_id,
+      liveRoomId: listing.live_room_id,
+      replayAssetId: listing.replay_asset_id,
+      donationPartnerId: listingPolicy.donationPartnerId,
+    })
 
     if (listingPolicy.donationPartnerId) {
       const communityResult = await db.client.execute({

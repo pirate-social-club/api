@@ -926,6 +926,68 @@ describe("community live-room routes", () => {
     )
     expect(duplicateListing.status).toBe(400)
 
+    const liveRoomTicketListingId = listingBody.id.replace(/^lst_/, "")
+    const communityDb = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      await communityDb.execute({
+        sql: `
+          UPDATE listings
+          SET regional_pricing_policy_json = ?3
+          WHERE community_id = ?1
+            AND listing_id = ?2
+        `,
+        args: [
+          communityId,
+          liveRoomTicketListingId,
+          JSON.stringify({
+            regional_pricing_enabled: false,
+            donation_partner_id: "don_live_room_charity",
+            donation_share_pct: 10,
+          }),
+        ],
+      })
+    } finally {
+      communityDb.close()
+    }
+    const donationQuoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(donationQuoteCreate.status).toBe(403)
+    expect(JSON.stringify(await json(donationQuoteCreate))).toContain("Live-room ticket donations are not supported")
+
+    const communityDbAfterDonationCheck = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      await communityDbAfterDonationCheck.execute({
+        sql: `
+          UPDATE listings
+          SET regional_pricing_policy_json = ?3
+          WHERE community_id = ?1
+            AND listing_id = ?2
+        `,
+        args: [
+          communityId,
+          liveRoomTicketListingId,
+          JSON.stringify({
+            regional_pricing_enabled: false,
+            donation_partner_id: null,
+            donation_share_pct: null,
+          }),
+        ],
+      })
+    } finally {
+      communityDbAfterDonationCheck.close()
+    }
+
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
@@ -3461,6 +3523,67 @@ describe("community live-room routes", () => {
           price_cents: 700,
         },
       })
+
+      const communityDb = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      try {
+        await communityDb.execute({
+          sql: `
+            UPDATE listings
+            SET regional_pricing_policy_json = ?3
+            WHERE community_id = ?1
+              AND listing_id = ?2
+          `,
+          args: [
+            communityId,
+            commerceRow.replay_listing_id,
+            JSON.stringify({
+              regional_pricing_enabled: false,
+              donation_partner_id: "don_replay_charity",
+              donation_share_pct: 10,
+            }),
+          ],
+        })
+      } finally {
+        communityDb.close()
+      }
+      const donationQuoteCreate = await requestJson(
+        `http://pirate.test/communities/${communityId}/purchase-quotes`,
+        {
+          listing: `lst_${commerceRow.replay_listing_id}`,
+          ...routedCheckoutQuoteFields,
+        },
+        ctx.env,
+        buyer.accessToken,
+      )
+      expect(donationQuoteCreate.status).toBe(403)
+      expect(JSON.stringify(await json(donationQuoteCreate))).toContain("Replay donations are not supported")
+
+      const communityDbAfterDonationCheck = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      try {
+        await communityDbAfterDonationCheck.execute({
+          sql: `
+            UPDATE listings
+            SET regional_pricing_policy_json = ?3
+            WHERE community_id = ?1
+              AND listing_id = ?2
+          `,
+          args: [
+            communityId,
+            commerceRow.replay_listing_id,
+            JSON.stringify({
+              regional_pricing_enabled: false,
+              donation_partner_id: null,
+              donation_share_pct: null,
+            }),
+          ],
+        })
+      } finally {
+        communityDbAfterDonationCheck.close()
+      }
 
       const quoteCreate = await requestJson(
         `http://pirate.test/communities/${communityId}/purchase-quotes`,
