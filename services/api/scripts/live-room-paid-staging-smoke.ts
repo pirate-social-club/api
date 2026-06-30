@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
@@ -68,6 +69,8 @@ Flags:
                          Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
   --require-existing-community
                          Fail before creating smoke users or communities unless --community-id/PIRATE_SMOKE_COMMUNITY_ID is set.
+  --skip-remote-config-preflight
+                         Skip the staging Worker secret-name preflight for replay recording runs.
   --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
   --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
@@ -79,6 +82,18 @@ Required env for --settle-purchase:
   PIRATE_CHECKOUT_RPC_URL
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
   PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY, PIRATE_SMOKE_BUYER_PRIVATE_KEY, or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+
+Required staging Worker secrets for --recording-enabled --replay-access-mode:
+  AGORA_CLOUD_RECORDING_CUSTOMER_KEY
+  AGORA_CLOUD_RECORDING_CUSTOMER_SECRET
+  AGORA_CLOUD_RECORDING_STORAGE_VENDOR
+  AGORA_CLOUD_RECORDING_STORAGE_REGION
+  AGORA_CLOUD_RECORDING_STORAGE_BUCKET
+  AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY
+  AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY
+  AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT
+  AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION
+  STORY_COMPOSITE_READ_CONDITION_ADDRESS
 `)
 }
 
@@ -182,6 +197,69 @@ function resolveCheckoutOperatorAddress(env: Record<string, string | undefined>)
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const REQUIRED_STAGING_REPLAY_WORKER_SECRETS = [
+  "AGORA_CLOUD_RECORDING_CUSTOMER_KEY",
+  "AGORA_CLOUD_RECORDING_CUSTOMER_SECRET",
+  "AGORA_CLOUD_RECORDING_STORAGE_VENDOR",
+  "AGORA_CLOUD_RECORDING_STORAGE_REGION",
+  "AGORA_CLOUD_RECORDING_STORAGE_BUCKET",
+  "AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY",
+  "AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY",
+  "AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT",
+  "AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION",
+  "STORY_COMPOSITE_READ_CONDITION_ADDRESS",
+] as const
+
+function assertStagingReplayWorkerSecretsPresent(input: {
+  apiBaseUrl: string
+  replayAccessMode: ReplayAccessMode | null
+}): void {
+  if (!input.replayAccessMode || !isStagingApiUrl(input.apiBaseUrl) || hasFlag("--skip-remote-config-preflight")) {
+    return
+  }
+
+  const result = spawnSync("./node_modules/.bin/wrangler", [
+    "secret",
+    "list",
+    "--env",
+    "staging",
+    "--format",
+    "json",
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  })
+  const stdout = result.stdout.trim()
+  const stderr = result.stderr.trim()
+  if (result.status !== 0) {
+    throw new Error(
+      `Unable to preflight staging Worker secrets with wrangler secret list. `
+      + `Authenticate Wrangler or pass --skip-remote-config-preflight to bypass this check.`
+      + (stderr ? `\n${stderr}` : "")
+      + (stdout ? `\n${stdout}` : ""),
+    )
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout || "[]")
+  } catch {
+    throw new Error("wrangler secret list returned non-JSON output")
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("wrangler secret list returned an unexpected payload")
+  }
+  const names = new Set(parsed.map((item) => String((item as { name?: unknown }).name ?? "").trim()).filter(Boolean))
+  const missing = REQUIRED_STAGING_REPLAY_WORKER_SECRETS.filter((name) => !names.has(name))
+  if (missing.length > 0) {
+    throw new Error(
+      "Staging Worker is missing required replay recording secrets:\n"
+      + missing.map((name) => `- ${name}`).join("\n")
+      + "\nSet them in Infisical staging /services/api, sync to the Worker, then rerun the smoke.",
+    )
+  }
 }
 
 async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
@@ -1240,6 +1318,10 @@ async function main(): Promise<void> {
   if (requireExistingCommunity && !existingCommunityId) {
     throw new Error("--require-existing-community requires --community-id or PIRATE_SMOKE_COMMUNITY_ID")
   }
+  assertStagingReplayWorkerSecretsPresent({
+    apiBaseUrl,
+    replayAccessMode,
+  })
   const skipVerification = hasFlag("--skip-verification")
   let host: SmokeSession | null = null
   let communityId = ""
