@@ -551,8 +551,9 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       maxJobsPerCommunity: 25,
       skipJobTypes: canProcessSongPreviewJobs ? [] : ["song_preview_generate"],
     })
-    if (summary.processed_jobs > 0) {
+    if (summary.processed_jobs > 0 || summary.failed_communities.length > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({
+        failed_communities: summary.failed_communities.length,
         processed_jobs: summary.processed_jobs,
         communities: summary.communities.map((community) => ({
           community_id: community.community_id,

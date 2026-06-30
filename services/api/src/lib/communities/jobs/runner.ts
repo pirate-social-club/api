@@ -30,9 +30,15 @@ type CommunityJobCommunityProcessingSummary = {
   jobs: CommunityJobRow[]
 }
 
+type CommunityJobCommunityFailureSummary = {
+  community_id: string
+  error: string
+}
+
 type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
+  failed_communities: CommunityJobCommunityFailureSummary[]
 }
 
 function createdAtMs(community: { created_at?: string | null }): number {
@@ -234,15 +240,27 @@ export async function processAvailableCommunityJobs(input: {
     )
 
   const communities: CommunityJobCommunityProcessingSummary[] = []
+  const failedCommunities: CommunityJobCommunityFailureSummary[] = []
 
   for (const communityId of communityIds) {
-    const processed = await processCommunityJobsForCommunity({
-      env: input.env,
-      communityId,
-      communityRepository: input.communityRepository,
-      maxJobs: input.maxJobsPerCommunity ?? 25,
-      skipJobTypes: input.skipJobTypes,
-    })
+    let processed: CommunityJobCommunityProcessingSummary
+    try {
+      processed = await processCommunityJobsForCommunity({
+        env: input.env,
+        communityId,
+        communityRepository: input.communityRepository,
+        maxJobs: input.maxJobsPerCommunity ?? 25,
+        skipJobTypes: input.skipJobTypes,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failedCommunities.push({ community_id: communityId, error: message })
+      logPipelineError("[community-job] failed to process community", {
+        community_id: communityId,
+        error: message,
+      })
+      continue
+    }
     if (processed.processed_jobs > 0) {
       communities.push(processed)
     }
@@ -251,6 +269,7 @@ export async function processAvailableCommunityJobs(input: {
   return {
     processed_jobs: communities.reduce((sum, community) => sum + community.processed_jobs, 0),
     communities,
+    failed_communities: failedCommunities,
   }
 }
 
