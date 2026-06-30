@@ -47,7 +47,8 @@ import {
   stopAgoraCloudRecording,
 } from "./agora-cloud-recording"
 import {
-  ingestAgoraRecordingToFilebase,
+  fetchLiveRoomRecordingCaptureObject,
+  ingestAgoraRecordingToPrivateStorage,
   selectAgoraRecordingObjectKey,
   serializeLiveRoomRecordingRawArtifactRef,
   type LiveRoomRecordingRawArtifactRef,
@@ -185,8 +186,8 @@ export type LiveRoomRecordingDraftResponse = {
     status: string
     failure_reason: string | null
     raw_artifact: null | {
-      provider: "filebase"
-      ipfs_cid: string
+      provider: "filebase" | "agora_capture"
+      ipfs_cid: string | null
       mime_type: string
       size_bytes: number
     }
@@ -1104,16 +1105,18 @@ function safeRawArtifact(rawArtifactRef: string | null): LiveRoomRecordingDraftR
     return null
   }
   if (
-    parsed.provider !== "filebase"
-    || typeof parsed.ipfs_cid !== "string"
+    (parsed.provider !== "filebase" && parsed.provider !== "agora_capture")
     || typeof parsed.mime_type !== "string"
     || typeof parsed.size_bytes !== "number"
   ) {
     return null
   }
+  if (parsed.provider === "filebase" && typeof parsed.ipfs_cid !== "string") {
+    return null
+  }
   return {
-    provider: "filebase",
-    ipfs_cid: parsed.ipfs_cid,
+    provider: parsed.provider,
+    ipfs_cid: parsed.ipfs_cid ?? null,
     mime_type: parsed.mime_type,
     size_bytes: parsed.size_bytes,
   }
@@ -1191,17 +1194,35 @@ function buildPublicLiveRoomReplayContentPath(communityId: string, liveRoomId: s
   return `/public-communities/${encodeURIComponent(communityId)}/live-rooms/${encodeURIComponent(liveRoomId)}/replay/content`
 }
 
-function replayPrimaryContentObjectKey(primaryContentRef: string): string {
+async function fetchReplayPrimaryContent(input: {
+  env: Env
+  primaryContentRef: string
+  rangeHeader?: string | null
+}): Promise<Response> {
   let parsed: Partial<LiveRoomRecordingRawArtifactRef>
   try {
-    parsed = JSON.parse(primaryContentRef) as Partial<LiveRoomRecordingRawArtifactRef>
+    parsed = JSON.parse(input.primaryContentRef) as Partial<LiveRoomRecordingRawArtifactRef>
   } catch {
     throw notFoundError("Replay content not found")
   }
-  if (parsed.provider !== "filebase" || !parsed.object_key?.trim()) {
+  if (!parsed.object_key?.trim()) {
     throw notFoundError("Replay content not found")
   }
-  return parsed.object_key
+  if (parsed.provider === "filebase") {
+    return await fetchSongArtifactBytes({
+      env: input.env,
+      objectKey: parsed.object_key,
+      rangeHeader: input.rangeHeader,
+    })
+  }
+  if (parsed.provider === "agora_capture") {
+    return await fetchLiveRoomRecordingCaptureObject({
+      env: input.env,
+      objectKey: parsed.object_key,
+      rangeHeader: input.rangeHeader,
+    })
+  }
+  throw notFoundError("Replay content not found")
 }
 
 async function buildReplayCdrAccessPackage(input: {
@@ -1401,6 +1422,7 @@ export async function fetchLiveRoomReplayContent(input: {
   liveRoomId: string
   communityRepository: LiveRoomRepository
   userRepository: UserRepository
+  rangeHeader?: string | null
 }): Promise<Response> {
   const access = await getLiveRoomReplayAccess(input)
   if (!access.access_granted) {
@@ -1425,9 +1447,10 @@ export async function fetchLiveRoomReplayContent(input: {
         objectKey: asset.locked_delivery_storage_ref,
       })
     }
-    return await fetchSongArtifactBytes({
+    return await fetchReplayPrimaryContent({
       env: input.env,
-      objectKey: replayPrimaryContentObjectKey(asset.primary_content_ref),
+      primaryContentRef: asset.primary_content_ref,
+      rangeHeader: input.rangeHeader,
     })
   } finally {
     db.close()
@@ -1507,6 +1530,7 @@ export async function fetchPublicLiveRoomReplayContent(input: {
   communityId: string
   liveRoomId: string
   communityRepository: LiveRoomRepository
+  rangeHeader?: string | null
 }): Promise<Response> {
   const access = await getPublicLiveRoomReplayAccess(input)
   if (!access.access_granted || access.delivery_kind !== "primary_content_ref") {
@@ -1522,9 +1546,10 @@ export async function fetchPublicLiveRoomReplayContent(input: {
     if (!asset || asset.publication_status !== "published" || asset.access_mode !== "free") {
       throw notFoundError("Live room replay content not found")
     }
-    return await fetchSongArtifactBytes({
+    return await fetchReplayPrimaryContent({
       env: input.env,
-      objectKey: replayPrimaryContentObjectKey(asset.primary_content_ref),
+      primaryContentRef: asset.primary_content_ref,
+      rangeHeader: input.rangeHeader,
     })
   } finally {
     db.close()
@@ -2258,7 +2283,7 @@ export async function ingestCapturedLiveRoomRecording(input: {
     recording,
     initialResponse: input.agoraStopResponse,
   })
-  const rawArtifact = await ingestAgoraRecordingToFilebase({
+  const rawArtifact = await ingestAgoraRecordingToPrivateStorage({
     env: input.env,
     communityId: input.communityId,
     liveRoomId: input.room.id,

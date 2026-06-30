@@ -505,6 +505,7 @@ publicCommunities.get("/:communityId/live-rooms/:liveRoomId/replay/content", asy
     communityId,
     liveRoomId: c.req.param("liveRoomId"),
     communityRepository,
+    rangeHeader: c.req.header("range"),
   })
 })
 

@@ -2153,8 +2153,8 @@ describe("community live-room routes", () => {
         status: "captured",
         failure_reason: null,
       })
-      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"provider\":\"filebase\"")
-      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"ipfs_cid\":\"bafy-live-room-recording\"")
+      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"provider\":\"agora_capture\"")
+      expect(recordingRows[0]?.raw_artifact_ref).toContain("\"ipfs_cid\":null")
       const readyDraft = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay-draft`,
         {
@@ -2189,8 +2189,8 @@ describe("community live-room routes", () => {
           provider: "agora",
           status: "captured",
           raw_artifact: {
-            provider: "filebase",
-            ipfs_cid: "bafy-live-room-recording",
+            provider: "agora_capture",
+            ipfs_cid: null,
             mime_type: "video/mp4",
             size_bytes: "captured recording".length,
           },
@@ -2363,11 +2363,9 @@ describe("community live-room routes", () => {
         "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/sid/sid-live-room/mode/mix/stop",
         "https://agora-recording.test/v1/apps/0123456789abcdef0123456789abcdef/cloud_recording/resourceid/resource-live-room/sid/sid-live-room/mode/mix/query",
       ])
-      expect(storageRequests[0]).toContain("https://capture-storage.test/capture-bucket/pirate/live/replay.mp4")
-      expect(storageRequests[1]).toContain("https://filebase.test/media/livestream-recordings/")
-      expect(storageRequests[1]).toContain("/replay.mp4")
-      expect(storageRequests[2]).toBe(storageRequests[1])
-      expect(storageRequests[3]).toBe(storageRequests[1])
+      expect(storageRequests).toHaveLength(3)
+      expect(storageRequests.every((request) => request.includes("https://capture-storage.test/capture-bucket/pirate/live/replay.mp4"))).toBe(true)
+      expect(storageRequests.some((request) => request.includes("filebase.test"))).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -2400,10 +2398,7 @@ describe("community live-room routes", () => {
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const href = url instanceof Request ? url.url : String(url)
       if (href.startsWith("https://capture-storage.test/")) {
-        return new Response(new TextEncoder().encode("captured recording"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        })
+        return new Response("capture unavailable", { status: 503 })
       }
       if (href.startsWith("https://filebase.test/")) {
         return new Response("filebase down", { status: 503 })
@@ -2472,7 +2467,7 @@ describe("community live-room routes", () => {
 
       const processedIngest = await processNextRouteCommunityJob({ ctx, communityId })
       expect(processedIngest?.status).toBe("failed")
-      expect(processedIngest?.error_code).toContain("Filebase object upload failed with status 503")
+      expect(processedIngest?.error_code).toContain("Agora capture artifact fetch failed with status 503")
 
       const recordingRows = await readLiveRoomRecordingRows({
         communityDbRoot: ctx.communityDbRoot,
@@ -2947,7 +2942,7 @@ describe("community live-room routes", () => {
       expect(cdrUploads[0]?.readConditionAddr).toBe(compositeReadConditionAddress)
       expect(cdrUploads[0]?.accessAuxData).toBe("0x")
       expect(cdrUploads[0]?.readConditionData).toMatch(/^0x[a-fA-F0-9]+$/)
-      expect([...storageObjects.keys()].some((key) => key.startsWith("livestream-recordings/"))).toBe(true)
+      expect([...storageObjects.keys()].some((key) => key.startsWith("livestream-recordings/"))).toBe(false)
       expect([...storageObjects.keys()].some((key) => key.startsWith("locked-replays/"))).toBe(true)
 
       const hostReplayAccess = await app.request(
