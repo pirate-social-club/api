@@ -3,6 +3,9 @@ import { Wallet } from "ethers"
 
 import {
   isProbablyAddress,
+  parseAddress,
+  parsePositiveAtomic,
+  parsePositiveInt,
   resolveHostPayoutWallet,
   validateFundingReadiness,
   validateQuotePaymentFields,
@@ -17,6 +20,20 @@ describe("smoke-paid-booking script guards", () => {
     expect(isProbablyAddress(VALID_ADDRESS)).toBe(true)
     expect(isProbablyAddress("0x123")).toBe(false)
     expect(isProbablyAddress("not-an-address")).toBe(false)
+  })
+
+  test("parses manual funding preflight arguments", () => {
+    expect(parsePositiveInt("8453", "--chain-id")).toBe(8453)
+    expect(parsePositiveAtomic("1000000", "--amount-atomic")).toBe("1000000")
+    expect(parseAddress(VALID_ADDRESS, "--settlement-address")).toBe(VALID_ADDRESS)
+  })
+
+  test("rejects malformed manual funding preflight arguments", () => {
+    expect(() => parsePositiveInt("0", "--chain-id")).toThrow("--chain-id")
+    expect(() => parsePositiveInt("8453.5", "--chain-id")).toThrow("--chain-id")
+    expect(() => parsePositiveAtomic("0", "--amount-atomic")).toThrow("--amount-atomic")
+    expect(() => parsePositiveAtomic("1.0", "--amount-atomic")).toThrow("--amount-atomic")
+    expect(() => parseAddress("0x123", "--settlement-address")).toThrow("--settlement-address")
   })
 
   test("defaults host payout to buyer wallet when a buyer key is present", () => {
