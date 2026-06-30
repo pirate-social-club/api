@@ -515,7 +515,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       maxCommunities: 100,
       maxAssetsPerCommunity: 25,
     })
-    if (reconciledLockedDelivery.enqueued_jobs > 0) {
+    if (reconciledLockedDelivery.enqueued_jobs > 0 || reconciledLockedDelivery.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
       captureScheduledWarning(
         env,
@@ -532,7 +532,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
     })
-    if (reconciledUploadSessions.enqueued_jobs > 0) {
+    if (reconciledUploadSessions.enqueued_jobs > 0 || reconciledUploadSessions.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stale song artifact upload sessions", JSON.stringify(reconciledUploadSessions))
       captureScheduledWarning(
         env,

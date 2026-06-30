@@ -1,4 +1,5 @@
 import { nowIso } from "../../helpers"
+import { logPipelineError } from "../../observability/pipeline-log"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { requiredString } from "../../sql-row"
 import { reapStaleMultipartSongArtifactUploads } from "../../song-artifacts/song-artifact-upload-session-service"
@@ -11,6 +12,7 @@ type SongArtifactSessionReaperReconcileSummary = {
   checked_communities: number
   enqueued_jobs: number
   communities: Array<{ community_id: string; stale_sessions: number }>
+  failed_communities: Array<{ community_id: string; error: string }>
 }
 
 export async function runSongArtifactSessionReaper(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -44,14 +46,16 @@ export async function reconcileStaleSongArtifactUploadSessionJobs(input: {
     })
 
     const communities: Array<{ community_id: string; stale_sessions: number }> = []
+    const failedCommunities: Array<{ community_id: string; error: string }> = []
     let enqueuedJobs = 0
     for (const row of result.rows) {
       const communityId = requiredString(row, "community_id")
       const staleSessions = Number(row.stale_sessions ?? 0)
       // Sessions live in the control plane, but execution stays on the per-community
       // job queue so retries and scheduling match the rest of the community jobs.
-      const db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
       try {
+        db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
         await enqueueCommunityJob({
           client: db.client,
           communityId,
@@ -66,8 +70,16 @@ export async function reconcileStaleSongArtifactUploadSessionJobs(input: {
           community_id: communityId,
           stale_sessions: staleSessions,
         })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        failedCommunities.push({ community_id: communityId, error: message })
+        logPipelineError("[community-job] failed to reconcile stale song artifact sessions for community", {
+          community_id: communityId,
+          error: message,
+        })
+        continue
       } finally {
-        db.close()
+        await db?.close()
       }
     }
 
@@ -75,6 +87,7 @@ export async function reconcileStaleSongArtifactUploadSessionJobs(input: {
       checked_communities: result.rows.length,
       enqueued_jobs: enqueuedJobs,
       communities,
+      failed_communities: failedCommunities,
     }
   } finally {
     control.close?.()
