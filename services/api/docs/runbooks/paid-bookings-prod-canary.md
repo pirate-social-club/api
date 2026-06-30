@@ -125,3 +125,53 @@ Keep production cron disabled, or disable it again, if any of these occur:
 - The payout transaction is missing or uses an unexpected operator wallet.
 - Any ambiguous or disputed booking lacks an operator-review resolution path.
 
+## Operator Review Canary
+
+Operator review uses `Operator <credential_id>.<secret>` authorization and the
+`bookings:settlement:resolve` scope. Provide that full credential to the smoke
+process through `PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL`, or override the
+environment variable name with `--operator-credential-env`.
+
+Do not print the credential. If it is stored in Infisical, keep it under the
+API service path and inject it with `infisical run`; if it is supplied manually,
+scope it to one shell session.
+
+List pending reviews without resolving money:
+
+```bash
+rtk infisical run --project-config-dir /home/t42/Documents/pirate-workspace/core --env prod --path /services/api -- \
+  rtk bun run smoke:booking-review -- \
+    --origin https://api.pirate.sc \
+    --limit 10
+```
+
+Inspect one pending review:
+
+```bash
+rtk infisical run --project-config-dir /home/t42/Documents/pirate-workspace/core --env prod --path /services/api -- \
+  rtk bun run smoke:booking-review -- \
+    --origin https://api.pirate.sc \
+    --booking-id <booking-id>
+```
+
+Resolve one review. This can trigger payout/refund settlement, so run it only
+after confirming the review version and intended outcome:
+
+```bash
+rtk infisical run --project-config-dir /home/t42/Documents/pirate-workspace/core --env prod --path /services/api -- \
+  rtk bun run smoke:booking-review -- \
+    --origin https://api.pirate.sc \
+    --resolve \
+    --booking-id <booking-id> \
+    --resolution no_show_host \
+    --expected-review-version <review-version> \
+    --note "operator-reviewed attendance"
+```
+
+Expected results:
+
+- `status=200` means the review resolved and settlement finalized.
+- `status=202` means the review resolved but payout/refund settlement is still
+  pending confirmation; poll the booking and settlement effect before retrying.
+- Replaying the same resolution should be idempotent.
+- Sending a different resolution after one is resolved should return a conflict.
