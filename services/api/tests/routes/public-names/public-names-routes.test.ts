@@ -32,6 +32,14 @@ function requestJson(url: string, body: unknown, env: unknown, headers: Record<s
   }, env as never))
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForNextOneSecondRateLimitWindow(bufferMs = 75): Promise<void> {
+  await sleep(1_000 - (Date.now() % 1_000) + bufferMs)
+}
+
 function setSuccessfulPublicNameFundingVerifier(input: {
   env: Parameters<typeof resolvePirateCheckoutOperatorAddress>[0]
   calls?: Array<{
@@ -448,6 +456,8 @@ describe("public names routes", () => {
     })
     cleanup = ctx.cleanup
 
+    await waitForNextOneSecondRateLimitWindow()
+
     const buyerWallet = "0x8000000000000000000000000000000000000008"
     const limit = 5
     for (let i = 0; i < limit; i++) {
@@ -464,8 +474,7 @@ describe("public names routes", () => {
     }, ctx.env)
     expect(blocked.status).toBe(429)
 
-    // Wait for window to roll over
-    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    await waitForNextOneSecondRateLimitWindow()
 
     const afterWindow = await requestJson("http://pirate.test/public-names/quotes", {
       desired_label: "rate-limit-window-after",
