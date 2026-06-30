@@ -819,6 +819,12 @@ async function enqueueStudyGenerationIfNeeded(input: {
 }): Promise<void> {
   if (!canGenerateStudyTranslations(input.env)) return
   if (input.units.length === 0) return
+  const pack = await getLatestPack({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
+  if (pack?.status === "ready") return
   if (await hasCompleteReadyStudyLocalizations({
     client: input.client,
     postId: input.postId,

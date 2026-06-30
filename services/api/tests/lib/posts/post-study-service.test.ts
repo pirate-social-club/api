@@ -1019,6 +1019,12 @@ describe("post study service", () => {
 
     const unavailableBefore = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'unavailable'")
     expect(Number(unavailableBefore.rows[0]?.count ?? 0)).toBe(2)
+    await exec(`
+      UPDATE community_jobs
+      SET status = 'succeeded',
+          result_ref = 'ready:es'
+      WHERE job_type = 'song_study_generate'
+    `)
 
     const payload = await getPostStudyPayload({
       actor: learnerActor,
@@ -1038,6 +1044,8 @@ describe("post study service", () => {
       ORDER BY status
     `)
     expect(statusRows.rows).toEqual([{ status: "unavailable", count: 2 }])
+    const jobRows = await client!.execute("SELECT COUNT(*) AS count FROM community_jobs WHERE job_type = 'song_study_generate'")
+    expect(Number(jobRows.rows[0]?.count ?? 0)).toBe(1)
   })
 
   test("lazy generation rejects answer-equal and duplicate distractors", async () => {
