@@ -1668,4 +1668,91 @@ describe("community-job-runner", () => {
     }
   })
 
+  test("continues scheduled polling when one community binding is unusable", async () => {
+    const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-failed-community-")
+
+    const communityId = "cmt_job_healthy_after_failure"
+    const failedCommunityId = "cmt_job_decommissioned"
+    const env: Env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+    }
+    const healthyRepo = buildCommunityRepository(join(rootDir, "healthy.db"), communityId)
+    await seedCommunityState({
+      env,
+      repo: healthyRepo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+    const healthyCommunity = await healthyRepo.getCommunityById(communityId)
+    expect(healthyCommunity).not.toBeNull()
+
+    const combinedRepo = {
+      async getCommunityById(id: string) {
+        if (id === failedCommunityId) {
+          return {
+            ...healthyCommunity!,
+            community_id: failedCommunityId,
+            primary_database_binding_id: "cdb_decommissioned",
+          }
+        }
+        return healthyRepo.getCommunityById(id)
+      },
+      async listActiveCommunities() {
+        return [
+          {
+            ...healthyCommunity!,
+            community_id: failedCommunityId,
+            primary_database_binding_id: "cdb_decommissioned",
+          },
+          healthyCommunity!,
+        ]
+      },
+      async getPrimaryCommunityDatabaseBinding(id: string) {
+        if (id === failedCommunityId) {
+          throw new Error("Community database binding has been decommissioned")
+        }
+        return healthyRepo.getPrimaryCommunityDatabaseBinding(id)
+      },
+      async getActiveCommunityDbCredential(bindingId: string) {
+        return healthyRepo.getActiveCommunityDbCredential(bindingId)
+      },
+      async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
+        return healthyRepo.recordCommunityPostProjection(input)
+      },
+      async getCommunityPostProjectionByPostId(postId: string) {
+        return healthyRepo.getCommunityPostProjectionByPostId(postId)
+      },
+      async updateCommunityPostProjectionStatus(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionStatus"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionStatus(input)
+      },
+      async updateCommunityPostProjectionPayload(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionPayload"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionPayload(input)
+      },
+      async updateCommunityPostProjectionMetrics(input: Parameters<TestCommunityRepository["updateCommunityPostProjectionMetrics"]>[0]) {
+        return healthyRepo.updateCommunityPostProjectionMetrics(input)
+      },
+      async recordCommunityCommentProjection(input: Parameters<TestCommunityRepository["recordCommunityCommentProjection"]>[0]) {
+        return healthyRepo.recordCommunityCommentProjection(input)
+      },
+      async getCommunityCommentProjectionByCommentId(commentId: string) {
+        return healthyRepo.getCommunityCommentProjectionByCommentId(commentId)
+      },
+    } satisfies CommunityJobRepository
+
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository: combinedRepo,
+      communityIds: [failedCommunityId, communityId],
+      maxJobsPerCommunity: 1,
+    })
+
+    expect(summary.failed_communities).toEqual([
+      {
+        community_id: failedCommunityId,
+        error: "Community database binding has been decommissioned",
+      },
+    ])
+    expect(summary.processed_jobs).toBe(0)
+  })
+
 })
