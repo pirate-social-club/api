@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { throwDiscriminatedNonMemberCommentGate } from "./comment-service"
+import { decideNonMemberCommentAccess } from "./comment-service"
 import { HttpError } from "../errors"
 import type { GatePolicyEvaluation, RequiredActionSet } from "../communities/membership/gate-types"
 
-// Pins the non-member comment-gate discriminator (commit: error-only, no writes).
-// The invariant under test: the solvable path fires *only* when the missing
-// capability set is exactly {altcha_pow}. Any other gate stays opaque. This
-// guards against a future gate type silently leaking its requirements via a
-// solvable gate_failed.
+// Pins the non-member comment-access decision. Invariants:
+//  - the provisional/solvable path fires ONLY when the missing capability set is
+//    exactly {altcha_pow} (a future gate type stays opaque until opted in);
+//  - a proof only helps a PoW-only gate — it never rescues an attribute gate;
+//  - the pure decision never consumes a proof or writes a row (that is the
+//    caller's verify-then-persist job).
 
 function evaluation(actionSet: RequiredActionSet | null): GatePolicyEvaluation {
   return {
@@ -38,50 +39,58 @@ const powPlusAttribute: RequiredActionSet = {
   ],
 }
 
-function captureThrow(actionSet: RequiredActionSet | null): HttpError {
+function decide(actionSet: RequiredActionSet | null, hasProof: boolean): { result?: string; error?: HttpError } {
   try {
-    throwDiscriminatedNonMemberCommentGate({
+    return { result: decideNonMemberCommentAccess({
       communityId: "cmt_test",
       evaluation: evaluation(actionSet),
       gateSummaries: [],
       walletScoreStatus: null,
-    })
+      hasProof,
+    }) }
   } catch (error) {
-    if (error instanceof HttpError) return error
+    if (error instanceof HttpError) return { error }
     throw error
   }
-  throw new Error("discriminator did not throw")
 }
 
-describe("throwDiscriminatedNonMemberCommentGate", () => {
-  test("missing set exactly {altcha_pow} → solvable, COMMENT-scoped gate_failed (not join)", () => {
-    const err = captureThrow(powOnly)
-    expect(err.status).toBe(403)
-    expect(err.code).toBe("gate_failed")
-    // Scope interaction: reusing the membership gate machinery with
-    // altchaScope:"comment_create" must yield comment-scoped output.
-    expect(err.message.toLowerCase()).toContain("comment")
-    expect((err.details as Record<string, unknown>)?.suggested_verification_intent).toBe("comment_create")
-    expect((err.details as Record<string, unknown>)?.missing_capabilities).toEqual(["altcha_pow"])
+describe("decideNonMemberCommentAccess", () => {
+  test("PoW-only + proof present → provisional_participant (no throw)", () => {
+    const { result, error } = decide(powOnly, true)
+    expect(error).toBeUndefined()
+    expect(result).toBe("provisional_participant")
   })
 
-  test("attribute gate (nationality) → opaque community_membership_required 404", () => {
-    const err = captureThrow(nationalityGate)
-    expect(err.status).toBe(404)
-    expect(err.code).toBe("not_found")
-    expect(err.message).toBe("Community not found")
-    expect(err.logCode).toBe("community_membership_required")
+  test("PoW-only + NO proof → solvable, COMMENT-scoped gate_failed (client fetches challenge, retries)", () => {
+    const { error } = decide(powOnly, false)
+    expect(error?.status).toBe(403)
+    expect(error?.code).toBe("gate_failed")
+    expect(error?.message.toLowerCase()).toContain("comment")
+    expect((error?.details as Record<string, unknown>)?.suggested_verification_intent).toBe("comment_create")
+    expect((error?.details as Record<string, unknown>)?.missing_capabilities).toEqual(["altcha_pow"])
   })
 
-  test("altcha_pow + an attribute (missing set ≠ {altcha_pow}) → opaque 404, NOT solvable", () => {
-    const err = captureThrow(powPlusAttribute)
-    expect(err.status).toBe(404)
-    expect(err.logCode).toBe("community_membership_required")
+  test("attribute gate (nationality) + proof present → opaque 404 (a proof cannot satisfy an attribute gate)", () => {
+    const { result, error } = decide(nationalityGate, true)
+    expect(result).toBeUndefined()
+    expect(error?.status).toBe(404)
+    expect(error?.code).toBe("not_found")
+    expect(error?.message).toBe("Community not found")
+    expect(error?.logCode).toBe("community_membership_required")
+  })
+
+  test("attribute gate + no proof → opaque 404", () => {
+    expect(decide(nationalityGate, false).error?.logCode).toBe("community_membership_required")
+  })
+
+  test("PoW + attribute (missing set ≠ {altcha_pow}) + proof → opaque 404, NOT provisional", () => {
+    const { result, error } = decide(powPlusAttribute, true)
+    expect(result).toBeUndefined()
+    expect(error?.status).toBe(404)
+    expect(error?.logCode).toBe("community_membership_required")
   })
 
   test("no required action set → opaque 404", () => {
-    const err = captureThrow(null)
-    expect(err.status).toBe(404)
-    expect(err.logCode).toBe("community_membership_required")
+    expect(decide(null, true).error?.status).toBe(404)
   })
 })

@@ -13,6 +13,7 @@ import {
   canAccessCommunity,
   getCommunityMembershipState,
   hasCommunityRole,
+  upsertCommunityMembership,
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
 import { enforceCommunityActionGate, evaluateGatedMembership } from "../communities/membership/eligibility-service"
@@ -79,98 +80,107 @@ async function requireMemberAccess(client: Client, communityId: string, userId: 
   return membership
 }
 
-async function requireCommentAuthorAccess(input: {
+type CommentAuthorAccess = {
+  membership: CommunityMembershipRow
+  /**
+   * True when the author is a non-member of a PoW-gated community who supplied a
+   * proof: the caller must verify+consume it via enforceCommunityActionGate and,
+   * only if that passes, enroll them as a `comment_pow` participant
+   * (verify-then-persist).
+   */
+  provisionalParticipant: boolean
+}
+
+/**
+ * Decide whether an author may comment. Members pass through. A non-member is
+ * discriminated by decideNonMemberCommentAccess: PoW-gated + proof present →
+ * provisional participant (enrolled later, after verification); PoW-gated + no
+ * proof → solvable gate_failed; otherwise → opaque community_membership_required.
+ *
+ * This does NOT verify the proof (preview-mode eval only, no consume) and does
+ * NOT write a membership row. Verification and enrollment happen in the caller,
+ * in that order.
+ */
+async function resolveCommentAuthorAccess(input: {
   env: Env
   client: Client
   communityId: string
   userId: string
   userRepository: UserRepository
-}): Promise<CommunityMembershipRow> {
+  hasProof: boolean
+}): Promise<CommentAuthorAccess> {
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
   if (canAccessCommunity(membership)) {
-    return membership
+    return { membership, provisionalParticipant: false }
   }
-  // Non-member. Discriminate the failure so a client can tell a self-serviceable
-  // PoW gate from a membership requirement it cannot satisfy inline.
-  //
-  // NOTE (commit scope): this only shapes the ERROR. It does not yet accept a
-  // proof, create a membership row, or let a non-member's comment through — that
-  // lands with the participant-membership change. Every path here still throws.
-  await discriminateNonMemberCommentGate(input)
-  // discriminateNonMemberCommentGate never returns; satisfy the type checker.
-  return membership
-}
-
-/**
- * A non-member tried to comment. Emit one of two errors:
- *
- * - The user's *only* missing capability is `altcha_pow` → a solvable,
- *   comment-scoped `gate_failed` (403) carrying the required action set, so any
- *   client (web, admin-cli, android) knows to solve PoW and retry. The ALTCHA
- *   challenge is fetched via the existing `/verification/altcha/challenge`
- *   endpoint; we do not inline it here.
- * - Anything else (approval/attribute gate, or no evaluable gate) → the opaque
- *   `community_membership_required` 404.
- *
- * The rule is a positive invariant on the *missing-capability set being exactly
- * `{altcha_pow}`* — not a fall-through that lets altcha-pow slip past. A future
- * gate type is opaque-by-default until someone explicitly opts it into the
- * solvable path (and updates the test that pins this).
- *
- * Privacy oracle: the solvable branch reveals to a non-member that this
- * community is PoW-only. That is safe *today* only because
- * `membership_gate_summaries` is already exposed in the public community preview
- * (same information, different fetch). If that preview is ever narrowed, revisit
- * this — otherwise the 403-vs-404 split becomes a gate-shape leak.
- */
-async function discriminateNonMemberCommentGate(input: {
-  env: Env
-  client: Client
-  communityId: string
-  userId: string
-  userRepository: UserRepository
-}): Promise<never> {
+  // Non-member.
   const policy = await getMembershipGatePolicy(input.client, input.communityId)
   const user = await input.userRepository.getUserById(input.userId)
-  if (policy && user) {
-    const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
-      env: input.env,
-      user,
-      userRepository: input.userRepository,
-      communityId: input.communityId,
-      policy,
-      mode: "preview",
-      altchaScope: "comment_create",
-    })
-    throwDiscriminatedNonMemberCommentGate({
-      communityId: input.communityId,
-      evaluation,
-      gateSummaries,
-      walletScoreStatus,
-    })
+  if (!policy || !user) {
+    // No evaluable gate/user → stay opaque (don't advertise a requirement we
+    // can't reason about).
+    throw communityMembershipRequiredError({ community_id: input.communityId })
   }
-  throw communityMembershipRequiredError({ community_id: input.communityId })
+  const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
+    env: input.env,
+    user,
+    userRepository: input.userRepository,
+    communityId: input.communityId,
+    policy,
+    mode: "preview",
+    altchaScope: "comment_create",
+  })
+  // Throws for the non-provisional branches; returns only when the community is
+  // PoW-only and a proof is present.
+  decideNonMemberCommentAccess({
+    communityId: input.communityId,
+    evaluation,
+    gateSummaries,
+    walletScoreStatus,
+    hasProof: input.hasProof,
+  })
+  return { membership, provisionalParticipant: true }
 }
 
 /**
- * Pure discriminator (no I/O, so it is unit-testable): given a non-member's gate
- * evaluation for a comment, throw either a solvable comment-scoped `gate_failed`
- * or the opaque `community_membership_required`. See requireCommentAuthorAccess /
- * discriminateNonMemberCommentGate for the invariant and privacy-oracle notes.
+ * Pure decision (no I/O, so it is unit-testable): given a non-member's gate
+ * evaluation for a comment and whether the request carried a PoW proof, either
+ * return `"provisional_participant"` (the caller should verify+consume the proof
+ * and enroll a `comment_pow` participant) or throw.
  *
- * The rule is positive: the solvable path requires the missing-capability set to
- * be *exactly* `{altcha_pow}`. A new gate type is opaque-by-default until
- * explicitly opted in here (and the pinning test updated).
+ * Branches (positive invariant: the solvable/provisional path requires the
+ * missing-capability set to be *exactly* `{altcha_pow}` — a new gate type is
+ * opaque-by-default until explicitly opted in here, with its test updated):
+ * - only-missing = {altcha_pow} AND a proof is present → `"provisional_participant"`.
+ * - only-missing = {altcha_pow} AND no proof → solvable comment-scoped
+ *   `gate_failed` (so the client fetches a challenge and retries).
+ * - anything else (approval/attribute gate, or none) → opaque
+ *   `community_membership_required` 404. A proof does NOT rescue an attribute
+ *   gate: PoW can't satisfy a nationality/age requirement.
+ *
+ * NOTE: this only *decides*. It never verifies or consumes the proof — that is
+ * the caller's job via enforceCommunityActionGate (single consume), and the
+ * participant row is written only AFTER that verification passes
+ * (verify-then-persist). Never enroll before verification: that is the spam hole.
+ *
+ * Privacy oracle: the solvable branch reveals to a non-member that this community
+ * is PoW-only. Safe *today* only because `membership_gate_summaries` is already
+ * exposed in the public community preview; if that preview is ever narrowed,
+ * revisit — otherwise the 403-vs-404 split becomes a gate-shape leak.
  */
-export function throwDiscriminatedNonMemberCommentGate(input: {
+export function decideNonMemberCommentAccess(input: {
   communityId: string
   evaluation: GatePolicyEvaluation
   gateSummaries: Parameters<typeof throwUnsatisfiedMembershipGate>[0]["gateSummaries"]
   walletScoreStatus: Parameters<typeof throwUnsatisfiedMembershipGate>[0]["walletScoreStatus"]
-}): never {
+  hasProof: boolean
+}): "provisional_participant" {
   const missing = missingCapabilitiesFromRequiredActionSet(input.evaluation.requiredActionSet)
   const onlyMissingIsPow = missing.length === 1 && missing[0] === "altcha_pow"
   if (onlyMissingIsPow) {
+    if (input.hasProof) {
+      return "provisional_participant"
+    }
     throwUnsatisfiedMembershipGate({
       evaluation: input.evaluation,
       gateSummaries: input.gateSummaries,
@@ -350,13 +360,18 @@ export async function createComment(input: {
   try {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
-      membership = await requireCommentAuthorAccess({
+      const access = await resolveCommentAuthorAccess({
         env: input.env,
         client: db.client,
         communityId: input.communityId,
         userId: input.userId,
         userRepository: input.userRepository,
+        hasProof: Boolean(input.altchaProof?.payload),
       })
+      membership = access.membership
+      // Verify+consume the PoW proof exactly once (for members and provisional
+      // participants alike; a plain member with no mod role re-verifies per
+      // comment). This throws gate_failed on a missing/invalid/consumed proof.
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,
@@ -367,6 +382,18 @@ export async function createComment(input: {
         altchaProof: input.altchaProof,
         verifiedAltchaProof,
       })
+      // Verify-then-persist: only AFTER the proof verified do we enroll a
+      // non-member as a `comment_pow` participant (Reddit-style, no visible join;
+      // excluded from subscriber counts/rosters/projection — see migration 1116).
+      if (access.provisionalParticipant) {
+        await upsertCommunityMembership({
+          client: db.client,
+          communityId: input.communityId,
+          userId: input.userId,
+          now: nowIso(),
+          participationSource: "comment_pow",
+        })
+      }
     }
     const canBypassLocks = input.bypassAuthorAccessChecks === true
       || (membership != null && hasCommunityRole(membership, ANY_COMMUNITY_ROLE))

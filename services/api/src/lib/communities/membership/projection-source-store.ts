@@ -27,6 +27,21 @@ export async function listCommunityMembershipProjectionSources(input: {
       SELECT community_id, user_id, status, updated_at
       FROM community_memberships
       WHERE community_id = ?1
+        -- Participants (participation_source='comment_pow') are SHARD-ONLY. This
+        -- projection carries subscriber lifecycle only. Downstream control-plane
+        -- consumers (home feed, royalty claim eligibility, member counts) rely on
+        -- this exclusion by treating every projected membership_state='member' as
+        -- a subscriber. Do NOT remove this filter without auditing every
+        -- membership_state==='member' consumer -- dropping it leaks drive-by
+        -- PoW commenters into the control plane (feed inflation + royalty claims).
+        -- Note: this filter runs BEFORE the status mapping, so a banned participant
+        -- (status='banned', source='comment_pow') is intentionally NOT projected.
+        -- The ban still holds at the shard (canAccessCommunity=false); we only lose
+        -- control-plane visibility of drive-by-commenter bans, an accepted v1
+        -- reporting gap (see migration 1116). A future "banned users" control-plane
+        -- surface that needs participant bans should add a separate projection, not
+        -- relax this filter.
+        AND participation_source = 'join'
       ORDER BY updated_at ASC, membership_id ASC
       LIMIT ?2
     `,

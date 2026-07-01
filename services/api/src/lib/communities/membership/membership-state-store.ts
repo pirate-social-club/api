@@ -2,7 +2,7 @@ import type { ReadClient } from "../../sql-client"
 import { executeFirst } from "../../db-helpers"
 import { rowValue, stringOrNull } from "../../sql-row"
 
-type MembershipExecutor = Pick<ReadClient, "execute">
+export type MembershipExecutor = Pick<ReadClient, "execute">
 
 export type CommunityRole = "owner" | "admin" | "moderator"
 
@@ -137,6 +137,9 @@ export async function getCommunityMemberCount(
         FROM community_memberships
         WHERE community_id = ?1
           AND status = 'member'
+          -- Subscriber count: exclude drive-by inline-PoW participants
+          -- (participation_source='comment_pow'). See migration 1116.
+          AND participation_source = 'join'
       `,
       args: [communityId],
     },
