@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test"
 import {
   capStoryRoyaltyRpcFeeResponseForTests,
   capStoryRoyaltyWriteContractRequestForTests,
+  isRetryableStoryRegistrationError,
+  withStoryRegistrationRetry,
 } from "./story-royalty-registration-service"
 import type { DirectTxGasPolicy } from "../evm-direct-tx"
 
@@ -147,5 +149,81 @@ describe("capStoryRoyaltyRpcFeeResponseForTests — passthrough guards", () => {
     const body = (await response.json()) as any
     expect(BigInt(body[0].result)).toBe(GAS_POLICY.maxFeePerGasCapWei)
     expect(body[1].result).toBe("0xabcdef")
+  })
+})
+
+describe("isRetryableStoryRegistrationError", () => {
+  test("retries pre-broadcast transport failures (the RPC Request failed case)", () => {
+    const err = new Error(
+      'The contract function "mintAndRegisterIpAndAttachPILTerms" reverted with the following reason: RPC Request failed.',
+    )
+    expect(isRetryableStoryRegistrationError(err)).toBe(true)
+  })
+
+  test("retries wrapped transport errors found down the cause chain", () => {
+    const inner = new Error("HTTP request failed. Status: 503")
+    const outer = new Error("Failed to register IP Asset")
+    ;(outer as any).cause = inner
+    expect(isRetryableStoryRegistrationError(outer)).toBe(true)
+  })
+
+  test("does NOT retry insufficient funds or gas-policy failures", () => {
+    expect(
+      isRetryableStoryRegistrationError(new Error("... exceeds the balance of the account")),
+    ).toBe(false)
+    expect(
+      isRetryableStoryRegistrationError(new Error("story_royalty_gas_limit_exceeds_policy:2415000:2000000")),
+    ).toBe(false)
+  })
+
+  test("does NOT retry once a tx may have broadcast (double-mint guard)", () => {
+    const broadcast = new Error("RPC Request failed.")
+    ;(broadcast as any).transactionHash = "0x" + "a".repeat(64)
+    expect(isRetryableStoryRegistrationError(broadcast)).toBe(false)
+
+    const postBroadcast = new Error("RPC Request failed.")
+    ;(postBroadcast as any).name = "WaitForTransactionReceiptTimeoutError"
+    expect(isRetryableStoryRegistrationError(postBroadcast)).toBe(false)
+  })
+
+  test("does NOT retry deterministic reverts with a decoded reason", () => {
+    expect(
+      isRetryableStoryRegistrationError(new Error("execution reverted: SPGNFT__MintingDenied")),
+    ).toBe(false)
+  })
+})
+
+describe("withStoryRegistrationRetry", () => {
+  test("retries a transient failure then succeeds", async () => {
+    let calls = 0
+    const result = await withStoryRegistrationRetry(async () => {
+      calls++
+      if (calls < 2) throw new Error("RPC Request failed.")
+      return "ok"
+    })
+    expect(result).toBe("ok")
+    expect(calls).toBe(2)
+  })
+
+  test("does not retry a non-retryable failure", async () => {
+    let calls = 0
+    await expect(
+      withStoryRegistrationRetry(async () => {
+        calls++
+        throw new Error("... exceeds the balance of the account")
+      }),
+    ).rejects.toThrow(/exceeds the balance/)
+    expect(calls).toBe(1)
+  })
+
+  test("gives up after max attempts on a persistent transient failure", async () => {
+    let calls = 0
+    await expect(
+      withStoryRegistrationRetry(async () => {
+        calls++
+        throw new Error("RPC Request failed.")
+      }),
+    ).rejects.toThrow(/RPC Request failed/)
+    expect(calls).toBe(3)
   })
 })
