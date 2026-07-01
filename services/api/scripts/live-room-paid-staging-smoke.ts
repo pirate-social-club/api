@@ -1035,7 +1035,8 @@ async function waitForReplayDraftReady(input: {
         status: string
         raw_artifact: null | {
           provider: string
-          ipfs_cid: string
+          ipfs_cid?: string | null
+          object_key?: string | null
           mime_type: string
           size_bytes: number
         }
@@ -1060,10 +1061,15 @@ async function waitForReplayDraftReady(input: {
     if (draft.status === "ready" && draft.replay_status === "review_pending" && draft.replay_asset && draft.recording?.raw_artifact) {
       const replayAssetId = draft.replay_asset.id ?? draft.replay_asset.replay_asset_id
       assert(replayAssetId, `ready replay draft did not expose replay asset id: ${JSON.stringify(draft.replay_asset)}`)
-      assert(draft.recording.raw_artifact.provider === "filebase", `raw recording did not land on Filebase: ${draft.recording.raw_artifact.provider}`)
-      assert(typeof draft.recording.raw_artifact.ipfs_cid === "string" && draft.recording.raw_artifact.ipfs_cid.length > 0, "raw Filebase artifact is missing ipfs_cid")
+      assert(["agora_capture", "filebase"].includes(draft.recording.raw_artifact.provider), `raw recording landed on unexpected provider: ${draft.recording.raw_artifact.provider}`)
+      if (draft.recording.raw_artifact.provider === "agora_capture") {
+        assert(typeof draft.recording.raw_artifact.object_key === "string" && draft.recording.raw_artifact.object_key.length > 0, "raw Agora capture artifact is missing object_key")
+      } else {
+        assert(typeof draft.recording.raw_artifact.ipfs_cid === "string" && draft.recording.raw_artifact.ipfs_cid.length > 0, "raw Filebase artifact is missing ipfs_cid")
+      }
       console.log("[paid-live-smoke] replay draft ready", {
-        ipfs_cid: draft.recording.raw_artifact.ipfs_cid,
+        object_key: draft.recording.raw_artifact.object_key ?? null,
+        provider: draft.recording.raw_artifact.provider,
         recording_status: draft.recording.status,
         replay_asset: replayAssetId,
         replay_status: draft.replay_status,
