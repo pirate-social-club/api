@@ -791,6 +791,31 @@ describe("post study service", () => {
     expect(fetchCalled).toBe(false)
   })
 
+  test("transcription accepts MediaRecorder audio/webm;codecs=opus (base type gate)", async () => {
+    await setStudyEnabled(true)
+    await seedSongPost()
+
+    let err: unknown
+    await withMockedFetch(() => (async () => new Response("unexpected", { status: 500 })) as typeof fetch, async () => {
+      try {
+        await transcribePostStudyAudio({
+          actor: learnerActor,
+          communityId: COMMUNITY_ID,
+          communityRepository: repo,
+          env: env(),
+          file: new File([new Uint8Array([1, 2, 3])], "say-it-back.webm", { type: "audio/webm;codecs=opus" }),
+          postId: POST_ID,
+        })
+      } catch (caught) {
+        err = caught
+      }
+    })
+
+    // The codec-parameterized MediaRecorder type must clear the mime gate (it may
+    // still fail later on ElevenLabs config, but never on the unsupported-type check).
+    expect(String((err as Error | undefined)?.message ?? "")).not.toContain("audio file type is not supported")
+  })
+
   test("attempts are blocked without writes when study is disabled", async () => {
     await setStudyEnabled(false)
     await seedSongPost()
