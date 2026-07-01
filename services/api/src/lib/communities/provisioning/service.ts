@@ -1,9 +1,5 @@
-import { encryptCommunityDbCredential } from "../community-db-credential-crypto"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
-import {
-  type ProvisionedCommunityCredential,
-  resolveCommunityProvisioningBackend,
-} from "./backend"
+import { resolveCommunityProvisioningBackend } from "./backend"
 import type { UserRepository } from "../../auth/repositories"
 import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
@@ -34,8 +30,6 @@ import {
   loadCommunityLocalSnapshot,
   loadCommunityProjection,
   requireOwnedCommunity,
-  resolveCommunityDbWrapKey,
-  resolveCommunityDbWrapKeyVersion,
   resolveProvisioningRetryAction,
 } from "../create/repository"
 import {
@@ -52,19 +46,6 @@ type CommunityProvisioningServiceRepository =
   & CommunityProvisioningRepository
   & CommunityMembershipProjectionRepository
   & CommunityMutationRepository
-
-function resolveProvisionedCredentialId(communityId: string, credentialId: string): string {
-  const trimmed = credentialId.trim()
-  if (trimmed.length > 0) {
-    return trimmed
-  }
-  const fallbackId = makeId("cdc")
-  console.warn("[community-provisioning] operator omitted credential_id; generated fallback", {
-    communityId,
-    credentialId: fallbackId,
-  })
-  return fallbackId
-}
 
 function namespaceRouteSlug(namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">): string {
   return namespaceVerification.family === "spaces"
@@ -106,45 +87,6 @@ function communityProvisioningFailureDetails(
   }
 
   return details
-}
-
-export async function persistProvisionedCommunityCredential(input: {
-  env: Env
-  repo: CommunityProvisioningRepository
-  communityId: string
-  bindingId: string
-  credential: ProvisionedCommunityCredential | null
-  updatedAt: string
-}): Promise<void> {
-  if (!input.credential) {
-    return
-  }
-
-  const encryptedToken = encryptCommunityDbCredential({
-    plaintextToken: input.credential.plaintextToken,
-    wrapKey: resolveCommunityDbWrapKey(input.env),
-  })
-  const communityDbCredentialId = resolveProvisionedCredentialId(
-    input.communityId,
-    input.credential.credentialId,
-  )
-  await input.repo.persistProvisionedCommunityDatabaseAccess({
-    communityDatabaseBindingId: input.bindingId,
-    communityDbCredentialId,
-    organizationSlug: input.credential.organizationSlug,
-    groupName: input.credential.groupName,
-    groupId: input.credential.groupId,
-    databaseName: input.credential.databaseName,
-    databaseId: input.credential.databaseId,
-    databaseUrl: input.credential.databaseUrl,
-    location: input.credential.location,
-    tokenName: input.credential.tokenName,
-    encryptedToken,
-    encryptionKeyVersion: resolveCommunityDbWrapKeyVersion(input.env),
-    issuedAt: input.credential.issuedAt,
-    expiresAt: input.credential.expiresAt,
-    updatedAt: input.updatedAt,
-  })
 }
 
 async function upsertLocalNamespaceAttachment(input: {
@@ -275,14 +217,6 @@ async function createNamespacelessCommunity(input: {
       namespaceVerificationId: null,
       routeSlug: null,
       communityRepository: input.communityRepository,
-    })
-    await persistProvisionedCommunityCredential({
-      env: input.env,
-      repo: input.communityRepository,
-      communityId,
-      bindingId: prepared.binding.community_database_binding_id,
-      credential: provisioned.credential,
-      updatedAt: input.auth.createdAt,
     })
     const localSnapshot = provisioned.localSnapshot
       ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
@@ -456,14 +390,6 @@ async function provisionNamespacedCommunity(input: {
       namespaceVerificationId,
       routeSlug,
       communityRepository: repo,
-    })
-    await persistProvisionedCommunityCredential({
-      env,
-      repo,
-      communityId,
-      bindingId: prepared.binding.community_database_binding_id,
-      credential: provisioned.credential,
-      updatedAt: auth.createdAt,
     })
     localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
     const resolvedBinding = await repo.getPrimaryCommunityDatabaseBinding(communityId)

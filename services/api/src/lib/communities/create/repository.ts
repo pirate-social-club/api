@@ -50,24 +50,6 @@ export function resolveCommunityDbRoot(env: Env): string {
   throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")
 }
 
-export function resolveCommunityDbWrapKey(env: Env): string {
-  const configured = String(env.TURSO_COMMUNITY_DB_WRAP_KEY || "").trim()
-  if (configured) {
-    return configured
-  }
-
-  throw internalError("TURSO_COMMUNITY_DB_WRAP_KEY is not configured")
-}
-
-export function resolveCommunityDbWrapKeyVersion(env: Env): number {
-  const parsed = Number(String(env.TURSO_COMMUNITY_DB_WRAP_KEY_VERSION || "").trim())
-  if (Number.isInteger(parsed) && parsed > 0) {
-    return parsed
-  }
-
-  throw internalError("TURSO_COMMUNITY_DB_WRAP_KEY_VERSION is not configured")
-}
-
 /**
  * Synthetic binding URL for a community that is being provisioned D1-native but
  * has not yet had a binding allocated from the shard pool. Resolved to
@@ -88,11 +70,6 @@ export function isExpired(timestamp: string | number): boolean {
     throw eligibilityFailed("Namespace verification expiry is invalid")
   }
   return expiresAt <= Date.now()
-}
-
-export function isPendingCommunityDatabaseUrl(value: string | null | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase()
-  return normalized.startsWith("libsql://pending-") || normalized.endsWith(".invalid")
 }
 
 const RUNNING_JOB_HEARTBEAT_TIMEOUT_MS = 30_000
@@ -124,15 +101,8 @@ export async function resolveProvisioningRetryAction(
   }
 
   const binding = await repo.getPrimaryCommunityDatabaseBinding(community.community_id)
-  if (!binding || binding.status !== "active" || isPendingCommunityDatabaseUrl(binding.database_url)) {
+  if (!binding || binding.status !== "active" || isPendingD1CommunityBindingUrl(binding.database_url)) {
     return { action: "retry" }
-  }
-
-  if (binding.requires_credentials) {
-    const credential = await repo.getActiveCommunityDbCredential(binding.community_database_binding_id)
-    if (!credential) {
-      return { action: "retry" }
-    }
   }
 
   return { action: "finalize", binding }

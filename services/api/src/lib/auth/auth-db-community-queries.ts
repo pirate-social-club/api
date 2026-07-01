@@ -2,7 +2,6 @@ import type { DbExecutor } from "../db-helpers"
 import { makeId } from "../helpers"
 import {
   type CommunityCommentProjectionRow,
-  type CommunityDbCredentialRow,
   type CommunityDatabaseBindingRow,
   type CommunityFollowProjectionRow,
   type CommunityMembershipProjectionRow,
@@ -11,7 +10,6 @@ import {
   type JobRow,
   toCommunityCommentProjectionRow,
   toCommunityDatabaseBindingRow,
-  toCommunityDbCredentialRow,
   toCommunityFollowProjectionRow,
   toCommunityMembershipProjectionRow,
   toCommunityPostProjectionRow,
@@ -253,27 +251,6 @@ export async function getPrimaryCommunityDatabaseBindingRow(
   })
 
   return row ? toCommunityDatabaseBindingRow(row) : null
-}
-
-export async function getActiveCommunityDbCredentialRow(
-  executor: DbExecutor,
-  communityDatabaseBindingId: string,
-): Promise<CommunityDbCredentialRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_db_credential_id, community_database_binding_id, credential_kind, token_name,
-             encrypted_token, encryption_key_version, token_scope, status, issued_at, invalidated_at,
-             expires_at, created_at, updated_at
-      FROM community_db_credentials
-      WHERE community_database_binding_id = ?1
-        AND status = 'active'
-      ORDER BY created_at DESC
-      LIMIT 1
-    `,
-    args: [communityDatabaseBindingId],
-  })
-
-  return row ? toCommunityDbCredentialRow(row) : null
 }
 
 export async function getJobRowById(executor: DbExecutor, jobId: string): Promise<JobRow | null> {

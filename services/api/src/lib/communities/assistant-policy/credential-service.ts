@@ -5,7 +5,7 @@ import { makeId, nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
 import { withTransaction } from "../../transactions"
-import { resolveCommunityDbWrapKey, resolveCommunityDbWrapKeyVersion } from "../create/repository"
+import { resolveCredentialWrapKey, resolveCredentialWrapKeyVersion } from "../../crypto/credential-wrap-key"
 import type {
   AssistantElevenLabsKeyStatus,
   AssistantOpenRouterKeyStatus,
@@ -258,8 +258,8 @@ export async function saveCommunityAssistantCredential(input: {
     actorUserId: input.actor.userId,
   })
 
-  const wrapKey = resolveCommunityDbWrapKey(input.env)
-  const encryptionKeyVersion = resolveCommunityDbWrapKeyVersion(input.env)
+  const wrapKey = resolveCredentialWrapKey(input.env)
+  const encryptionKeyVersion = resolveCredentialWrapKeyVersion(input.env)
   const encryptedSecret = encryptCredentialKey({ plaintextKey, provider, wrapKey })
   const keyLast4 = plaintextKey.slice(-4)
   const now = nowIso()
@@ -352,7 +352,7 @@ export async function decryptActiveCommunityAssistantCredential(input: {
     encryptedSecret: active.encrypted_secret,
     encryptionKeyVersion: active.encryption_key_version,
     provider: input.provider,
-    wrapKey: resolveCommunityDbWrapKey(input.env),
+    wrapKey: resolveCredentialWrapKey(input.env),
   })
 }
 

@@ -54,7 +54,6 @@ async function setup() {
     updated_at: now,
   }
   const repo = {
-    getActiveCommunityDbCredential: async () => null,
     getCommunityById: async (id: string) => id === communityId ? community : null,
     getCommunityByNamespaceVerificationId: async () => null,
     getCommunityByRouteSlug: async () => null,

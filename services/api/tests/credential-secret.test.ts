@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { encryptCommunityDbCredential, decryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
+import { decryptCredentialSecret, encryptCredentialSecret } from "../src/lib/crypto/credential-secret"
 
 const VALID_WRAP_KEY = "0".repeat(64)
 
-describe("community-db-credential-crypto", () => {
-  describe("encryptCommunityDbCredential", () => {
+describe("credential secret crypto", () => {
+  describe("encryptCredentialSecret", () => {
     test("encrypts and returns v1-prefixed ciphertext", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "my-secret-token",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "my-secret-token",
         wrapKey: VALID_WRAP_KEY,
       })
       expect(encrypted.startsWith("v1:")).toBe(true)
@@ -15,43 +15,43 @@ describe("community-db-credential-crypto", () => {
 
     test("rejects empty plaintext", () => {
       expect(() =>
-        encryptCommunityDbCredential({ plaintextToken: "", wrapKey: VALID_WRAP_KEY }),
+        encryptCredentialSecret({ plaintext: "", wrapKey: VALID_WRAP_KEY }),
       ).toThrow()
     })
 
     test("rejects whitespace-only plaintext", () => {
       expect(() =>
-        encryptCommunityDbCredential({ plaintextToken: "   ", wrapKey: VALID_WRAP_KEY }),
+        encryptCredentialSecret({ plaintext: "   ", wrapKey: VALID_WRAP_KEY }),
       ).toThrow()
     })
 
     test("rejects invalid wrap key (too short)", () => {
       expect(() =>
-        encryptCommunityDbCredential({ plaintextToken: "token", wrapKey: "abc123" }),
+        encryptCredentialSecret({ plaintext: "token", wrapKey: "abc123" }),
       ).toThrow()
     })
 
     test("rejects non-hex wrap key", () => {
       expect(() =>
-        encryptCommunityDbCredential({ plaintextToken: "token", wrapKey: "g".repeat(64) }),
+        encryptCredentialSecret({ plaintext: "token", wrapKey: "g".repeat(64) }),
       ).toThrow()
     })
 
     test("produces different ciphertext for same input (random IV)", () => {
-      const a = encryptCommunityDbCredential({ plaintextToken: "same-token", wrapKey: VALID_WRAP_KEY })
-      const b = encryptCommunityDbCredential({ plaintextToken: "same-token", wrapKey: VALID_WRAP_KEY })
+      const a = encryptCredentialSecret({ plaintext: "same-token", wrapKey: VALID_WRAP_KEY })
+      const b = encryptCredentialSecret({ plaintext: "same-token", wrapKey: VALID_WRAP_KEY })
       expect(a).not.toBe(b)
     })
   })
 
-  describe("decryptCommunityDbCredential", () => {
+  describe("decryptCredentialSecret", () => {
     test("round-trips encrypt then decrypt", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "round-trip-secret",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "round-trip-secret",
         wrapKey: VALID_WRAP_KEY,
       })
-      const decrypted = decryptCommunityDbCredential({
-        encryptedToken: encrypted,
+      const decrypted = decryptCredentialSecret({
+        encryptedSecret: encrypted,
         encryptionKeyVersion: 1,
         wrapKey: VALID_WRAP_KEY,
       })
@@ -59,13 +59,13 @@ describe("community-db-credential-crypto", () => {
     })
 
     test("rejects key version 0", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "token",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "token",
         wrapKey: VALID_WRAP_KEY,
       })
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: encrypted,
+        decryptCredentialSecret({
+          encryptedSecret: encrypted,
           encryptionKeyVersion: 0,
           wrapKey: VALID_WRAP_KEY,
         }),
@@ -73,13 +73,13 @@ describe("community-db-credential-crypto", () => {
     })
 
     test("rejects negative key version", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "token",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "token",
         wrapKey: VALID_WRAP_KEY,
       })
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: encrypted,
+        decryptCredentialSecret({
+          encryptedSecret: encrypted,
           encryptionKeyVersion: -1,
           wrapKey: VALID_WRAP_KEY,
         }),
@@ -87,14 +87,14 @@ describe("community-db-credential-crypto", () => {
     })
 
     test("rejects wrong wrap key", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "token",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "token",
         wrapKey: VALID_WRAP_KEY,
       })
       const wrongKey = "f".repeat(64)
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: encrypted,
+        decryptCredentialSecret({
+          encryptedSecret: encrypted,
           encryptionKeyVersion: 1,
           wrapKey: wrongKey,
         }),
@@ -103,8 +103,8 @@ describe("community-db-credential-crypto", () => {
 
     test("rejects malformed ciphertext (missing prefix)", () => {
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: "garbage",
+        decryptCredentialSecret({
+          encryptedSecret: "garbage",
           encryptionKeyVersion: 1,
           wrapKey: VALID_WRAP_KEY,
         }),
@@ -113,8 +113,8 @@ describe("community-db-credential-crypto", () => {
 
     test("rejects malformed ciphertext (wrong prefix)", () => {
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: "v2:aaaa:bbbb:cccc",
+        decryptCredentialSecret({
+          encryptedSecret: "v2:aaaa:bbbb:cccc",
           encryptionKeyVersion: 1,
           wrapKey: VALID_WRAP_KEY,
         }),
@@ -123,8 +123,8 @@ describe("community-db-credential-crypto", () => {
 
     test("rejects truncated ciphertext (missing parts)", () => {
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: "v1:aaaa",
+        decryptCredentialSecret({
+          encryptedSecret: "v1:aaaa",
           encryptionKeyVersion: 1,
           wrapKey: VALID_WRAP_KEY,
         }),
@@ -132,17 +132,17 @@ describe("community-db-credential-crypto", () => {
     })
 
     test("rejects tampered ciphertext", () => {
-      const encrypted = encryptCommunityDbCredential({
-        plaintextToken: "token",
+      const encrypted = encryptCredentialSecret({
+        plaintext: "token",
         wrapKey: VALID_WRAP_KEY,
       })
       const parts = encrypted.split(":")
-      const ctBytes = Buffer.from(parts[3], "hex")
+      const ctBytes = Buffer.from(parts[3] ?? "", "hex")
       ctBytes[0] ^= 0xff
       const tampered = [parts[0], parts[1], parts[2], ctBytes.toString("hex")].join(":")
       expect(() =>
-        decryptCommunityDbCredential({
-          encryptedToken: tampered,
+        decryptCredentialSecret({
+          encryptedSecret: tampered,
           encryptionKeyVersion: 1,
           wrapKey: VALID_WRAP_KEY,
         }),

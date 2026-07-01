@@ -7,9 +7,7 @@ import {
   createCommunityProvisioningRequest,
   markCommunityProvisioningSucceeded,
 } from "./repository"
-import { persistProvisionedCommunityCredential } from "./service"
-import type { CommunityProvisioningRepository, InitialCommunityDatabaseBinding } from "../community-repository-types"
-import type { Env } from "../../../env"
+import type { InitialCommunityDatabaseBinding } from "../community-repository-types"
 
 let cp: Client
 let tmpDir: string
@@ -71,21 +69,6 @@ const SCHEMA_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
-  `CREATE TABLE community_db_credentials (
-    community_db_credential_id TEXT PRIMARY KEY,
-    community_database_binding_id TEXT NOT NULL REFERENCES community_database_bindings(community_database_binding_id),
-    credential_kind TEXT NOT NULL,
-    token_name TEXT NOT NULL,
-    encrypted_token TEXT NOT NULL,
-    encryption_key_version INTEGER NOT NULL,
-    token_scope TEXT NOT NULL,
-    status TEXT NOT NULL,
-    issued_at TEXT NOT NULL,
-    invalidated_at TEXT,
-    expires_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
   `CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,
     job_type TEXT NOT NULL,
@@ -142,34 +125,7 @@ async function seedUser(userId: string): Promise<void> {
   })
 }
 
-test("persistProvisionedCommunityCredential({credential: null}) is a no-op — never invokes the credentials writer", async () => {
-  // Regression net: if someone tightens this function to require a non-null
-  // credential (e.g. adds a guard that throws on null), d1_native provisioning
-  // — which always returns credential: null — starts throwing in production
-  // without any test catching it. Pin the d1-native contract.
-  let called = 0
-  const fakeRepo: CommunityProvisioningRepository = {
-    persistProvisionedCommunityDatabaseAccess: async () => {
-      called += 1
-    },
-    // Other methods are never called on the null path; throw loudly if they
-    // are, so a future refactor that touches the repo doesn't silently lose
-    // coverage.
-  } as unknown as CommunityProvisioningRepository
-
-  await persistProvisionedCommunityCredential({
-    env: {} as Env,
-    repo: fakeRepo,
-    communityId: "cmt_d1",
-    bindingId: "cdb_d1",
-    credential: null,
-    updatedAt: "t0",
-  })
-
-  expect(called).toBe(0)
-})
-
-test("d1-native persist flow: create + null-credential persist + succeed writes zero credential rows and lands provisioning_state=active with a d1:// resultRef", async () => {
+test("d1-native persist flow: create + succeed lands provisioning_state=active with a d1:// resultRef", async () => {
   await seedUser("usr_d1")
   const now = "2026-06-19T00:00:00Z"
 
@@ -191,25 +147,11 @@ test("d1-native persist flow: create + null-credential persist + succeed writes 
   expect(prepared.binding.database_url).toBe("d1://pending-cmt_d1_persist.invalid")
   expect(Number(prepared.binding.requires_credentials)).toBe(0)
 
-  // The d1_native.provision() return shape: no credential, no snapshot, but
-  // a concrete binding (in production this URL would be `d1://shard/<binding>`;
-  // for the persist path the exact value is opaque — the test only checks it
-  // is the same string the caller passed through).
+  // The d1_native.provision() return shape has no credential, only a concrete
+  // binding. In production this URL would be `d1://shard/<binding>`; for the
+  // persist path the exact value is opaque and this test only checks it is the
+  // same string the caller passed through.
   const resolvedD1Url = "d1://shard/DB_CMTY_PERSIST_001"
-  const repo = {
-    persistProvisionedCommunityDatabaseAccess: async () => {
-      throw new Error("must not be called for d1_native (credential: null)")
-    },
-  } as unknown as CommunityProvisioningRepository
-
-  await persistProvisionedCommunityCredential({
-    env: {} as Env,
-    repo,
-    communityId: "cmt_d1",
-    bindingId: prepared.binding.community_database_binding_id,
-    credential: null,
-    updatedAt: now,
-  })
 
   const finalized = await markCommunityProvisioningSucceeded(cp, {
     communityId: "cmt_d1",
@@ -248,15 +190,6 @@ test("d1-native persist flow: create + null-credential persist + succeed writes 
   })).rows[0]
   expect(binding.database_url).toBe("d1://pending-cmt_d1_persist.invalid")
   expect(Number(binding.requires_credentials)).toBe(0)
-
-  // The defining audit-g5 invariant: zero credential rows for a d1-native
-  // community. A future refactor that accidentally calls the credentials
-  // writer on the d1 path will surface here.
-  const credRows = (await cp.execute({
-    sql: "SELECT COUNT(*) AS n FROM community_db_credentials WHERE community_database_binding_id = ?1",
-    args: [prepared.binding.community_database_binding_id],
-  })).rows[0]
-  expect(Number(credRows.n)).toBe(0)
 
   // The audit log records a provisioning_succeeded event with the d1_native
   // mode in metadata — proves the persist path's metadata is mode-aware

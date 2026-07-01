@@ -38,9 +38,6 @@ function buildRepository(): CommunityDatabaseBindingRepository {
     async getPrimaryCommunityDatabaseBinding() {
       return null
     },
-    async getActiveCommunityDbCredential() {
-      return null
-    },
   }
   return repo
 }

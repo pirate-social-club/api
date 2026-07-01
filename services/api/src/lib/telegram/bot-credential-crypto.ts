@@ -1,7 +1,7 @@
 import {
-  decryptCommunityDbCredential,
-  encryptCommunityDbCredential,
-} from "../communities/community-db-credential-crypto"
+  decryptCredentialSecret,
+  encryptCredentialSecret,
+} from "../crypto/credential-secret"
 import { badRequestError } from "../errors"
 
 export function normalizeTelegramBotToken(input: string): string {
@@ -19,8 +19,8 @@ export function encryptTelegramBotToken(input: {
   plaintextToken: string
   wrapKey: string
 }): string {
-  return encryptCommunityDbCredential({
-    plaintextToken: normalizeTelegramBotToken(input.plaintextToken),
+  return encryptCredentialSecret({
+    plaintext: normalizeTelegramBotToken(input.plaintextToken),
     wrapKey: input.wrapKey,
   })
 }
@@ -30,8 +30,8 @@ export function decryptTelegramBotToken(input: {
   encryptionKeyVersion: number
   wrapKey: string
 }): string {
-  return decryptCommunityDbCredential({
-    encryptedToken: input.encryptedToken,
+  return decryptCredentialSecret({
+    encryptedSecret: input.encryptedToken,
     encryptionKeyVersion: input.encryptionKeyVersion,
     wrapKey: input.wrapKey,
   })

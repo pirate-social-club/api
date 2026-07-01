@@ -185,9 +185,6 @@ export function buildTestCommunityRepository(input: {
         updated_at: now,
       }
     },
-    async getActiveCommunityDbCredential() {
-      return null
-    },
     async updateCommunityPostProjectionMetrics() {
       return undefined
     },

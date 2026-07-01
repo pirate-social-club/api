@@ -8,18 +8,18 @@ const IV_BYTES = 12
 function requireWrapKeyHex(wrapKey: string): Buffer {
   const normalized = wrapKey.trim()
   if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
-    throw internalError("TURSO_COMMUNITY_DB_WRAP_KEY must be 32 bytes encoded as hex")
+    throw internalError("Credential wrap key must be 32 bytes encoded as hex")
   }
   return Buffer.from(normalized, "hex")
 }
 
-export function encryptCommunityDbCredential(input: {
-  plaintextToken: string
+export function encryptCredentialSecret(input: {
+  plaintext: string
   wrapKey: string
 }): string {
-  const plaintext = input.plaintextToken.trim()
+  const plaintext = input.plaintext.trim()
   if (!plaintext) {
-    throw internalError("Community DB plaintext token is required")
+    throw internalError("Credential plaintext is required")
   }
 
   const key = requireWrapKeyHex(input.wrapKey)
@@ -33,18 +33,18 @@ export function encryptCommunityDbCredential(input: {
   return `${FORMAT_PREFIX}:${iv.toString("hex")}:${tag.toString("hex")}:${ciphertext.toString("hex")}`
 }
 
-export function decryptCommunityDbCredential(input: {
-  encryptedToken: string
+export function decryptCredentialSecret(input: {
+  encryptedSecret: string
   encryptionKeyVersion: number
   wrapKey: string
 }): string {
   if (!Number.isInteger(input.encryptionKeyVersion) || input.encryptionKeyVersion <= 0) {
-    throw internalError("Community DB credential encryption key version is invalid")
+    throw internalError("Credential encryption key version is invalid")
   }
 
-  const [format, ivHex, tagHex, ciphertextHex] = input.encryptedToken.trim().split(":")
+  const [format, ivHex, tagHex, ciphertextHex] = input.encryptedSecret.trim().split(":")
   if (format !== FORMAT_PREFIX || !ivHex || !tagHex || !ciphertextHex) {
-    throw internalError("Community DB credential ciphertext format is invalid")
+    throw internalError("Credential ciphertext format is invalid")
   }
 
   const key = requireWrapKeyHex(input.wrapKey)
@@ -61,6 +61,6 @@ export function decryptCommunityDbCredential(input: {
     }
     return plaintext
   } catch {
-    throw internalError("Community DB credential ciphertext could not be decrypted")
+    throw internalError("Credential ciphertext could not be decrypted")
   }
 }

@@ -6,7 +6,7 @@ import { logPipelineInfo, type PipelineLogFields } from "../observability/pipeli
 import { getControlPlaneClient } from "../runtime-deps"
 import { withTransaction } from "../transactions"
 import { numberOrNull, rowValue, stringOrNull } from "../sql-row"
-import { resolveCommunityDbWrapKey, resolveCommunityDbWrapKeyVersion } from "../communities/create/repository"
+import { resolveCredentialWrapKey, resolveCredentialWrapKeyVersion } from "../crypto/credential-wrap-key"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
 import type { Env } from "../../env"
 import {
@@ -259,8 +259,8 @@ export async function saveCommunityTelegramBot(input: {
 
   const now = nowIso()
   const client = getControlPlaneClient(input.env)
-  const wrapKey = resolveCommunityDbWrapKey(input.env)
-  const encryptionKeyVersion = resolveCommunityDbWrapKeyVersion(input.env)
+  const wrapKey = resolveCredentialWrapKey(input.env)
+  const encryptionKeyVersion = resolveCredentialWrapKeyVersion(input.env)
   const encryptedToken = encryptTelegramBotToken({ plaintextToken, wrapKey })
   const tokenLast4 = plaintextToken.slice(-4)
   const webhookId = makeId("tgb")
@@ -373,7 +373,7 @@ export async function revokeCommunityTelegramBot(input: {
         token: decryptTelegramBotToken({
           encryptedToken: existing.encrypted_bot_token,
           encryptionKeyVersion: existing.encryption_key_version,
-          wrapKey: resolveCommunityDbWrapKey(input.env),
+          wrapKey: resolveCredentialWrapKey(input.env),
         }),
         userId: existing.telegram_bot_user_id,
         username: existing.bot_username,
@@ -452,7 +452,7 @@ export async function decryptActiveCommunityTelegramBotOrNull(input: {
     token: decryptTelegramBotToken({
       encryptedToken: row.encrypted_bot_token,
       encryptionKeyVersion: row.encryption_key_version,
-      wrapKey: resolveCommunityDbWrapKey(input.env),
+      wrapKey: resolveCredentialWrapKey(input.env),
     }),
     userId: row.telegram_bot_user_id,
     username: row.bot_username,
@@ -477,7 +477,7 @@ export async function decryptCommunityTelegramBotById(input: {
     token: decryptTelegramBotToken({
       encryptedToken: row.encrypted_bot_token,
       encryptionKeyVersion: row.encryption_key_version,
-      wrapKey: resolveCommunityDbWrapKey(input.env),
+      wrapKey: resolveCredentialWrapKey(input.env),
     }),
     userId: row.telegram_bot_user_id,
     username: row.bot_username,
@@ -502,7 +502,7 @@ export async function decryptCommunityTelegramBotByWebhookId(input: {
     token: decryptTelegramBotToken({
       encryptedToken: row.encrypted_bot_token,
       encryptionKeyVersion: row.encryption_key_version,
-      wrapKey: resolveCommunityDbWrapKey(input.env),
+      wrapKey: resolveCredentialWrapKey(input.env),
     }),
     userId: row.telegram_bot_user_id,
     username: row.bot_username,

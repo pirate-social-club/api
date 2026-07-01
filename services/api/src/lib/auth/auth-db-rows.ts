@@ -17,7 +17,6 @@ import type {
 export type {
   CommunityCommentProjectionRow,
   CommunityDatabaseBindingRow,
-  CommunityDbCredentialRow,
   CommunityFollowProjectionRow,
   CommunityMembershipProjectionRow,
   CommunityPostProjectionRow,
@@ -27,7 +26,6 @@ export type {
 export {
   toCommunityCommentProjectionRow,
   toCommunityDatabaseBindingRow,
-  toCommunityDbCredentialRow,
   toCommunityFollowProjectionRow,
   toCommunityMembershipProjectionRow,
   toCommunityPostProjectionRow,

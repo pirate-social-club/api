@@ -19,9 +19,6 @@ const LEARNER_ID = "usr_learner"
 const NOW = "2026-06-29T08:00:00.000Z"
 
 const repo: CommunityDatabaseBindingRepository = {
-  async getActiveCommunityDbCredential() {
-    return null
-  },
   async getPrimaryCommunityDatabaseBinding() {
     return null
   },

@@ -118,9 +118,6 @@ describe("d1NativeProvisioningBackend", () => {
       async markCommunityProvisioningSucceeded() {
         throw new Error("unused in this test")
       },
-      async persistProvisionedCommunityDatabaseAccess() {
-        throw new Error("unused in this test")
-      },
       async markCommunityProvisioningFailed() {
         throw new Error("unused in this test")
       },

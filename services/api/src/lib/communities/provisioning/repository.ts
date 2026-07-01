@@ -317,99 +317,10 @@ export async function markCommunityProvisioningSucceeded(
   })
 }
 
-export async function persistProvisionedCommunityDatabaseAccess(
-  client: Client,
-  input: {
-    communityDatabaseBindingId: string
-    communityDbCredentialId: string
-    organizationSlug: string
-    groupName: string
-    groupId: string | null
-    databaseName: string
-    databaseId: string | null
-    databaseUrl: string
-    location: string | null
-    tokenName: string
-    encryptedToken: string
-    encryptionKeyVersion: number
-    issuedAt: string
-    expiresAt: string | null
-    updatedAt: string
-  },
-): Promise<void> {
-  await withTransaction(client, "write", async (tx) => {
-    await tx.batch([
-      {
-        sql: `
-          UPDATE community_database_bindings
-          SET organization_slug = ?2,
-              group_name = ?3,
-              group_id = ?4,
-              database_name = ?5,
-              database_id = ?6,
-              database_url = ?7,
-              location = ?8,
-              requires_credentials = 1,
-              status = 'active',
-              transferred_at = NULL,
-              updated_at = ?9
-          WHERE community_database_binding_id = ?1
-        `,
-        args: [
-          input.communityDatabaseBindingId,
-          input.organizationSlug,
-          input.groupName,
-          input.groupId,
-          input.databaseName,
-          input.databaseId,
-          input.databaseUrl,
-          input.location,
-          input.updatedAt,
-        ],
-      },
-      {
-        sql: `
-          UPDATE community_db_credentials
-          SET status = 'superseded',
-              invalidated_at = ?2,
-              updated_at = ?2
-          WHERE community_database_binding_id = ?1
-            AND status = 'active'
-        `,
-        args: [input.communityDatabaseBindingId, input.updatedAt],
-      },
-      {
-        sql: `
-          INSERT INTO community_db_credentials (
-            community_db_credential_id, community_database_binding_id, credential_kind, token_name,
-            encrypted_token, encryption_key_version, token_scope, status, issued_at, invalidated_at,
-            expires_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, 'database_token', ?3,
-            ?4, ?5, 'database', 'active', ?6, NULL,
-            ?7, ?8, ?8
-          )
-        `,
-        args: [
-          input.communityDbCredentialId,
-          input.communityDatabaseBindingId,
-          input.tokenName,
-          input.encryptedToken,
-          input.encryptionKeyVersion,
-          input.issuedAt,
-          input.expiresAt,
-          input.updatedAt,
-        ],
-      },
-    ])
-  })
-}
-
 /**
  * Finalize a D1-native community's binding row once the shard has allocated a
- * concrete binding. Counterpart to `persistProvisionedCommunityDatabaseAccess`
- * for the credential-free D1 path: there is no token, so this writes ONLY the
- * `community_database_bindings` row (no `community_db_credentials`).
+ * concrete binding. The D1 path is credential-free, so this writes only the
+ * `community_database_bindings` row.
  *
  * Replaces the `d1://pending-…invalid` sentinel written at create time with the
  * resolved `d1://shard/<bindingName>` URL and flips `requires_credentials` to 0,

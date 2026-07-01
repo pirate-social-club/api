@@ -107,7 +107,6 @@ const communityCreateRepositoryMock = () => activeClient == null ? realCommunity
     authType: "user",
   }),
   isExpired: () => false,
-  isPendingCommunityDatabaseUrl: () => false,
   loadCommunityLocalSnapshot: async () => null,
   loadCommunityProjection: async (_env: Env, _repo: unknown, communityRow: { community_id: string }) => ({
     community_id: communityRow.community_id,
@@ -143,8 +142,6 @@ const communityCreateRepositoryMock = () => activeClient == null ? realCommunity
   }),
   selectEndaomentOrganizationMatch: () => null,
   resolveCommunityDbRoot: () => "/tmp",
-  resolveCommunityDbWrapKey: () => "test-wrap-key",
-  resolveCommunityDbWrapKeyVersion: () => 1,
   resolveProvisioningRetryAction: async () => ({ action: "return_existing" }),
 })
 const communityCreateSharedMock = () => activeClient == null ? realCommunityCreateSharedSnapshot : communityCreateRepositoryMock()

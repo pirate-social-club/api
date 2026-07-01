@@ -1,6 +1,5 @@
 import type { Client } from "../sql-client"
 import {
-  getActiveCommunityDbCredentialRow,
   getCommunityRowById,
   getCommunityRowByIdentifierCandidates,
   getCommunityRowByRouteSlug,
@@ -12,7 +11,6 @@ import {
   getPrimaryCommunityDatabaseBindingRow,
 } from "../auth/auth-db-community-queries"
 import type {
-  CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
   CommunityRow,
   JobRow,
@@ -64,13 +62,6 @@ export async function getPrimaryCommunityDatabaseBinding(
   communityId: string,
 ): Promise<CommunityDatabaseBindingRow | null> {
   return getPrimaryCommunityDatabaseBindingRow(client, communityId)
-}
-
-export async function getActiveCommunityDbCredential(
-  client: Client,
-  communityDatabaseBindingId: string,
-): Promise<CommunityDbCredentialRow | null> {
-  return getActiveCommunityDbCredentialRow(client, communityDatabaseBindingId)
 }
 
 export async function getJobById(client: Client, jobId: string): Promise<JobRow | null> {

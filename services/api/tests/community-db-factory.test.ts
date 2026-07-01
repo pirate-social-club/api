@@ -206,9 +206,6 @@ function buildRepository(databasePath: string): CommunityDatabaseBindingReposito
         updated_at: new Date().toISOString(),
       }
     },
-    async getActiveCommunityDbCredential() {
-      return null
-    },
   }
 }
 
@@ -285,9 +282,6 @@ describe("openCommunityDb", () => {
           created_at: now,
           updated_at: now,
         }
-      },
-      async getActiveCommunityDbCredential() {
-        throw new Error("credentials should not be read for remote bindings")
       },
     } satisfies CommunityDatabaseBindingRepository
 

@@ -8,7 +8,6 @@ import {
 } from "../auth/auth-db-community-queries"
 import type {
   CommunityCommentProjectionRow,
-  CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
   CommunityFollowProjectionRow,
   CommunityMembershipProjectionRow,
@@ -48,7 +47,6 @@ import {
   listActiveCommunities,
   searchActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
-  getActiveCommunityDbCredential,
   getJobById,
   getLatestCommunityProvisioningJob,
 } from "./community-read-repository"
@@ -62,7 +60,6 @@ import {
   createCommunityProvisioningRequest,
   retryCommunityProvisioningRequest,
   markCommunityProvisioningSucceeded,
-  persistProvisionedCommunityDatabaseAccess,
   markCommunityProvisioningFailed,
 } from "./provisioning/repository"
 import {
@@ -167,10 +164,6 @@ export class DatabaseCommunityRepository implements CommunityRepository {
 
   async getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null> {
     return getPrimaryCommunityDatabaseBinding(this.client, communityId)
-  }
-
-  async getActiveCommunityDbCredential(communityDatabaseBindingId: string): Promise<CommunityDbCredentialRow | null> {
-    return getActiveCommunityDbCredential(this.client, communityDatabaseBindingId)
   }
 
   async getJobById(jobId: string): Promise<JobRow | null> {
@@ -345,26 +338,6 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     job: JobRow
   }> {
     return markCommunityProvisioningSucceeded(this.client, input)
-  }
-
-  async persistProvisionedCommunityDatabaseAccess(input: {
-    communityDatabaseBindingId: string
-    communityDbCredentialId: string
-    organizationSlug: string
-    groupName: string
-    groupId: string | null
-    databaseName: string
-    databaseId: string | null
-    databaseUrl: string
-    location: string | null
-    tokenName: string
-    encryptedToken: string
-    encryptionKeyVersion: number
-    issuedAt: string
-    expiresAt: string | null
-    updatedAt: string
-  }): Promise<void> {
-    return persistProvisionedCommunityDatabaseAccess(this.client, input)
   }
 
   async markCommunityProvisioningFailed(input: {

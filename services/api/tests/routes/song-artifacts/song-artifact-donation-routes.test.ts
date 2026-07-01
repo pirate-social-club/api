@@ -929,9 +929,6 @@ describe("song artifact donation routes", () => {
           updated_at: new Date().toISOString(),
         }
       },
-      async getActiveCommunityDbCredential() {
-        return null
-      },
     }
 
     const communityDb = await openCommunityDb(ctx.env, repo, communityId)

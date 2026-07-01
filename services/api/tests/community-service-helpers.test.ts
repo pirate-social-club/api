@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   isExpired,
-  isPendingCommunityDatabaseUrl,
   buildPendingD1CommunityBindingUrl,
   isPendingD1CommunityBindingUrl,
   assertCreateRequest,
@@ -103,26 +102,6 @@ describe("community helper functions", () => {
 
     test("rejects invalid ISO timestamps", () => {
       expect(() => isExpired("not-a-date")).toThrow()
-    })
-  })
-
-  describe("isPendingCommunityDatabaseUrl", () => {
-    test("detects libsql://pending- prefix", () => {
-      expect(isPendingCommunityDatabaseUrl("libsql://pending-cmt_abc.invalid")).toBe(true)
-    })
-
-    test("detects .invalid suffix", () => {
-      expect(isPendingCommunityDatabaseUrl("https://example.com/database.invalid")).toBe(true)
-    })
-
-    test("returns false for normal URLs", () => {
-      expect(isPendingCommunityDatabaseUrl("libsql://my-db.turso.io")).toBe(false)
-    })
-
-    test("returns false for empty/null/undefined", () => {
-      expect(isPendingCommunityDatabaseUrl("")).toBe(false)
-      expect(isPendingCommunityDatabaseUrl(null)).toBe(false)
-      expect(isPendingCommunityDatabaseUrl(undefined)).toBe(false)
     })
   })
 

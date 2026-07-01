@@ -75,7 +75,7 @@ describe("community provisioning recovery routes", () => {
 
     const bindingRows = await ctx.client.execute({
       sql: `
-        SELECT community_database_binding_id
+        SELECT database_url, requires_credentials
         FROM community_database_bindings
         WHERE community_id = ?1
           AND binding_role = 'primary'
@@ -83,16 +83,8 @@ describe("community provisioning recovery routes", () => {
       `,
       args: [firstBody.community.id.replace(/^com_/, "")],
     })
-    const bindingId = String(bindingRows.rows[0]?.community_database_binding_id ?? "")
-    const credentialRows = await ctx.client.execute({
-      sql: `
-        SELECT COUNT(*) AS count
-        FROM community_db_credentials
-        WHERE community_database_binding_id = ?1
-      `,
-      args: [bindingId],
-    })
-    expect(Number(credentialRows.rows[0]?.count ?? 0)).toBe(0)
+    expect(String(bindingRows.rows[0]?.database_url ?? "")).not.toStartWith("libsql://")
+    expect(Number(bindingRows.rows[0]?.requires_credentials ?? 1)).toBe(0)
 
     await ctx.client.execute({
       sql: `

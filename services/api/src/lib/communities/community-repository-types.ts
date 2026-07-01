@@ -1,6 +1,5 @@
 import type {
   CommunityCommentProjectionRow,
-  CommunityDbCredentialRow,
   CommunityDatabaseBindingRow,
   CommunityFollowProjectionRow,
   CommunityMembershipProjectionRow,
@@ -28,7 +27,6 @@ export interface CommunityReadRepository {
 
 export interface CommunityDatabaseBindingRepository {
   getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null>
-  getActiveCommunityDbCredential(communityDatabaseBindingId: string): Promise<CommunityDbCredentialRow | null>
 }
 
 export interface CommunityJobReadRepository {
@@ -185,23 +183,6 @@ export interface CommunityProvisioningRepository {
     community: CommunityRow
     job: JobRow
   }>
-  persistProvisionedCommunityDatabaseAccess(input: {
-    communityDatabaseBindingId: string
-    communityDbCredentialId: string
-    organizationSlug: string
-    groupName: string
-    groupId: string | null
-    databaseName: string
-    databaseId: string | null
-    databaseUrl: string
-    location: string | null
-    tokenName: string
-    encryptedToken: string
-    encryptionKeyVersion: number
-    issuedAt: string
-    expiresAt: string | null
-    updatedAt: string
-  }): Promise<void>
   markCommunityProvisioningFailed(input: {
     communityId: string
     jobId: string

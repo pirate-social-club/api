@@ -1,7 +1,7 @@
 import {
-  decryptCommunityDbCredential,
-  encryptCommunityDbCredential,
-} from "../community-db-credential-crypto"
+  decryptCredentialSecret,
+  encryptCredentialSecret,
+} from "../../crypto/credential-secret"
 import { badRequestError } from "../../errors"
 
 export function normalizeOpenRouterKey(input: string): string {
@@ -30,8 +30,8 @@ export function encryptOpenRouterKey(input: {
   plaintextKey: string
   wrapKey: string
 }): string {
-  return encryptCommunityDbCredential({
-    plaintextToken: normalizeOpenRouterKey(input.plaintextKey),
+  return encryptCredentialSecret({
+    plaintext: normalizeOpenRouterKey(input.plaintextKey),
     wrapKey: input.wrapKey,
   })
 }
@@ -40,8 +40,8 @@ export function encryptElevenLabsKey(input: {
   plaintextKey: string
   wrapKey: string
 }): string {
-  return encryptCommunityDbCredential({
-    plaintextToken: normalizeElevenLabsKey(input.plaintextKey),
+  return encryptCredentialSecret({
+    plaintext: normalizeElevenLabsKey(input.plaintextKey),
     wrapKey: input.wrapKey,
   })
 }
@@ -51,8 +51,8 @@ export function decryptOpenRouterKey(input: {
   encryptionKeyVersion: number
   wrapKey: string
 }): string {
-  return decryptCommunityDbCredential({
-    encryptedToken: input.encryptedSecret,
+  return decryptCredentialSecret({
+    encryptedSecret: input.encryptedSecret,
     encryptionKeyVersion: input.encryptionKeyVersion,
     wrapKey: input.wrapKey,
   })
@@ -63,8 +63,8 @@ export function decryptElevenLabsKey(input: {
   encryptionKeyVersion: number
   wrapKey: string
 }): string {
-  return decryptCommunityDbCredential({
-    encryptedToken: input.encryptedSecret,
+  return decryptCredentialSecret({
+    encryptedSecret: input.encryptedSecret,
     encryptionKeyVersion: input.encryptionKeyVersion,
     wrapKey: input.wrapKey,
   })

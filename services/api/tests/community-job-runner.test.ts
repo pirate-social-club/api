@@ -457,9 +457,6 @@ describe("community-job-runner", () => {
           ? alphaRepo.getPrimaryCommunityDatabaseBinding(communityId)
           : betaRepo.getPrimaryCommunityDatabaseBinding(communityId)
       },
-      async getActiveCommunityDbCredential(bindingId: string) {
-        return alphaRepo.getActiveCommunityDbCredential(bindingId) ?? betaRepo.getActiveCommunityDbCredential(bindingId)
-      },
       async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
         return input.communityId === "cmt_job_alpha"
           ? alphaRepo.recordCommunityPostProjection(input)
@@ -1714,9 +1711,6 @@ describe("community-job-runner", () => {
         }
         return healthyRepo.getPrimaryCommunityDatabaseBinding(id)
       },
-      async getActiveCommunityDbCredential(bindingId: string) {
-        return healthyRepo.getActiveCommunityDbCredential(bindingId)
-      },
       async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
         return healthyRepo.recordCommunityPostProjection(input)
       },
@@ -1800,9 +1794,6 @@ describe("community-job-runner", () => {
           throw new Error("Community database binding has been decommissioned")
         }
         return healthyRepo.getPrimaryCommunityDatabaseBinding(id)
-      },
-      async getActiveCommunityDbCredential(bindingId: string) {
-        return healthyRepo.getActiveCommunityDbCredential(bindingId)
       },
       async recordCommunityPostProjection(input: Parameters<TestCommunityRepository["recordCommunityPostProjection"]>[0]) {
         return healthyRepo.recordCommunityPostProjection(input)
