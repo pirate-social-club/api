@@ -9,6 +9,7 @@ import {
   completeUniqueHumanVerification,
   exchangeJwt,
   requestJson,
+  updateLocalCommunityAnonymousPolicy,
 } from "./communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -215,6 +216,98 @@ describe("feed routes", () => {
     expect(Array.isArray(body.items[0]?.post.viewer_gate_state?.membership_gate_summaries)).toBe(true)
     expect(body.top_communities.map((community) => community.display_name)).toContain("Feed Reader Club")
     expect(body.next_cursor).toBeNull()
+  })
+
+  test("GET /feed/home stamps the public author handle so feed bylines match the community read", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "feed-route-handle-reader")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Feed Handle Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityId = ((await json(communityCreate)) as {
+      community: { id: string }
+    }).community.id.replace(/^com_/, "")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Byline parity post",
+        body: "The feed byline should match the community read byline on first paint.",
+        idempotency_key: "feed-route-handle-post",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postId = ((await json(createdPost)) as { id: string }).id
+
+    // An anonymous post by the same author must never leak the public handle into
+    // the feed byline, even though hydration now runs on the feed path.
+    await updateLocalCommunityAnonymousPolicy({
+      allowAnonymousIdentity: true,
+      anonymousIdentityScope: "community_stable",
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })
+    const anonymousPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        identity_mode: "anonymous",
+        anonymous_scope: "community_stable",
+        title: "Anonymous byline post",
+        body: "Anonymous feed cards must keep author_public_handle null.",
+        idempotency_key: "feed-route-handle-anon-post",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(anonymousPost.status).toBe(201)
+    const anonymousPostId = ((await json(anonymousPost)) as { id: string }).id
+
+    // The single-community read path already hydrates the public author handle,
+    // so it is the source of truth for the byline the feed must match.
+    const communityList = await app.request(
+      `http://pirate.test/communities/${communityId}/posts?sort=new`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(communityList.status).toBe(200)
+    const communityCard = ((await json(communityList)) as {
+      items: Array<{ post: { id: string; author_public_handle: string | null } }>
+    }).items.find((item) => item.post.id === postId)
+    const expectedHandle = communityCard?.post.author_public_handle
+    // Guard against a vacuous assertion: the author must actually resolve to a
+    // public handle, otherwise `null === null` would pass with or without the fix.
+    expect(typeof expectedHandle).toBe("string")
+    expect(expectedHandle).toBeTruthy()
+
+    // The home-feed fanout builds and serializes its own responses; before the
+    // handle hydrator was wired in it emitted `author_public_handle: null`, so
+    // feed cards flashed the truncated id before a client profile fetch swapped
+    // in the handle. It must now match the community read on first paint.
+    const feed = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    expect(feed.status).toBe(200)
+    const feedItems = ((await json(feed)) as {
+      items: Array<{ post: { post: { id: string; identity_mode: string; author_public_handle: string | null } } }>
+    }).items
+    const feedCard = feedItems.find((item) => item.post.post.id === postId)
+    expect(feedCard?.post.post.author_public_handle).toBe(expectedHandle ?? null)
+
+    const anonymousCard = feedItems.find((item) => item.post.post.id === anonymousPostId)
+    expect(anonymousCard?.post.post.identity_mode).toBe("anonymous")
+    expect(anonymousCard?.post.post.author_public_handle).toBeNull()
   })
 
   test("GET /feed/home hydrates crosspost source previews", async () => {

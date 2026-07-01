@@ -13,6 +13,7 @@ import { getMembershipGatePolicy } from "../communities/membership/gate-policy-s
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
+import { hydrateAuthorPublicHandlesForResponses } from "../posts/post-read-response"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
@@ -423,6 +424,17 @@ export async function readHomeFeedCommunityItems(input: {
     await hydrateCrosspostSourcesForResponses({
       responses: postReadJobs.map((job) => job.response),
       communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+    // Stamp public-identity author handles onto the post payload so home-feed
+    // cards render the byline on first paint instead of falling back to a
+    // per-author profile fetch (the truncated-id -> handle flicker). One batched
+    // profile lookup per community slice; anonymous/agent posts stay null.
+    // The live feed hits this directly; the cached materialized public feed
+    // reuses it via listHomeFeed -> readHomeFeedCommunityItems before it stores
+    // the serialized payload, so both paths get the handle.
+    await hydrateAuthorPublicHandlesForResponses({
+      responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
     })
     if (communitySummary) {
