@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process"
+import { rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
@@ -23,6 +27,8 @@ type RuntimeAgoraBlock = {
   token_expires_at: number | null
   uid: number
 }
+
+type ReplayAccessMode = "free" | "included_with_ticket" | "paid"
 
 const DEFAULT_STAGING_API_BASE_URL = "https://api-staging.pirate.sc"
 const ERC20_INTERFACE = new Interface([
@@ -51,10 +57,29 @@ and creates a checkout quote without sending funds.
 
 Flags:
   --settle-purchase      Send Base Sepolia USDC, settle the quote, and verify viewer_attach.
+  --recording-enabled    Create the room with recording enabled and verify recording draft processing after host attach.
+  --replay-access-mode <free|included_with_ticket|paid>
+                         End the recorded room, wait for Filebase ingest, publish the replay, and verify replay access.
   --skip-verification    Skip self verification for newly created smoke users.
   --keep-room-open       Do not end/cancel the smoke live room in cleanup.
   --api-base-url <url>   Override PIRATE_SMOKE_API_BASE_URL.
   --price-cents <n>      Override PIRATE_SMOKE_PRICE_CENTS, default 199.
+  --replay-price-cents <n>
+                         Override paid replay price, default PIRATE_SMOKE_REPLAY_PRICE_CENTS or --price-cents.
+  --recording-hold-ms <n>
+                         When publishing a replay, wait this long after host attach before ending; default 20000.
+  --publish-browser-media
+                         Launch agent-browser with fake mic/camera media into the Agora channel during the recording hold.
+  --skip-browser-media-cleanup
+                         Leave the browser session open after the smoke for debugging.
+  --community-id <id>    Reuse an existing provisioned community instead of creating a new one.
+                         Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
+  --require-existing-community
+                         Fail before creating smoke users or communities unless --community-id/PIRATE_SMOKE_COMMUNITY_ID is set.
+  --skip-remote-config-preflight
+                         Skip the staging Worker secret-name preflight for replay recording runs.
+  --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
+  --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
 Required env for staging:
   AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET
@@ -63,7 +88,14 @@ Required env for staging:
 Required env for --settle-purchase:
   PIRATE_CHECKOUT_RPC_URL
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
-  PIRATE_SMOKE_BUYER_PRIVATE_KEY or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+  PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY, PIRATE_SMOKE_BUYER_PRIVATE_KEY, or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+
+Required staging Worker secrets for --recording-enabled --replay-access-mode:
+  AGORA_CLOUD_RECORDING_CUSTOMER_ID
+  AGORA_CLOUD_RECORDING_CUSTOMER_SECRET
+  AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY
+  AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY
+  STORY_COMPOSITE_READ_CONDITION_ADDRESS
 `)
 }
 
@@ -90,6 +122,15 @@ function readPositiveInteger(value: string, label: string): number {
     throw new Error(`${label} must be a positive integer`)
   }
   return parsed
+}
+
+function readReplayAccessMode(): ReplayAccessMode | null {
+  const value = readArg("--replay-access-mode")
+  if (!value) return null
+  if (value === "free" || value === "included_with_ticket" || value === "paid") {
+    return value
+  }
+  throw new Error("--replay-access-mode must be free, included_with_ticket, or paid")
 }
 
 function isStagingApiUrl(apiBaseUrl: string): boolean {
@@ -131,6 +172,10 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
+function internalUserId(userId: string): string {
+  return userId.replace(/^usr_usr_/u, "usr_")
+}
+
 function resolveCheckoutSourceChainId(env: Record<string, string | undefined>): number {
   const parsed = Number(env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID || "84532")
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 84532
@@ -154,6 +199,64 @@ function resolveCheckoutOperatorAddress(env: Record<string, string | undefined>)
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const REQUIRED_STAGING_REPLAY_WORKER_SECRETS = [
+  "AGORA_CLOUD_RECORDING_CUSTOMER_ID",
+  "AGORA_CLOUD_RECORDING_CUSTOMER_SECRET",
+  "AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY",
+  "AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY",
+  "STORY_COMPOSITE_READ_CONDITION_ADDRESS",
+] as const
+
+function assertStagingReplayWorkerSecretsPresent(input: {
+  apiBaseUrl: string
+  replayAccessMode: ReplayAccessMode | null
+}): void {
+  if (!input.replayAccessMode || !isStagingApiUrl(input.apiBaseUrl) || hasFlag("--skip-remote-config-preflight")) {
+    return
+  }
+
+  const result = spawnSync("./node_modules/.bin/wrangler", [
+    "secret",
+    "list",
+    "--env",
+    "staging",
+    "--format",
+    "json",
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  })
+  const stdout = result.stdout.trim()
+  const stderr = result.stderr.trim()
+  if (result.status !== 0) {
+    throw new Error(
+      `Unable to preflight staging Worker secrets with wrangler secret list. `
+      + `Authenticate Wrangler or pass --skip-remote-config-preflight to bypass this check.`
+      + (stderr ? `\n${stderr}` : "")
+      + (stdout ? `\n${stdout}` : ""),
+    )
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout || "[]")
+  } catch {
+    throw new Error("wrangler secret list returned non-JSON output")
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("wrangler secret list returned an unexpected payload")
+  }
+  const names = new Set(parsed.map((item) => String((item as { name?: unknown }).name ?? "").trim()).filter(Boolean))
+  const missing = REQUIRED_STAGING_REPLAY_WORKER_SECRETS.filter((name) => !names.has(name))
+  if (missing.length > 0) {
+    throw new Error(
+      "Staging Worker is missing required replay recording secrets:\n"
+      + missing.map((name) => `- ${name}`).join("\n")
+      + "\nSet them in Infisical staging /services/api, sync to the Worker, then rerun the smoke.",
+    )
+  }
 }
 
 async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
@@ -341,7 +444,7 @@ async function createCommunity(input: {
     job: created.job.id,
     provisioning_state: created.community.provisioning_state ?? null,
   })
-  return created.community.id
+  return created.community.id.replace(/^com_/u, "")
 }
 
 async function waitForJob(input: {
@@ -421,11 +524,12 @@ async function publishPaidLiveRoom(input: {
   communityId: string
   host: SmokeSession
   priceCents: number
+  recordingEnabled: boolean
   runId: string
 }): Promise<{ listingId: string; postId: string; roomId: string }> {
   const published = await api<{
     listing: { id: string; live_room: string | null; price_cents: number }
-    room: { anchor_post: string; id: string; status: string }
+    room: { anchor_post: string; id: string; recording_enabled?: boolean | null; replay_status?: string | null; status: string }
   }>({
     apiBaseUrl: input.apiBaseUrl,
     body: {
@@ -440,9 +544,10 @@ async function publishPaidLiveRoom(input: {
           {
             role: "host",
             share_bps: 10000,
-            user: input.host.userId,
+            user: internalUserId(input.host.userId),
           },
         ],
+        recording_enabled: input.recordingEnabled,
         room_kind: "solo",
         setlist: {
           items: [
@@ -466,9 +571,15 @@ async function publishPaidLiveRoom(input: {
 
   assert(published.listing.live_room === published.room.id, "listing is not linked to the published live room")
   assert(published.listing.price_cents === input.priceCents, "listing price did not round-trip")
+  if (input.recordingEnabled) {
+    assert(published.room.recording_enabled === true, `recording_enabled did not round-trip true: ${published.room.recording_enabled}`)
+    assert(published.room.replay_status === "none", `new recording-enabled room should start with replay_status none, got ${published.room.replay_status}`)
+  }
   console.log("[paid-live-smoke] paid room", {
     anchor_post: published.room.anchor_post,
     listing: published.listing.id,
+    recording_enabled: published.room.recording_enabled ?? null,
+    replay_status: published.room.replay_status ?? null,
     room: published.room.id,
     status: published.room.status,
   })
@@ -542,6 +653,130 @@ async function hostAttach(input: {
     uid: attached.agora.uid,
   })
   return attached.agora
+}
+
+async function startBrowserMediaPublisher(input: {
+  agora: RuntimeAgoraBlock
+  runId: string
+}): Promise<{ session: string; close: () => Promise<void> } | null> {
+  if (!hasFlag("--publish-browser-media")) return null
+  assert(input.agora.app_id, "browser media publisher requires Agora app_id")
+  assert(input.agora.token, "browser media publisher requires Agora token")
+
+  const session = `paid-live-smoke-${input.runId}`
+  const htmlPath = join(tmpdir(), `${session}.html`)
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Agora Smoke Publisher</title>
+    <style>body{font-family:sans-serif;margin:24px}#status{font-weight:700}</style>
+  </head>
+  <body>
+    <div id="status">starting</div>
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.23.2.js"></script>
+    <script>
+      const appId = ${JSON.stringify(input.agora.app_id)};
+      const channel = ${JSON.stringify(input.agora.channel)};
+      const token = ${JSON.stringify(input.agora.token)};
+      const uid = ${JSON.stringify(input.agora.uid)};
+      const status = document.getElementById("status");
+      async function main() {
+        const client = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
+        client.setClientRole("host");
+        await client.join(appId, channel, token, uid);
+        const audio = await AgoraRTC.createMicrophoneAudioTrack();
+        await client.publish([audio]);
+        window.__pirateAgoraClient = client;
+        window.__pirateAgoraTracks = [audio];
+        status.textContent = "published " + channel + " uid " + uid;
+      }
+      main().catch((error) => {
+        console.error(error);
+        status.textContent = "error: " + (error && error.message ? error.message : String(error));
+      });
+    </script>
+  </body>
+</html>`
+  await writeFile(htmlPath, html, { mode: 0o600 })
+  const args = [
+    "--session",
+    session,
+    "--allow-file-access",
+    "--args",
+    "--use-fake-device-for-media-stream,--use-fake-ui-for-media-stream,--autoplay-policy=no-user-gesture-required,--no-sandbox",
+    "open",
+    `file://${htmlPath}`,
+  ]
+  const opened = spawnSync("agent-browser", args, { stdio: "inherit" })
+  assert(opened.status === 0, `agent-browser publisher failed to open; exit ${opened.status}`)
+  const waited = spawnSync("agent-browser", ["--session", session, "wait", "--text", "published"], { stdio: "inherit" })
+  assert(waited.status === 0, `agent-browser publisher did not report published; exit ${waited.status}`)
+  console.log("[paid-live-smoke] browser media publisher", {
+    channel: input.agora.channel,
+    session,
+    uid: input.agora.uid,
+  })
+  return {
+    session,
+    close: async () => {
+      if (!hasFlag("--skip-browser-media-cleanup")) {
+        spawnSync("agent-browser", ["--session", session, "close"], { stdio: "ignore" })
+      }
+      await rm(htmlPath, { force: true })
+    },
+  }
+}
+
+async function assertRecordingDraftProcessing(input: {
+  apiBaseUrl: string
+  communityId: string
+  host: SmokeSession
+  roomId: string
+}): Promise<void> {
+  const draft = await api<{
+    live_room: string
+    object: string
+    recording: null | {
+      provider: string
+      status: string
+      raw_artifact: unknown
+    }
+    recording_enabled: boolean
+    replay_asset: unknown
+    replay_status: string
+    status: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/recording-draft`,
+    token: input.host.accessToken,
+  })
+
+  assert(draft.object === "live_room_replay_draft", `unexpected draft object ${draft.object}`)
+  assert(draft.live_room === input.roomId, "recording draft live_room mismatch")
+  assert(draft.recording_enabled === true, "recording draft did not report recording_enabled true")
+  assert(draft.replay_status === "none" || draft.replay_status === "processing", `unexpected early replay_status ${draft.replay_status}`)
+  assert(draft.status === "processing", `recording draft should be processing after host attach, got ${draft.status}`)
+  assert(draft.replay_asset == null, "recording draft unexpectedly has a replay asset before ingest")
+  assert(draft.recording?.provider === "agora", `recording provider mismatch: ${draft.recording?.provider}`)
+  assert(["starting", "recording", "stopping", "captured", "ingesting"].includes(draft.recording.status), `unexpected recording status ${draft.recording.status}`)
+  assert(draft.recording.raw_artifact == null, "recording draft unexpectedly has a raw artifact before room end")
+  console.log("[paid-live-smoke] recording draft", {
+    recording_status: draft.recording.status,
+    replay_status: draft.replay_status,
+    status: draft.status,
+  })
+}
+
+async function holdRecordingWindowIfNeeded(input: {
+  replayAccessMode: ReplayAccessMode | null
+}): Promise<void> {
+  if (!input.replayAccessMode) return
+  const holdMs = readPositiveInteger(readArg("--recording-hold-ms") || "20000", "recording hold ms")
+  console.log("[paid-live-smoke] recording hold", {
+    hold_ms: holdMs,
+  })
+  await sleep(holdMs)
 }
 
 async function createPurchaseQuote(input: {
@@ -750,6 +985,353 @@ async function viewerAttachAndRenew(input: {
   })
 }
 
+async function endRoomForReplay(input: {
+  apiBaseUrl: string
+  communityId: string
+  host: SmokeSession
+  roomId: string
+}): Promise<void> {
+  const ended = await api<{
+    id: string
+    replay_status?: string | null
+    status: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/end`,
+    token: input.host.accessToken,
+  })
+  assert(ended.id === input.roomId, "ended room id mismatch")
+  assert(ended.status === "ended", `room did not end, got ${ended.status}`)
+  assert(ended.replay_status === "processing" || ended.replay_status === "failed", `unexpected replay_status after end: ${ended.replay_status}`)
+  console.log("[paid-live-smoke] room ended for replay", {
+    replay_status: ended.replay_status ?? null,
+    room: ended.id,
+  })
+}
+
+async function waitForReplayDraftReady(input: {
+  apiBaseUrl: string
+  communityId: string
+  host: SmokeSession
+  roomId: string
+}): Promise<{ replayAssetId: string }> {
+  const timeoutMs = readPositiveInteger(readArg("--replay-timeout-ms") || "240000", "replay timeout")
+  const intervalMs = readPositiveInteger(readArg("--replay-interval-ms") || "5000", "replay interval")
+  const startedAt = Date.now()
+  let lastStatus = "unknown"
+  let lastRecordingStatus = "unknown"
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const draft = await api<{
+      live_room: string
+      recording: null | {
+        provider: string
+        status: string
+        raw_artifact: null | {
+          provider: string
+          ipfs_cid?: string | null
+          object_key?: string | null
+          mime_type: string
+          size_bytes: number
+        }
+      }
+      replay_asset: null | {
+        id?: string
+        replay_asset_id?: string
+        access_mode: string
+      }
+      replay_status: string
+      status: string
+    }>({
+      apiBaseUrl: input.apiBaseUrl,
+      path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/replay-draft`,
+      token: input.host.accessToken,
+    })
+    lastStatus = draft.status
+    lastRecordingStatus = draft.recording?.status ?? "none"
+    if (draft.status === "failed" || draft.replay_status === "failed" || draft.recording?.status === "failed") {
+      throw new Error(`recording replay failed: ${JSON.stringify(draft)}`)
+    }
+    if (draft.status === "ready" && draft.replay_status === "review_pending" && draft.replay_asset && draft.recording?.raw_artifact) {
+      const replayAssetId = draft.replay_asset.id ?? draft.replay_asset.replay_asset_id
+      assert(replayAssetId, `ready replay draft did not expose replay asset id: ${JSON.stringify(draft.replay_asset)}`)
+      assert(["agora_capture", "filebase"].includes(draft.recording.raw_artifact.provider), `raw recording landed on unexpected provider: ${draft.recording.raw_artifact.provider}`)
+      assert(draft.recording.raw_artifact.mime_type === "video/mp4", `raw replay artifact mime_type mismatch: ${draft.recording.raw_artifact.mime_type}`)
+      assert(draft.recording.raw_artifact.size_bytes > 0, "raw replay artifact is empty")
+      if (draft.recording.raw_artifact.provider === "agora_capture") {
+        assert(draft.recording.raw_artifact.ipfs_cid == null, "raw Agora capture artifact should not expose an IPFS CID")
+      } else {
+        assert(typeof draft.recording.raw_artifact.ipfs_cid === "string" && draft.recording.raw_artifact.ipfs_cid.length > 0, "raw Filebase artifact is missing ipfs_cid")
+      }
+      console.log("[paid-live-smoke] replay draft ready", {
+        ipfs_cid: draft.recording.raw_artifact.ipfs_cid ?? null,
+        provider: draft.recording.raw_artifact.provider,
+        size_bytes: draft.recording.raw_artifact.size_bytes,
+        recording_status: draft.recording.status,
+        replay_asset: replayAssetId,
+        replay_status: draft.replay_status,
+      })
+      return { replayAssetId }
+    }
+    await sleep(intervalMs)
+  }
+
+  throw new Error(`replay draft did not become ready within ${timeoutMs}ms; last status ${lastStatus}, recording ${lastRecordingStatus}`)
+}
+
+async function updateReplayDraftAccessMode(input: {
+  accessMode: ReplayAccessMode
+  apiBaseUrl: string
+  communityId: string
+  host: SmokeSession
+  roomId: string
+}): Promise<void> {
+  if (input.accessMode === "free") return
+  const draft = await api<{
+    replay_asset: null | { access_mode: string }
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      access_mode: input.accessMode,
+    },
+    method: "PATCH",
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/replay-draft`,
+    token: input.host.accessToken,
+  })
+  assert(draft.replay_asset?.access_mode === input.accessMode, `replay draft access mode did not update: ${draft.replay_asset?.access_mode}`)
+  console.log("[paid-live-smoke] replay draft access mode", {
+    access_mode: draft.replay_asset.access_mode,
+  })
+}
+
+async function publishReplayDraft(input: {
+  accessMode: ReplayAccessMode
+  apiBaseUrl: string
+  communityId: string
+  host: SmokeSession
+  replayPriceCents: number
+  roomId: string
+}): Promise<{ replayAssetId: string; replayListingId: string | null }> {
+  const published = await api<{
+    replay_asset: null | {
+      access_mode: string
+      id?: string
+      replay_asset_id?: string
+      locked_delivery_status: string
+      publication_status: string
+    }
+    replay_status: string
+    status: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      access_mode: input.accessMode,
+      listing: input.accessMode === "paid"
+        ? {
+          price_cents: input.replayPriceCents,
+          regional_pricing_enabled: false,
+          status: "active",
+        }
+        : null,
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/replay-draft/publish`,
+    token: input.host.accessToken,
+  })
+  const replayAssetId = published.replay_asset?.id ?? published.replay_asset?.replay_asset_id
+  assert(published.status === "published", `replay draft publish returned status ${published.status}`)
+  assert(published.replay_status === "published", `replay_status after publish was ${published.replay_status}`)
+  assert(replayAssetId, `published replay did not include replay asset: ${JSON.stringify(published.replay_asset)}`)
+  assert(published.replay_asset?.access_mode === input.accessMode, `published replay access mode mismatch: ${published.replay_asset?.access_mode}`)
+  if (input.accessMode !== "free") {
+    assert(published.replay_asset.locked_delivery_status === "ready", `locked replay delivery was not ready: ${published.replay_asset.locked_delivery_status}`)
+  }
+
+  const room = await api<{
+    replay_asset: string | null
+    replay_asset_id?: string | null
+    replay_listing: string | null
+    replay_listing_id?: string | null
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}`,
+    token: input.host.accessToken,
+  })
+  const replayListingId = room.replay_listing ?? room.replay_listing_id ?? null
+  if (input.accessMode === "paid") {
+    assert(replayListingId, "paid replay publish did not attach replay listing to the room")
+  }
+  console.log("[paid-live-smoke] replay published", {
+    access_mode: input.accessMode,
+    replay_asset: replayAssetId,
+    replay_listing: replayListingId,
+  })
+  return { replayAssetId, replayListingId }
+}
+
+async function assertReplayAccess(input: {
+  accessMode: ReplayAccessMode
+  apiBaseUrl: string
+  buyer: SmokeSession
+  communityId: string
+  expectEntitled: boolean
+  replayAssetId: string
+  replayListingId: string | null
+  roomId: string
+}): Promise<void> {
+  const access = await api<{
+    access_granted: boolean
+    access_mode: string | null
+    decision_reason: string
+    delivery_kind: string | null
+    replay_asset: string | null
+    replay_listing: null | {
+      id: string
+      price_cents: number
+      replay_asset: string | null
+    }
+    story_cdr_access: null | {
+      access_scope: string
+      ciphertext_ref: string
+      vault_uuid: number
+    }
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    path: `/communities/${encodeURIComponent(input.communityId)}/live-rooms/${encodeURIComponent(input.roomId)}/replay/access`,
+    token: input.buyer.accessToken,
+  })
+  assert(access.replay_asset === input.replayAssetId, `replay access asset mismatch: ${access.replay_asset}`)
+  assert(access.access_mode === input.accessMode, `replay access mode mismatch: ${access.access_mode}`)
+  if (input.accessMode === "free") {
+    assert(access.access_granted === true, `free replay was not granted: ${JSON.stringify(access)}`)
+    assert(access.decision_reason === "free", `free replay decision mismatch: ${access.decision_reason}`)
+    assert(access.delivery_kind === "primary_content_ref", `free replay delivery mismatch: ${access.delivery_kind}`)
+  } else if (input.expectEntitled) {
+    assert(access.access_granted === true, `entitled locked replay was not granted: ${JSON.stringify(access)}`)
+    assert(access.decision_reason === "purchase_entitlement", `locked replay decision mismatch: ${access.decision_reason}`)
+    assert(access.delivery_kind === "story_cdr_ref", `locked replay delivery mismatch: ${access.delivery_kind}`)
+    assert(access.story_cdr_access?.access_scope === "asset.share", `locked replay CDR access scope mismatch: ${access.story_cdr_access?.access_scope}`)
+  } else {
+    assert(access.access_granted === false, `locked replay was unexpectedly granted: ${JSON.stringify(access)}`)
+    assert(access.decision_reason === "purchase_required", `locked replay decision mismatch: ${access.decision_reason}`)
+    if (input.accessMode === "paid") {
+      const replayListing = access.replay_listing
+      const expectedListingIds = new Set([
+        input.replayListingId,
+        input.replayListingId ? `lst_${input.replayListingId}` : null,
+      ].filter((value): value is string => Boolean(value)))
+      assert(Boolean(replayListing?.id && expectedListingIds.has(replayListing.id)), `paid replay access did not expose listing ${input.replayListingId}: ${JSON.stringify(replayListing)}`)
+      assert(replayListing?.replay_asset === input.replayAssetId, "paid replay listing target mismatch")
+    }
+  }
+  console.log("[paid-live-smoke] replay access", {
+    access_granted: access.access_granted,
+    access_mode: access.access_mode,
+    decision_reason: access.decision_reason,
+    delivery_kind: access.delivery_kind,
+  })
+}
+
+async function createReplayPurchaseQuote(input: {
+  apiBaseUrl: string
+  buyer: SmokeSession
+  communityId: string
+  env: Record<string, string | undefined>
+  listingId: string
+  replayAssetId: string
+}): Promise<{
+  final_price_cents: number
+  funding_destination_address?: string | null
+  id: string
+  settlement_mode: string
+}> {
+  const chainId = resolveCheckoutSourceChainId(input.env)
+  const listingId = input.listingId.startsWith("lst_lst_") ? input.listingId : `lst_${input.listingId}`
+  const quote = await api<{
+    final_price_cents: number
+    funding_destination_address?: string | null
+    id: string
+    replay_asset: string | null
+    settlement_mode: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      client_estimated_hop_count: 1,
+      client_estimated_slippage_bps: 0,
+      funding_asset: {
+        asset_symbol: "USDC",
+        chain_id: chainId,
+        chain_namespace: "eip155",
+        display_name: `USDC on ${resolveCheckoutChainName(chainId)}`,
+      },
+      listing: listingId,
+      route_provider: "pirate_checkout",
+      source_chain: {
+        chain_id: chainId,
+        chain_namespace: "eip155",
+        display_name: resolveCheckoutChainName(chainId),
+      },
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/purchase-quotes`,
+    token: input.buyer.accessToken,
+  })
+
+  assert(quote.replay_asset === input.replayAssetId, `replay quote target mismatch: ${quote.replay_asset}`)
+  assert(quote.settlement_mode === "delivery_only_story_settlement", `unexpected replay settlement mode ${quote.settlement_mode}`)
+  console.log("[paid-live-smoke] replay purchase quote", {
+    final_price_cents: quote.final_price_cents,
+    funding_destination_address: quote.funding_destination_address ?? null,
+    quote: quote.id,
+  })
+  return quote
+}
+
+async function settleReplayPurchase(input: {
+  apiBaseUrl: string
+  buyer: SmokeSession
+  communityId: string
+  fundingTxRef: string
+  quoteId: string
+  replayAssetId: string
+}): Promise<string> {
+  if (!input.buyer.walletAttachment) {
+    throw new Error("buyer wallet attachment is required for replay purchase settlement")
+  }
+  const settlement = await api<{
+    entitlement_kind: string
+    entitlement_target_ref: string
+    id: string
+    purchase_entitlement: string
+    replay_asset: string | null
+    settlement_mode: string
+    settlement_tx_ref: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      funding_tx_ref: input.fundingTxRef,
+      quote: input.quoteId,
+      settlement_tx_ref: readArg("--replay-settlement-tx-ref") || input.fundingTxRef,
+      settlement_wallet_attachment: input.buyer.walletAttachment,
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/purchase-settlements`,
+    token: input.buyer.accessToken,
+  })
+
+  assert(settlement.replay_asset === input.replayAssetId, `replay settlement target mismatch: ${settlement.replay_asset}`)
+  assert(settlement.entitlement_kind === "replay_access", `unexpected replay entitlement kind ${settlement.entitlement_kind}`)
+  assert(settlement.entitlement_target_ref === input.replayAssetId, "replay settlement entitlement target mismatch")
+  assert(settlement.settlement_mode === "delivery_only_story_settlement", `unexpected replay settlement mode ${settlement.settlement_mode}`)
+  console.log("[paid-live-smoke] replay purchase settlement", {
+    entitlement: settlement.purchase_entitlement,
+    settlement: settlement.id,
+    settlement_tx_ref: settlement.settlement_tx_ref,
+  })
+  return settlement.purchase_entitlement
+}
+
 async function cleanupRoom(input: {
   apiBaseUrl: string
   communityId: string
@@ -796,29 +1378,58 @@ async function main(): Promise<void> {
       || readEnv(env, "PIRATE_SMOKE_API_BASE_URL", DEFAULT_STAGING_API_BASE_URL),
   )
   const runId = `${new Date().toISOString().replace(/[-:.TZ]/gu, "").slice(0, 14)}-${Math.random().toString(16).slice(2, 8)}`
+  const existingCommunityId = readArg("--community-id") || readEnv(env, "PIRATE_SMOKE_COMMUNITY_ID") || ""
+  const hostSubject = readArg("--host-subject")
+    || readEnv(env, "PIRATE_SMOKE_HOST_SUBJECT")
+    || `paid-live-smoke-host-${runId}`
+  const buyerSubject = readArg("--buyer-subject")
+    || readEnv(env, "PIRATE_SMOKE_BUYER_SUBJECT")
+    || `paid-live-smoke-buyer-${runId}`
   const priceCents = readPositiveInteger(
     readArg("--price-cents") || readEnv(env, "PIRATE_SMOKE_PRICE_CENTS", "199"),
     "price cents",
   )
   const settle = hasFlag("--settle-purchase")
+  const recordingEnabled = hasFlag("--recording-enabled")
+  const replayAccessMode = readReplayAccessMode()
+  const requireExistingCommunity = hasFlag("--require-existing-community")
+  const replayPriceCents = readPositiveInteger(
+    readArg("--replay-price-cents") || readEnv(env, "PIRATE_SMOKE_REPLAY_PRICE_CENTS", String(priceCents)),
+    "replay price cents",
+  )
+  if (replayAccessMode && !recordingEnabled) {
+    throw new Error("--replay-access-mode requires --recording-enabled")
+  }
+  if (requireExistingCommunity && !existingCommunityId) {
+    throw new Error("--require-existing-community requires --community-id or PIRATE_SMOKE_COMMUNITY_ID")
+  }
+  assertStagingReplayWorkerSecretsPresent({
+    apiBaseUrl,
+    replayAccessMode,
+  })
   const skipVerification = hasFlag("--skip-verification")
   let host: SmokeSession | null = null
   let communityId = ""
   let roomId: string | null = null
   let hostAttached = false
+  let browserPublisher: { close: () => Promise<void> } | null = null
 
   try {
     console.log("[paid-live-smoke] start", {
       api_base_url: apiBaseUrl,
       price_cents: priceCents,
+      replay_access_mode: replayAccessMode,
+      replay_price_cents: replayAccessMode === "paid" ? replayPriceCents : null,
+      recording_enabled: recordingEnabled,
       run_id: runId,
       settle_purchase: settle,
+      using_existing_community: Boolean(existingCommunityId),
     })
 
     host = await createSession({
       apiBaseUrl,
       env,
-      subject: `paid-live-smoke-host-${runId}`,
+      subject: hostSubject,
     })
     console.log("[paid-live-smoke] host", {
       user: host.userId,
@@ -829,14 +1440,15 @@ async function main(): Promise<void> {
       await completeUniqueHuman({ apiBaseUrl, session: host })
     }
 
-    const buyerPrivateKey = readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
+    const buyerPrivateKey = readEnv(env, "PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY")
+      || readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
       || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
       || null
     const buyer = await createSession({
       apiBaseUrl,
       env,
       privateKey: buyerPrivateKey,
-      subject: `paid-live-smoke-buyer-${runId}`,
+      subject: buyerSubject,
     })
     console.log("[paid-live-smoke] buyer", {
       user: buyer.userId,
@@ -847,7 +1459,15 @@ async function main(): Promise<void> {
       await completeUniqueHuman({ apiBaseUrl, session: buyer })
     }
 
-    communityId = await createCommunity({ apiBaseUrl, host, runId })
+    if (existingCommunityId) {
+      communityId = existingCommunityId.replace(/^com_/u, "")
+      console.log("[paid-live-smoke] community", {
+        community: communityId,
+        reused: true,
+      })
+    } else {
+      communityId = await createCommunity({ apiBaseUrl, host, runId })
+    }
     await approveBuyerMembership({ apiBaseUrl, buyer, communityId, host })
 
     const published = await publishPaidLiveRoom({
@@ -855,6 +1475,7 @@ async function main(): Promise<void> {
       communityId,
       host,
       priceCents,
+      recordingEnabled,
       runId,
     })
     roomId = published.roomId
@@ -869,6 +1490,19 @@ async function main(): Promise<void> {
 
     const hostAgora = await hostAttach({ apiBaseUrl, communityId, host, roomId })
     hostAttached = true
+    browserPublisher = await startBrowserMediaPublisher({
+      agora: hostAgora,
+      runId,
+    })
+    if (recordingEnabled) {
+      await assertRecordingDraftProcessing({
+        apiBaseUrl,
+        communityId,
+        host,
+        roomId,
+      })
+    }
+    await holdRecordingWindowIfNeeded({ replayAccessMode })
 
     const quote = await createPurchaseQuote({
       apiBaseUrl,
@@ -879,7 +1513,7 @@ async function main(): Promise<void> {
       roomId,
     })
 
-    if (!settle) {
+    if (!settle && !replayAccessMode) {
       console.log("[paid-live-smoke] quote-only mode complete", {
         anchor_post: published.postId,
         community: communityId,
@@ -891,40 +1525,120 @@ async function main(): Promise<void> {
       return
     }
 
-    const fundingTxRef = readArg("--funding-tx-ref")
-      || readEnv(env, "PIRATE_SMOKE_FUNDING_TX_REF")
-      || await sendCheckoutFunding({ buyer, env, quote })
-    const entitlement = await settlePurchase({
-      apiBaseUrl,
-      buyer,
-      communityId,
-      fundingTxRef,
-      quoteId: quote.id,
-      roomId,
-    })
-    await assertAccessAllowed({
-      apiBaseUrl,
-      buyer,
-      communityId,
-      entitlementId: entitlement,
-      roomId,
-    })
-    await viewerAttachAndRenew({
-      apiBaseUrl,
-      buyer,
-      communityId,
-      expectedChannel: hostAgora.channel,
-      roomId,
-    })
+    if (settle) {
+      const fundingTxRef = readArg("--funding-tx-ref")
+        || readEnv(env, "PIRATE_SMOKE_FUNDING_TX_REF")
+        || await sendCheckoutFunding({ buyer, env, quote })
+      const entitlement = await settlePurchase({
+        apiBaseUrl,
+        buyer,
+        communityId,
+        fundingTxRef,
+        quoteId: quote.id,
+        roomId,
+      })
+      await assertAccessAllowed({
+        apiBaseUrl,
+        buyer,
+        communityId,
+        entitlementId: entitlement,
+        roomId,
+      })
+      await viewerAttachAndRenew({
+        apiBaseUrl,
+        buyer,
+        communityId,
+        expectedChannel: hostAgora.channel,
+        roomId,
+      })
+    } else {
+      console.log("[paid-live-smoke] live-ticket quote-only mode", {
+        quote: quote.id,
+      })
+    }
+
+    if (replayAccessMode) {
+      await endRoomForReplay({ apiBaseUrl, communityId, host, roomId })
+      await waitForReplayDraftReady({ apiBaseUrl, communityId, host, roomId })
+      await updateReplayDraftAccessMode({
+        accessMode: replayAccessMode,
+        apiBaseUrl,
+        communityId,
+        host,
+        roomId,
+      })
+      const replay = await publishReplayDraft({
+        accessMode: replayAccessMode,
+        apiBaseUrl,
+        communityId,
+        host,
+        replayPriceCents,
+        roomId,
+      })
+      await assertReplayAccess({
+        accessMode: replayAccessMode,
+        apiBaseUrl,
+        buyer,
+        communityId,
+        expectEntitled: settle && replayAccessMode === "included_with_ticket",
+        replayAssetId: replay.replayAssetId,
+        replayListingId: replay.replayListingId,
+        roomId,
+      })
+      if (replayAccessMode === "paid") {
+        assert(replay.replayListingId, "paid replay listing was missing")
+        const replayQuote = await createReplayPurchaseQuote({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          env,
+          listingId: replay.replayListingId,
+          replayAssetId: replay.replayAssetId,
+        })
+        if (settle) {
+          const replayFundingTxRef = readArg("--replay-funding-tx-ref")
+            || readEnv(env, "PIRATE_SMOKE_REPLAY_FUNDING_TX_REF")
+            || await sendCheckoutFunding({ buyer, env, quote: replayQuote })
+          await settleReplayPurchase({
+            apiBaseUrl,
+            buyer,
+            communityId,
+            fundingTxRef: replayFundingTxRef,
+            quoteId: replayQuote.id,
+            replayAssetId: replay.replayAssetId,
+          })
+          await assertReplayAccess({
+            accessMode: replayAccessMode,
+            apiBaseUrl,
+            buyer,
+            communityId,
+            expectEntitled: true,
+            replayAssetId: replay.replayAssetId,
+            replayListingId: replay.replayListingId,
+            roomId,
+          })
+        } else {
+          console.log("[paid-live-smoke] paid replay quote-only mode", {
+            quote: replayQuote.id,
+            replay_asset: replay.replayAssetId,
+            replay_listing: replay.replayListingId,
+          })
+        }
+      }
+    }
 
     console.log("[paid-live-smoke] paid live-room Base Sepolia smoke passed", {
       anchor_post: published.postId,
       community: communityId,
-      funding_tx_ref: fundingTxRef,
       listing: published.listingId,
+      replay_access_mode: replayAccessMode,
       room: roomId,
     })
   } finally {
+    if (browserPublisher) {
+      await browserPublisher.close()
+      browserPublisher = null
+    }
     if (communityId) {
       await cleanupRoom({
         apiBaseUrl,

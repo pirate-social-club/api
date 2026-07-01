@@ -17,6 +17,7 @@ export type CreateLiveRoomRequest = {
   guest_user?: string | null
   event_start_at?: number | null
   cover_ref?: string | null
+  recording_enabled?: boolean | null
   performer_allocations?: Array<{
     user?: string | null
     role?: "host" | "guest" | null
@@ -61,6 +62,9 @@ export type LiveRoom = {
   ended_at: number | null
   canceled_at: number | null
   broadcast_ref: string | null
+  recording_enabled: boolean
+  replay_asset_id: string | null
+  replay_listing_id: string | null
   replay_status: string
   performer_allocations: Array<{
     id: string

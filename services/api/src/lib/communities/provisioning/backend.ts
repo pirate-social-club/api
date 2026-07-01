@@ -208,7 +208,7 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       organizationSlug: "shard",
       groupName: "shard",
       groupId: null,
-      databaseName: "pending",
+      databaseName: `pending-${input.communityId}`,
       databaseId: null,
       databaseUrl: buildPendingD1CommunityBindingUrl(input.communityId),
       location: resolveShardRegion(input.env, input.databaseRegion),

@@ -202,6 +202,7 @@ async function finalizeLocalPurchaseSettlement(input: {
     input.communityId,
     input.buyer,
     entitlementTarget.targetRef,
+    entitlementTarget.entitlementKind,
   )
   if (!entitlement) {
     entitlement = {
@@ -241,17 +242,17 @@ async function finalizeLocalPurchaseSettlement(input: {
     await tx.execute({
       sql: `
         INSERT INTO purchases (
-          purchase_id, community_id, listing_id, asset_id, live_room_id, buyer_kind, buyer_user_id,
+          purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id, buyer_kind, buyer_user_id,
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
           settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
           settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
           donation_amount_usd, donation_settlement_ref, vinyl_release_provider, vinyl_release_url, created_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-          ?8, ?9, ?10,
-          ?11, ?12, ?13, ?14,
-          ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22, ?23, ?24
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+          ?9, ?10, ?11,
+          ?12, ?13, ?14, ?15,
+          ?16, ?17, ?18, ?19,
+          ?20, ?21, ?22, ?23, ?24, ?25
         )
         ON CONFLICT(purchase_id) DO NOTHING
       `,
@@ -261,6 +262,7 @@ async function finalizeLocalPurchaseSettlement(input: {
         input.quote.listing_id,
         input.quote.asset_id,
         input.quote.live_room_id,
+        input.quote.replay_asset_id,
         buyerFields.buyer_kind,
         buyerFields.buyer_user_id,
         buyerFields.buyer_wallet_address,
@@ -738,6 +740,19 @@ async function settleCommunityPurchaseForBuyer(input: {
       throw badRequestError("Purchase quote has expired")
     }
     const createdAt = nowIso()
+    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
+      parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
+    )
+    if (!quote.asset_id && allocationSnapshot.some((allocation) => allocation.recipient_type === "charity")) {
+      throw badRequestError("Non-asset purchase donations are not supported until charity payout routing is enabled")
+    }
+    const {
+      donationAmountUsd,
+      donationPartnerId,
+      donationSharePct,
+    } = extractDonationCompatibilityFields({
+      allocationSnapshot,
+    })
     const reservation = await reservePurchaseSettlementAttempt({
       client: db.client,
       communityId: input.communityId,
@@ -762,16 +777,6 @@ async function settleCommunityPurchaseForBuyer(input: {
       }
       throw conflictError("Purchase settlement was finalized but local purchase rows are missing")
     }
-    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
-      parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
-    )
-    const {
-      donationAmountUsd,
-      donationPartnerId,
-      donationSharePct,
-    } = extractDonationCompatibilityFields({
-      allocationSnapshot,
-    })
     const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
       quote.destination_settlement_chain_json,
       { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },

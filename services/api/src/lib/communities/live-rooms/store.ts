@@ -34,6 +34,9 @@ export type LiveRoomRow = {
   ended_at: number | null
   canceled_at: number | null
   broadcast_ref: string | null
+  recording_enabled: boolean
+  replay_asset_id: string | null
+  replay_listing_id: string | null
   replay_status: string
   created_at: string
   updated_at: string
@@ -74,7 +77,7 @@ export async function getLiveRoomRow(
       SELECT live_room_id, community_id, anchor_post_id, host_user_id, guest_user_id,
              room_kind, status, access_mode, visibility, title, description, cover_ref,
              event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
-             replay_status, created_at, updated_at
+             recording_enabled, replay_asset_id, replay_listing_id, replay_status, created_at, updated_at
       FROM live_rooms
       WHERE community_id = ?1 AND live_room_id = ?2
       LIMIT 1
@@ -149,6 +152,9 @@ export async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRo
     ended_at: room.ended_at,
     canceled_at: room.canceled_at,
     broadcast_ref: room.broadcast_ref,
+    recording_enabled: room.recording_enabled,
+    replay_asset_id: room.replay_asset_id,
+    replay_listing_id: room.replay_listing_id,
     replay_status: room.replay_status,
     performer_allocations: allocations.map((allocation) => ({
       id: allocation.allocation_id,
@@ -224,10 +230,17 @@ function rowToLiveRoom(row: QueryResultRow): LiveRoomRow {
     ended_at: numberOrNull(rowValue(row, "ended_at")),
     canceled_at: numberOrNull(rowValue(row, "canceled_at")),
     broadcast_ref: stringOrNull(rowValue(row, "broadcast_ref")),
+    recording_enabled: booleanFromSql(rowValue(row, "recording_enabled")),
+    replay_asset_id: stringOrNull(rowValue(row, "replay_asset_id")),
+    replay_listing_id: stringOrNull(rowValue(row, "replay_listing_id")),
     replay_status: requiredString(row, "replay_status"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
+}
+
+function booleanFromSql(value: unknown): boolean {
+  return value === true || value === 1 || value === "1"
 }
 
 function rowToAllocation(row: QueryResultRow): AllocationRow {

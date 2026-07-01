@@ -87,11 +87,17 @@ export function resolveAllocationSettlementAmountAtomic(input: {
 }
 
 export function resolvePurchaseEntitlementTarget(
-  quote: Pick<PurchaseQuoteRow, "asset_id" | "live_room_id" | "listing_id">,
+  quote: Pick<PurchaseQuoteRow, "asset_id" | "live_room_id" | "listing_id"> & { replay_asset_id?: string | null },
 ): {
   entitlementKind: CommunityPurchase["entitlement_kind"]
   targetRef: string
 } {
+  if (quote.replay_asset_id) {
+    return {
+      entitlementKind: "replay_access",
+      targetRef: quote.replay_asset_id,
+    }
+  }
   return {
     entitlementKind: quote.live_room_id ? "live_room_access" : "asset_access",
     targetRef: quote.asset_id ?? quote.live_room_id ?? quote.listing_id,
@@ -101,7 +107,9 @@ export function resolvePurchaseEntitlementTarget(
 function toSettlementEntitlementKind(
   entitlementKind: CommunityPurchase["entitlement_kind"],
 ): CommunityPurchaseSettlement["entitlement_kind"] {
-  return entitlementKind === "live_room_access" ? "live_room_access" : "asset_access"
+  if (entitlementKind === "live_room_access") return "live_room_access"
+  if (entitlementKind === "replay_access") return "replay_access"
+  return "asset_access"
 }
 
 export function serializeSettlement(
@@ -123,6 +131,7 @@ export function serializeSettlement(
     buyer_user: `usr_${requireUserBuyerId(purchase)}`,
     asset: purchase.asset_id ? `asset_${purchase.asset_id}` : null,
     live_room: purchase.live_room_id,
+    replay_asset: purchase.replay_asset_id,
     settlement_wallet_attachment: purchase.settlement_wallet_attachment_id,
     purchase_price_cents: usdToCents(purchase.purchase_price_usd) ?? 0,
     pricing_tier: purchase.pricing_tier,
