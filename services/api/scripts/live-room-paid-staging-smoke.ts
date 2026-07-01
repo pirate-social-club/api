@@ -1053,14 +1053,17 @@ async function waitForReplayDraftReady(input: {
       const replayAssetId = draft.replay_asset.id ?? draft.replay_asset.replay_asset_id
       assert(replayAssetId, `ready replay draft did not expose replay asset id: ${JSON.stringify(draft.replay_asset)}`)
       assert(["agora_capture", "filebase"].includes(draft.recording.raw_artifact.provider), `raw recording landed on unexpected provider: ${draft.recording.raw_artifact.provider}`)
+      assert(draft.recording.raw_artifact.mime_type === "video/mp4", `raw replay artifact mime_type mismatch: ${draft.recording.raw_artifact.mime_type}`)
+      assert(draft.recording.raw_artifact.size_bytes > 0, "raw replay artifact is empty")
       if (draft.recording.raw_artifact.provider === "agora_capture") {
-        assert(typeof draft.recording.raw_artifact.object_key === "string" && draft.recording.raw_artifact.object_key.length > 0, "raw Agora capture artifact is missing object_key")
+        assert(draft.recording.raw_artifact.ipfs_cid == null, "raw Agora capture artifact should not expose an IPFS CID")
       } else {
         assert(typeof draft.recording.raw_artifact.ipfs_cid === "string" && draft.recording.raw_artifact.ipfs_cid.length > 0, "raw Filebase artifact is missing ipfs_cid")
       }
       console.log("[paid-live-smoke] replay draft ready", {
-        object_key: draft.recording.raw_artifact.object_key ?? null,
+        ipfs_cid: draft.recording.raw_artifact.ipfs_cid ?? null,
         provider: draft.recording.raw_artifact.provider,
+        size_bytes: draft.recording.raw_artifact.size_bytes,
         recording_status: draft.recording.status,
         replay_asset: replayAssetId,
         replay_status: draft.replay_status,
