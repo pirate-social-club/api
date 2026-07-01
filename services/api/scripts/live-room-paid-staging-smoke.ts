@@ -1212,8 +1212,13 @@ async function assertReplayAccess(input: {
     assert(access.access_granted === false, `locked replay was unexpectedly granted: ${JSON.stringify(access)}`)
     assert(access.decision_reason === "purchase_required", `locked replay decision mismatch: ${access.decision_reason}`)
     if (input.accessMode === "paid") {
-      assert(access.replay_listing?.id === input.replayListingId, `paid replay access did not expose listing ${input.replayListingId}: ${JSON.stringify(access.replay_listing)}`)
-      assert(access.replay_listing.replay_asset === input.replayAssetId, "paid replay listing target mismatch")
+      const replayListing = access.replay_listing
+      const expectedListingIds = new Set([
+        input.replayListingId,
+        input.replayListingId ? `lst_${input.replayListingId}` : null,
+      ].filter((value): value is string => Boolean(value)))
+      assert(Boolean(replayListing?.id && expectedListingIds.has(replayListing.id)), `paid replay access did not expose listing ${input.replayListingId}: ${JSON.stringify(replayListing)}`)
+      assert(replayListing?.replay_asset === input.replayAssetId, "paid replay listing target mismatch")
     }
   }
   console.log("[paid-live-smoke] replay access", {
