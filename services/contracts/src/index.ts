@@ -302,179 +302,6 @@ export type PublicNameStatus = ({
   owner_kind: "user";
 });
 
-export type BookingProfile = {
-  object: "booking_profile";
-  host: string;
-  display_headline?: string | null;
-  bio?: string | null;
-  topics?: Array<string> | null;
-  intro_video_ref?: string | null;
-  host_timezone: string;
-  base_price_cents: number;
-  default_slot_duration_seconds: number;
-  platform_fee_bps: number;
-  payout_wallet_address?: string | null;
-  is_published: boolean;
-  created: number;
-  updated: number;
-};
-
-export type BookingProfileResponse = (BookingProfile | BookingProfileEmpty);
-
-export type UpdateBookingProfileRequest = {
-  host_timezone?: string;
-  base_price_cents?: number;
-  default_slot_duration_seconds?: number;
-  display_headline?: string | null;
-  bio?: string | null;
-  topics?: Array<string> | null;
-  intro_video_ref?: string | null;
-  platform_fee_bps?: number;
-  payout_wallet_address?: string | null;
-};
-
-export type AvailabilityRule = {
-  object: "availability_rule";
-  id: string;
-  by_weekday: Array<number>;
-  start_local: string;
-  end_local: string;
-  slot_duration_seconds: number;
-  effective_from: number | null;
-  effective_until: number | null;
-  created: number;
-  updated: number;
-};
-
-export type CreateAvailabilityRuleRequest = {
-  by_weekday: Array<number>;
-  start_local: string;
-  end_local: string;
-  slot_duration_seconds: number;
-  effective_from_utc?: string;
-  effective_until_utc?: string;
-};
-
-export type UpdateAvailabilityRuleRequest = {
-  by_weekday?: Array<number>;
-  start_local?: string;
-  end_local?: string;
-  slot_duration_seconds?: number;
-  effective_from_utc?: string;
-  effective_until_utc?: string;
-};
-
-export type AvailabilityException = {
-  object: "availability_exception";
-  id: string;
-  kind: "block" | "open";
-  start: number;
-  end: number;
-  created: number;
-};
-
-export type CreateAvailabilityExceptionRequest = {
-  kind: "block" | "open";
-  start_utc: string;
-  end_utc: string;
-};
-
-export type UpdateAvailabilityExceptionRequest = {
-  kind?: "block" | "open";
-  start_utc?: string;
-  end_utc?: string;
-};
-
-export type PriceRule = {
-  object: "price_rule";
-  id: string;
-  match_weekday: Array<number> | null;
-  match_local_start: string | null;
-  match_local_end: string | null;
-  match_duration_seconds: number | null;
-  price_cents: number;
-  priority: number;
-  created: number;
-  updated: number;
-};
-
-export type CreatePriceRuleRequest = {
-  match_weekday?: Array<number> | null;
-  match_local_start?: string | null;
-  match_local_end?: string | null;
-  match_duration_seconds?: number | null;
-  price_cents: number;
-  priority?: number;
-};
-
-export type UpdatePriceRuleRequest = {
-  match_weekday?: Array<number> | null;
-  match_local_start?: string | null;
-  match_local_end?: string | null;
-  match_duration_seconds?: number | null;
-  price_cents?: number;
-  priority?: number;
-};
-
-export type BookingSlotsResponse = {
-  host_timezone: string;
-  viewer_timezone: string;
-  slots: Array<ResolvedBookingSlot>;
-};
-
-export type CreateBookingHoldRequest = {
-  slot_start_utc: string;
-  slot_end_utc: string;
-  source_community_id?: string | null;
-};
-
-export type BookingQuote = {
-  hold_id: string;
-  gross_cents: number;
-  platform_fee_bps: number;
-  platform_fee_cents: number;
-  host_payout_cents: number;
-  expires_at_utc: string;
-  payment: BookingPaymentInstructions;
-};
-
-export type ConfirmBookingHoldRequest = {
-  funding_tx_ref: string;
-  wallet_attachment_id: string;
-};
-
-export type Booking = {
-  booking_id: string;
-  status: BookingStatus;
-  host_user_id: string;
-  booker_user_id: string;
-  slot_start_utc: string;
-  slot_end_utc: string;
-  gross_cents: number;
-  platform_fee_cents: number;
-  host_payout_cents: number;
-};
-
-export type BookingSessionAttachResponse = {
-  session_id: string;
-  party: "host" | "booker";
-  channel: string;
-  agora: (Record<string, unknown>) | null;
-};
-
-export type ResolveBookingSettlementReviewRequest = {
-  resolution: "completed" | "no_show_host" | "no_show_booker";
-  expected_review_version: number;
-  note?: string | null;
-};
-
-export type ResolveBookingSettlementReviewResponse = {
-  booking: Booking;
-  resolution: "completed" | "no_show_host" | "no_show_booker";
-  pending_settlement: boolean;
-  replayed: boolean;
-};
-
 export type CommunityRoleSummary = {
   user: string;
   display_name: string;
@@ -873,12 +700,12 @@ export type Community = {
   description?: string | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
-  store_url?: string | null;
-  store_label?: string | null;
-  country_code?: string | null;
   namespace_verification?: string | null;
   route_slug?: string | null;
   pending_namespace_verification_session?: string | null;
+  store_url?: string | null;
+  store_label?: string | null;
+  country_code?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
   artist_identity?: string | null;
@@ -1002,6 +829,7 @@ export type CommunityListing = {
 export type CreateCommunityListingRequest = {
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   price_cents: number;
   regional_pricing_enabled: boolean;
   donation_partner?: string | null;
@@ -1189,6 +1017,179 @@ export type CommunityPurchaseSettlementFailure = {
   status: "failed" | "expired";
   failed_at?: number | null;
   expires_at: number;
+};
+
+export type BookingProfile = {
+  object: "booking_profile";
+  host: string;
+  display_headline?: string | null;
+  bio?: string | null;
+  topics?: Array<string> | null;
+  intro_video_ref?: string | null;
+  host_timezone: string;
+  base_price_cents: number;
+  default_slot_duration_seconds: number;
+  platform_fee_bps: number;
+  payout_wallet_address?: string | null;
+  is_published: boolean;
+  created: number;
+  updated: number;
+};
+
+export type BookingProfileResponse = (BookingProfile | BookingProfileEmpty);
+
+export type UpdateBookingProfileRequest = {
+  host_timezone?: string;
+  base_price_cents?: number;
+  default_slot_duration_seconds?: number;
+  display_headline?: string | null;
+  bio?: string | null;
+  topics?: Array<string> | null;
+  intro_video_ref?: string | null;
+  platform_fee_bps?: number;
+  payout_wallet_address?: string | null;
+};
+
+export type AvailabilityRule = {
+  object: "availability_rule";
+  id: string;
+  by_weekday: Array<number>;
+  start_local: string;
+  end_local: string;
+  slot_duration_seconds: number;
+  effective_from: number | null;
+  effective_until: number | null;
+  created: number;
+  updated: number;
+};
+
+export type CreateAvailabilityRuleRequest = {
+  by_weekday: Array<number>;
+  start_local: string;
+  end_local: string;
+  slot_duration_seconds: number;
+  effective_from_utc?: string;
+  effective_until_utc?: string;
+};
+
+export type UpdateAvailabilityRuleRequest = {
+  by_weekday?: Array<number>;
+  start_local?: string;
+  end_local?: string;
+  slot_duration_seconds?: number;
+  effective_from_utc?: string;
+  effective_until_utc?: string;
+};
+
+export type AvailabilityException = {
+  object: "availability_exception";
+  id: string;
+  kind: "block" | "open";
+  start: number;
+  end: number;
+  created: number;
+};
+
+export type CreateAvailabilityExceptionRequest = {
+  kind: "block" | "open";
+  start_utc: string;
+  end_utc: string;
+};
+
+export type UpdateAvailabilityExceptionRequest = {
+  kind?: "block" | "open";
+  start_utc?: string;
+  end_utc?: string;
+};
+
+export type PriceRule = {
+  object: "price_rule";
+  id: string;
+  match_weekday: Array<number> | null;
+  match_local_start: string | null;
+  match_local_end: string | null;
+  match_duration_seconds: number | null;
+  price_cents: number;
+  priority: number;
+  created: number;
+  updated: number;
+};
+
+export type CreatePriceRuleRequest = {
+  match_weekday?: Array<number> | null;
+  match_local_start?: string | null;
+  match_local_end?: string | null;
+  match_duration_seconds?: number | null;
+  price_cents: number;
+  priority?: number;
+};
+
+export type UpdatePriceRuleRequest = {
+  match_weekday?: Array<number> | null;
+  match_local_start?: string | null;
+  match_local_end?: string | null;
+  match_duration_seconds?: number | null;
+  price_cents?: number;
+  priority?: number;
+};
+
+export type BookingSlotsResponse = {
+  host_timezone: string;
+  viewer_timezone: string;
+  slots: Array<ResolvedBookingSlot>;
+};
+
+export type CreateBookingHoldRequest = {
+  slot_start_utc: string;
+  slot_end_utc: string;
+  source_community_id?: string | null;
+};
+
+export type BookingQuote = {
+  hold_id: string;
+  gross_cents: number;
+  platform_fee_bps: number;
+  platform_fee_cents: number;
+  host_payout_cents: number;
+  expires_at_utc: string;
+  payment: BookingPaymentInstructions;
+};
+
+export type ConfirmBookingHoldRequest = {
+  funding_tx_ref: string;
+  wallet_attachment_id: string;
+};
+
+export type Booking = {
+  booking_id: string;
+  status: BookingStatus;
+  host_user_id: string;
+  booker_user_id: string;
+  slot_start_utc: string;
+  slot_end_utc: string;
+  gross_cents: number;
+  platform_fee_cents: number;
+  host_payout_cents: number;
+};
+
+export type BookingSessionAttachResponse = {
+  session_id: string;
+  party: "host" | "booker";
+  channel: string;
+  agora: (Record<string, unknown>) | null;
+};
+
+export type ResolveBookingSettlementReviewRequest = {
+  resolution: "completed" | "no_show_host" | "no_show_booker";
+  expected_review_version: number;
+  note?: string | null;
+};
+
+export type ResolveBookingSettlementReviewResponse = {
+  booking: Booking;
+  resolution: "completed" | "no_show_host" | "no_show_booker";
+  pending_settlement: boolean;
+  replayed: boolean;
 };
 
 export type CommunityHandle = {
@@ -1468,11 +1469,11 @@ export type CreateSongArtifactBundleRequest = {
   vocal_audio?: SongArtifactUploadRef | null;
 };
 
-export type CreatePostRequest = (({
+export type CreatePostRequest = (((unknown & {
   post_type: "text";
   title?: string;
   body?: string;
-} | {
+}) | {
   post_type: "image";
   title?: string | null;
   media_refs: Array<ImageMediaDescriptor>;
@@ -1482,21 +1483,23 @@ export type CreatePostRequest = (({
   access_mode?: "public" | "locked";
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
+  royalty_allocations?: Array<RoyaltyAllocationRequest> | null;
   media_refs: Array<VideoMediaDescriptor>;
 } | {
   post_type: "link";
   title?: string | null;
   body?: string | null;
   link_url: string;
-} | {
+} | (unknown & {
   post_type: "song";
   identity_mode: "public";
   access_mode?: "public" | "locked";
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
+  royalty_allocations?: Array<RoyaltyAllocationRequest> | null;
   title?: string | null;
   media_refs?: Array<AudioMediaDescriptor>;
-} | {
+}) | {
   post_type: "crosspost";
   title: string;
   source_post: string;
@@ -1623,24 +1626,30 @@ export type SongArtifactUpload = {
   community: string;
   uploader_user: string;
   artifact_kind: "primary_audio" | "cover_art" | "preview_audio" | "preview_video" | "canvas_video" | "instrumental_audio" | "vocal_audio" | "primary_video";
-  status: "pending_upload" | "uploaded" | "failed";
+  status: "pending_upload" | "uploaded" | "failed" | "cancelled";
   storage_ref: string;
   mime_type: string;
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
-  ipfs_cid?: string | null;
   storage_provider?: "filebase" | "local_dev_file_storage" | null;
   storage_bucket?: string | null;
   storage_object_key?: string | null;
   storage_endpoint?: string | null;
   gateway_url?: string | null;
+  ipfs_cid?: string | null;
   upload_url: string;
   upload_session?: ({
     id: string;
+    status: "created" | "parts_uploading" | "completing" | "head_verifying" | "uploaded" | "aborting" | "aborted";
+    object_key: string;
     upload_id: string;
     part_size_bytes: number;
     total_parts: number;
+    expires_at: string;
+    sign_part_url: string;
+    complete: string;
+    abort: string;
   }) | null;
   created: number;
 };
@@ -1972,41 +1981,6 @@ export type SongPresentation = {
   duration_ms: number | null;
 };
 
-export type SongKaraokePayload = {
-  id: string;
-  object: "song_karaoke_payload";
-  song?: string | null;
-  post?: string | null;
-  community?: string | null;
-  title?: string | null;
-  artist_name?: string | null;
-  artwork_src?: string | null;
-  instrumental_audio_url?: string | null;
-  karaoke_lines?: Array<SongKaraokeLine> | null;
-  raw_lines?: Array<Record<string, unknown>> | null;
-};
-
-export type KaraokeSession = {
-  id: string;
-  object: "karaoke_session";
-  attempt: string;
-  protocol_version: 1;
-  websocket_url: string;
-  token_expires_at: number;
-  session_expires_at: number;
-  scoring_policy: KaraokeScoringPolicy;
-};
-
-export type KaraokeScoringPolicy = ({
-  kind: "disabled";
-} | {
-  kind: "enabled";
-  provider: "assistant" | "elevenlabs" | "mistral" | "openai";
-  model: string;
-  retention: "not_stored";
-  voice_coach_enabled?: boolean;
-});
-
 export type SongStudyCapability = {
   status: "ready" | "locked" | "processing" | "unavailable";
   exercise_count?: number | null;
@@ -2036,7 +2010,42 @@ export type SongStudyAccessState = "ready" | "locked" | "processing" | "unavaila
 
 export type SongStudyLockedReason = "purchase_required" | "membership_required" | "age_required";
 
-export type SongStudyUnavailableReason = "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed";
+export type SongKaraokePayload = {
+  id: string;
+  object: "song_karaoke_payload";
+  song?: string | null;
+  post?: string | null;
+  community?: string | null;
+  title?: string | null;
+  artist_name?: string | null;
+  artwork_src?: string | null;
+  instrumental_audio_url?: string | null;
+  karaoke_lines?: Array<SongKaraokeLine> | null;
+  raw_lines?: Array<Record<string, unknown>> | null;
+};
+
+export type KaraokeScoringPolicy = ({
+  kind: "disabled";
+} | {
+  kind: "enabled";
+  provider: "assistant" | "elevenlabs" | "mistral" | "openai";
+  model: string;
+  retention: "not_stored";
+  voice_coach_enabled?: boolean;
+});
+
+export type KaraokeSession = {
+  id: string;
+  object: "karaoke_session";
+  attempt: string;
+  protocol_version: 1;
+  websocket_url: string;
+  token_expires_at: number;
+  session_expires_at: number;
+  scoring_policy: KaraokeScoringPolicy;
+};
+
+export type SongStudyUnavailableReason = "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed" | "missing_transcription_provider";
 
 export type SongStudyExercise = ({
   id: string;
@@ -2167,7 +2176,7 @@ export type CommunityPreview = {
   store_label?: string | null;
   country_code?: string | null;
   membership_mode: "open" | "request" | "gated";
-  karaoke_enabled: boolean;
+  karaoke_enabled?: boolean;
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   allowed_disclosed_qualifiers?: Array<string> | null;
@@ -3002,20 +3011,20 @@ type CreateCommunityRequestBase = {
   accepted_agent_ownership_providers?: Array<AgentOwnershipProvider> | null;
   namespace?: NamespaceAttachmentInput | null;
   handle_policy: HandlePolicyInput;
-  donation_policy?: CreateCommunityDonationPolicyInput | null;
-  content_authenticity_policy?: CreateCommunityContentAuthenticityPolicyInput | null;
-  source_policy?: CreateCommunitySourcePolicyInput | null;
-  capture_edit_policy?: CreateCommunityCaptureEditPolicyInput | null;
-  adult_content_policy?: CreateCommunityAdultContentPolicyInput | null;
-  graphic_content_policy?: CreateCommunityGraphicContentPolicyInput | null;
-  motion_media_policy?: CreateCommunityMotionMediaPolicyInput | null;
-  language_policy?: CreateCommunityLanguagePolicyInput | null;
-  civility_policy?: CreateCommunityCivilityPolicyInput | null;
-  provenance_policy?: CreateCommunityProvenancePolicyInput | null;
-  promotion_policy?: CreateCommunityPromotionPolicyInput | null;
-  content_authenticity_detection_policy?: CreateCommunityContentAuthenticityDetectionPolicyInput | null;
-  market_context_policy?: CreateCommunityMarketContextPolicyInput | null;
-  money_policy?: CreateCommunityMoneyPolicyInput | null;
+  donation_policy?: (CreateCommunityDonationPolicyInput & Record<string, never>) | null;
+  content_authenticity_policy?: (CreateCommunityContentAuthenticityPolicyInput & Record<string, never>) | null;
+  source_policy?: (CreateCommunitySourcePolicyInput & Record<string, never>) | null;
+  capture_edit_policy?: (CreateCommunityCaptureEditPolicyInput & Record<string, never>) | null;
+  adult_content_policy?: (CreateCommunityAdultContentPolicyInput & Record<string, never>) | null;
+  graphic_content_policy?: (CreateCommunityGraphicContentPolicyInput & Record<string, never>) | null;
+  motion_media_policy?: (CreateCommunityMotionMediaPolicyInput & Record<string, never>) | null;
+  language_policy?: (CreateCommunityLanguagePolicyInput & Record<string, never>) | null;
+  civility_policy?: (CreateCommunityCivilityPolicyInput & Record<string, never>) | null;
+  provenance_policy?: (CreateCommunityProvenancePolicyInput & Record<string, never>) | null;
+  promotion_policy?: (CreateCommunityPromotionPolicyInput & Record<string, never>) | null;
+  content_authenticity_detection_policy?: (CreateCommunityContentAuthenticityDetectionPolicyInput & Record<string, never>) | null;
+  market_context_policy?: (CreateCommunityMarketContextPolicyInput & Record<string, never>) | null;
+  money_policy?: (CreateCommunityMoneyPolicyInput & Record<string, never>) | null;
   community_bootstrap?: CreateCommunityBootstrapInput | null;
   gate_rules?: Array<GateRuleInput> | null;
 };
@@ -3473,6 +3482,12 @@ type RootPostQuotaRule = {
   max_video_posts: number;
 };
 
+type RoyaltyAllocationRequest = {
+  recipient_kind: "creator" | "collaborator";
+  wallet_address: string;
+  share_bps: number;
+};
+
 type SongArtifactUploadRef = {
   song_artifact_upload: string;
 };
@@ -3482,10 +3497,10 @@ type SongAudioArtifactDescriptor = {
   mime_type: string;
   size_bytes?: number | null;
   content_hash?: string | null;
+  decentralized_storage?: (Record<string, unknown>) | null;
   duration_ms?: number | null;
   clip_start_ms?: number | null;
   clip_duration_ms?: number | null;
-  decentralized_storage?: (Record<string, unknown>) | null;
 };
 
 type SongImageArtifactDescriptor = {
@@ -3493,6 +3508,7 @@ type SongImageArtifactDescriptor = {
   mime_type: string;
   size_bytes?: number | null;
   content_hash?: string | null;
+  upload_mode?: "proxy" | "direct_multipart";
   width?: number | null;
   height?: number | null;
 };
@@ -3648,30 +3664,6 @@ export const apiRoutes = {
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",
   publicNameStatus: (label: string) => `/public-names/${label}/status`,
-  hostBookingProfile: "/host-bookings/me/profile",
-  hostBookingProfilePublish: "/host-bookings/me/profile/publish",
-  hostBookingProfileUnpublish: "/host-bookings/me/profile/unpublish",
-  hostBookingAvailabilityRules: "/host-bookings/me/availability-rules",
-  hostBookingAvailabilityRule: (ruleId: string) => `/host-bookings/me/availability-rules/${ruleId}`,
-  hostBookingAvailabilityExceptions: "/host-bookings/me/availability-exceptions",
-  hostBookingAvailabilityException: (exceptionId: string) => `/host-bookings/me/availability-exceptions/${exceptionId}`,
-  hostBookingPriceRules: "/host-bookings/me/price-rules",
-  hostBookingPriceRule: (priceRuleId: string) => `/host-bookings/me/price-rules/${priceRuleId}`,
-  bookings: "/bookings",
-  bookingHostSlots: (hostUserId: string) => `/bookings/hosts/${hostUserId}/slots`,
-  bookingHostHolds: (hostUserId: string) => `/bookings/hosts/${hostUserId}/holds`,
-  bookingHoldQuote: (holdId: string) => `/bookings/holds/${holdId}/quote`,
-  bookingHoldConfirm: (holdId: string) => `/bookings/holds/${holdId}/confirm`,
-  booking: (bookingId: string) => `/bookings/${bookingId}`,
-  bookingCancel: (bookingId: string) => `/bookings/${bookingId}/cancel`,
-  bookingStart: (bookingId: string) => `/bookings/${bookingId}/start`,
-  bookingComplete: (bookingId: string) => `/bookings/${bookingId}/complete`,
-  bookingNoShow: (bookingId: string) => `/bookings/${bookingId}/no-show`,
-  bookingSessionAttach: (bookingId: string) => `/bookings/${bookingId}/session/attach`,
-  bookingSessionHeartbeat: (bookingId: string) => `/bookings/${bookingId}/session/heartbeat`,
-  bookingSettlementReviewPending: "/bookings/settlement-review/pending",
-  bookingSettlementReview: (bookingId: string) => `/bookings/${bookingId}/settlement-review`,
-  bookingSettlementReviewResolve: (bookingId: string) => `/bookings/${bookingId}/settlement-review/resolve`,
   onboardingStatus: "/onboarding/status",
   onboardingDismiss: "/onboarding/dismiss",
   onboardingRedditVerification: "/onboarding/reddit-verification",
@@ -3710,21 +3702,48 @@ export const apiRoutes = {
   communityPurchaseQuotes: (communityId: string) => `/communities/${communityId}/purchase-quotes`,
   communityPurchaseSettlements: (communityId: string) => `/communities/${communityId}/purchase-settlements`,
   communityPurchaseSettlementFailures: (communityId: string) => `/communities/${communityId}/fail-purchase-settlement`,
+  bookings: "/bookings",
+  bookingHostSlots: (hostUserId: string) => `/bookings/hosts/${hostUserId}/slots`,
+  bookingHostHolds: (hostUserId: string) => `/bookings/hosts/${hostUserId}/holds`,
+  bookingHoldQuote: (holdId: string) => `/bookings/holds/${holdId}/quote`,
+  bookingHoldConfirm: (holdId: string) => `/bookings/holds/${holdId}/confirm`,
+  booking: (bookingId: string) => `/bookings/${bookingId}`,
+  bookingCancel: (bookingId: string) => `/bookings/${bookingId}/cancel`,
+  bookingStart: (bookingId: string) => `/bookings/${bookingId}/start`,
+  bookingComplete: (bookingId: string) => `/bookings/${bookingId}/complete`,
+  bookingNoShow: (bookingId: string) => `/bookings/${bookingId}/no-show`,
+  bookingSessionAttach: (bookingId: string) => `/bookings/${bookingId}/session/attach`,
+  bookingSessionHeartbeat: (bookingId: string) => `/bookings/${bookingId}/session/heartbeat`,
+  bookingSettlementReviewPending: "/bookings/settlement-review/pending",
+  bookingSettlementReview: (bookingId: string) => `/bookings/${bookingId}/settlement-review`,
+  bookingSettlementReviewResolve: (bookingId: string) => `/bookings/${bookingId}/settlement-review/resolve`,
+  hostBookingProfile: "/host-bookings/me/profile",
+  hostBookingProfilePublish: "/host-bookings/me/profile/publish",
+  hostBookingProfileUnpublish: "/host-bookings/me/profile/unpublish",
+  hostBookingAvailabilityRules: "/host-bookings/me/availability-rules",
+  hostBookingAvailabilityRule: (ruleId: string) => `/host-bookings/me/availability-rules/${ruleId}`,
+  hostBookingAvailabilityExceptions: "/host-bookings/me/availability-exceptions",
+  hostBookingAvailabilityException: (exceptionId: string) => `/host-bookings/me/availability-exceptions/${exceptionId}`,
+  hostBookingPriceRules: "/host-bookings/me/price-rules",
+  hostBookingPriceRule: (priceRuleId: string) => `/host-bookings/me/price-rules/${priceRuleId}`,
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
   communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPostReports: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/reports`,
-  communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
-  communityPostStudy: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study`,
-  communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
-  communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
   communityCommentReports: (communityId: string, commentId: string) => `/communities/${communityId}/comments/${commentId}/reports`,
   communityModerationCases: (communityId: string) => `/communities/${communityId}/moderation/cases`,
   communityModerationCase: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}`,
   communityModerationCaseActions: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}/actions`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
+  communityLiveRoomRecordingDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/recording-draft`,
+  communityLiveRoomReplayDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft`,
+  communityLiveRoomReplayDraftPublish: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay-draft/publish`,
+  communityLiveRoomReplayAccess: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay/access`,
+  communityLiveRoomReplayContent: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/replay/content`,
+  publicCommunityLiveRoomReplayAccess: (communityId: string, liveRoomId: string) => `/public-communities/${communityId}/live-rooms/${liveRoomId}/replay/access`,
+  publicCommunityLiveRoomReplayContent: (communityId: string, liveRoomId: string) => `/public-communities/${communityId}/live-rooms/${liveRoomId}/replay/content`,
   communityJoin: (communityId: string) => `/communities/${communityId}/join`,
   communityMembershipRequests: (communityId: string) => `/communities/${communityId}/membership-requests`,
   communityMembershipRequestApprove: (communityId: string, membershipRequestId: string) => `/communities/${communityId}/membership-requests/${membershipRequestId}/approve`,
@@ -3733,6 +3752,10 @@ export const apiRoutes = {
   communitySongArtifactUploadContent: (communityId: string, songArtifactUploadId: string) => `/communities/${communityId}/song-artifact-uploads/${songArtifactUploadId}/content`,
   communitySongArtifacts: (communityId: string) => `/communities/${communityId}/song-artifacts`,
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
+  communityPostStudy: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study`,
+  communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
+  communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
+  communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
