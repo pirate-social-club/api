@@ -80,6 +80,7 @@ async function setup() {
     communityDbPath,
     communityId,
     env: {
+      ENVIRONMENT: "test",
       CONTROL_PLANE_DATABASE_URL: `file:${controlDbPath}`,
     } as Env,
     repo,

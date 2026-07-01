@@ -166,15 +166,6 @@ jobs:
         working-directory: services/contracts
         run: bun audit --audit-level=high
 
-      - name: Check generated contracts freshness when specs are available
-        working-directory: services/contracts
-        run: |
-          if [ -f ../../../specs/api/scripts/generate-api-contracts.ts ]; then
-            bun run check:fresh
-          else
-            echo "Skipping contracts freshness check; sibling specs checkout not available."
-          fi
-
       - name: Typecheck generated contracts package
         working-directory: services/contracts
         run: bun run check
@@ -196,6 +187,17 @@ jobs:
           else
             echo "Using default core branch for cross-repo checks."
           fi
+
+      - name: Check generated contracts freshness against core spec
+        working-directory: services/contracts
+        env:
+          # Core is checked out at $GITHUB_WORKSPACE/core above. Point the
+          # generator at it explicitly. No conditional skip: if core is
+          # unavailable, resolveCoreRepoRoot throws and this step fails loudly,
+          # rather than silently passing a stale contract (the previous guard
+          # tested ../../../specs — a path that never existed and always skipped).
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+        run: bun run check:fresh
 
       - name: Install community provision operator dependencies
         working-directory: services/community-provision-operator

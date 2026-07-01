@@ -7,11 +7,13 @@ import { getControlPlaneClient } from "../runtime-deps"
 import type { Client, InStatement, ReadClient } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
+import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
 import {
   routeCommunityRead,
   type CommunityReadInvoker,
 } from "./community-read-router"
+import type { CommunityDatabaseBindingRepository } from "./community-repository-types"
 
 export type CommunityReadHandle = {
   client: ReadClient
@@ -110,6 +112,19 @@ function shardReadInvokerFor(env: Env): CommunityReadInvoker {
   return async (binding) => makeShardReadClient(shard, binding)
 }
 
+function shouldUseTestLocalCommunityDb(env: Env): boolean {
+  return env.ENVIRONMENT === "test" && !env.COMMUNITY_D1_SHARD
+}
+
+async function openTestLocalCommunityDb(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  const handle = await openCommunityDb(env, repo, communityId)
+  return { client: handle.client, close: () => handle.close() }
+}
+
 export type CommunityReadAccessDeps = {
   resolver: CommunityBindingResolver
   controlPlane: DbExecutor
@@ -124,7 +139,15 @@ export async function resolveCommunityReadHandle(
   return { client: routed.client, close: () => routed.client.close?.() }
 }
 
-export async function openCommunityReadClient(env: Env, _repo: unknown, communityId: string): Promise<CommunityReadHandle> {
+export async function openCommunityReadClient(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+): Promise<CommunityReadHandle> {
+  if (shouldUseTestLocalCommunityDb(env)) {
+    return openTestLocalCommunityDb(env, repo, communityId)
+  }
+
   return resolveCommunityReadHandle(
     {
       resolver: getResolver(),
@@ -160,7 +183,15 @@ export async function resolveCommunityWriteHandle(
   return { client: deps.openD1(binding), close: () => {} }
 }
 
-export async function openCommunityWriteClient(env: Env, _repo: unknown, communityId: string): Promise<CommunityWriteHandle> {
+export async function openCommunityWriteClient(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+): Promise<CommunityWriteHandle> {
+  if (shouldUseTestLocalCommunityDb(env)) {
+    return openTestLocalCommunityDb(env, repo, communityId)
+  }
+
   return resolveCommunityWriteHandle(
     {
       resolver: getResolver(),
