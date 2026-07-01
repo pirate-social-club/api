@@ -1661,7 +1661,7 @@ export async function viewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolveLiveRoomViewerAccess({
       client: db.client,
@@ -1797,7 +1797,7 @@ export async function publicViewerRenewLiveRoom(input: {
   communityRepository: LiveRoomRepository
 }): Promise<LiveRoomViewerAttachResponse> {
   const uid = normalizeLiveRoomViewerUid(input.body.uid)
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const access = await resolvePublicLiveRoomViewerAccess({
       client: db.client,
