@@ -277,6 +277,8 @@
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
         "PIRATE_APP_JWT_ISSUER": "pirate-api-staging",
+        "COMMUNITY_PROVISION_BACKEND": "d1_native",
+        "COMMUNITY_D1_SHARD_REGION": "eeur",
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
         "PIRATE_APP_JWT_TTL_SECONDS": "3600",
         "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
