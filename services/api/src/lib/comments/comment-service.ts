@@ -15,6 +15,7 @@ import {
   hasCommunityRole,
   upsertCommunityMembership,
   type CommunityMembershipRow,
+  type MembershipParticipationSource,
 } from "../communities/membership/membership-state-store"
 import { enforceCommunityActionGate, evaluateGatedMembership } from "../communities/membership/eligibility-service"
 import { throwUnsatisfiedMembershipGate } from "../communities/membership/gate-failure-service"
@@ -78,6 +79,31 @@ async function requireMemberAccess(client: Client, communityId: string, userId: 
     throw communityMembershipRequiredError({ community_id: communityId })
   }
   return membership
+}
+
+/**
+ * Verify-then-persist sequencing for the comment author. Extracted so the
+ * ordering is unit-testable with a throwing/resolving `enforceGate` mock, without
+ * a shard or an ALTCHA stub (we test the sequencing, not ALTCHA math).
+ *
+ * `enforceGate` verifies+consumes the PoW proof (throws on failure). Only AFTER
+ * it resolves do we enroll a provisional non-member as a `comment_pow`
+ * participant. This ordering is DATA HYGIENE — it prevents a phantom participant
+ * row when a first-comment verify fails. It is NOT the spam guard: spam is
+ * prevented by the role design (participants are plain members with no role, so
+ * enforceCommunityActionGate re-runs on every comment and demands a fresh proof
+ * each time). A phantom row, were it created, would not let anyone comment twice
+ * on one proof — it would just be junk data a reconciliation job later flags.
+ */
+export async function enforceGateAndEnrollParticipant(input: {
+  provisionalParticipant: boolean
+  enforceGate: () => Promise<void>
+  enrollParticipant: (participationSource: MembershipParticipationSource) => Promise<void>
+}): Promise<void> {
+  await input.enforceGate()
+  if (input.provisionalParticipant) {
+    await input.enrollParticipant("comment_pow")
+  }
 }
 
 type CommentAuthorAccess = {
@@ -369,31 +395,31 @@ export async function createComment(input: {
         hasProof: Boolean(input.altchaProof?.payload),
       })
       membership = access.membership
-      // Verify+consume the PoW proof exactly once (for members and provisional
-      // participants alike; a plain member with no mod role re-verifies per
-      // comment). This throws gate_failed on a missing/invalid/consumed proof.
-      await enforceCommunityActionGate({
-        env: input.env,
-        client: db.client,
-        userId: input.userId,
-        userRepository: input.userRepository,
-        communityId: input.communityId,
-        altchaScope: "comment_create",
-        altchaProof: input.altchaProof,
-        verifiedAltchaProof,
-      })
-      // Verify-then-persist: only AFTER the proof verified do we enroll a
-      // non-member as a `comment_pow` participant (Reddit-style, no visible join;
-      // excluded from subscriber counts/rosters/projection — see migration 1116).
-      if (access.provisionalParticipant) {
-        await upsertCommunityMembership({
+      await enforceGateAndEnrollParticipant({
+        provisionalParticipant: access.provisionalParticipant,
+        // Verify+consume the PoW proof exactly once. This throws gate_failed on a
+        // missing/invalid/already-consumed proof. Spam prevention does NOT depend
+        // on this call's placement: participants are plain members (no role), so
+        // enforceCommunityActionGate runs on EVERY comment (eligibility-service
+        // early-returns only for owner/admin/mod) — a fresh proof per comment.
+        enforceGate: () => enforceCommunityActionGate({
+          env: input.env,
+          client: db.client,
+          userId: input.userId,
+          userRepository: input.userRepository,
+          communityId: input.communityId,
+          altchaScope: "comment_create",
+          altchaProof: input.altchaProof,
+          verifiedAltchaProof,
+        }),
+        enrollParticipant: (participationSource) => upsertCommunityMembership({
           client: db.client,
           communityId: input.communityId,
           userId: input.userId,
           now: nowIso(),
-          participationSource: "comment_pow",
-        })
-      }
+          participationSource,
+        }),
+      })
     }
     const canBypassLocks = input.bypassAuthorAccessChecks === true
       || (membership != null && hasCommunityRole(membership, ANY_COMMUNITY_ROLE))
