@@ -61,6 +61,10 @@ jobs:
         with:
           bun-version: 1.2.21
 
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
       - name: Run bookings repository real-Postgres tests
         working-directory: services/api
         env:
