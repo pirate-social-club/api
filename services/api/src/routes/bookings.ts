@@ -34,6 +34,7 @@ import {
   type BookingViewerRole,
 } from "../lib/bookings/booking-read-service"
 import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runtime-deps"
+import { decodePublicUserId } from "../lib/public-ids"
 import { requireJsonBody } from "./communities-route-helpers"
 
 const DEFAULT_WINDOW_DAYS = 14
@@ -121,6 +122,10 @@ function routeParam(c: BookingContext, name: string): string {
   return value
 }
 
+function hostUserIdParam(c: BookingContext): string {
+  return decodePublicUserId(routeParam(c, "hostUserId"))
+}
+
 function optionalSourceCommunityId(value: string | null): string | null | undefined {
   if (value === null) return undefined
   const trimmed = value.trim()
@@ -145,7 +150,7 @@ function settlementReasonStatus(reason: "not_found" | "not_settleable" | "sessio
 }
 
 async function slotsHandler(c: BookingContext) {
-  const hostUserId = routeParam(c, "hostUserId")
+  const hostUserId = hostUserIdParam(c)
   const url = new URL(c.req.url)
   const nowUtc = new Date().toISOString()
   const windowStartUtc = url.searchParams.get("from") ?? nowUtc
@@ -171,7 +176,7 @@ async function slotsHandler(c: BookingContext) {
 
 async function createHoldHandler(c: BookingContext) {
   const actor = c.get("actor")
-  const hostUserId = routeParam(c, "hostUserId")
+  const hostUserId = hostUserIdParam(c)
   const body = await requireJsonBody<{
     slot_start_utc?: string
     slot_end_utc?: string

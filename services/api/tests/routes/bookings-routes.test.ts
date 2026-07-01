@@ -339,6 +339,21 @@ describe("/bookings routes", () => {
     })
   })
 
+  test("normalizes public profile user ids for slot discovery", async () => {
+    const app = loadApp()
+    const res = await app.request(
+      "http://pirate.test/bookings/hosts/usr_host_route/slots?from=2026-07-01T10:00:00.000Z&to=2026-07-01T12:00:00.000Z&tz=America/New_York",
+      {},
+      env(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(calls.availability).toHaveLength(1)
+    expect(calls.availability[0]).toMatchObject({
+      hostUserId: "host_route",
+    })
+  })
+
   test("keeps unauthenticated hold creation blocked", async () => {
     const app = loadApp()
     const res = await app.request("http://pirate.test/bookings/hosts/host_route/holds", {
@@ -352,6 +367,24 @@ describe("/bookings routes", () => {
 
     expect(res.status).toBe(401)
     expect(calls.createHold).toHaveLength(0)
+  })
+
+  test("normalizes public profile user ids for hold creation", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings/hosts/usr_host_route/holds", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        slot_start_utc: "2026-07-01T10:00:00.000Z",
+        slot_end_utc: "2026-07-01T10:30:00.000Z",
+      }),
+    }, env())
+
+    expect(res.status).toBe(201)
+    expect(calls.createHold).toHaveLength(1)
+    expect(calls.createHold[0]).toMatchObject({
+      hostUserId: "host_route",
+    })
   })
 
   test("creates holds with optional source community metadata", async () => {
