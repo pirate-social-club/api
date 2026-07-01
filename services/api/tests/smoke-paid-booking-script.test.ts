@@ -9,6 +9,7 @@ import {
   parsePositiveInt,
   resolveFundingPreflightBuyerAddress,
   resolveHostPayoutWallet,
+  runDelayedCompletion,
   validateCompletedCanaryBooking,
   validateFundingReadiness,
   validateQuotePaymentFields,
@@ -25,7 +26,11 @@ describe("smoke-paid-booking script guards", () => {
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("--agora-evidence-file")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("--base-price-cents")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("https://api.pirate.sc")
-    expect(PAID_BOOKING_SMOKE_USAGE).toContain("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("--wait-for-completion")
+    // Canary is testnet-only: Base Sepolia chain + USDC, never mainnet.
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("84532")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("0x036CbD53842c5426634e7929541eC2318f3dCF7e")
+    expect(PAID_BOOKING_SMOKE_USAGE).not.toContain("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("0xbBA024600cba5F375AfdCeC401f7dcCB3D515829")
   })
 
@@ -181,5 +186,56 @@ describe("smoke-paid-booking script guards", () => {
       bookingId: "bkg_final",
       fundingTxRef: `0x${"1".repeat(64)}`,
     })).toThrow("paid booking canary final verification failed")
+  })
+
+  test("delayed completion refreshes auth, starts before completing, tolerates already-live, sends no payment", async () => {
+    const exchanges: string[] = []
+    const calls: string[] = []
+    const fakeExchange = async (_origin: string, subject: string) => {
+      exchanges.push(subject)
+      return { accessToken: `tok-${subject}`, userId: `usr_${subject}`, walletAttachment: "wa_1" }
+    }
+    const fakeRequest = async (url: string, init?: RequestInit) => {
+      const path = url.replace(/^https?:\/\/[^/]+/, "")
+      calls.push(`${(init?.method ?? "GET")} ${path}`)
+      if (path.endsWith("/start")) return { status: 409, body: {} } // already live → must be tolerated
+      if (path.endsWith("/complete")) return { status: 200, body: { booking: { status: "settled" } } }
+      return { status: 200, body: {} }
+    }
+
+    const res = await runDelayedCompletion({
+      origin: "https://api.example",
+      bookingId: "bkg_1",
+      hostSubject: "host-1",
+      bookerSubject: "booker-1",
+      buyerWallet: VALID_ADDRESS,
+      exchangeSession: fakeExchange as never,
+      requestJson: fakeRequest as never,
+    })
+
+    // Both sessions re-exchanged (auth refreshed) before any lifecycle call.
+    expect(exchanges).toEqual(["host-1", "booker-1"])
+    const startIdx = calls.findIndex((c) => c.endsWith("/bookings/bkg_1/start"))
+    const completeIdx = calls.findIndex((c) => c.endsWith("/bookings/bkg_1/complete"))
+    expect(startIdx).toBeGreaterThanOrEqual(0)
+    expect(completeIdx).toBeGreaterThan(startIdx) // start strictly before complete
+    // No payment path can run during recovery.
+    expect(calls.some((c) => /confirm|holds|payment|transfer/i.test(c))).toBe(false)
+    expect(res.completion).toMatchObject({ booking: { status: "settled" } })
+    expect(res.booker.accessToken).toBe("tok-booker-1") // refreshed token surfaced for the caller
+  })
+
+  test("delayed completion surfaces a failed complete", async () => {
+    const fakeExchange = async (_o: string, subject: string) => ({ accessToken: `tok-${subject}`, userId: "u", walletAttachment: null })
+    const fakeRequest = async (url: string) => (url.endsWith("/complete") ? { status: 500, body: { error: "boom" } } : { status: 200, body: {} })
+    await expect(runDelayedCompletion({
+      origin: "https://api.example",
+      bookingId: "bkg_2",
+      hostSubject: "h",
+      bookerSubject: "b",
+      buyerWallet: VALID_ADDRESS,
+      exchangeSession: fakeExchange as never,
+      requestJson: fakeRequest as never,
+    })).rejects.toThrow("complete failed")
   })
 })
