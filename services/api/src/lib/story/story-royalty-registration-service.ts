@@ -383,13 +383,18 @@ function capBigintField(value: unknown, cap: bigint): bigint {
   return cap
 }
 
-// Only enforce a caller-supplied gas limit; when absent, leave it undefined so
+// Enforce a caller-supplied gas limit the same way the estimate path does:
+// pass through when under the cap, reject when over it (throwing before send, so
+// no gas is burned on an under-gassed tx), and leave it undefined when absent so
 // viem estimates via eth_estimateGas (which enforceStoryRoyaltyGasEstimate then
-// buffers + caps). Never force a flat cap here — that would skip revert
+// buffers + caps). Never silently clamp a flat cap here — that would skip revert
 // detection and burn gas on doomed txs.
 function capStoryRoyaltyGasLimitField(value: unknown, cap: bigint): bigint | undefined {
   if (typeof value !== "bigint" || value <= 0n) return undefined
-  return value < cap ? value : cap
+  if (value > cap) {
+    throw new Error(`story_royalty_gas_limit_exceeds_policy:${value.toString()}:${cap.toString()}`)
+  }
+  return value
 }
 
 function normalizeStoryRoyaltyRightsBasis(

@@ -59,12 +59,18 @@ describe("capStoryRoyaltyWriteContractRequestForTests", () => {
     expect(out.maxPriorityFeePerGas).toBe(500_000_000n)
   })
 
-  test("clamps a caller-supplied over-cap gas limit and leaves an absent one undefined", () => {
-    const clamped = capStoryRoyaltyWriteContractRequestForTests(
-      { gas: 9_000_000n },
+  test("rejects a caller-supplied over-cap gas limit (parity with the estimate path)", () => {
+    expect(() => capStoryRoyaltyWriteContractRequestForTests({ gas: 9_000_000n }, GAS_POLICY)).toThrow(
+      /story_royalty_gas_limit_exceeds_policy/,
+    )
+  })
+
+  test("passes an under-cap gas limit through and leaves an absent one undefined", () => {
+    const under = capStoryRoyaltyWriteContractRequestForTests(
+      { gas: 1_000_000n },
       GAS_POLICY,
     ) as Record<string, unknown>
-    expect(clamped.gas).toBe(GAS_POLICY.gasLimitCap)
+    expect(under.gas).toBe(1_000_000n)
 
     const absent = capStoryRoyaltyWriteContractRequestForTests({}, GAS_POLICY) as Record<string, unknown>
     expect(absent.gas).toBeUndefined() // must stay undefined so viem still estimates (revert detection)
