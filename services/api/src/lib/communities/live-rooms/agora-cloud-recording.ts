@@ -11,6 +11,9 @@ export type AgoraCloudRecordingConfig = {
     bucket: string
     accessKey: string
     secretKey: string
+    extensionParams?: {
+      endpoint: string
+    }
     fileNamePrefix?: string[]
   }
   resourceExpiredHour: number
@@ -37,16 +40,23 @@ type Fetcher = typeof fetch
 
 const DEFAULT_BASE_URL = "https://api.agora.io"
 const DEFAULT_RESOURCE_EXPIRED_HOURS = 24
+const AGORA_STORAGE_VENDOR_S3_COMPATIBLE = 11
+const AGORA_STORAGE_REGION_S3_COMPATIBLE = 0
 
 export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingConfig | null {
   const appId = firstTrimmed(env.AGORA_APP_ID)
   const customerKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_KEY)
   const customerSecret = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_SECRET)
+  const endpoint = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT)
+    ?? firstTrimmed(env.AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT)
+    ?? firstTrimmed(env.FILEBASE_S3_ENDPOINT)
   const vendor = positiveIntegerOrNull(env.AGORA_CLOUD_RECORDING_STORAGE_VENDOR)
-  const region = positiveIntegerOrNull(env.AGORA_CLOUD_RECORDING_STORAGE_REGION)
-  const bucket = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET)
-  const accessKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY)
-  const secretKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY)
+    ?? (endpoint ? AGORA_STORAGE_VENDOR_S3_COMPATIBLE : null)
+  const region = nonNegativeIntegerOrNull(env.AGORA_CLOUD_RECORDING_STORAGE_REGION)
+    ?? (endpoint ? AGORA_STORAGE_REGION_S3_COMPATIBLE : null)
+  const bucket = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET) ?? firstTrimmed(env.FILEBASE_MEDIA_BUCKET)
+  const accessKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY) ?? firstTrimmed(env.FILEBASE_S3_ACCESS_KEY)
+  const secretKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY) ?? firstTrimmed(env.FILEBASE_S3_SECRET_KEY)
   if (!appId || !customerKey || !customerSecret || vendor == null || region == null || !bucket || !accessKey || !secretKey) {
     return null
   }
@@ -61,6 +71,7 @@ export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingC
       bucket,
       accessKey,
       secretKey,
+      ...(endpoint && vendor === AGORA_STORAGE_VENDOR_S3_COMPATIBLE ? { extensionParams: { endpoint } } : {}),
       fileNamePrefix: fileNamePrefixFromEnv(env.AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX),
     },
     resourceExpiredHour: positiveIntegerOrNull(env.AGORA_CLOUD_RECORDING_RESOURCE_EXPIRED_HOURS) ?? DEFAULT_RESOURCE_EXPIRED_HOURS,
@@ -207,12 +218,17 @@ function firstTrimmed(value: string | undefined): string | null {
 }
 
 function positiveIntegerOrNull(value: string | undefined): number | null {
+  const parsed = nonNegativeIntegerOrNull(value)
+  return parsed && parsed > 0 ? parsed : null
+}
+
+function nonNegativeIntegerOrNull(value: string | undefined): number | null {
   const trimmed = firstTrimmed(value)
   if (!trimmed) {
     return null
   }
   const parsed = Number(trimmed)
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isInteger(parsed) || parsed < 0) {
     return null
   }
   return parsed

@@ -68,6 +68,52 @@ describe("ingestAgoraRecordingToPrivateStorage", () => {
     }
   })
 
+  test("can fetch capture objects from the existing Filebase bucket defaults", async () => {
+    const originalFetch = globalThis.fetch
+    const captureBytes = new TextEncoder().encode("recording")
+    const requests: string[] = []
+    globalThis.fetch = (async (request: RequestInfo | URL) => {
+      const url = request instanceof Request ? request.url : String(request)
+      requests.push(url)
+      if (url.startsWith("https://s3.filebase.com/")) {
+        return new Response(captureBytes, { status: 200, headers: { "content-type": "video/mp4" } })
+      }
+      return new Response("not found", { status: 404 })
+    }) as typeof fetch
+
+    try {
+      const ref = await ingestAgoraRecordingToPrivateStorage({
+        env: {
+          FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
+          FILEBASE_S3_REGION: "us-east-1",
+          FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
+          FILEBASE_S3_ACCESS_KEY: "filebase-access",
+          FILEBASE_S3_SECRET_KEY: "filebase-secret",
+        },
+        communityId: "cmt_music",
+        liveRoomId: "lr_room",
+        recordingId: "lrr_recording",
+        agoraStopResponse: {
+          serverResponse: {
+            fileList: [{ fileName: "agora/output/replay.mp4" }],
+          },
+        },
+      })
+
+      expect(ref).toMatchObject({
+        provider: "agora_capture",
+        bucket: "psc-media-bucket",
+        object_key: "agora/output/replay.mp4",
+        endpoint: "https://s3.filebase.com/",
+        ipfs_cid: null,
+      })
+      expect(requests[0]).toContain("https://s3.filebase.com/psc-media-bucket/agora/output/replay.mp4")
+      expect(requests).toHaveLength(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("rejects captures that exceed the Worker-safe replay raw limit", async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (request: RequestInfo | URL) => {

@@ -45,6 +45,35 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
       },
     })
   })
+
+  test("defaults Agora capture storage to the existing Filebase bucket", () => {
+    const config = agoraCloudRecordingConfigFromEnv({
+      AGORA_APP_ID: "agora-app",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
+      FILEBASE_S3_REGION: "us-east-1",
+    })
+
+    expect(config).toMatchObject({
+      appId: "agora-app",
+      customerKey: "customer-key",
+      customerSecret: "customer-secret",
+      storageConfig: {
+        vendor: 11,
+        region: 0,
+        bucket: "psc-media-bucket",
+        accessKey: "filebase-access",
+        secretKey: "filebase-secret",
+        extensionParams: {
+          endpoint: "https://s3.filebase.com",
+        },
+      },
+    })
+  })
 })
 
 describe("Agora Cloud Recording REST adapter", () => {
@@ -97,6 +126,58 @@ describe("Agora Cloud Recording REST adapter", () => {
           accessKey: "capture-access",
           secretKey: "capture-secret",
           fileNamePrefix: ["pirate", "live"],
+        },
+      },
+    })
+  })
+
+  test("passes S3-compatible endpoint extension params to Agora", async () => {
+    const requests: Array<{ body: Record<string, unknown> | null }> = []
+    const fetcher = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null
+      requests.push({ body })
+      if (String(url).endsWith("/acquire")) {
+        return Response.json({ resourceId: "resource-a" })
+      }
+      return Response.json({ resourceId: "resource-a", sid: "sid-a" })
+    }
+
+    const config = agoraCloudRecordingConfigFromEnv({
+      AGORA_APP_ID: "agora-app",
+      AGORA_CLOUD_RECORDING_BASE_URL: "https://agora.test",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
+      FILEBASE_S3_REGION: "us-east-1",
+    })
+    if (!config) {
+      throw new Error("expected test config")
+    }
+
+    await startAgoraCloudRecording({
+      config,
+      recording: {
+        cname: "pirate-live-lr_1",
+        uid: "987654",
+        token: "rtc-token",
+      },
+      fetcher: fetcher as typeof fetch,
+    })
+
+    expect(requests[1]?.body).toMatchObject({
+      clientRequest: {
+        storageConfig: {
+          vendor: 11,
+          region: 0,
+          bucket: "psc-media-bucket",
+          accessKey: "filebase-access",
+          secretKey: "filebase-secret",
+          extensionParams: {
+            endpoint: "https://s3.filebase.com",
+          },
         },
       },
     })
