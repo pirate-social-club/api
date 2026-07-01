@@ -14,6 +14,9 @@ import {
 } from "../communities/membership/membership-state-store"
 import { notFoundError } from "../errors"
 import { getPostById } from "../posts/community-post-query-store"
+import { getProfileRepository } from "../auth/repositories"
+import type { ProfileRepository } from "../auth/repositories"
+import { hydrateCommentAuthorPublicHandles } from "./comment-author-hydration"
 import type { Env } from "../../env"
 import type { CommentContext, CommentListResponse, CommentSort } from "./comment-types"
 import {
@@ -105,6 +108,7 @@ export async function listPostComments(input: {
       communityId: input.communityId,
       locale: input.locale ?? null,
       items: comments.items,
+      profileRepository: getProfileRepository(input.env),
     })
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, input.threadRootPostId)
     return {
@@ -150,6 +154,7 @@ export async function listPublicPostComments(input: {
       locale: input.locale,
       sort: input.sort,
       threadRootPostId: input.threadRootPostId,
+      profileRepository: getProfileRepository(input.env),
     })
   } finally {
     db.close()
@@ -164,6 +169,7 @@ export async function listPublicPostCommentsFromCommunityDb(input: {
   sort?: string | null
   cursor?: string | null
   limit?: string | null
+  profileRepository?: ProfileRepository | null
 }): Promise<CommentListResponse> {
   const comments = await listTopLevelComments({
     executor: input.client,
@@ -178,6 +184,7 @@ export async function listPublicPostCommentsFromCommunityDb(input: {
     communityId: input.communityId,
     locale: input.locale ?? null,
     items: comments.items,
+    profileRepository: input.profileRepository,
   })
   const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, input.threadRootPostId)
   return {
@@ -223,6 +230,7 @@ export async function listCommentReplies(input: {
       communityId: projection.community_id,
       locale: input.locale ?? null,
       items: replies.items,
+      profileRepository: getProfileRepository(input.env),
     })
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, projection.thread_root_post_id)
     return {
@@ -278,6 +286,7 @@ export async function listPublicCommentReplies(input: {
       communityId: projection.community_id,
       locale: input.locale ?? null,
       items: replies.items,
+      profileRepository: getProfileRepository(input.env),
     })
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, projection.thread_root_post_id)
     return {
@@ -317,12 +326,14 @@ export async function getCommentContext(input: {
     if (!context) {
       throw notFoundError("Comment not found")
     }
+    const profileRepository = getProfileRepository(input.env)
     const [ancestors, comment, replies] = await Promise.all([
       localizeCommentItems({
         client: db.client,
         communityId: projection.community_id,
         locale: input.locale ?? null,
         items: context.ancestors,
+        profileRepository,
       }),
       buildLocalizedCommentListItem({
         executor: db.client,
@@ -334,8 +345,10 @@ export async function getCommentContext(input: {
         communityId: projection.community_id,
         locale: input.locale ?? null,
         items: context.replies,
+        profileRepository,
       }),
     ])
+    await hydrateCommentAuthorPublicHandles([comment], profileRepository)
     await enqueueCommentTranslationOnReadIfNeeded({
       client: db.client,
       communityId: projection.community_id,

@@ -265,6 +265,12 @@ export type Comment = {
   thread_root_post_id: string
   parent_comment_id: string | null
   author_user_id: string | null
+  /**
+   * Read-time public handle label for a public-identity human author, resolved
+   * during comment read so clients render the byline on first paint. Null for
+   * anonymous/guest/agent comments and when the profile cannot be resolved.
+   */
+  author_public_handle?: string | null
   authorship_mode: "human_direct" | "user_agent" | "guest"
   agent_id?: string | null
   agent_ownership_record_id?: string | null
@@ -450,6 +456,12 @@ export type Post = {
   post_id: string
   community_id: string
   author_user_id?: string | null
+  /**
+   * Read-time public handle label for a public-identity human author, resolved
+   * during response hydration so clients can render the byline on first paint.
+   * Null for anonymous/agent posts and when the profile cannot be resolved.
+   */
+  author_public_handle?: string | null
   authorship_mode: "human_direct" | "user_agent"
   agent_id?: string | null
   agent_ownership_record_id?: string | null
