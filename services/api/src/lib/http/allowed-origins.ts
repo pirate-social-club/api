@@ -1,15 +1,31 @@
 import type { Env } from "../../env"
 
-function configuredOriginValues(env: Pick<Env, "CORS_ALLOWED_ORIGINS" | "PIRATE_WEB_PUBLIC_ORIGIN">): string[] {
-  const values = String(env.CORS_ALLOWED_ORIGINS || "")
+const DEFAULT_ANDROID_KARAOKE_ORIGIN = "https://android.pirate.sc"
+
+function commaSeparatedValues(value: string | undefined): string[] {
+  return String(value || "")
     .split(",")
-    .map((value) => value.trim())
+    .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function configuredOriginValues(env: Pick<Env, "CORS_ALLOWED_ORIGINS" | "PIRATE_WEB_PUBLIC_ORIGIN">): string[] {
+  const values = commaSeparatedValues(env.CORS_ALLOWED_ORIGINS)
   const webOrigin = env.PIRATE_WEB_PUBLIC_ORIGIN?.trim()
   if (webOrigin) {
     values.push(webOrigin)
   }
   return [...new Set(values)]
+}
+
+function configuredKaraokeOriginValues(
+  env: Pick<Env, "CORS_ALLOWED_ORIGINS" | "PIRATE_ANDROID_KARAOKE_ORIGINS" | "PIRATE_WEB_PUBLIC_ORIGIN">,
+): string[] {
+  return [
+    ...configuredOriginValues(env),
+    DEFAULT_ANDROID_KARAOKE_ORIGIN,
+    ...commaSeparatedValues(env.PIRATE_ANDROID_KARAOKE_ORIGINS),
+  ]
 }
 
 function normalizeExactOrigin(value: string): string | null {
@@ -65,7 +81,7 @@ export function configuredCorsOrigin(origin: string, env: Pick<Env, "CORS_ALLOWE
 
 export function isAllowedKaraokeWebSocketOrigin(
   origin: string | null | undefined,
-  env: Pick<Env, "CORS_ALLOWED_ORIGINS" | "ENVIRONMENT" | "PIRATE_WEB_PUBLIC_ORIGIN">,
+  env: Pick<Env, "CORS_ALLOWED_ORIGINS" | "ENVIRONMENT" | "PIRATE_ANDROID_KARAOKE_ORIGINS" | "PIRATE_WEB_PUBLIC_ORIGIN">,
 ): boolean {
   if (!origin) return false
   const normalized = normalizeExactOrigin(origin)
@@ -77,7 +93,7 @@ export function isAllowedKaraokeWebSocketOrigin(
     return false
   }
 
-  return configuredOriginValues(env)
+  return configuredKaraokeOriginValues(env)
     .filter((value) => value !== "*")
     .map(normalizeExactOrigin)
     .some((allowed) => allowed === normalized)
