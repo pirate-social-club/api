@@ -2,6 +2,7 @@ import { badRequestError, notFoundError, providerUnavailable } from "../errors"
 import { sha256Hex, toArrayBuffer } from "../crypto"
 import { readFilebaseCid } from "../storage/filebase-cid"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
+import { fetchFilebaseWithTimeout } from "../storage/filebase-multipart"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
 import type { Env } from "../../env"
 import { FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER } from "./song-artifact-storage-provider"
@@ -235,7 +236,7 @@ export async function uploadFilebaseObject(input: {
     },
     body: toArrayBuffer(input.bytes),
   })
-  const response = await fetch(request)
+  const response = await fetchFilebaseWithTimeout(request, "Filebase object upload")
   if (!response.ok) {
     const responseText = await response.text().catch(() => "")
     throw providerUnavailable(
@@ -294,7 +295,7 @@ export async function uploadSongArtifactBytes(input: {
     },
     body: toArrayBuffer(input.bytes),
   })
-  const response = await fetch(request)
+  const response = await fetchFilebaseWithTimeout(request, "Filebase artifact upload")
   if (!response.ok) {
     const responseText = await response.text().catch(() => "")
     throw providerUnavailable(

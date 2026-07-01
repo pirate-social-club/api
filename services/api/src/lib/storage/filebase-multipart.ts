@@ -4,6 +4,8 @@ import { resolveFilebaseConfig } from "./filebase-config"
 import { buildS3PresignedUrl, buildS3SignedRequest } from "./s3-signing"
 
 const encoder = new TextEncoder()
+const FILEBASE_REQUEST_TIMEOUT_MS = 30_000
+const FILEBASE_MULTIPART_COMPLETE_TIMEOUT_MS = 120_000
 
 export type CompletedMultipartPart = {
   partNumber: number
@@ -68,12 +70,30 @@ async function requireProviderOk(response: Response, label: string): Promise<str
   return responseText
 }
 
+export async function fetchFilebaseWithTimeout(
+  request: Request,
+  label: string,
+  timeoutMs = FILEBASE_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(request, { signal: controller.signal })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const reason = error instanceof Error && error.name === "AbortError" ? "timed out" : "failed"
+    throw providerUnavailable(`${label} ${reason}: ${message}`)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export async function createMultipartUpload(input: {
   env: Env
   objectKey: string
   mimeType: string
 }): Promise<{ uploadId: string }> {
-  const response = await fetch(await buildS3SignedRequest({
+  const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "POST",
     config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
@@ -82,7 +102,7 @@ export async function createMultipartUpload(input: {
     headers: {
       "content-type": input.mimeType.trim().toLowerCase(),
     },
-  }))
+  }), "Filebase multipart init")
   const xml = await requireProviderOk(response, "Filebase multipart init")
   const uploadId = extractXmlValue(xml, "UploadId")
   if (!uploadId) {
@@ -100,12 +120,12 @@ export async function headObject(input: {
   etag: string | null
   cid: string | null
 }> {
-  const response = await fetch(await buildS3SignedRequest({
+  const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "HEAD",
     config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     bodyHashMode: "empty",
-  }))
+  }), "Filebase object HEAD")
   if (response.status === 404) {
     throw notFoundError("Object not found")
   }
@@ -135,7 +155,7 @@ export async function completeMultipartUpload(input: {
     ].join(""))
     .join("")
   const body = encoder.encode(`<CompleteMultipartUpload>${partsXml}</CompleteMultipartUpload>`)
-  const response = await fetch(await buildS3SignedRequest({
+  const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "POST",
     config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
@@ -144,7 +164,7 @@ export async function completeMultipartUpload(input: {
       "content-type": "application/xml",
     },
     body,
-  }))
+  }), "Filebase multipart complete", FILEBASE_MULTIPART_COMPLETE_TIMEOUT_MS)
   const xml = await requireProviderOk(response, "Filebase multipart complete")
   const etag = extractXmlValue(xml, "ETag")
   const cid = extractXmlValue(xml, "CID")
@@ -165,13 +185,21 @@ export async function abortMultipartUpload(input: {
   objectKey: string
   uploadId: string
 }): Promise<void> {
-  const response = await fetch(await buildS3SignedRequest({
-    method: "DELETE",
-    config: resolveFilebaseConfig(input.env),
-    objectKey: input.objectKey,
-    query: { uploadId: input.uploadId },
-    bodyHashMode: "empty",
-  }))
+  let response: Response
+  try {
+    response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
+      method: "DELETE",
+      config: resolveFilebaseConfig(input.env),
+      objectKey: input.objectKey,
+      query: { uploadId: input.uploadId },
+      bodyHashMode: "empty",
+    }), "Filebase multipart abort")
+  } catch (error) {
+    console.warn("Filebase multipart abort failed", {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return
+  }
   if (response.ok || response.status === 404) {
     return
   }
@@ -199,13 +227,13 @@ export async function listParts(input: {
   if (input.maxParts != null) {
     query["max-parts"] = String(input.maxParts)
   }
-  const response = await fetch(await buildS3SignedRequest({
+  const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "GET",
     config: resolveFilebaseConfig(input.env),
     objectKey: input.objectKey,
     query,
     bodyHashMode: "empty",
-  }))
+  }), "Filebase multipart list parts")
   if (response.status === 404) {
     throw notFoundError("Multipart upload not found")
   }
