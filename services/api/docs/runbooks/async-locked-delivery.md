@@ -87,3 +87,23 @@ PIRATE_TIMING_COMMUNITY_ID=cmt_... rtk bash scripts/timing-runs.sh async
 The async run should move the old locked delivery cost from `post_create` to
 `job_run_to_ready`.
 
+Story royalty registration uses the same direct transaction caps as the other
+Story runtime writes:
+
+```text
+STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI=5000000000
+STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI=2000000000
+STORY_DIRECT_TX_GAS_LIMIT_MAX=1500000
+STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS=12000
+```
+
+With those caps, one registration attempt is bounded at:
+
+```text
+1,500,000 gas * 5 gwei = 7,500,000,000,000,000 wei = 0.0075 IP
+```
+
+Using 2x retry headroom gives a required per-run signer balance floor of
+0.015 IP. The configured `STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI` is 0.1 IP and
+`STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI` is 0.25 IP, so the runtime funding
+preflight stays above the bounded worst-case registration cost.
