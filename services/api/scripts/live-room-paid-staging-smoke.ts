@@ -1243,6 +1243,7 @@ async function createReplayPurchaseQuote(input: {
   settlement_mode: string
 }> {
   const chainId = resolveCheckoutSourceChainId(input.env)
+  const listingId = input.listingId.startsWith("lst_lst_") ? input.listingId : `lst_${input.listingId}`
   const quote = await api<{
     final_price_cents: number
     funding_destination_address?: string | null
@@ -1260,7 +1261,7 @@ async function createReplayPurchaseQuote(input: {
         chain_namespace: "eip155",
         display_name: `USDC on ${resolveCheckoutChainName(chainId)}`,
       },
-      listing: input.listingId,
+      listing: listingId,
       route_provider: "pirate_checkout",
       source_chain: {
         chain_id: chainId,
