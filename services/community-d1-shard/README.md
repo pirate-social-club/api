@@ -44,8 +44,8 @@ All from `services/community-provision-operator`, via
 5. Add `"<C>":"DB_CMTY_<X>"` to `COMMUNITY_D1_BINDING_MAP_JSON`; deploy this shard.
 6. Ensure the API env has the `COMMUNITY_D1_SHARD` service binding; deploy the API.
 7. `bun run scripts/flip-community-to-d1.ts --community-id <C> --shard-worker-id community-d1-shard-staging --binding-name DB_CMTY_<X> --region <r> --apply`.
-8. Verify: `COMMUNITY_READ_ROUTING_ENABLED=true`, read the community's preview, confirm
-   shard `wrangler tail` shows `rpcMethod: execute` / `outcome: ok`, no fallback, no 5xx.
+8. Verify: read the community's preview, confirm shard `wrangler tail` shows
+   `rpcMethod: execute` / `outcome: ok`, no fallback, no 5xx.
    (`wrangler tail --format json` is PRETTY-printed, not JSONL — grep `"rpcMethod"`/`"outcome": "ok"`.)
 
 ## Rollback (tested on staging)
