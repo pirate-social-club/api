@@ -877,6 +877,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Esta opción conserva el sentido de perderse en las olas.",
                     distractors: [
@@ -887,6 +888,7 @@ describe("post study service", () => {
                   },
                   {
                     line_id: "line_002",
+                    source_text: "Hold me close until the morning",
                     translation: "Abrázame fuerte hasta la mañana",
                     explanation: "Esta opción expresa cercanía hasta la mañana.",
                     distractors: [
@@ -947,6 +949,278 @@ describe("post study service", () => {
     expect(rows.rows.some((row) => row.explanation_text)).toBe(true)
   })
 
+  test("lazy generation keeps valid chunks when another chunk fails validation", async () => {
+    await seedMultilineSongPost()
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_STUDY_GENERATION_CHUNK_SIZE: "1",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    let callCount = 0
+    const jobResult = await withMockedFetch(() => (async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return new Response(JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  lines: [
+                    {
+                      line_id: "line_001",
+                      source_text: "I was lost in the midnight waves",
+                      translation: "Me perdí en las olas de medianoche",
+                      explanation: "Esta opción conserva el sentido de perderse.",
+                      distractors: [
+                        "Me encontré junto a las olas de medianoche",
+                        "Me perdí entre luces al amanecer",
+                        "Nadé tranquilo bajo la luna",
+                      ],
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ lines: [] }) } }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(callCount).toBe(2)
+    expect(jobResult).toContain("ready_partial:es")
+    expect(jobResult).toContain("schema_shape")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "translation_choice",
+      "say_it_back",
+    ])
+    const statusRows = await client!.execute(`
+      SELECT status, COUNT(*) AS count
+      FROM song_study_unit_localization
+      GROUP BY status
+      ORDER BY status
+    `)
+    expect(statusRows.rows).toEqual([
+      { status: "ready", count: 1 },
+      { status: "unavailable", count: 1 },
+    ])
+  })
+
+  test("lazy generation keeps valid lines when another line in the same chunk fails validation", async () => {
+    await seedMultilineSongPost()
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_STUDY_GENERATION_CHUNK_SIZE: "10",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    let callCount = 0
+    const jobResult = await withMockedFetch(() => (async () => {
+      callCount += 1
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
+                    translation: "Me perdí en las olas de medianoche",
+                    explanation: "Esta opción conserva el sentido de perderse.",
+                    distractors: [
+                      "Me encontré junto a las olas de medianoche",
+                      "Me perdí entre luces al amanecer",
+                      "Nadé tranquilo bajo la luna",
+                    ],
+                  },
+                  {
+                    line_id: "line_002",
+                    source_text: "Hold me close until the morning",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta línea falla por distractores iguales a la respuesta.",
+                    distractors: [
+                      "Abrázame fuerte hasta la mañana",
+                      "Abrázame fuerte hasta la mañana",
+                      "Abrázame fuerte hasta la mañana",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(callCount).toBe(1)
+    expect(jobResult).toContain("ready_partial:es")
+    expect(jobResult).toContain("skipped=1")
+    expect(jobResult).toContain("skip_errors=schema_invalid_distractors")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "translation_choice",
+      "say_it_back",
+    ])
+  })
+
+  test("rejects a line whose echoed source_text belongs to a different line (chunk drift)", async () => {
+    await seedMultilineSongPost()
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_STUDY_GENERATION_CHUNK_SIZE: "10",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    // line_001 echoes line_002's source text — the off-by-one drift. Its translation
+    // ("Abrázame fuerte…") is actually line_002's answer, so serving it would be a wrong key.
+    const jobResult = await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                lines: [
+                  {
+                    line_id: "line_001",
+                    source_text: "Hold me close until the morning",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Traducción desalineada respecto a la línea solicitada.",
+                    distractors: [
+                      "Déjame ir antes del amanecer",
+                      "Canta conmigo toda la noche",
+                      "Espera hasta que cambie el viento",
+                    ],
+                  },
+                  {
+                    line_id: "line_002",
+                    source_text: "Hold me close until the morning",
+                    translation: "Abrázame fuerte hasta la mañana",
+                    explanation: "Esta opción expresa cercanía hasta la mañana.",
+                    distractors: [
+                      "Déjame ir antes del amanecer",
+                      "Canta conmigo toda la noche",
+                      "Espera hasta que cambie el viento",
+                    ],
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    expect(jobResult).toContain("ready_partial:es")
+    expect(jobResult).toContain("skipped=1")
+    expect(jobResult).toContain("skip_errors=schema_source_mismatch")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    // No MCQ for the drifted line_001; only the correctly-aligned line_002 gets one.
+    const choiceLineIds = payload.exercises
+      .filter((exercise) => exercise.type === "translation_choice")
+      .map((exercise) => exercise.line_id)
+    expect(choiceLineIds).toEqual(["line_002"])
+    expect(JSON.stringify(payload)).not.toContain("correct_option_id")
+
+    const statusRows = await client!.execute(`
+      SELECT u.line_id, l.status
+      FROM song_study_unit u
+      JOIN song_study_unit_localization l ON l.unit_id = u.id
+      WHERE l.target_language = 'es'
+      ORDER BY u.line_index
+    `)
+    expect(statusRows.rows).toEqual([
+      { line_id: "line_001", status: "unavailable" },
+      { line_id: "line_002", status: "ready" },
+    ])
+  })
+
   test("lazy generation falls back to say-it-back when provider output is invalid", async () => {
     await seedMultilineSongPost()
     const generationEnv = env({
@@ -989,6 +1263,65 @@ describe("post study service", () => {
     expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
   })
 
+  test("lazy generation does not re-mark current unavailable localizations as processing", async () => {
+    await seedMultilineSongPost()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    await withMockedFetch(() => (async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ lines: [] }) } }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "es",
+    }))
+
+    const unavailableBefore = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'unavailable'")
+    expect(Number(unavailableBefore.rows[0]?.count ?? 0)).toBe(2)
+    await exec(`
+      UPDATE community_jobs
+      SET status = 'succeeded',
+          result_ref = 'ready:es'
+      WHERE job_type = 'song_study_generate'
+    `)
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    const statusRows = await client!.execute(`
+      SELECT status, COUNT(*) AS count
+      FROM song_study_unit_localization
+      GROUP BY status
+      ORDER BY status
+    `)
+    expect(statusRows.rows).toEqual([{ status: "unavailable", count: 2 }])
+    const jobRows = await client!.execute("SELECT COUNT(*) AS count FROM community_jobs WHERE job_type = 'song_study_generate'")
+    expect(Number(jobRows.rows[0]?.count ?? 0)).toBe(1)
+  })
+
   test("lazy generation rejects answer-equal and duplicate distractors", async () => {
     await seedMultilineSongPost()
     const generationEnv = env({
@@ -1014,6 +1347,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Explica el sentido de estar perdido.",
                     distractors: [
@@ -1098,6 +1432,7 @@ describe("post study service", () => {
                 lines: [
                   {
                     line_id: "line_001",
+                    source_text: "I was lost in the midnight waves",
                     translation: "Me perdí en las olas de medianoche",
                     explanation: "Esta opción conserva el sentido de perderse.",
                     distractors: [
@@ -1108,6 +1443,7 @@ describe("post study service", () => {
                   },
                   {
                     line_id: "line_002",
+                    source_text: "Hold me close until the morning",
                     translation: "Abrázame fuerte hasta la mañana",
                     explanation: "Esta opción expresa cercanía hasta la mañana.",
                     distractors: [
@@ -1147,7 +1483,7 @@ describe("post study service", () => {
       WHERE target_language = 'es' AND status = 'ready'
     `)
     expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
-    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(1)
+    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(4)
   })
 
   test("canonicalizes regional target languages before enqueueing generation", async () => {

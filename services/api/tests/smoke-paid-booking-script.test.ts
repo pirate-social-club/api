@@ -22,6 +22,8 @@ describe("smoke-paid-booking script guards", () => {
   test("documents prod preflight and canary commands", () => {
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("--funding-preflight-only")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("--claim")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("--agora-evidence-file")
+    expect(PAID_BOOKING_SMOKE_USAGE).toContain("--base-price-cents")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("https://api.pirate.sc")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
     expect(PAID_BOOKING_SMOKE_USAGE).toContain("0xbBA024600cba5F375AfdCeC401f7dcCB3D515829")

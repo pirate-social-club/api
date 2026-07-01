@@ -16,6 +16,7 @@ import { canGenerateStudyTranslations, requestStudyPackGeneration, type StudyGen
 import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
 import { withTransaction } from "../transactions"
+import { logPipelineError } from "../observability/pipeline-log"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
@@ -23,9 +24,10 @@ type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
 
 const STUDY_UNIT_GENERATION_VERSION = 1
-const STUDY_LOCALIZATION_GENERATION_VERSION = 1
+const STUDY_LOCALIZATION_GENERATION_VERSION = 4
 const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
+const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
   "ar",
   "de",
@@ -58,6 +60,7 @@ type StudyPost = {
 
 type StudyPack = {
   generated_at: string | null
+  job_result_ref?: string | null
   source_language: string | null
   status: "ready" | "processing" | "unavailable"
   study_pack_version: number
@@ -198,6 +201,79 @@ function readString(value: unknown): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+function classifyStudyGenerationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/malformed JSON/iu.test(message)) return "malformed_json"
+  if (/unexpected line_id|schema_line_id/iu.test(message)) return "schema_line_id"
+  if (/missing translation distractors|schema_missing_distractors/iu.test(message)) return "schema_missing_distractors"
+  if (/invalid translation distractors|schema_invalid_distractors/iu.test(message)) return "schema_invalid_distractors"
+  if (/schema_source_mismatch|source_text/iu.test(message)) return "schema_source_mismatch"
+  if (/expected object|lines must be an array|invalid line|no valid generated lines|no generated lines|schema_shape/iu.test(message)) return "schema_shape"
+  if (/schema mismatch/iu.test(message)) return "schema_mismatch"
+  if (/timed out|timeout|abort/iu.test(message)) return "timeout"
+  if (/OpenRouter|HTTP|status|fetch|network/iu.test(message)) return "provider_error"
+  return "unknown"
+}
+
+function compactGenerationResultRef(input: {
+  failedChunks: number
+  failureCodes: string[]
+  generatedLineCount: number
+  skippedLineCount: number
+  skippedReasonCodes: string[]
+  targetLanguage: string
+  totalChunks: number
+  unavailableLineCount: number
+}): string {
+  const failureCodes = [...new Set(input.failureCodes)].slice(0, 3)
+  const skippedReasonCodes = [...new Set(input.skippedReasonCodes)].slice(0, 3)
+  const diagnosticParts = [
+    failureCodes.length ? `errors=${failureCodes.join("+")}` : null,
+    input.skippedLineCount > 0 ? `skipped=${input.skippedLineCount}` : null,
+    skippedReasonCodes.length ? `skip_errors=${skippedReasonCodes.join("+")}` : null,
+  ]
+  if (input.failedChunks === 0 && input.unavailableLineCount === 0) {
+    return [
+      "ready",
+      input.targetLanguage,
+      ...diagnosticParts,
+    ].filter(Boolean).join(":")
+  }
+  if (input.generatedLineCount > 0) {
+    return [
+      "ready_partial",
+      input.targetLanguage,
+      `generated=${input.generatedLineCount}`,
+      `unavailable=${input.unavailableLineCount}`,
+      `failed_chunks=${input.failedChunks}/${input.totalChunks}`,
+      ...diagnosticParts,
+    ].filter(Boolean).join(":")
+  }
+  return [
+    "fallback",
+    input.targetLanguage,
+    `unavailable=${input.unavailableLineCount}`,
+    `failed_chunks=${input.failedChunks}/${input.totalChunks}`,
+    ...diagnosticParts,
+  ].filter(Boolean).join(":")
+}
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize))
+  }
+  return chunks
+}
+
+function studyGenerationChunkSize(env: Env): number {
+  const configured = Number(env.OPENROUTER_STUDY_GENERATION_CHUNK_SIZE ?? "")
+  if (Number.isInteger(configured) && configured > 0) {
+    return Math.min(configured, 25)
+  }
+  return DEFAULT_STUDY_GENERATION_CHUNK_SIZE
 }
 
 function readRequiredString(value: unknown, field: string): string {
@@ -632,29 +708,51 @@ async function createReadyStudyPack(input: {
   if (units.length === 0) return null
 
   const generatedLines = new Map<string, StudyGeneratedLine>()
+  const generationFailureCodes: string[] = []
+  const skippedGenerationReasonCodes: string[] = []
+  let skippedGenerationLineCount = 0
+  let failedGenerationChunks = 0
+  let totalGenerationChunks = 0
   if (canGenerateStudyTranslations(input.env)) {
-    try {
-      const generated = await requestStudyPackGeneration({
-        env: input.env,
-        lines: units.filter((unit) => wordCount(unit.prompt_text) >= 3).map((unit) => {
-          const previous = units.find((candidate) => candidate.line_index === unit.line_index - 1)
-          const next = units.find((candidate) => candidate.line_index === unit.line_index + 1)
-          return {
-            lineId: unit.line_id,
-            next: next?.prompt_text ?? null,
-            previous: previous?.prompt_text ?? null,
-            text: unit.prompt_text,
-          }
-        }),
-        sourceLanguage: input.post.source_language,
-        targetLanguage: input.targetLanguage,
+    const requestLines = units
+      .filter((unit) => wordCount(unit.prompt_text) >= 3)
+      .map((unit) => {
+        const previous = units.find((candidate) => candidate.line_index === unit.line_index - 1)
+        return {
+          lineId: unit.line_id,
+          previous: previous?.prompt_text ?? null,
+          text: unit.prompt_text,
+        }
       })
-      for (const line of generated.lines) {
-        generatedLines.set(line.lineId, line)
+    const chunks = chunkArray(requestLines, studyGenerationChunkSize(input.env))
+    totalGenerationChunks = chunks.length
+    for (const [chunkIndex, lines] of chunks.entries()) {
+      try {
+        const generated = await requestStudyPackGeneration({
+          env: input.env,
+          lines,
+          sourceLanguage: input.post.source_language,
+          targetLanguage: input.targetLanguage,
+        })
+        for (const line of generated.lines) {
+          generatedLines.set(line.lineId, line)
+        }
+        if (generated.skipped.length > 0) {
+          skippedGenerationLineCount += generated.skipped.length
+          skippedGenerationReasonCodes.push(...generated.skipped.map((line) => line.reason))
+        }
+      } catch (error) {
+        const errorCode = classifyStudyGenerationError(error)
+        failedGenerationChunks += 1
+        generationFailureCodes.push(errorCode)
+        logPipelineError("[song-study] generation chunk failed", {
+          chunk_index: chunkIndex,
+          chunk_line_count: lines.length,
+          error_code: errorCode,
+          post_id: input.post.post_id,
+          target_language: input.targetLanguage,
+        })
       }
-    } catch {
-      // Keep the route usable for say-it-back when generation is unavailable.
-      // Translation-choice exercises are only created from validated provider output.
     }
   }
 
@@ -675,9 +773,11 @@ async function createReadyStudyPack(input: {
       status: readString(row.status),
     },
   ]))
+  let unavailableLineCount = 0
   for (const unit of units) {
     const generatedLine = generatedLines.get(unit.line_id)
     if (!generatedLine || generatedLine.distractors.length < 3) {
+      unavailableLineCount += 1
       const existing = existingLocalizations.get(unit.id)
       if (existing?.status === "ready") {
         continue
@@ -745,6 +845,16 @@ async function createReadyStudyPack(input: {
 
   return {
     generated_at: now,
+    job_result_ref: compactGenerationResultRef({
+      failedChunks: failedGenerationChunks,
+      failureCodes: generationFailureCodes,
+      generatedLineCount: generatedLines.size,
+      skippedLineCount: skippedGenerationLineCount,
+      skippedReasonCodes: skippedGenerationReasonCodes,
+      targetLanguage: input.targetLanguage,
+      totalChunks: totalGenerationChunks,
+      unavailableLineCount,
+    }),
     source_language: input.post.source_language,
     status: "ready",
     study_pack_version: Math.max(STUDY_UNIT_GENERATION_VERSION, STUDY_LOCALIZATION_GENERATION_VERSION),
@@ -797,7 +907,7 @@ async function markStudyLocalizationsProcessing(input: {
         ON CONFLICT(unit_id, target_language) DO UPDATE SET
           localization_version = excluded.localization_version,
           status = CASE
-            WHEN song_study_unit_localization.status = 'ready'
+            WHEN song_study_unit_localization.status IN ('ready', 'unavailable')
              AND song_study_unit_localization.localization_version >= excluded.localization_version
             THEN song_study_unit_localization.status
             ELSE 'processing'
@@ -820,6 +930,12 @@ async function enqueueStudyGenerationIfNeeded(input: {
 }): Promise<void> {
   if (!canGenerateStudyTranslations(input.env)) return
   if (input.units.length === 0) return
+  const pack = await getLatestPack({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
+  if (pack?.status === "ready") return
   if (await hasCompleteReadyStudyLocalizations({
     client: input.client,
     postId: input.postId,
@@ -989,7 +1105,7 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
       post,
       targetLanguage,
     })
-    return pack?.status === "ready" ? `ready:${targetLanguage}` : "skipped:generation_unavailable"
+    return pack?.job_result_ref ?? (pack?.status === "ready" ? `ready:${targetLanguage}` : "skipped:generation_unavailable")
   } finally {
     await db.close()
   }
