@@ -22,7 +22,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { badRequestError, commentMediaRejected, eligibilityFailed, internalError, notFoundError } from "../errors"
+import { badRequestError, commentMediaRejected, communityMembershipRequiredError, communityShardSettingsMissingError, eligibilityFailed, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
@@ -66,7 +66,9 @@ type CommentServiceCommunityRepository =
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
   if (!canAccessCommunity(membership)) {
-    throw notFoundError("Community not found")
+    // Same client-visible 404 as a genuine not-found (don't leak membership on
+    // gated communities); log-side logCode distinguishes it from the shard case.
+    throw communityMembershipRequiredError({ community_id: communityId })
   }
   return membership
 }
@@ -278,7 +280,9 @@ export async function createComment(input: {
 
     const policy = await getCommunityCommentPolicy(db.client, input.communityId)
     if (!policy) {
-      throw notFoundError("Community not found")
+      // Community resolved + live in the control plane, but its shard has no
+      // `communities` row — a provisioning/migration defect, not a real 404.
+      throw communityShardSettingsMissingError({ community_id: input.communityId })
     }
 
     let writeBody = input.body

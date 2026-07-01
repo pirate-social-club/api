@@ -5,13 +5,33 @@ export class HttpError extends Error {
   readonly code: string
   readonly retryable: boolean
   readonly details: Record<string, unknown> | null
+  /**
+   * Server/log-side diagnostic discriminator. NEVER serialized into the
+   * response body (see `errorResponse`), so it can distinguish otherwise
+   * identical client-visible errors — e.g. the several 404s that all show
+   * `{ code: "not_found", message: "Community not found" }` to preserve the
+   * deliberate non-member-privacy behaviour on gated communities. Defaults to
+   * `code`.
+   */
+  readonly logCode: string
+  /** Server/log-side context. NEVER serialized into the response body. */
+  readonly logContext: Record<string, unknown> | null
 
-  constructor(status: number, code: string, message: string, retryable = false, details: Record<string, unknown> | null = null) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    retryable = false,
+    details: Record<string, unknown> | null = null,
+    diagnostics: { logCode?: string; logContext?: Record<string, unknown> | null } = {},
+  ) {
     super(message)
     this.status = status
     this.code = code
     this.retryable = retryable
     this.details = details
+    this.logCode = diagnostics.logCode ?? code
+    this.logContext = diagnostics.logContext ?? null
   }
 }
 
@@ -57,6 +77,45 @@ export function commentMediaRejected(message: string, details: Record<string, un
 
 export function notFoundError(message: string): HttpError {
   return new HttpError(404, "not_found", message)
+}
+
+const COMMUNITY_NOT_FOUND_MESSAGE = "Community not found"
+
+/**
+ * The community itself could not be resolved (control-plane miss). Client sees
+ * the standard `not_found` / "Community not found" 404.
+ */
+export function communityNotFoundError(logContext: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(404, "not_found", COMMUNITY_NOT_FOUND_MESSAGE, false, null, {
+    logCode: "community_not_found",
+    logContext,
+  })
+}
+
+/**
+ * The community resolved and is live, but the caller is not a member of a gated
+ * community. We intentionally return the SAME body as a genuine not-found so we
+ * don't leak the community's existence/membership. Only the log-side `logCode`
+ * distinguishes it.
+ */
+export function communityMembershipRequiredError(logContext: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(404, "not_found", COMMUNITY_NOT_FOUND_MESSAGE, false, null, {
+    logCode: "community_membership_required",
+    logContext,
+  })
+}
+
+/**
+ * The community resolved and is live in the control plane, but its per-community
+ * shard is missing the `communities` settings row (a provisioning/migration
+ * defect — e.g. a `backend='d1'` flip onto an un-seeded shard). Client sees the
+ * standard 404; the log-side `logCode` + context make it diagnosable.
+ */
+export function communityShardSettingsMissingError(logContext: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(404, "not_found", COMMUNITY_NOT_FOUND_MESSAGE, false, null, {
+    logCode: "community_shard_settings_missing",
+    logContext,
+  })
 }
 
 export function structuredSurfaceDisabled(message: string, details: Record<string, unknown> | null = null): HttpError {

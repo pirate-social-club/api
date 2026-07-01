@@ -257,6 +257,21 @@ app.get("/__debug/sentry-error", (c) => {
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError((error, c) => {
+  // 4xx HttpErrors are otherwise returned with no server-side trace. When a
+  // helper set a distinct `logCode` (different from the wire `code`), emit a
+  // low-severity diagnostic so intentionally-opaque 404s (e.g. the several
+  // "Community not found" throw sites) are triageable from logs without
+  // changing the client-visible body.
+  if (error instanceof HttpError && error.status < 500 && error.logCode !== error.code) {
+    console.log("[api-4xx-diagnostic]", JSON.stringify({
+      code: error.code,
+      logCode: error.logCode,
+      status: error.status,
+      route: c.req.path,
+      method: c.req.method,
+      ...(error.logContext ?? {}),
+    }))
+  }
   if (!(error instanceof HttpError) || error.status >= 500) {
     console.error("[api-worker]", error)
     if (c.env.SENTRY_DSN) {
