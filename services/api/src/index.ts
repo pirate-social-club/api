@@ -47,8 +47,8 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
-import { emptyBookingSettlementSummary, isBookingSettlementCronEnabled, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
-import { emptyGlobalBookingSettlementSummary, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
+import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
+import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabled, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
@@ -601,13 +601,16 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
 
 async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
-  if (!isBookingSettlementCronEnabled(env)) return
+  if (!isGlobalBookingSettlementCronEnabled(env)) return
   let globalSummary = emptyGlobalBookingSettlementSummary(true)
   const communityRepository = getCommunityRepository(env)
-  let summary = emptyBookingSettlementSummary(true)
+  const legacyCommunitySweepEnabled = String(env.LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED ?? "").trim().toLowerCase() === "true"
+  let summary = emptyBookingSettlementSummary(legacyCommunitySweepEnabled)
   try {
     globalSummary = await sweepGlobalBookingSettlements({ env, client: getControlPlaneClient(env), maxBookings: 100, deadlineMs: 20_000 })
-    summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
+    if (legacyCommunitySweepEnabled) {
+      summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
+    }
     // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
     // generic marker (no raw message/object reaches Sentry from coordinator/RPC paths).
     if (globalSummary.fatal) captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
