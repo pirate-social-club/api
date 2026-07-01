@@ -692,8 +692,9 @@ describe("story royalty registration service", () => {
       }
 
       expect(caughtError).toBeInstanceOf(Error)
-      expect((caughtError as Error).message).toContain("Story registration failed before publishing this asset")
-      expect((caughtError as Error).message).toContain("Story royalty configuration is missing")
+      expect((caughtError as Error).message).toContain(
+        "This asset could not be published because Story registration is not configured",
+      )
 
       const posts = await db.client.execute({
         sql: "SELECT post_id FROM posts WHERE post_id = ?1",
@@ -781,8 +782,9 @@ describe("story royalty registration service", () => {
 
       expect(fundingAssertionNames).toEqual(["story-operator"])
       expect(caughtError).toBeInstanceOf(Error)
-      expect((caughtError as Error).message).toContain("Story registration failed before publishing this asset")
-      expect((caughtError as Error).message).toContain("Story runtime signer funding below floor")
+      expect((caughtError as Error).message).toContain("Story registration is temporarily unavailable")
+      // raw operator-funding detail must not leak into the user-facing message
+      expect((caughtError as Error).message).not.toContain("funding below floor")
 
       const posts = await db.client.execute({
         sql: "SELECT post_id FROM posts WHERE post_id = ?1",
