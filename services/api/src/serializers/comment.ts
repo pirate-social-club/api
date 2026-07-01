@@ -25,6 +25,7 @@ export function serializeComment(comment: Comment): CurrentCommentResponse {
     thread_root_post: publicPostId(comment.thread_root_post_id),
     parent_comment: comment.parent_comment_id ? publicCommentId(comment.parent_comment_id) : null,
     author_user: comment.authorship_mode === "guest" || !comment.author_user_id ? null : `usr_${comment.author_user_id}`,
+    author_public_handle: comment.identity_mode === "public" && comment.authorship_mode === "human_direct" ? comment.author_public_handle ?? null : null,
     authorship_mode: comment.authorship_mode,
     agent: comment.agent_id ? `agt_${comment.agent_id}` : comment.agent_id,
     agent_ownership_record: comment.agent_ownership_record_id ? `aor_${comment.agent_ownership_record_id}` : comment.agent_ownership_record_id,

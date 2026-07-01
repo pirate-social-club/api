@@ -259,6 +259,7 @@ publicPosts.get("/:postId/thread", async (c) => {
       sort: c.req.query("sort") ?? null,
       cursor: c.req.query("cursor") ?? null,
       limit: c.req.query("limit") ?? null,
+      profileRepository: getProfileRepository(c.env),
     })
     const links = publicPostLinks({
       apiOrigin: configuredApiOrigin(c.env, c.req.url),

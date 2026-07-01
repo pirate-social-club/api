@@ -4,6 +4,7 @@ import type {
   CommunityReadRepository,
 } from "../communities/db-community-repository"
 import type { ProfileRepository } from "../auth/repositories"
+import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import type { AgeGateViewerState } from "./age-gate-viewer-state"
@@ -80,6 +81,46 @@ export async function buildLocalizedPostReadResponse(input: {
   })
 }
 
+/**
+ * Resolves the read-time public handle label for public-identity human authors
+ * and stamps it onto `response.post.author_public_handle`, so clients render the
+ * byline on first paint instead of doing a per-author profile lookup. Anonymous
+ * and agent (`user_agent`) posts are left untouched (byline comes from the
+ * anonymous label or the agent snapshot). One batched profile lookup per read.
+ */
+export async function hydrateAuthorPublicHandlesForResponses(input: {
+  responses: LocalizedPostResponse[]
+  profileRepository?: ProfileRepository | null
+}): Promise<void> {
+  if (!input.profileRepository) return
+
+  const eligiblePosts = input.responses
+    .map((response) => response.post)
+    .filter((post): post is Post & { author_user_id: string } =>
+      post.identity_mode === "public"
+      && post.authorship_mode === "human_direct"
+      && Boolean(post.author_user_id))
+
+  const authorUserIds = [...new Set(eligiblePosts.map((post) => post.author_user_id))]
+  if (authorUserIds.length === 0) return
+
+  const profileRepository = input.profileRepository
+  const profilesByUserId = profileRepository.listProfilesByUserIds
+    ? await profileRepository.listProfilesByUserIds(authorUserIds).catch(() => new Map())
+    : new Map(await Promise.all(authorUserIds.map(async (userId): Promise<[
+        string,
+        Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>,
+      ]> => [
+        userId,
+        await profileRepository.getProfileByUserId(userId).catch(() => null),
+      ])))
+
+  for (const post of eligiblePosts) {
+    const profile = profilesByUserId.get(post.author_user_id) ?? null
+    post.author_public_handle = profile ? getProfilePublicHandleLabel(profile) : null
+  }
+}
+
 export async function hydrateAndEnqueuePostReadResponses(input: {
   client: Client
   communityId: string
@@ -94,6 +135,11 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
       profileRepository: input.profileRepository,
     })
   }
+
+  await hydrateAuthorPublicHandlesForResponses({
+    responses: input.responses,
+    profileRepository: input.profileRepository,
+  })
 
   await hydrateDerivativeSourcesForResponses({
     client: input.client,

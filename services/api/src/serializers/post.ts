@@ -41,6 +41,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     object: "post",
     community: publicCommunityId(post.community_id),
     author_user: post.identity_mode === "public" && post.author_user_id ? `usr_${post.author_user_id}` : null,
+    author_public_handle: post.identity_mode === "public" ? post.author_public_handle ?? null : null,
     authorship_mode: post.authorship_mode,
     agent: post.agent_id ? `agt_${post.agent_id}` : post.agent_id,
     agent_ownership_record: post.agent_ownership_record_id ? `aor_${post.agent_ownership_record_id}` : post.agent_ownership_record_id,

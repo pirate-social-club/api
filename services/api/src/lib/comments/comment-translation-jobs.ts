@@ -4,6 +4,8 @@ import { enqueueCommunityJob } from "../communities/jobs/store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { nowIso } from "../helpers"
+import type { ProfileRepository } from "../auth/repositories"
+import { hydrateCommentAuthorPublicHandles } from "./comment-author-hydration"
 import type { CommentListResponse } from "./comment-types"
 import type { CommentWriteDraft } from "./community-comment-store"
 
@@ -79,12 +81,15 @@ export async function localizeCommentItems(input: {
   communityId: string
   locale?: string | null
   items: CommentListResponse["items"]
+  profileRepository?: ProfileRepository | null
 }): Promise<CommentListResponse["items"]> {
   const localized = await Promise.all(input.items.map((item) => buildLocalizedCommentListItem({
     executor: input.client,
     item,
     locale: input.locale ?? null,
   })))
+
+  await hydrateCommentAuthorPublicHandles(localized, input.profileRepository)
 
   await Promise.all(localized.map((item) => enqueueCommentTranslationOnReadIfNeeded({
     client: input.client,
