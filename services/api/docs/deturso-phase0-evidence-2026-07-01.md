@@ -1,6 +1,7 @@
 # De-Turso Phase 0 Evidence - 2026-07-01
 
-Read-only checks run from `api-slice-d` on branch `deturso-phase1`.
+Read-only checks run from `api-slice-d`; Phase 1 and Phase 2 changes were
+merged to `main` before production deploys.
 
 ## Control Plane Aggregates
 
@@ -70,3 +71,24 @@ Post-smoke production aggregates:
 - Remaining primary `libsql://` rows without D1 routing are not ready
   communities: `32` active/error pending sentinels, `1` archived/active legacy
   row, and `1` deleted/active legacy row.
+
+## Phase 2 Deploy And Smoke
+
+Production `api-core` was redeployed from `origin/main` after removing the API
+read/write Turso dispatch branch and removing `COMMUNITY_READ_ROUTING_ENABLED`
+from `wrangler.jsonc`.
+
+- Deployed Worker version: `017bd106-6f80-434c-b941-a50ef9e6e854`.
+- Deploy output no longer listed `COMMUNITY_READ_ROUTING_ENABLED`.
+- Health check after deploy: `GET https://api.pirate.sc/health` returned
+  `{"ok":true}`.
+
+Production smoke `scripts/smoke-d1-provisioning-cutover.ts`:
+
+- Namespaceless create:
+  `com_cmt_c722d426fa814c369399f353c1cf4c3b` -> `DB_CMTY_0080`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0080'`.
+- Namespaced create:
+  `com_cmt_8ac035173f52427dba86432d1ad3004b` with
+  `nv_deturso_smoke_20260701192227` -> `DB_CMTY_0081`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0081'`.
