@@ -942,7 +942,7 @@ export async function publishLiveRoomReplayDraft(input: {
         })
         await withTransaction(db.client, "write", async (tx) => {
           await insertCommunityListingRow(tx, input.communityId, preparedListing)
-          published = await publishLockedPaidLiveRoomReplayAsset({
+          await publishLockedPaidLiveRoomReplayAsset({
             client: tx,
             communityId: input.communityId,
             liveRoomId: input.liveRoomId,
@@ -956,7 +956,13 @@ export async function publishLiveRoomReplayDraft(input: {
             storyReadCondition: lockedDelivery.storyReadCondition,
             storyWriteCondition: lockedDelivery.storyWriteCondition,
             now,
+            hydrate: false,
           })
+        })
+        published = await getLiveRoomReplayAsset({
+          client: db.client,
+          communityId: input.communityId,
+          liveRoomId: input.liveRoomId,
         })
       } catch (error) {
         await markLiveRoomReplayAssetLockedDeliveryFailed({

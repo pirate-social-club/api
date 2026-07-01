@@ -368,6 +368,7 @@ export async function publishLockedPaidLiveRoomReplayAsset(input: {
   storyReadCondition: string
   storyWriteCondition: string
   now: string
+  hydrate?: boolean
 }): Promise<LiveRoomReplayAsset | null> {
   await input.client.execute({
     sql: `
@@ -418,6 +419,9 @@ export async function publishLockedPaidLiveRoomReplayAsset(input: {
     `,
     args: [input.communityId, input.liveRoomId, input.replayAssetId, input.replayListingId, input.now],
   })
+  if (input.hydrate === false) {
+    return null
+  }
   return await getLiveRoomReplayAsset({
     client: input.client,
     communityId: input.communityId,
