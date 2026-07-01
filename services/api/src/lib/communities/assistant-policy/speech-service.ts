@@ -70,7 +70,9 @@ function elevenLabsTimeoutMs(env: Env): number {
 }
 
 function normalizeAudioMimeType(file: File): string {
-  return String(file.type || "application/octet-stream").trim().toLowerCase()
+  // Strip any codec/parameter suffix (e.g. "audio/webm;codecs=opus" from
+  // MediaRecorder) so the base type matches SUPPORTED_TRANSCRIPTION_MIME_TYPES.
+  return String(file.type || "application/octet-stream").split(";")[0].trim().toLowerCase()
 }
 
 function assertTranscriptionPolicy(policy: CommunityAssistantPolicy): void {
