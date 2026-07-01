@@ -5,6 +5,7 @@ import {
   buildUploadPartPresignedUrl,
   completeMultipartUpload,
   createMultipartUpload,
+  fetchFilebaseWithTimeout,
   headObject,
   listParts,
 } from "../../../src/lib/storage/filebase-multipart"
@@ -36,6 +37,25 @@ afterEach(() => {
 })
 
 describe("filebase multipart helpers", () => {
+  test("aborts timed out Filebase requests", async () => {
+    let observedAbort = false
+    globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          observedAbort = true
+          reject(new DOMException("The operation was aborted.", "AbortError"))
+        }, { once: true })
+      })
+    }
+
+    await expect(fetchFilebaseWithTimeout(
+      new Request("https://s3.filebase.test/example-bucket/object"),
+      "Filebase test request",
+      1,
+    )).rejects.toThrow("Filebase test request timed out")
+    expect(observedAbort).toBe(true)
+  })
+
   test("creates a multipart upload and extracts UploadId", async () => {
     const requests = installFetch(() => new Response(
       "<InitiateMultipartUploadResult><UploadId>upload-123</UploadId></InitiateMultipartUploadResult>",

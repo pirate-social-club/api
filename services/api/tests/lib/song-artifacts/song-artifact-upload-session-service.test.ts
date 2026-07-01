@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { HttpError } from "../../../src/lib/errors"
 import {
   computeMultipartPartPlan,
-  DIRECT_MULTIPART_VIDEO_MAX_BYTES,
+  DIRECT_MULTIPART_MAX_BYTES,
   reapStaleMultipartSongArtifactUploads,
 } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
 import { createSongArtifactUploadIntent } from "../../../src/lib/song-artifacts/song-artifact-repository"
@@ -122,8 +122,8 @@ describe("song artifact upload session service", () => {
   })
 
   test("rejects direct multipart uploads above the product cap", () => {
-    expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_VIDEO_MAX_BYTES)).not.toThrow()
-    expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_VIDEO_MAX_BYTES + 1)).toThrow("Video uploads are currently limited to 2GB")
+    expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_MAX_BYTES)).not.toThrow()
+    expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_MAX_BYTES + 1)).toThrow("Direct multipart uploads are currently limited to 2GB")
   })
 
   test("reaps stale multipart sessions idempotently", async () => {
