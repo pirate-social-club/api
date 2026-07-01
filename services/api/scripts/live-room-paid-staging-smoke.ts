@@ -651,15 +651,6 @@ async function hostAttach(input: {
   return attached.agora
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;")
-}
-
 async function startBrowserMediaPublisher(input: {
   agora: RuntimeAgoraBlock
   runId: string
