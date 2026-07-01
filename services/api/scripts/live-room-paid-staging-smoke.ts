@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process"
+import { rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
@@ -65,6 +68,10 @@ Flags:
                          Override paid replay price, default PIRATE_SMOKE_REPLAY_PRICE_CENTS or --price-cents.
   --recording-hold-ms <n>
                          When publishing a replay, wait this long after host attach before ending; default 20000.
+  --publish-browser-media
+                         Launch agent-browser with fake mic/camera media into the Agora channel during the recording hold.
+  --skip-browser-media-cleanup
+                         Leave the browser session open after the smoke for debugging.
   --community-id <id>    Reuse an existing provisioned community instead of creating a new one.
                          Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
   --require-existing-community
@@ -642,6 +649,88 @@ async function hostAttach(input: {
     uid: attached.agora.uid,
   })
   return attached.agora
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+}
+
+async function startBrowserMediaPublisher(input: {
+  agora: RuntimeAgoraBlock
+  runId: string
+}): Promise<{ session: string; close: () => Promise<void> } | null> {
+  if (!hasFlag("--publish-browser-media")) return null
+  assert(input.agora.app_id, "browser media publisher requires Agora app_id")
+  assert(input.agora.token, "browser media publisher requires Agora token")
+
+  const session = `paid-live-smoke-${input.runId}`
+  const htmlPath = join(tmpdir(), `${session}.html`)
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Agora Smoke Publisher</title>
+    <style>body{font-family:sans-serif;margin:24px}#status{font-weight:700}</style>
+  </head>
+  <body>
+    <div id="status">starting</div>
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.23.2.js"></script>
+    <script>
+      const appId = ${JSON.stringify(input.agora.app_id)};
+      const channel = ${JSON.stringify(input.agora.channel)};
+      const token = ${JSON.stringify(input.agora.token)};
+      const uid = ${JSON.stringify(input.agora.uid)};
+      const status = document.getElementById("status");
+      async function main() {
+        const client = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
+        client.setClientRole("host");
+        await client.join(appId, channel, token, uid);
+        const audio = await AgoraRTC.createMicrophoneAudioTrack();
+        await client.publish([audio]);
+        window.__pirateAgoraClient = client;
+        window.__pirateAgoraTracks = [audio];
+        status.textContent = "published " + channel + " uid " + uid;
+      }
+      main().catch((error) => {
+        console.error(error);
+        status.textContent = "error: " + (error && error.message ? error.message : String(error));
+      });
+    </script>
+  </body>
+</html>`
+  await writeFile(htmlPath, html, { mode: 0o600 })
+  const args = [
+    "--session",
+    session,
+    "--allow-file-access",
+    "--args",
+    "--use-fake-device-for-media-stream,--use-fake-ui-for-media-stream,--autoplay-policy=no-user-gesture-required,--no-sandbox",
+    "open",
+    `file://${htmlPath}`,
+  ]
+  const opened = spawnSync("agent-browser", args, { stdio: "inherit" })
+  assert(opened.status === 0, `agent-browser publisher failed to open; exit ${opened.status}`)
+  const waited = spawnSync("agent-browser", ["--session", session, "wait", "--text", "published"], { stdio: "inherit" })
+  assert(waited.status === 0, `agent-browser publisher did not report published; exit ${waited.status}`)
+  console.log("[paid-live-smoke] browser media publisher", {
+    channel: input.agora.channel,
+    session,
+    uid: input.agora.uid,
+  })
+  return {
+    session,
+    close: async () => {
+      if (!hasFlag("--skip-browser-media-cleanup")) {
+        spawnSync("agent-browser", ["--session", session, "close"], { stdio: "ignore" })
+      }
+      await rm(htmlPath, { force: true })
+    },
+  }
 }
 
 async function assertRecordingDraftProcessing(input: {
@@ -1313,6 +1402,7 @@ async function main(): Promise<void> {
   let communityId = ""
   let roomId: string | null = null
   let hostAttached = false
+  let browserPublisher: { close: () => Promise<void> } | null = null
 
   try {
     console.log("[paid-live-smoke] start", {
@@ -1390,6 +1480,10 @@ async function main(): Promise<void> {
 
     const hostAgora = await hostAttach({ apiBaseUrl, communityId, host, roomId })
     hostAttached = true
+    browserPublisher = await startBrowserMediaPublisher({
+      agora: hostAgora,
+      runId,
+    })
     if (recordingEnabled) {
       await assertRecordingDraftProcessing({
         apiBaseUrl,
@@ -1531,6 +1625,10 @@ async function main(): Promise<void> {
       room: roomId,
     })
   } finally {
+    if (browserPublisher) {
+      await browserPublisher.close()
+      browserPublisher = null
+    }
     if (communityId) {
       await cleanupRoom({
         apiBaseUrl,
