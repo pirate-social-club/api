@@ -17,7 +17,7 @@ publicProfiles.get("/by-wallet/:walletAddress", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
-  resolved.profile.is_bookable = await resolveHostBookable(c.env, resolved.profile.id)
+  resolved.profile.is_bookable = await resolveHostBookable(c.env, decodePublicUserId(resolved.profile.id))
   return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
@@ -46,7 +46,7 @@ publicProfiles.get("/:handleLabel", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
-  resolved.profile.is_bookable = await resolveHostBookable(c.env, resolved.profile.id)
+  resolved.profile.is_bookable = await resolveHostBookable(c.env, decodePublicUserId(resolved.profile.id))
   return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
