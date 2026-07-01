@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
+import { setHostBookableConfigLoaderForTests } from "../../../src/lib/bookings/host-bookable"
 import { exchangeJwt, requestJson } from "./profiles-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -11,6 +12,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  setHostBookableConfigLoaderForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -198,6 +200,36 @@ describe("public profile routes", () => {
     expect(body.resolved_handle_label).toBe("queryparamcaptain.pirate")
     expect(body.is_canonical).toBe(true)
     expect(body.profile.id).toBe(session.publicUserId)
+  })
+
+  test("public profiles resolve bookability with the canonical user id, not the serialized public id", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-public-bookable-host")
+    let observedHostUserId: string | null = null
+    setHostBookableConfigLoaderForTests(async (_env, hostUserId) => {
+      observedHostUserId = hostUserId
+      return hostUserId === session.userId
+        ? { profile: { isPublished: true }, availabilityRules: [{}] }
+        : null
+    })
+
+    const renamed = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
+      desired_label: "bookablecaptain",
+    }, ctx.env, session.accessToken)
+    expect(renamed.status).toBe(200)
+
+    const response = await app.request("http://pirate.test/public-profiles/bookablecaptain", {}, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      profile: { id: string; is_bookable?: boolean }
+      resolved_handle_label: string
+    }
+    expect(body.resolved_handle_label).toBe("bookablecaptain.pirate")
+    expect(body.profile.id).toBe(session.publicUserId)
+    expect(observedHostUserId).toBe(session.userId)
+    expect(body.profile.is_bookable).toBe(true)
   })
 
   test("linked handle sync discovers ENS names and primary public handle can switch to ENS", async () => {
