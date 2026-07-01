@@ -56,6 +56,18 @@ jobs:
           repository: pirate-social-club/core
           path: core
 
+      - name: Check out web repo for cross-repo file deps
+        uses: actions/checkout@v4
+        with:
+          repository: pirate-social-club/web
+          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          path: .cross-repo/web
+
+      - name: Link cross-repo file deps
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
+          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
