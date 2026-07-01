@@ -39,18 +39,18 @@ Common options:
   --agora-evidence-file PATH           Write booking id and host/booker Agora credentials to a 0600 JSON file after attach.
 
 Funding preflight options:
-  --chain-id 8453
-  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  --chain-id 84532
+  --token-address 0x036CbD53842c5426634e7929541eC2318f3dCF7e
   --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829
   --amount-atomic 1000000
 
-Prod funding preflight:
-  bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
+Prod testnet funding preflight:
+  BASE_SEPOLIA_RPC_URL=https://sepolia.base.org bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --chain-id 84532 --token-address 0x036CbD53842c5426634e7929541eC2318f3dCF7e --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
 
-Prod address-only funding preflight:
-  bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --buyer-address 0x1111111111111111111111111111111111111111 --chain-id 8453 --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
+Prod testnet address-only funding preflight:
+  BASE_SEPOLIA_RPC_URL=https://sepolia.base.org bun run smoke:paid-booking -- --funding-preflight-only --origin https://api.pirate.sc --buyer-address 0x1111111111111111111111111111111111111111 --chain-id 84532 --token-address 0x036CbD53842c5426634e7929541eC2318f3dCF7e --settlement-address 0xbBA024600cba5F375AfdCeC401f7dcCB3D515829 --amount-atomic 1000000
 
-Prod full canary:
+Prod testnet full canary:
   bun run smoke:paid-booking -- --origin https://api.pirate.sc --run-id 20260630-prod-paid-canary --claim --wait-for-completion
 `
 
@@ -267,6 +267,41 @@ async function exchangeSession(origin: string, subject: string, wallet?: string)
   return { accessToken, userId, walletAttachment }
 }
 
+export interface DelayedCompletionDeps {
+  origin: string
+  bookingId: string
+  hostSubject: string
+  bookerSubject: string
+  buyerWallet: string
+  exchangeSession: (origin: string, subject: string, wallet?: string) => Promise<Session>
+  requestJson: (url: string, init?: RequestInit) => Promise<JsonResult>
+}
+
+/**
+ * Recover + complete a booking after the (long) slot wait.
+ *
+ * The 15-minute access tokens minted up front expire during the wait, so both sessions are
+ * refreshed first. Then the FSM is driven confirmed → live → completed: `start` MUST precede
+ * `complete`, and is idempotent-tolerant (409 = already live). Crucially, NO payment path runs
+ * here — the single on-chain pay-in happened at confirm; the server-side payout is
+ * idempotency-keyed — so a recovery/retry through this function can never send a second payment.
+ */
+export async function runDelayedCompletion(deps: DelayedCompletionDeps): Promise<{ host: Session; booker: Session; completion: Record<string, unknown> }> {
+  const host = await deps.exchangeSession(deps.origin, deps.hostSubject)
+  const booker = await deps.exchangeSession(deps.origin, deps.bookerSubject, deps.buyerWallet)
+  requireStatus("start", await deps.requestJson(`${deps.origin}/bookings/${deps.bookingId}/start`, {
+    method: "POST",
+    headers: bearer(host.accessToken),
+    body: "{}",
+  }), [200, 202, 409])
+  const completion = requireStatus("complete", await deps.requestJson(`${deps.origin}/bookings/${deps.bookingId}/complete`, {
+    method: "POST",
+    headers: bearer(host.accessToken),
+    body: "{}",
+  }), [200, 202])
+  return { host, booker, completion }
+}
+
 function resolveRpcUrl(chainId: number): string {
   return env("PIRATE_BOOKING_SETTLEMENT_RPC_URL")
     || (chainId === 84532 ? env("BASE_SEPOLIA_RPC_URL") : "")
@@ -380,8 +415,8 @@ async function main(): Promise<void> {
   const hostSubject = `paid-booking-smoke-host-${runId}`
   const bookerSubject = `paid-booking-smoke-booker-${runId}`
 
-  const host = await exchangeSession(origin, hostSubject)
-  const booker = await exchangeSession(origin, bookerSubject, buyerWallet)
+  let host = await exchangeSession(origin, hostSubject)
+  let booker = await exchangeSession(origin, bookerSubject, buyerWallet)
   if (!booker.walletAttachment) throw new Error("booker wallet attachment missing")
 
   const profile = await requestJson(`${origin}/host-bookings/me/profile`, {
@@ -548,11 +583,12 @@ async function main(): Promise<void> {
   if (waitForCompletion && Number.isFinite(slotStartMs)) {
     const delay = Math.max(0, slotStartMs - Date.now() + 1000)
     if (delay > 0) await sleep(delay)
-    completion = requireStatus("complete", await requestJson(`${origin}/bookings/${bookingId}/complete`, {
-      method: "POST",
-      headers: bearer(host.accessToken),
-      body: "{}",
-    }), [200, 202])
+    // Tokens expire across the slot wait — refresh auth and drive confirmed → live → completed
+    // (start before complete, idempotent, no second payment). See runDelayedCompletion.
+    const recovered = await runDelayedCompletion({ origin, bookingId, hostSubject, bookerSubject, buyerWallet, exchangeSession, requestJson })
+    host = recovered.host
+    booker = recovered.booker
+    completion = recovered.completion
     const finalBooking = requireStatus("final_booking", await requestJson(`${origin}/bookings/${bookingId}`, {
       headers: bearer(booker.accessToken),
     }), 200)
