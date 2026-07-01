@@ -145,6 +145,7 @@ export type Profile = {
   linked_handles?: Array<LinkedHandle> | null;
   primary_public_handle?: LinkedHandle | null;
   primary_wallet_address?: string | null;
+  is_bookable?: boolean;
   xmtp_inbox?: string | null;
   verification_capabilities?: VerificationCapabilities | null;
   global_handle: GlobalHandle;
