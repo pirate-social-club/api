@@ -2,7 +2,7 @@ import type { Env } from "../../../env"
 
 export type AgoraCloudRecordingConfig = {
   appId: string
-  customerKey: string
+  customerId: string
   customerSecret: string
   baseUrl: string
   storageConfig: {
@@ -45,7 +45,8 @@ const AGORA_STORAGE_REGION_S3_COMPATIBLE = 0
 
 export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingConfig | null {
   const appId = firstTrimmed(env.AGORA_APP_ID)
-  const customerKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_KEY)
+  const customerId = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_ID)
+    ?? firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_KEY)
   const customerSecret = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_SECRET)
   const endpoint = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT)
     ?? firstTrimmed(env.AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT)
@@ -57,12 +58,12 @@ export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingC
   const bucket = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET) ?? firstTrimmed(env.FILEBASE_MEDIA_BUCKET)
   const accessKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY) ?? firstTrimmed(env.FILEBASE_S3_ACCESS_KEY)
   const secretKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY) ?? firstTrimmed(env.FILEBASE_S3_SECRET_KEY)
-  if (!appId || !customerKey || !customerSecret || vendor == null || region == null || !bucket || !accessKey || !secretKey) {
+  if (!appId || !customerId || !customerSecret || vendor == null || region == null || !bucket || !accessKey || !secretKey) {
     return null
   }
   return {
     appId,
-    customerKey,
+    customerId,
     customerSecret,
     baseUrl: firstTrimmed(env.AGORA_CLOUD_RECORDING_BASE_URL) ?? DEFAULT_BASE_URL,
     storageConfig: {
@@ -192,7 +193,7 @@ async function agoraRecordingRequest<T>(input: {
   const response = await input.fetcher(`${input.config.baseUrl.replace(/\/+$/, "")}${input.path}`, {
     method: input.method,
     headers: {
-      authorization: `Basic ${basicAuth(input.config.customerKey, input.config.customerSecret)}`,
+      authorization: `Basic ${basicAuth(input.config.customerId, input.config.customerSecret)}`,
       ...(input.body ? { "content-type": "application/json" } : {}),
     },
     body: input.body ? JSON.stringify(input.body) : undefined,

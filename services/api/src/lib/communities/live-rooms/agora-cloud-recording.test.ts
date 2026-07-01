@@ -10,7 +10,7 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
   test("returns null until every required Cloud Recording setting is present", () => {
     expect(agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: "app",
-      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_ID: "id",
     })).toBeNull()
   })
 
@@ -18,7 +18,7 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
     const config = agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: " app ",
       AGORA_CLOUD_RECORDING_BASE_URL: "https://agora.test/",
-      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: " key ",
+      AGORA_CLOUD_RECORDING_CUSTOMER_ID: " id ",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: " secret ",
       AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
       AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
@@ -32,7 +32,7 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
     expect(config).toEqual({
       appId: "app",
       baseUrl: "https://agora.test/",
-      customerKey: "key",
+      customerId: "id",
       customerSecret: "secret",
       resourceExpiredHour: 12,
       storageConfig: {
@@ -49,7 +49,7 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
   test("defaults Agora capture storage to the existing Filebase bucket", () => {
     const config = agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: "agora-app",
-      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_ID: "customer-id",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
       FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
       FILEBASE_S3_ACCESS_KEY: "filebase-access",
@@ -60,7 +60,7 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
 
     expect(config).toMatchObject({
       appId: "agora-app",
-      customerKey: "customer-key",
+      customerId: "customer-id",
       customerSecret: "customer-secret",
       storageConfig: {
         vendor: 11,
@@ -73,6 +73,21 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
         },
       },
     })
+  })
+
+  test("accepts the legacy customer key env var as a fallback", () => {
+    const config = agoraCloudRecordingConfigFromEnv({
+      AGORA_APP_ID: "agora-app",
+      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "legacy-customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
+      FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
+      FILEBASE_S3_ACCESS_KEY: "filebase-access",
+      FILEBASE_S3_SECRET_KEY: "filebase-secret",
+      FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
+      FILEBASE_S3_REGION: "us-east-1",
+    })
+
+    expect(config?.customerId).toBe("legacy-customer-key")
   })
 })
 
@@ -103,7 +118,7 @@ describe("Agora Cloud Recording REST adapter", () => {
     expect(requests[0]?.url).toBe("https://agora.test/v1/apps/agora-app/cloud_recording/acquire")
     expect(requests[1]?.url).toBe("https://agora.test/v1/apps/agora-app/cloud_recording/resourceid/resource-a/mode/mix/start")
     expect(requests[0]?.init.headers).toMatchObject({
-      authorization: `Basic ${btoa("customer-key:customer-secret")}`,
+      authorization: `Basic ${btoa("customer-id:customer-secret")}`,
       "content-type": "application/json",
     })
     expect(requests[0]?.body).toEqual({
@@ -145,7 +160,7 @@ describe("Agora Cloud Recording REST adapter", () => {
     const config = agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: "agora-app",
       AGORA_CLOUD_RECORDING_BASE_URL: "https://agora.test",
-      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+      AGORA_CLOUD_RECORDING_CUSTOMER_ID: "customer-id",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
       FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
       FILEBASE_S3_ACCESS_KEY: "filebase-access",
@@ -216,7 +231,7 @@ function requiredConfig() {
   const config = agoraCloudRecordingConfigFromEnv({
     AGORA_APP_ID: "agora-app",
     AGORA_CLOUD_RECORDING_BASE_URL: "https://agora.test",
-    AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "customer-key",
+    AGORA_CLOUD_RECORDING_CUSTOMER_ID: "customer-id",
     AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
     AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "2",
     AGORA_CLOUD_RECORDING_STORAGE_REGION: "1",
