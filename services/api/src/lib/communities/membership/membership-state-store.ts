@@ -145,26 +145,43 @@ export async function getCommunityMemberCount(
   return typeof countValue === "number" ? countValue : null
 }
 
+export type MembershipParticipationSource = "join" | "comment_pow"
+
 export async function upsertCommunityMembership(input: {
   client: MembershipExecutor
   communityId: string
   userId: string
   now: string
+  /**
+   * How this membership came to exist. Defaults to "join" (a real subscriber).
+   * "comment_pow" marks a drive-by inline-PoW commenter who was auto-enrolled
+   * only to author a comment; such rows are excluded from subscriber counts and
+   * rosters. See migration 1116.
+   */
+  participationSource?: MembershipParticipationSource
 }): Promise<void> {
+  const participationSource: MembershipParticipationSource = input.participationSource ?? "join"
   await input.client.execute({
     sql: `
       INSERT INTO community_memberships (
-        membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
+        membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at, participation_source
       ) VALUES (
-        ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4
+        ?1, ?2, ?3, 'member', ?4, NULL, NULL, ?4, ?4, ?5
       )
       ON CONFLICT(membership_id) DO UPDATE SET
         status = excluded.status,
         joined_at = excluded.joined_at,
         left_at = excluded.left_at,
         banned_at = excluded.banned_at,
-        updated_at = excluded.updated_at
+        updated_at = excluded.updated_at,
+        -- 'join' wins: a real join upgrades an existing 'comment_pow'; a
+        -- comment-driven upsert ('comment_pow') never clobbers an existing
+        -- value (so re-commenting can't downgrade a subscriber). Pinned by test.
+        participation_source = CASE
+          WHEN excluded.participation_source = 'join' THEN 'join'
+          ELSE community_memberships.participation_source
+        END
     `,
-    args: [`mbr_${input.communityId}_${input.userId}`, input.communityId, input.userId, input.now],
+    args: [`mbr_${input.communityId}_${input.userId}`, input.communityId, input.userId, input.now, participationSource],
   })
 }
