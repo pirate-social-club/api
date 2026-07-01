@@ -63,6 +63,7 @@ describe("d1NativeProvisioningBackend", () => {
     const binding = backend.initialBinding({ env, communityId: "cmt_d1", databaseRegion: null })
     expect(binding.provisioningMode).toBe("d1_native")
     expect(binding.databaseUrl).toBe("d1://pending-cmt_d1.invalid")
+    expect(binding.databaseName).toBe("pending-cmt_d1")
     expect(binding.requiresCredentials).toBe(false)
     expect(binding.organizationSlug).toBe("shard")
     expect(binding.location).toBe("weur")
