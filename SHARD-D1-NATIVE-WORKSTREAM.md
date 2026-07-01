@@ -1,5 +1,9 @@
 # Shard D1-Native Workstream — Implementation Tracking
 
+> Historical note: the Turso community provisioning operator path was removed
+> during the de-Turso workstream. Current production evidence is in
+> `services/api/docs/deturso-phase0-evidence-2026-07-01.md`.
+
 > **Deploy surface:** the API D1 workstream lives on `pirate-api-d1-staging`
 > (Worker v `0e64adc9-8298-4d3c-a716-6f804149e79b`). The shared
 > `pirate-api-staging` is reserved for the karaoke workstream; the two

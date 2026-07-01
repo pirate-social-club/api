@@ -25,8 +25,8 @@ Relevant areas:
   - Community handle API routes.
 - `services/api/test-fixtures/db/community-template/migrations/1066_community_handle_claims.sql`
   - Existing app-internal handle and quote tables.
-- `services/community-provision-operator/src/generated/community-migrations.ts`
-  - Generated community DB migration manifest used by the provision operator.
+- `services/api/src/lib/communities/provisioning/generated/community-schema-snapshot.ts`
+  - Generated community DB schema snapshot used by D1-native provisioning.
 - `services/contracts/src/index.ts`
   - Shared API contract types.
 - `core/db/community-template/migrations/`
@@ -156,10 +156,10 @@ services/api/test-fixtures/db/community-template/migrations/1072_community_handl
 core/db/community-template/migrations/1072_community_handle_protocol_issuance.sql
 ```
 
-The migration must also be added to:
+The migration must also be reflected in the API-owned generated schema snapshot:
 
 ```text
-services/community-provision-operator/src/generated/community-migrations.ts
+services/api/src/lib/communities/provisioning/generated/community-schema-snapshot.ts
 ```
 
 V1 placement decision:

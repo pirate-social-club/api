@@ -27,6 +27,7 @@ const API_ONLY_COMMUNITY_MIGRATION_GUARD_MIN = "1110_"
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const apiRoot = resolve(scriptDir, "..")
 const repoRoot = resolve(apiRoot, "../..")
+const API_COMMUNITY_SCHEMA_SNAPSHOT = "services/api/src/lib/communities/provisioning/generated/community-schema-snapshot.ts"
 
 function git(args: string[]): string {
   try {
@@ -55,7 +56,7 @@ function changedFiles(): string[] {
 }
 
 function changedGeneratedMigrationNames(): string[] {
-  const diff = git(["diff", "--unified=0", "--", "services/community-provision-operator/src/generated/community-migrations.ts"])
+  const diff = git(["diff", "--unified=0", "--", API_COMMUNITY_SCHEMA_SNAPSHOT])
   const names = new Set<string>()
   for (const line of diff.split("\n")) {
     if (!line.startsWith("+") || line.startsWith("+++")) {
@@ -138,7 +139,7 @@ function resolveCoreCommunityMigrationsDir(): string {
 }
 
 function generatedCommunityMigrationNames(): string[] {
-  const generatedPath = resolve(repoRoot, "services/community-provision-operator/src/generated/community-migrations.ts")
+  const generatedPath = resolve(repoRoot, API_COMMUNITY_SCHEMA_SNAPSHOT)
   if (!existsSync(generatedPath)) {
     return []
   }

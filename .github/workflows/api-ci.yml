@@ -8,7 +8,6 @@ on:
       - "services/cli/**"
       - "services/community-protocol-issuer/**"
       - "services/community-protocol-prover-runpod/**"
-      - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
@@ -20,7 +19,6 @@ on:
       - "services/cli/**"
       - "services/community-protocol-issuer/**"
       - "services/community-protocol-prover-runpod/**"
-      - "services/community-provision-operator/**"
       - "services/contracts/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
@@ -199,33 +197,9 @@ jobs:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
         run: bun run check:fresh
 
-      - name: Install community provision operator dependencies
-        working-directory: services/community-provision-operator
-        run: bun install --frozen-lockfile
-
-      - name: Audit community provision operator dependencies
-        working-directory: services/community-provision-operator
-        run: bun audit --audit-level=high
-
-      - name: Check generated community migration manifest freshness
-        working-directory: services/community-provision-operator
-        env:
-          PIRATE_CORE_REPO: ${{ github.workspace }}/core
-        run: |
-          bun run generate:migrations
-          git diff --exit-code -- src/generated/community-migrations.ts
-
       - name: Check community schema guards
         working-directory: services/api
         run: bun run check:community-schema-guards
-
-      - name: Typecheck community provision operator
-        working-directory: services/community-provision-operator
-        run: bun run check
-
-      - name: Run community provision operator tests
-        working-directory: services/community-provision-operator
-        run: bun run test
 
       - name: Install ZKPassport verifier container dependencies
         working-directory: services/zkpassport-verifier-container

@@ -1,5 +1,9 @@
 # Audit: community provisioning "file:" control-plane URL failure + prevention
 
+> Historical note: the Turso community provisioning operator path was removed
+> during the de-Turso workstream. Current production evidence is in
+> `services/api/docs/deturso-phase0-evidence-2026-07-01.md`.
+
 **Audience:** a reviewing AI/engineer auditing this change set before merge/deploy.
 **Worktree:** `api-tier1-prod` (branch `release/api-tier1-prod`, the production line).
 **Author intent:** fix the recurrence risk in code; document the parts that require operator credentials (secret repoint + orphan cleanup) so a human can execute them.

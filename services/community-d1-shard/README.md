@@ -30,23 +30,12 @@ Any NEW RPC method touching D1 MUST go through `runShardRead`/`runShardBatch`
 - `COMMUNITY_D1_BINDING_MAP_JSON = {"cmt_a43c487541154b358837c726b98aea2e":"DB_CMTY_PILOT"}`.
 - API staging binds it: service `community-d1-shard-staging`, entrypoint `CommunityD1Shard`, binding `COMMUNITY_D1_SHARD` (api `wrangler.jsonc` staging `services`). **Prod has no shard binding.**
 
-## Migrate a community onto D1 (procedure)
+## Historical Turso migration procedure
 
-All from `services/community-provision-operator`, via
-`infisical run --project-config-dir <core> --env staging --path /services/api -- ...`:
-
-1. `wrangler@4.100.0 d1 create <db>` → add to this wrangler's `d1_databases` as `DB_CMTY_<X>`.
-2. `bun run scripts/copy-community-turso-to-d1.ts --community-id <C> --out /tmp/dump.sql`
-   (dumps Turso schema+data, prints per-table counts).
-3. `bunx wrangler@4.100.0 d1 execute <db> --remote --file /tmp/dump.sql --yes`.
-4. **Parity:** compare per-table counts (step 2 output) against
-   `d1 execute <db> --remote --command "SELECT count(*) ..."`.
-5. Add `"<C>":"DB_CMTY_<X>"` to `COMMUNITY_D1_BINDING_MAP_JSON`; deploy this shard.
-6. Ensure the API env has the `COMMUNITY_D1_SHARD` service binding; deploy the API.
-7. `bun run scripts/flip-community-to-d1.ts --community-id <C> --shard-worker-id community-d1-shard-staging --binding-name DB_CMTY_<X> --region <r> --apply`.
-8. Verify: read the community's preview, confirm shard `wrangler tail` shows
-   `rpcMethod: execute` / `outcome: ok`, no fallback, no 5xx.
-   (`wrangler tail --format json` is PRETTY-printed, not JSONL — grep `"rpcMethod"`/`"outcome": "ok"`.)
+The manual Turso-to-D1 migration procedure is no longer an active operating
+path. New communities are provisioned directly on D1, and the production cutover
+evidence is recorded in
+`services/api/docs/deturso-phase0-evidence-2026-07-01.md`.
 
 ## Rollback (tested on staging)
 

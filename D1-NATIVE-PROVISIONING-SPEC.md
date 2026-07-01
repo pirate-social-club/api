@@ -1,5 +1,9 @@
 # D1-Native Provisioning — Design Spec
 
+> Historical note: the Turso community provisioning operator path was removed
+> during the de-Turso workstream. Current production evidence is in
+> `services/api/docs/deturso-phase0-evidence-2026-07-01.md`.
+
 Investigation only. No code changes. Maps what must change so new communities
 get a D1 binding allocated at create time and their routing row seeded as
 `backend='d1'` from day one.
