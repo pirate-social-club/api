@@ -100,10 +100,8 @@ const communityCreateRepositoryMock = () => activeClient == null ? realCommunity
   buildBootstrapGatePolicy: () => null,
   buildBootstrapInitialSettings: () => ({}),
   buildBootstrapRules: () => [],
-  buildPendingCommunityDatabaseUrl: (communityId: string) => `libsql://pending-${communityId}.invalid`,
   buildPendingD1CommunityBindingUrl: (communityId: string) => `d1://pending-${communityId}.invalid`,
   isPendingD1CommunityBindingUrl: () => false,
-  buildProvisionOperatorBootstrapPayload: () => ({}),
   communityMutationActorFromUserId: (userId: string) => ({
     userId,
     authType: "user",
@@ -147,7 +145,6 @@ const communityCreateRepositoryMock = () => activeClient == null ? realCommunity
   resolveCommunityDbRoot: () => "/tmp",
   resolveCommunityDbWrapKey: () => "test-wrap-key",
   resolveCommunityDbWrapKeyVersion: () => 1,
-  resolveCommunityProvisionGroupLocation: () => "local",
   resolveProvisioningRetryAction: async () => ({ action: "return_existing" }),
 })
 const communityCreateSharedMock = () => activeClient == null ? realCommunityCreateSharedSnapshot : communityCreateRepositoryMock()

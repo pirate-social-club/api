@@ -16,7 +16,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "../db-community-repository"
-import { badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { writeAuditEventForEnv } from "../../audit"
 import type { ActorContext, AdminActorContext } from "../../auth-middleware"
@@ -25,7 +25,7 @@ import type { Community } from "../../../types"
 import { serializeCommunity } from "../community-serialization"
 import { openCommunityReadClient } from "../community-read-access"
 import { normalizeCommunityCountryCode } from "../country-code"
-import type { GateAtom, GateExpression, GatePolicy } from "../membership/gate-types"
+import type { GatePolicy } from "../membership/gate-types"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
@@ -50,35 +50,6 @@ export function resolveCommunityDbRoot(env: Env): string {
   throw internalError("LOCAL_COMMUNITY_DB_ROOT is not configured")
 }
 
-function parseAllowedCommunityProvisionGroupLocations(env: Env): Set<string> {
-  return new Set(
-    String(env.COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS || "")
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean),
-  )
-}
-
-export function resolveCommunityProvisionGroupLocation(
-  env: Env,
-  requestedLocation?: string | null,
-): string {
-  const configured = String(env.COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION || "").trim()
-  const requested = String(requestedLocation || "").trim()
-  const resolved = !requested || requested === "auto" ? configured : requested
-
-  if (!resolved) {
-    throw internalError("COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION is not configured")
-  }
-
-  const allowed = parseAllowedCommunityProvisionGroupLocations(env)
-  if (allowed.size > 0 && !allowed.has(resolved)) {
-    throw badRequestError("database_region is not supported")
-  }
-
-  return resolved
-}
-
 export function resolveCommunityDbWrapKey(env: Env): string {
   const configured = String(env.TURSO_COMMUNITY_DB_WRAP_KEY || "").trim()
   if (configured) {
@@ -97,16 +68,10 @@ export function resolveCommunityDbWrapKeyVersion(env: Env): number {
   throw internalError("TURSO_COMMUNITY_DB_WRAP_KEY_VERSION is not configured")
 }
 
-export function buildPendingCommunityDatabaseUrl(communityId: string): string {
-  return `libsql://pending-${communityId}.invalid`
-}
-
 /**
  * Synthetic binding URL for a community that is being provisioned D1-native but
- * has not yet had a binding allocated from the shard pool. Mirrors the Turso
- * pending sentinel (`buildPendingCommunityDatabaseUrl`) so the provisioning
- * request can be persisted before the shard hands back a concrete binding.
- * Resolved to `d1://shard/<bindingName>` once allocation completes.
+ * has not yet had a binding allocated from the shard pool. Resolved to
+ * `d1://shard/<bindingName>` once allocation completes.
  */
 export function buildPendingD1CommunityBindingUrl(communityId: string): string {
   return `d1://pending-${communityId}.invalid`
@@ -422,68 +387,6 @@ export function buildBootstrapInitialSettings(body: CreateCommunityRequestBody):
     settings.accepted_agent_ownership_providers = body.accepted_agent_ownership_providers
   }
   return Object.keys(settings).length > 0 ? settings : null
-}
-
-function normalizeHumanVerificationProvider(value: unknown): "self" | "very" | null {
-  return value === "self" || value === "very" ? value : null
-}
-
-function resolveScopeUniqueHumanProvider(
-  body: CreateCommunityRequestBody,
-  scope: "membership" | "posting",
-): "self" | "very" | null {
-  if (scope === "membership") {
-    const gatePolicy = body.gate_policy as GatePolicy | null | undefined
-    const provider = findFirstHumanVerificationProvider(gatePolicy?.expression ?? null)
-    if (provider) return provider
-  }
-
-  return normalizeHumanVerificationProvider(body.human_verification_lane)
-}
-
-function findFirstHumanVerificationProvider(expression: GateExpression | null): "self" | "very" | null {
-  if (!expression) return null
-  if (expression.op === "gate") {
-    return humanVerificationProviderForAtom(expression.gate)
-  }
-  for (const child of expression.children) {
-    const provider = findFirstHumanVerificationProvider(child)
-    if (provider) return provider
-  }
-  return null
-}
-
-function humanVerificationProviderForAtom(atom: GateAtom): "self" | "very" | null {
-  switch (atom.type) {
-    case "unique_human":
-      return atom.provider === "very" ? "very" : "self"
-    case "minimum_age":
-    case "nationality":
-    case "gender":
-      return "self"
-    default:
-      return null
-  }
-}
-
-export function buildProvisionOperatorBootstrapPayload(
-  body: CreateCommunityRequestBody,
-  namespaceLabel: string | null,
-) {
-  return {
-    description: body.description?.trim() || null,
-    avatar_ref: normalizeCommunityMediaRef(body.avatar_ref),
-    banner_ref: normalizeCommunityMediaRef(body.banner_ref),
-    membership_mode: resolvePublicV0MembershipMode(body.membership_mode),
-    default_age_gate_policy: body.default_age_gate_policy ?? "none",
-    gate_policy: buildBootstrapGatePolicy(body) as Record<string, unknown> | null,
-    membership_unique_human_provider: resolveScopeUniqueHumanProvider(body, "membership"),
-    posting_unique_human_provider: resolveScopeUniqueHumanProvider(body, "posting"),
-    handle_policy_template: body.handle_policy?.policy_template ?? "premium",
-    handle_pricing_model: body.handle_policy?.pricing_model ?? "flat_by_length",
-    namespace_label: namespaceLabel,
-    initial_settings: buildBootstrapInitialSettings(body),
-  }
 }
 
 function resolvePublicV0MembershipMode(mode: CreateCommunityRequestBody["membership_mode"] | null | undefined): "request" | "gated" {

@@ -6,7 +6,6 @@ import {
   exchangeJwt,
   requestJson,
 } from "./community-routes-test-helpers"
-import { encryptCommunityDbCredential } from "../../../src/lib/communities/community-db-credential-crypto"
 import {
   createSelfVerifiedSession,
   withFetchMock,
@@ -54,42 +53,6 @@ describe("admin auth middleware", () => {
     })
   })
 
-  test("__version reports community provision operator version when bound", async () => {
-    const operator = {
-      fetch: (request: Request | string) => {
-        const normalizedRequest = typeof request === "string" ? new Request(request) : request
-        expect(new URL(normalizedRequest.url).pathname).toBe("/health")
-        return new Response(JSON.stringify({
-          service: "community-provision-operator",
-          environment: "production",
-          git_sha: "operator123",
-          git_ref: "main",
-          build_timestamp: "2026-05-13T05:54:46Z",
-        }), {
-          headers: { "content-type": "application/json" },
-        })
-      },
-    } as unknown as Fetcher
-    const ctx = await createRouteTestContext({
-      BUILD_GIT_SHA: "api123",
-      COMMUNITY_PROVISION_OPERATOR: operator,
-    })
-    cleanup = ctx.cleanup
-
-    const response = await Promise.resolve(app.request("http://pirate.test/__version", {}, ctx.env))
-    expect(response.status).toBe(200)
-    const body = await json(response) as {
-      git_sha: string
-      operator: {
-        service: string
-        git_sha: string
-      } | null
-    }
-    expect(body.git_sha).toBe("api123")
-    expect(body.operator?.service).toBe("community-provision-operator")
-    expect(body.operator?.git_sha).toBe("operator123")
-  })
-
   test("admin token can validate against admin health route", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
@@ -116,113 +79,6 @@ describe("admin auth middleware", () => {
     expect(healthBody.ok).toBe(true)
     expect(healthBody.mode).toBe("admin")
     expect(healthBody.acting_user_id).toBe(actingSession.userId)
-  })
-
-  test("admin token can migrate a provisioned community database", async () => {
-    const wrapKey = "11".repeat(32)
-    const operatorToken = "operator-token"
-    let operatorRequestBody: Record<string, unknown> | null = null
-    const operator = {
-      fetch: async (request: Request | string) => {
-        const normalizedRequest = typeof request === "string" ? new Request(request) : request
-        expect(new URL(normalizedRequest.url).pathname).toBe("/internal/v0/community-provisioning/migrate")
-        expect(normalizedRequest.headers.get("authorization")).toBe(`Bearer ${operatorToken}`)
-        operatorRequestBody = await normalizedRequest.json() as Record<string, unknown>
-        return new Response(JSON.stringify({
-          applied: 1,
-          skipped: 61,
-        }), {
-          headers: { "content-type": "application/json" },
-        })
-      },
-    } as Fetcher
-    const ctx = await createRouteTestContext({
-      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
-      COMMUNITY_PROVISION_OPERATOR: operator,
-      COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN: operatorToken,
-      TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
-    })
-    cleanup = ctx.cleanup
-
-    const actingSession = await exchangeJwt(ctx.env, "admin-db-migrate-actor")
-    const now = new Date().toISOString()
-    await ctx.client.batch([
-      {
-        sql: `
-          INSERT INTO communities (
-            community_id, creator_user_id, display_name, membership_mode, status, provisioning_state,
-            transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-            primary_database_binding_id, created_at, updated_at
-          ) VALUES (
-            'cmt_admin_migrate', ?1, 'Admin Migrate', 'request', 'active', 'active',
-            'none', NULL, NULL, NULL,
-            'cdb_admin_migrate', ?2, ?2
-          )
-        `,
-        args: [actingSession.userId, now],
-      },
-      {
-        sql: `
-          INSERT INTO community_database_bindings (
-            community_database_binding_id, community_id, binding_role, organization_slug, group_name,
-            group_id, database_name, database_id, database_url, location, requires_credentials,
-            status, transferred_at, created_at, updated_at
-          ) VALUES (
-            'cdb_admin_migrate', 'cmt_admin_migrate', 'primary', 'pirate-prod', 'region-aws-us-east-1',
-            'grp_admin_migrate', 'main-cmt-admin-migrate', 'db_admin_migrate',
-            'libsql://main-cmt-admin-migrate-pirate-prod.aws-us-east-1.turso.io',
-            'aws-us-east-1', 1,
-            'active', NULL, ?1, ?1
-          )
-        `,
-        args: [now],
-      },
-      {
-        sql: `
-          INSERT INTO community_db_credentials (
-            community_db_credential_id, community_database_binding_id, credential_kind, token_name,
-            encrypted_token, encryption_key_version, token_scope, status, issued_at, invalidated_at,
-            expires_at, created_at, updated_at
-          ) VALUES (
-            'cdc_admin_migrate', 'cdb_admin_migrate', 'database_token', 'worker-cmt_admin_migrate-v1',
-            ?1, 1, 'database', 'active', ?2, NULL,
-            NULL, ?2, ?2
-          )
-        `,
-        args: [
-          encryptCommunityDbCredential({
-            plaintextToken: "db-token-admin-migrate",
-            wrapKey,
-          }),
-          now,
-        ],
-      },
-    ])
-
-    const response = await app.request(
-      "http://pirate.test/communities/cmt_admin_migrate/admin/database-migrations",
-      {
-        method: "POST",
-        headers: {
-          "x-admin-token": ADMIN_TOKEN,
-          "x-admin-as-user-id": actingSession.userId,
-        },
-      },
-      ctx.env,
-    )
-
-    expect(response.status).toBe(200)
-    expect(operatorRequestBody).toEqual({
-      database_url: "libsql://main-cmt-admin-migrate-pirate-prod.aws-us-east-1.turso.io",
-      database_auth_token: "db-token-admin-migrate",
-    })
-    const body = await json(response) as Record<string, unknown>
-    expect(body).toEqual({
-      community: "com_cmt_admin_migrate",
-      database_url: "libsql://main-cmt-admin-migrate-pirate-prod.aws-us-east-1.turso.io",
-      applied: 1,
-      skipped: 61,
-    })
   })
 
   async function createAdminLinkPreviewFixture(input: {

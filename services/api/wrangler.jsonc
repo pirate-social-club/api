@@ -93,7 +93,6 @@
     "AGORA_APP_ID": "d902e3752b4a4e638a31c4510d34d8a4",
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
     "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-    "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-dev",
     "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
     "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
     "PASSPORT_API_URL": "https://api.passport.xyz",
@@ -150,10 +149,6 @@
       ],
       "services": [
         {
-          "binding": "COMMUNITY_PROVISION_OPERATOR",
-          "service": "community-provision-operator-staging"
-        },
-        {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
           "entrypoint": "CommunityD1Shard"
@@ -173,7 +168,6 @@
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
         "PIRATE_APP_JWT_ISSUER": "pirate-api-d1-staging",
-        "COMMUNITY_PROVISION_BACKEND": "d1_native",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
         "STAGING_TEST_AUTH_ENABLED": "true",
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
@@ -211,7 +205,6 @@
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
         "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
         "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
         "PASSPORT_API_URL": "https://api.passport.xyz",
@@ -260,10 +253,6 @@
       ],
       "services": [
         {
-          "binding": "COMMUNITY_PROVISION_OPERATOR",
-          "service": "community-provision-operator-staging"
-        },
-        {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
           "entrypoint": "CommunityD1Shard"
@@ -283,7 +272,6 @@
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
         "PIRATE_APP_JWT_ISSUER": "pirate-api-staging",
-        "COMMUNITY_PROVISION_BACKEND": "d1_native",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
         "PIRATE_APP_JWT_TTL_SECONDS": "3600",
@@ -321,7 +309,6 @@
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
 	        "STAGING_TEST_AUTH_ENABLED": "true",
-	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-social",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
@@ -369,10 +356,6 @@
         }
       ],
       "services": [
-        {
-          "binding": "COMMUNITY_PROVISION_OPERATOR",
-          "service": "community-provision-operator"
-        },
         {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-prod",
@@ -432,9 +415,7 @@
         "SPACES_VERIFIER_CHALLENGE_DOMAIN": "pirate.sc",
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "TURSO_COMMUNITY_DB_WRAP_KEY_VERSION": "2",
-        "COMMUNITY_PROVISION_BACKEND": "d1_native",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
-	        "COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG": "pirate-prod",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",

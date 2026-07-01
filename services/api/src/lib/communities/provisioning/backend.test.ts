@@ -15,39 +15,31 @@ function buildEnv(overrides: Partial<Env> = {}): Env {
 }
 
 describe("resolveCommunityProvisioningBackend", () => {
-  test("selects d1_native for a namespaceless request when the flag is set AND the shard binding exists", () => {
-    const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native", COMMUNITY_D1_SHARD: fakeShard })
+  test("selects d1_native for a namespaceless request when the shard binding exists", () => {
+    const env = buildEnv({ COMMUNITY_D1_SHARD: fakeShard })
     expect(isD1NativeProvisioningSelected(env)).toBe(true)
     expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("d1_native")
   })
 
-  test("selects d1_native for a namespaced request when the flag is set AND the shard binding exists", () => {
-    const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native", COMMUNITY_D1_SHARD: fakeShard })
+  test("selects d1_native for a namespaced request when the shard binding exists", () => {
+    const env = buildEnv({ COMMUNITY_D1_SHARD: fakeShard })
     expect(resolveCommunityProvisioningBackend(env, { hasNamespace: true }).mode).toBe("d1_native")
   })
 
-  test("does NOT select d1_native when the flag is set but the shard binding is absent", () => {
-    const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native" })
+  test("reports d1_native unselected when the shard binding is absent but still returns the fail-closed d1 backend", () => {
+    const env = buildEnv()
     expect(isD1NativeProvisioningSelected(env)).toBe(false)
-    // Falls through to the operator path in a non-dev environment.
-    expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("turso_operator")
+    expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("d1_native")
   })
 
-  test("ignores an unrelated COMMUNITY_PROVISION_BACKEND value (backwards compatible)", () => {
-    const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "turso_operator", COMMUNITY_D1_SHARD: fakeShard })
-    expect(isD1NativeProvisioningSelected(env)).toBe(false)
-    expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("turso_operator")
-  })
-
-  test("default (no flag) keeps local_dev in a dev/test environment", () => {
-    const env = buildEnv({ ENVIRONMENT: "test" })
+  test("selects local_dev only when LOCAL_COMMUNITY_DB_ROOT is configured", () => {
+    const env = buildEnv({ ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: "/tmp/pirate-community-dbs" })
     expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("local_dev")
   })
 })
 
 describe("d1NativeProvisioningBackend", () => {
   const env = buildEnv({
-    COMMUNITY_PROVISION_BACKEND: "d1_native",
     COMMUNITY_D1_SHARD: fakeShard,
     COMMUNITY_D1_SHARD_REGION: "weur",
   })
@@ -64,7 +56,7 @@ describe("d1NativeProvisioningBackend", () => {
   })
 
   test("initialBinding fails loud when no region is configured", () => {
-    const noRegion = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native", COMMUNITY_D1_SHARD: fakeShard })
+    const noRegion = buildEnv({ COMMUNITY_D1_SHARD: fakeShard })
     expect(() =>
       resolveCommunityProvisioningBackend(noRegion, { hasNamespace: false }).initialBinding({
         env: noRegion,
@@ -81,7 +73,6 @@ describe("d1NativeProvisioningBackend", () => {
     // The fake shard is observable; we assert on the call sequence.
     const calls: Array<{ m: string; input: unknown }> = []
     const env = buildEnv({
-      COMMUNITY_PROVISION_BACKEND: "d1_native",
       COMMUNITY_D1_SHARD: {} as ShardRpc,
       COMMUNITY_D1_SHARD_REGION: "weur",
     })
@@ -227,7 +218,7 @@ describe("d1NativeProvisioningBackend", () => {
     // §4.1 acceptance: a shard_pool_exhausted is a transient 503, NOT a
     // generic 500. The orchestrator branches on the raw ShardResult and
     // throws an HttpError with the right status + retryable.
-    const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native", COMMUNITY_D1_SHARD_REGION: "weur" })
+    const env = buildEnv({ COMMUNITY_D1_SHARD_REGION: "weur" })
     const fakeShard: ShardRpc = {
       async communityD1Bind() {
         return { ok: false, code: "shard_pool_exhausted", message: "no free bindings" }

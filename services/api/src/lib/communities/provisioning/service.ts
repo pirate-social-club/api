@@ -81,8 +81,6 @@ function isSameNamespaceRoot(
 
 function provisioningFailureErrorCode(mode: CommunityProvisioningMode): string {
   switch (mode) {
-    case "turso_operator":
-      return "turso_operator_provision_failed"
     case "d1_native":
       return "d1_native_provision_failed"
     default:

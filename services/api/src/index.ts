@@ -53,7 +53,6 @@ import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/j
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
-import { getCommunityProvisionOperatorHealth, getCommunityProvisionOperatorVersion } from "./lib/communities/provisioning/operator-client"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
@@ -121,7 +120,6 @@ async function buildVersionPayload(env: Env) {
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
-    operator: await getCommunityProvisionOperatorVersion(env),
   }
 }
 
@@ -192,20 +190,20 @@ app.use("*", async (_c, next) => {
 })
 
 app.get("/health", (c) => c.json({ ok: true }))
-// Deep provisioning health: fans out to the operator's `/health/deep`, which
-// opens the control plane. Returns booleans only (no connection strings or
-// secrets) so a post-deploy smoke check can curl it without credentials.
 app.get("/health/provisioning", async (c) => {
-  const health = await getCommunityProvisionOperatorHealth(c.env)
+  const shardConfigured = Boolean(c.env.COMMUNITY_D1_SHARD)
+  const regionConfigured = Boolean(String(c.env.COMMUNITY_D1_SHARD_REGION ?? "").trim())
+  const ok = shardConfigured && regionConfigured
   return c.json(
     {
-      ok: health.ok,
-      configured: health.configured,
-      control_plane_ok: health.control_plane_ok,
-      environment: health.environment,
-      ...(health.ok ? {} : { error_code: health.error_code }),
+      ok,
+      backend: "d1_native",
+      shard_configured: shardConfigured,
+      region_configured: regionConfigured,
+      environment: c.env.ENVIRONMENT ?? null,
+      ...(ok ? {} : { error_code: "d1_provisioning_unconfigured" }),
     },
-    health.ok ? 200 : 503,
+    ok ? 200 : 503,
     { "cache-control": "no-store" },
   )
 })

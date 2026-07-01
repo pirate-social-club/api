@@ -7,12 +7,9 @@ import type {
 } from "../community-repository-types"
 import {
   bootstrapCommunityLocalSnapshot,
-  buildPendingCommunityDatabaseUrl,
   buildPendingD1CommunityBindingUrl,
-  buildProvisionOperatorBootstrapPayload,
   localCommunityShardStatements,
   resolveCommunityDbRoot,
-  resolveCommunityProvisionGroupLocation,
 } from "../create/repository"
 import { HttpError, internalError } from "../../errors"
 import type {
@@ -20,10 +17,6 @@ import type {
   CreateCommunityRequestBody,
 } from "../create/validation"
 import type { Env } from "../../../env"
-import {
-  isCommunityProvisionOperatorConfigured,
-  provisionCommunityViaOperator,
-} from "./operator-client"
 
 type BindingInput = {
   env: Env
@@ -38,11 +31,6 @@ type ProvisionInput = {
   communityId: string
   namespaceVerificationId: string | null
   routeSlug: string | null
-  /**
-   * d1_native orchestrator uses this to seed the routing row at 'ready' and
-   * to persist the resolved d1 binding URL (gap 1 — see D1-NATIVE-PROVISIONING-DESIGN.md
-   * §3, §4). Unused by the local_dev / turso_operator backends.
-   */
   communityRepository: CommunityProvisioningRepository
 }
 
@@ -112,81 +100,6 @@ const localDevProvisioningBackend: CommunityProvisioningBackend = {
   },
 }
 
-const tursoOperatorProvisioningBackend: CommunityProvisioningBackend = {
-  mode: "turso_operator",
-  initialBinding(input) {
-    return {
-      organizationSlug: "pending",
-      groupName: `club-${input.communityId}`,
-      groupId: null,
-      databaseName: "main",
-      databaseId: null,
-      databaseUrl: buildPendingCommunityDatabaseUrl(input.communityId),
-      location: resolveCommunityProvisionGroupLocation(input.env, input.databaseRegion),
-      requiresCredentials: true,
-      provisioningMode: "turso_operator",
-    }
-  },
-  async provision(input) {
-    const binding = this.initialBinding({
-      env: input.env,
-      communityId: input.communityId,
-      databaseRegion: input.body.database_region,
-    })
-    const provisioned = await provisionCommunityViaOperator({
-      env: input.env,
-      communityId: input.communityId,
-      creatorUserId: input.auth.userId,
-      displayName: input.auth.communityDisplayName,
-      namespaceVerificationId: input.namespaceVerificationId,
-      groupLocation: binding.location ?? resolveCommunityProvisionGroupLocation(input.env, input.body.database_region),
-      bootstrapPayload: buildProvisionOperatorBootstrapPayload(input.body, input.routeSlug),
-    })
-    return {
-      mode: "turso_operator",
-      binding: {
-        organizationSlug: provisioned.organizationSlug,
-        groupName: provisioned.groupName,
-        groupId: provisioned.groupId,
-        databaseName: provisioned.databaseName,
-        databaseId: provisioned.databaseId,
-        databaseUrl: provisioned.databaseUrl,
-        location: provisioned.location,
-        requiresCredentials: true,
-        provisioningMode: "turso_operator",
-      },
-      credential: {
-        credentialId: provisioned.credentialId,
-        organizationSlug: provisioned.organizationSlug,
-        groupName: provisioned.groupName,
-        groupId: provisioned.groupId,
-        databaseName: provisioned.databaseName,
-        databaseId: provisioned.databaseId,
-        databaseUrl: provisioned.databaseUrl,
-        location: provisioned.location,
-        tokenName: provisioned.tokenName,
-        plaintextToken: provisioned.plaintextToken,
-        issuedAt: provisioned.issuedAt,
-        expiresAt: provisioned.expiresAt,
-      },
-      localSnapshot: null,
-    }
-  },
-}
-
-/**
- * D1-native provisioning backend: new communities are born on D1 (a binding is
- * allocated 1:1 from the shard pool and the local snapshot is loaded into it),
- * with the `community_database_routing` row seeded `backend='d1'` from the start
- * — no later `flip-community-to-d1` step.
- *
- * `initialBinding` is complete; `provision()` is intentionally NOT wired yet — it
- * requires the shard-side pool + allocator RPC (`communityD1Bind` / snapshot-load),
- * which do not exist on `ShardRpc` today. It fails loud (notImplementedError)
- * rather than silently falling back, matching the spec's fail-closed stance. The
- * resolver below only selects this backend behind an explicit opt-in env flag, so
- * the throw is unreachable until ops both set the flag AND ship the shard pool.
- */
 /**
  * Region label for a D1-native binding: the request's `database_region` if given,
  * else the env default. Required when D1-native is in use (the 0117 CHECK needs
@@ -194,6 +107,15 @@ const tursoOperatorProvisioningBackend: CommunityProvisioningBackend = {
  */
 function resolveShardRegion(env: Env, requestedRegion?: string | null): string {
   const requested = String(requestedRegion ?? "").trim()
+  const allowed = new Set(
+    String(env.COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS || "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  )
+  if (requested && requested !== "auto" && allowed.size > 0 && !allowed.has(requested)) {
+    throw new HttpError(400, "bad_request", "database_region is not supported")
+  }
   const resolved = requested && requested !== "auto" ? requested : String(env.COMMUNITY_D1_SHARD_REGION ?? "").trim()
   if (!resolved) {
     throw internalError("COMMUNITY_D1_SHARD_REGION is not configured")
@@ -240,9 +162,6 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
     })
     const shard = input.env.COMMUNITY_D1_SHARD
     if (!shard) {
-      // Resolver selects d1_native only when COMMUNITY_D1_SHARD is bound
-      // (per isD1NativeProvisioningSelected), so this is unreachable in
-      // practice. Fail loud rather than silently fall back.
       throw internalError(
         "d1_native provisioning: COMMUNITY_D1_SHARD service binding is not configured on this Worker",
       )
@@ -386,9 +305,13 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
   },
 }
 
-/** True when D1-native provisioning is explicitly opted in AND the shard binding exists. */
+function isLocalDevProvisioningSelected(env: Env): boolean {
+  return Boolean(String(env.LOCAL_COMMUNITY_DB_ROOT ?? "").trim())
+}
+
+/** True when D1-native provisioning has the required shard binding. */
 export function isD1NativeProvisioningSelected(env: Env): boolean {
-  return String(env.COMMUNITY_PROVISION_BACKEND ?? "").trim() === "d1_native" && Boolean(env.COMMUNITY_D1_SHARD)
+  return Boolean(env.COMMUNITY_D1_SHARD)
 }
 
 export type ProvisioningRequestShape = {
@@ -400,10 +323,8 @@ export function resolveCommunityProvisioningBackend(
   env: Env,
   _request: ProvisioningRequestShape,
 ): CommunityProvisioningBackend {
-  if (isD1NativeProvisioningSelected(env)) {
-    return d1NativeProvisioningBackend
+  if (isLocalDevProvisioningSelected(env)) {
+    return localDevProvisioningBackend
   }
-  return isCommunityProvisionOperatorConfigured(env)
-    ? tursoOperatorProvisioningBackend
-    : localDevProvisioningBackend
+  return d1NativeProvisioningBackend
 }

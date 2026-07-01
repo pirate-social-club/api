@@ -40,19 +40,11 @@ export type Env = {
    */
   COMMUNITY_D1_RECONCILER_ONLY?: string
   /**
-   * Opt-in selector for D1-native provisioning (new communities born on D1).
-   * "d1_native" selects the D1-native backend; any other value (or absent) keeps
-   * the existing turso_operator / local_dev selection. Requires COMMUNITY_D1_SHARD.
-   */
-  COMMUNITY_PROVISION_BACKEND?: string
-  /**
    * Region label recorded on D1-native routing rows (satisfies the 0117
    * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set
    * out-of-band by the shard's static `wrangler d1_databases` bindings.
    */
   COMMUNITY_D1_SHARD_REGION?: string
-  COMMUNITY_PROVISION_OPERATOR_AUTH_TOKEN?: string
-  COMMUNITY_PROVISION_EXPECTED_ORGANIZATION_SLUG?: string
   COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION?: string
   COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS?: string
 
@@ -317,7 +309,4 @@ export type Env = {
   HNS_VERIFIER_BASE_URL?: string
   HNS_VERIFIER_AUTH_TOKEN?: string
   HNS_CHALLENGE_TTL_HOURS?: string
-
-  // Service bindings
-  COMMUNITY_PROVISION_OPERATOR?: Fetcher
 }
