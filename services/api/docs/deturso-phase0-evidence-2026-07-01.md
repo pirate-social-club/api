@@ -122,7 +122,7 @@ Production `api-core` was redeployed from `origin/main` after deleting the
 retired `services/community-provision-operator` package and removing its root
 script and CI references.
 
-- Deployed Worker version: `d42e0680-ee5d-47c0-b213-9a9bbd52e96a`.
+- Deployed Worker version: `7a087a2e-0c8f-4bbc-9e93-f0255c204c8a`.
 - Deploy output still did not list the `COMMUNITY_PROVISION_OPERATOR` service binding.
 - Health check after deploy: `GET https://api.pirate.sc/health` returned
   `{"ok":true}`.
@@ -132,9 +132,9 @@ script and CI references.
 Production smoke `scripts/smoke-d1-provisioning-cutover.ts`:
 
 - Namespaceless create:
-  `com_cmt_e4e96c84b2e74aaebb349a5f128dd506` -> `DB_CMTY_0084`,
-  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0084'`.
+  `com_cmt_c39986f94b594255b558cef6ea89c25d` -> `DB_CMTY_0086`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0086'`.
 - Namespaced create:
-  `com_cmt_2fec72c9dd894d17b08e497d5854e575` with
-  `nv_deturso_smoke_20260701195622` -> `DB_CMTY_0085`,
-  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0085'`.
+  `com_cmt_04b81230a9ff43d1a72bc8a76d4e13e8` with
+  `nv_deturso_smoke_20260701195847` -> `DB_CMTY_0087`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0087'`.
