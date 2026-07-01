@@ -682,6 +682,12 @@ const handler: ExportedHandler<Env> = {
     // jobs — see runner docs / overlap caveat).
     const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
     const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
+    // Money-path recovery must not sit behind the rotating best-effort maintenance tail. A live
+    // prod tick showed the deadline deferring reconcile_booking_settlements after slower feed /
+    // community work, so keep this first while leaving the lower-priority jobs rotated.
+    const priorityJobs: NamedTask[] = [
+      { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
+    ]
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
@@ -690,17 +696,20 @@ const handler: ExportedHandler<Env> = {
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
       { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
-      { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
     ]
-    const jobs: NamedTask[] = [
+    const rotatedJobs: NamedTask[] = [
       ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
       ...(reconcilerOnly ? [] : generalJobs),
     ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
     // Rotate the start order each minute so a deadline-trimmed tail never starves
     // the same jobs run after run.
     const minute = Math.floor((controller.scheduledTime || Date.now()) / 60_000)
-    const offset = ((minute % jobs.length) + jobs.length) % jobs.length
-    const ordered = [...jobs.slice(offset), ...jobs.slice(0, offset)]
+    const offset = rotatedJobs.length > 0 ? ((minute % rotatedJobs.length) + rotatedJobs.length) % rotatedJobs.length : 0
+    const ordered = [
+      ...priorityJobs.map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) })),
+      ...rotatedJobs.slice(offset),
+      ...rotatedJobs.slice(0, offset),
+    ]
 
     // The DO lease is REQUIRED. Rather than silently run without overlap
     // protection (which could re-trigger control-plane connection exhaustion), a
