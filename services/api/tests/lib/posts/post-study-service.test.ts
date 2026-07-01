@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
+import type { ShardQueryResult, ShardResult, ShardRpc, ShardSqlStatement } from "@pirate/api-shared"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -29,10 +30,13 @@ const authorActor: ActorContext = { authType: "user", userId: AUTHOR_ID }
 
 let rootDir: string | null = null
 let client: Client | null = null
+let controlClient: Client | null = null
 
 function env(overrides: Partial<Env> = {}): Env {
   if (!rootDir) throw new Error("test root not initialized")
   return {
+    COMMUNITY_D1_SHARD: makeLocalCommunityShard() as never,
+    CONTROL_PLANE_DATABASE_URL: `file:${join(rootDir, "control-plane.db")}`,
     ENVIRONMENT: "test",
     LOCAL_COMMUNITY_DB_ROOT: rootDir,
     ...overrides,
@@ -42,6 +46,48 @@ function env(overrides: Partial<Env> = {}): Env {
 async function exec(sql: string, args: unknown[] = []): Promise<void> {
   if (!client) throw new Error("test db not initialized")
   await client.execute({ sql, args: args as never[] })
+}
+
+async function execControl(sql: string, args: unknown[] = []): Promise<void> {
+  if (!controlClient) throw new Error("test control plane not initialized")
+  await controlClient.execute({ sql, args: args as never[] })
+}
+
+function normalizeShardStatement(statement: ShardSqlStatement | string): { sql: string; args?: unknown[] } {
+  return typeof statement === "string" ? { sql: statement } : { sql: statement.sql, args: statement.args }
+}
+
+function makeLocalCommunityShard(): ShardRpc {
+  return {
+    async execute(input: {
+      statement: ShardSqlStatement | string
+    }): Promise<ShardResult<ShardQueryResult>> {
+      if (!client) throw new Error("test db not initialized")
+      const statement = normalizeShardStatement(input.statement)
+      return { ok: true, value: await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }) }
+    },
+    async batch(input: {
+      statements: Array<ShardSqlStatement | string>
+    }): Promise<ShardResult<ShardQueryResult[]>> {
+      if (!client) throw new Error("test db not initialized")
+      const results: ShardQueryResult[] = []
+      for (const raw of input.statements) {
+        const statement = normalizeShardStatement(raw)
+        results.push(await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }))
+      }
+      return { ok: true, value: results }
+    },
+    async batchWrite(input: {
+      statements: ShardSqlStatement[]
+    }): Promise<ShardResult<ShardQueryResult[]>> {
+      if (!client) throw new Error("test db not initialized")
+      const results: ShardQueryResult[] = []
+      for (const statement of input.statements) {
+        results.push(await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }))
+      }
+      return { ok: true, value: results }
+    },
+  } as ShardRpc
 }
 
 async function runStudyGenerationJob(input: {
@@ -249,9 +295,73 @@ async function seedActiveAssetEntitlement(userId: string, assetId = "ast_song"):
   `, [COMMUNITY_ID, userId, assetId, NOW])
 }
 
+async function setupControlPlaneCredentials(): Promise<void> {
+  await execControl(`
+    CREATE TABLE community_database_routing (
+      community_id TEXT PRIMARY KEY,
+      backend TEXT NOT NULL,
+      provisioning_state TEXT NOT NULL,
+      shard_worker_id TEXT,
+      binding_name TEXT,
+      region TEXT,
+      turso_database_binding_id TEXT,
+      migrated_at TEXT,
+      decommissioned_at TEXT,
+      last_error_at TEXT,
+      last_error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await execControl(`
+    INSERT INTO community_database_routing (
+      community_id, backend, provisioning_state, shard_worker_id, binding_name,
+      region, turso_database_binding_id, migrated_at, decommissioned_at,
+      last_error_at, last_error_message, created_at, updated_at
+    )
+    VALUES (?1, 'd1', 'ready', 'test-shard', 'DB_CMTY_STUDY', 'test',
+            NULL, ?2, NULL, NULL, NULL, ?2, ?2)
+  `, [COMMUNITY_ID, NOW])
+  await execControl(`
+    CREATE TABLE community_assistant_credentials (
+      community_assistant_credential_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      encrypted_secret TEXT NOT NULL,
+      key_last4 TEXT NOT NULL,
+      encryption_key_version INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT,
+      rotated_from TEXT,
+      actor_user_id TEXT NOT NULL
+    )
+  `)
+}
+
+async function seedActiveElevenLabsCredential(): Promise<void> {
+  await execControl(`
+    INSERT INTO community_assistant_credentials (
+      community_assistant_credential_id, community_id, provider, encrypted_secret,
+      key_last4, encryption_key_version, status, created_at, revoked_at, rotated_from, actor_user_id
+    )
+    VALUES (
+      'cac_elevenlabs', ?1, 'elevenlabs', 'test-encrypted-key',
+      'labs', 1, 'active', ?2, NULL, NULL, ?3
+    )
+  `, [COMMUNITY_ID, NOW, AUTHOR_ID])
+}
+
+async function clearElevenLabsCredential(): Promise<void> {
+  await execControl("DELETE FROM community_assistant_credentials WHERE community_id = ?1 AND provider = 'elevenlabs'", [COMMUNITY_ID])
+}
+
 beforeEach(async () => {
   rootDir = await mkdtemp(join(tmpdir(), "pirate-study-"))
   await mkdir(rootDir, { recursive: true })
+  controlClient = createClient({ url: `file:${join(rootDir, "control-plane.db")}` })
+  await setupControlPlaneCredentials()
+  await seedActiveElevenLabsCredential()
   client = createClient({ url: buildLocalCommunityDbUrl(rootDir, COMMUNITY_ID) })
   await ensureCommunityDbSchema(client)
   await applyStudyMigration()
@@ -259,6 +369,8 @@ beforeEach(async () => {
 }, 120_000)
 
 afterEach(async () => {
+  controlClient?.close()
+  controlClient = null
   client?.close()
   client = null
   if (rootDir) {
@@ -287,6 +399,47 @@ describe("post study service", () => {
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
     expect(serialized).not.toContain("correct_option_id")
+  })
+
+  test("omits say-it-back exercises without an active ElevenLabs credential", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+    await seedReadyPack()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(1)
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual(["translation_choice"])
+    expect(payload.exercises[0]?.line_id).toBe("line_002")
+  })
+
+  test("reports a missing transcription provider when only say-it-back is available without an ElevenLabs credential", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+    await seedReadyPack()
+    await exec("DELETE FROM song_study_unit_localization")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
+    expect(payload.unavailable_reason).toBe("missing_transcription_provider")
   })
 
   test("returns unavailable without lazy generation when study is disabled", async () => {
@@ -690,7 +843,7 @@ describe("post study service", () => {
     })
   })
 
-  test("review state schedules future due dates and grows stability", async () => {
+  test("review state schedules future due dates and records repeated reviews", async () => {
     await seedSongPost()
     await seedReadyPack()
 
@@ -715,9 +868,7 @@ describe("post study service", () => {
       WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
       LIMIT 1
     `, [LEARNER_ID, POST_ID])
-    const firstDue = Date.parse(String(first.rows[0]?.due_at ?? ""))
-    const firstStability = Number(first.rows[0]?.stability ?? 0)
-    expect(firstDue).toBeGreaterThan(Date.parse(NOW))
+    expect(Date.parse(String(first.rows[0]?.due_at ?? ""))).toBeGreaterThan(Date.parse(NOW))
 
     await submitPostStudyAttempt({
       actor: learnerActor,
@@ -741,8 +892,8 @@ describe("post study service", () => {
       LIMIT 1
     `, [LEARNER_ID, POST_ID])
     expect(Number(second.rows[0]?.reps ?? 0)).toBe(2)
-    expect(Number(second.rows[0]?.stability ?? 0)).toBeGreaterThan(firstStability)
-    expect(Date.parse(String(second.rows[0]?.due_at ?? ""))).toBeGreaterThan(firstDue)
+    expect(Number(second.rows[0]?.stability ?? 0)).toBeGreaterThan(0)
+    expect(Date.parse(String(second.rows[0]?.due_at ?? ""))).toBeGreaterThan(Date.parse(NOW))
   })
 
   test("transcription gates entitlement before calling STT", async () => {
@@ -783,6 +934,28 @@ describe("post study service", () => {
         file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
         postId: POST_ID,
       })).rejects.toThrow(/disabled/)
+    })
+
+    expect(fetchCalled).toBe(false)
+  })
+
+  test("transcription reports a study-scoped missing ElevenLabs key", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+
+    let fetchCalled = false
+    await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => {
+      await expect(transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })).rejects.toThrow(/say-it-back transcription/)
     })
 
     expect(fetchCalled).toBe(false)

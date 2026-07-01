@@ -206,6 +206,7 @@ export async function transcribeCommunityAudioWithElevenLabs(input: {
   communityId: string
   env: Env
   file: File
+  missingCredentialMessage?: string
   model?: string | null
 }): Promise<CommunityAudioTranscriptionResponse> {
   return {
@@ -213,6 +214,7 @@ export async function transcribeCommunityAudioWithElevenLabs(input: {
       communityId: input.communityId,
       env: input.env,
       file: input.file,
+      missingCredentialMessage: input.missingCredentialMessage,
       model: input.model,
     }),
     object: "community_audio_transcription",
@@ -242,6 +244,7 @@ async function transcribeCommunityAudioWithElevenLabsInternal(input: {
   communityId: string
   env: Env
   file: File
+  missingCredentialMessage?: string
   model?: string | null
 }): Promise<Omit<CommunityAssistantTranscriptionResponse, "object">> {
   const mimeType = normalizeAudioMimeType(input.file)
@@ -262,6 +265,7 @@ async function transcribeCommunityAudioWithElevenLabsInternal(input: {
   const apiKey = await decryptActiveCommunityElevenLabsKey({
     env: input.env,
     communityId: input.communityId,
+    missingCredentialMessage: input.missingCredentialMessage,
   })
 
   const response = await fetchWithTimeout({

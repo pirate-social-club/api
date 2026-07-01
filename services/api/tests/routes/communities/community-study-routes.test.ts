@@ -96,6 +96,52 @@ describe("community study routes", () => {
       communityDbRoot: ctx.communityDbRoot,
       communityId,
     })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO users (
+          user_id, verification_state, capability_provider,
+          verification_capabilities_json, verified_at,
+          created_at, updated_at
+        )
+        VALUES (
+          'route_author', 'verified', 'self', '["unique_human"]',
+          '2026-06-29T08:00:00.000Z',
+          '2026-06-29T08:00:00.000Z',
+          '2026-06-29T08:00:00.000Z'
+        )
+        ON CONFLICT (user_id) DO NOTHING
+      `,
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, description,
+          membership_mode, status, provisioning_state, transfer_state,
+          route_slug, created_at, updated_at
+        )
+        VALUES (
+          ?1, 'route_author', 'Study Route Club', NULL,
+          'open', 'active', 'active', 'none',
+          NULL, '2026-06-29T08:00:00.000Z', '2026-06-29T08:00:00.000Z'
+        )
+      `,
+      args: [communityId],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO community_assistant_credentials (
+          community_assistant_credential_id, community_id, provider, encrypted_secret,
+          key_last4, encryption_key_version, status, created_at, revoked_at,
+          rotated_from, actor_user_id
+        )
+        VALUES (
+          'cac_study_route_elevenlabs', ?1, 'elevenlabs', 'test-encrypted-key',
+          'labs', 1, 'active', '2026-06-29T08:00:00.000Z', NULL, NULL,
+          'route_author'
+        )
+      `,
+      args: [communityId],
+    })
 
     const response = await app.request(
       `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study?target_language=es`,

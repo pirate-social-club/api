@@ -11,6 +11,7 @@ import { parseJobPayload } from "../communities/jobs/payload"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
+import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
 import { canGenerateStudyTranslations, requestStudyPackGeneration, type StudyGeneratedLine } from "./post-study-generation-provider"
 import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } from "./post-access"
@@ -65,8 +66,15 @@ type StudyPack = {
   status: "ready" | "processing" | "unavailable"
   study_pack_version: number
   target_language: string
-  unavailable_reason: "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed" | null
+  unavailable_reason: StudyUnavailableReason | null
 }
+
+type StudyUnavailableReason =
+  | "not_song"
+  | "no_lyrics"
+  | "unsupported_language"
+  | "generation_failed"
+  | "missing_transcription_provider"
 
 type StudyExerciseRow = {
   correct_option_id: string | null
@@ -160,7 +168,7 @@ export type SongStudyPayload = {
   study_pack_version?: number
   target_language?: string | null
   title: string
-  unavailable_reason?: "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed"
+  unavailable_reason?: StudyUnavailableReason
 }
 
 export type SongStudyAttemptRequest = {
@@ -522,6 +530,7 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
 
 async function listExercises(input: {
   client: ReadClient
+  includeSayItBack: boolean
   postId: string
   targetLanguage: string
 }): Promise<StudyExerciseRow[]> {
@@ -536,6 +545,7 @@ async function listExercises(input: {
       FROM song_study_unit
       WHERE post_id = ?1
         AND say_it_back_status = 'ready'
+        AND ?3 = 1
       UNION ALL
       SELECT ('stu:' || u.id || ':translation_choice:' || l.target_language) AS id,
              u.line_id, u.line_index, 'translation_choice' AS exercise_type,
@@ -553,7 +563,7 @@ async function listExercises(input: {
         AND l.correct_option_id IS NOT NULL
       ORDER BY line_index ASC, sort_order ASC, id ASC
     `,
-    args: [input.postId, input.targetLanguage],
+    args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0],
   })
   return result.rows.map((row) => ({
     correct_option_id: readString(row.correct_option_id),
@@ -1044,8 +1054,13 @@ export async function getPostStudyPayload(input: {
       }
     }
 
+    const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+      env: input.env,
+      communityId: input.communityId,
+    })
     const exercises = (await listExercises({
       client: db.client,
+      includeSayItBack,
       postId: input.postId,
       targetLanguage,
     })).map((row) => toExercise(row, input.actor.userId))
@@ -1053,7 +1068,7 @@ export async function getPostStudyPayload(input: {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
         source_language: pack?.source_language ?? post.source_language,
-        unavailable_reason: "no_lyrics",
+        unavailable_reason: includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
       }
     }
     return {
@@ -1739,6 +1754,7 @@ export async function transcribePostStudyAudio(input: {
     communityId: input.communityId,
     env: input.env,
     file: input.file,
+    missingCredentialMessage: "An ElevenLabs API key is required for say-it-back transcription",
   })
   return {
     confidence: transcription.confidence,
