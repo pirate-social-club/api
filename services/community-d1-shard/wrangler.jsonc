@@ -47,6 +47,11 @@
       "binding": "DB_CMTY_0002",
       "database_name": "community-d1-pool-0002-staging",
       "database_id": "c1ccf25f-0e13-4aad-9770-b7a46fa12a82"
+    },
+    {
+      "binding": "DB_CMTY_0003",
+      "database_name": "community-d1-pool-0003-staging",
+      "database_id": "c6eb764f-2972-492a-a3d6-aba9f6e85e29"
     }
   ],
   // Production env — a SEPARATE worker (community-d1-shard-prod) with its own pool
