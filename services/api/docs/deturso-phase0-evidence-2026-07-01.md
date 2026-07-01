@@ -92,3 +92,26 @@ Production smoke `scripts/smoke-d1-provisioning-cutover.ts`:
   `com_cmt_8ac035173f52427dba86432d1ad3004b` with
   `nv_deturso_smoke_20260701192227` -> `DB_CMTY_0081`,
   `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0081'`.
+
+## API Operator Path Removal Deploy And Smoke
+
+Production `api-core` was redeployed from `origin/main` after removing the API
+Turso provisioning operator backend, operator service binding, and admin
+database-migration route.
+
+- Deployed Worker version: `4b3498a0-99c7-49f1-a31c-507d25050733`.
+- Deploy output no longer listed the `COMMUNITY_PROVISION_OPERATOR` service binding.
+- Health check after deploy: `GET https://api.pirate.sc/health` returned
+  `{"ok":true}`.
+- Provisioning health returned a D1-native readiness payload with shard and
+  region readiness fields.
+
+Production smoke `scripts/smoke-d1-provisioning-cutover.ts`:
+
+- Namespaceless create:
+  `com_cmt_8b1e37fb85524c3f951f084a630ad4d4` -> `DB_CMTY_0082`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0082'`.
+- Namespaced create:
+  `com_cmt_024737057bcf4bed935363a1c0c5efb1` with
+  `nv_deturso_smoke_20260701193454` -> `DB_CMTY_0083`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0083'`.
