@@ -5,6 +5,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { getProfileActivity, parseProfileActivityLimit, parseProfileActivityTab } from "../lib/profile/profile-activity-read-service"
 import { decodePublicUserId } from "../lib/public-ids"
 import type { Env } from "../env"
+import { resolveHostBookable } from "../lib/bookings/host-bookable"
 import { serializePublicProfileResolution } from "../serializers/profile"
 import { serializeProfileActivityResponse } from "../serializers/profile-activity"
 
@@ -16,6 +17,7 @@ publicProfiles.get("/by-wallet/:walletAddress", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
+  resolved.profile.is_bookable = await resolveHostBookable(c.env, resolved.profile.id)
   return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
@@ -44,6 +46,7 @@ publicProfiles.get("/:handleLabel", async (c) => {
   if (!resolved) {
     throw notFoundError("Profile not found")
   }
+  resolved.profile.is_bookable = await resolveHostBookable(c.env, resolved.profile.id)
   return c.json(serializePublicProfileResolution(resolved), 200)
 })
 
