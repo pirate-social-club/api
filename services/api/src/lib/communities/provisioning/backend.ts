@@ -391,29 +391,16 @@ export function isD1NativeProvisioningSelected(env: Env): boolean {
   return String(env.COMMUNITY_PROVISION_BACKEND ?? "").trim() === "d1_native" && Boolean(env.COMMUNITY_D1_SHARD)
 }
 
-/**
- * Per-request shape passed to the resolver. v1 narrows the d1_native path
- * to namespaceless creates only (§7 of D1-NATIVE-PROVISIONING-DESIGN.md):
- * the namespace-attach path can't be routed to d1 today, so a namespaced
- * request must resolve to the Turso operator path even when the d1_native
- * env flag is set. Without this guard, flipping the flag on would brick
- * namespaced community creation globally.
- */
 export type ProvisioningRequestShape = {
-  /** True if the create call carries a namespaceVerificationId (i.e. it
-   * routes through provisionNamespacedCommunity). False for namespaceless
-   * creates (createNamespacelessCommunity). */
+  /** True if the create call carries a namespaceVerificationId. */
   hasNamespace: boolean
 }
 
 export function resolveCommunityProvisioningBackend(
   env: Env,
-  request: ProvisioningRequestShape,
+  _request: ProvisioningRequestShape,
 ): CommunityProvisioningBackend {
-  // v1: d1_native is namespaceless-only. Namespaced requests always go
-  // through the existing Turso path regardless of the d1_native flag,
-  // because the namespace-attach path can't be routed to d1 today.
-  if (!request.hasNamespace && isD1NativeProvisioningSelected(env)) {
+  if (isD1NativeProvisioningSelected(env)) {
     return d1NativeProvisioningBackend
   }
   return isCommunityProvisionOperatorConfigured(env)

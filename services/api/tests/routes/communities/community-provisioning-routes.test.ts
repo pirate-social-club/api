@@ -639,4 +639,104 @@ describe("d1_native community provisioning (step 4 of the D1-native workstream)"
       status: "active",
     })
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
+
+  testWithTimeout("namespaced d1_native create reaches provisioning_succeeded with namespace metadata and a backend='d1' routing row", async () => {
+    const calls: Array<{ m: string; input: unknown }> = []
+    const fakeShard: ShardRpc = {
+      async communityD1Bind(input: { communityId: string; now: string }) {
+        calls.push({ m: "communityD1Bind", input })
+        return {
+          ok: true,
+          value: {
+            bindingName: "DB_CMTY_ROUTE_NS_TEST",
+            shardWorkerId: "community-d1-shard-staging",
+            allocated: true,
+          },
+        }
+      },
+      async communityD1LoadSnapshot(input: { communityId: string; bindingName: string; statements: unknown[] }) {
+        calls.push({ m: "communityD1LoadSnapshot", input })
+        return { ok: true, value: { rowsAffected: 0, loaded: true } }
+      },
+    } as unknown as ShardRpc
+
+    const ctx = await createRouteTestContext({
+      COMMUNITY_PROVISION_BACKEND: "d1_native",
+      COMMUNITY_D1_SHARD: fakeShard,
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-d1-native-namespace-route-test")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, session.accessToken)
+
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "D1 Native Namespace Club",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, session.accessToken)
+
+    if (response.status !== 202) {
+      const errBody = await json(response)
+      throw new Error(`expected 202, got ${response.status}: ${JSON.stringify(errBody)}`)
+    }
+    const body = (await response.json()) as {
+      community: { id: string; display_name: string; provisioning_state: string; namespace_verification: string | null }
+      job: { status: string }
+    }
+    expect(body.community.display_name).toBe("D1 Native Namespace Club")
+    expect(body.community.provisioning_state).toBe("active")
+    expect(body.community.namespace_verification).toBe(namespaceVerificationId)
+    expect(body.job.status).toBe("succeeded")
+    expect(calls.map((c) => c.m)).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+    ])
+
+    const load = calls[1]!.input as { statements: Array<{ sql?: string; args?: unknown[] }> }
+    expect(load.statements.some((statement) =>
+      Array.isArray(statement.args) && statement.args.includes(namespaceVerificationId.replace(/^nv_/, ""))
+    )).toBe(true)
+
+    const communityIdBare = body.community.id.replace(/^com_/, "")
+    const routingRow = (await ctx.client.execute({
+      sql: `SELECT backend, provisioning_state, shard_worker_id, binding_name, region
+            FROM community_database_routing WHERE community_id = ?1`,
+      args: [communityIdBare],
+    })).rows[0] as Record<string, unknown>
+    expect(routingRow).toMatchObject({
+      backend: "d1",
+      provisioning_state: "ready",
+      shard_worker_id: "community-d1-shard-staging",
+      binding_name: "DB_CMTY_ROUTE_NS_TEST",
+      region: "weur",
+    })
+
+    const communityRow = (await ctx.client.execute({
+      sql: `SELECT namespace_verification_id, route_slug
+            FROM communities WHERE community_id = ?1`,
+      args: [communityIdBare],
+    })).rows[0] as Record<string, unknown>
+    expect(communityRow).toMatchObject({
+      namespace_verification_id: namespaceVerificationId.replace(/^nv_/, ""),
+      route_slug: "piratecommunityroot",
+    })
+
+    const bindingRow = (await ctx.client.execute({
+      sql: `SELECT database_url, database_name, organization_slug, group_name, location, requires_credentials, status
+            FROM community_database_bindings WHERE community_id = ?1`,
+      args: [communityIdBare],
+    })).rows[0] as Record<string, unknown>
+    expect(bindingRow).toMatchObject({
+      database_url: "d1://shard/DB_CMTY_ROUTE_NS_TEST",
+      database_name: "DB_CMTY_ROUTE_NS_TEST",
+      organization_slug: "shard",
+      group_name: "shard",
+      location: "weur",
+      requires_credentials: 0,
+      status: "active",
+    })
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 })

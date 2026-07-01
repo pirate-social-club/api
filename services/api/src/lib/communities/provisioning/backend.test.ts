@@ -21,15 +21,9 @@ describe("resolveCommunityProvisioningBackend", () => {
     expect(resolveCommunityProvisioningBackend(env, { hasNamespace: false }).mode).toBe("d1_native")
   })
 
-  test("routes a namespaced request to turso_operator even when the d1_native flag is set (v1 scope)", () => {
-    // v1 of d1_native is namespaceless-only. Flipping the env flag must NOT
-    // brick namespaced community creation — namespaced requests continue to
-    // use the Turso operator path regardless of the d1_native flag, because
-    // the namespace-attach path can't be routed to d1 today (the
-    // upsertLocalNamespaceAttachment call site hits openCommunityDb which
-    // fails on d1:// URLs).
+  test("selects d1_native for a namespaced request when the flag is set AND the shard binding exists", () => {
     const env = buildEnv({ COMMUNITY_PROVISION_BACKEND: "d1_native", COMMUNITY_D1_SHARD: fakeShard })
-    expect(resolveCommunityProvisioningBackend(env, { hasNamespace: true }).mode).toBe("turso_operator")
+    expect(resolveCommunityProvisioningBackend(env, { hasNamespace: true }).mode).toBe("d1_native")
   })
 
   test("does NOT select d1_native when the flag is set but the shard binding is absent", () => {
