@@ -703,11 +703,15 @@ export type Community = {
   namespace_verification?: string | null;
   route_slug?: string | null;
   pending_namespace_verification_session?: string | null;
+  store_url?: string | null;
+  store_label?: string | null;
+  country_code?: string | null;
   status: "draft" | "active" | "frozen" | "archived" | "deleted";
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error";
   artist_identity?: string | null;
   community_agent_user?: string | null;
   membership_mode: "open" | "request" | "gated";
+  karaoke_enabled: boolean;
   allow_anonymous_identity: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   human_verification_lane: HumanVerificationLane;
@@ -809,6 +813,7 @@ export type CommunityListing = {
   community: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   listing_mode: "fixed_price";
   status: "draft" | "active" | "paused" | "archived";
   price_cents: number;
@@ -824,6 +829,7 @@ export type CommunityListing = {
 export type CreateCommunityListingRequest = {
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   price_cents: number;
   regional_pricing_enabled: boolean;
   donation_partner?: string | null;
@@ -853,6 +859,7 @@ export type CommunityPurchase = {
   listing: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   buyer_user: string;
   settlement_wallet_attachment: string;
   purchase_price_cents: number;
@@ -932,6 +939,7 @@ export type CommunityPurchaseQuote = {
   buyer_user: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   base_price_cents: number;
   pricing_tier?: string | null;
   final_price_cents: number;
@@ -976,6 +984,7 @@ export type CommunityPurchaseSettlement = {
   buyer_user: string;
   asset?: string | null;
   live_room?: string | null;
+  replay_asset?: string | null;
   settlement_wallet_attachment: string;
   purchase_price_cents: number;
   pricing_tier?: string | null;
@@ -990,7 +999,7 @@ export type CommunityPurchaseSettlement = {
   donation_amount_cents?: number | null;
   vinyl_release_provider?: "elasticstage" | null;
   vinyl_release_url?: string | null;
-  entitlement_kind: "asset_access" | "live_room_access";
+  entitlement_kind: "asset_access" | "live_room_access" | "replay_access";
   entitlement_target_ref: string;
   purchase_entitlement: string;
   settled_at: number;
@@ -1444,6 +1453,7 @@ export type CreateSongArtifactUploadRequest = {
   filename?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
+  upload_mode?: "proxy" | "direct_multipart" | null;
 };
 
 export type CreateSongArtifactBundleRequest = {
@@ -1588,7 +1598,8 @@ export type AssetAccessResponse = {
   story_status: "none" | "requested" | "published" | "failed";
   locked_delivery_status: "none" | "requested" | "ready" | "failed";
   access_granted: boolean;
-  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending";
+  decision_reason: "public" | "creator" | "moderator" | "purchase_entitlement" | "purchase_required" | "delivery_pending" | "preview_pending";
+  bundle_preview_status?: "pending" | "processing" | "completed" | "failed" | null;
   delivery_kind: "primary_content_ref" | "locked_delivery_ref" | "story_cdr_ref" | null;
   delivery_ref: string | null;
   story_cdr_access?: ({
@@ -2096,12 +2107,15 @@ export type SongStudyTranscriptionResponse = {
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
+  viewer_gate_state?: PostViewerGateState | null;
   author_community_role?: "owner" | "moderator" | null;
   thread_snapshot: CommentThreadSnapshot | null;
   market_context?: MarketContextSummary | null;
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
   study_capability?: SongStudyCapability | null;
+  asset_story?: PostAssetStorySummary | null;
+  derivative_sources?: Array<PostDerivativeSource> | null;
   upvote_count: number;
   downvote_count: number;
   like_count: number;
@@ -2158,7 +2172,11 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
+  store_url?: string | null;
+  store_label?: string | null;
+  country_code?: string | null;
   membership_mode: "open" | "request" | "gated";
+  karaoke_enabled?: boolean;
   allow_anonymous_identity?: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
   allowed_disclosed_qualifiers?: Array<string> | null;
@@ -2178,6 +2196,7 @@ export type CommunityPreview = {
   moderators: Array<CommunityRoleSummary>;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
+  gate_match_mode?: "all" | "any" | null;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
   viewer_community_role?: "owner" | "admin" | "moderator" | null;
@@ -2726,7 +2745,7 @@ type CommunitySaleAllocationLeg = (CommunitySaleAllocationSnapshot & {
   failure_reason?: string | null;
 });
 
-type CommunitySaleAllocationRecipientType = "creator" | "charity" | "community_treasury";
+type CommunitySaleAllocationRecipientType = "creator" | "performer" | "charity" | "community_treasury";
 
 type CommunitySaleAllocationSettlementStrategy = "story_payout" | "provider_payout" | "treasury_payout";
 
@@ -3234,6 +3253,7 @@ type MediaDescriptor = {
   mime_type?: string | null;
   size_bytes?: number | null;
   content_hash?: string | null;
+  decentralized_storage?: (Record<string, unknown>) | null;
   duration_ms?: number | null;
   poster_ref?: string | null;
   poster_mime_type?: string | null;
@@ -3306,7 +3326,29 @@ type PolymarketMarketEmbed = {
   last_checked_at?: number | null;
 };
 
+type PostAssetStorySummary = {
+  story_ip: string | null;
+  story_royalty_registration_status: "none" | "pending" | "registered" | "failed";
+};
+
 type PostCreatorRelation = "captured" | "created" | "subject" | "authorized_repost" | "fan_work" | "found";
+
+type PostDerivativeSource = {
+  source_ref: string;
+  title: string;
+  kind: "song" | "video" | "external";
+  relationship_type: "remix_of" | "references_song" | "references_video" | "inspired_by" | "samples";
+  community?: string | null;
+  asset?: string | null;
+  source_post?: string | null;
+  story_ip?: string | null;
+  story_license_terms?: string | null;
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+  commercial_rev_share_pct?: number | null;
+  creator_user?: string | null;
+  creator_handle?: string | null;
+  creator_display_name?: string | null;
+};
 
 type PostEmbed = (XPostEmbed | YouTubeVideoEmbed | KalshiMarketEmbed | PolymarketMarketEmbed);
 
@@ -3316,6 +3358,15 @@ type PostLabel = {
   label: string;
   color_token?: string | null;
   status: "active" | "archived";
+};
+
+type PostViewerGateState = {
+  community_id: string;
+  community_display_name: string;
+  viewer_community_role: "owner" | "admin" | "moderator" | null;
+  viewer_membership_status: "member" | "not_member" | "banned" | null;
+  membership_gate_summaries: Array<MembershipGateSummary>;
+  gate_match_mode?: "all" | "any" | null;
 };
 
 type PredictionMarketChartPoint = {
@@ -3704,6 +3755,8 @@ export const apiRoutes = {
   communityPostStudy: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study`,
   communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
   communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
+  communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
+  karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
   postVote: (postId: string) => `/posts/${postId}/vote`,
