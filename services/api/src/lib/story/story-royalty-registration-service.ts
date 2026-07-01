@@ -1,16 +1,21 @@
-import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress } from "@story-protocol/core-sdk"
-import { http } from "viem"
+import { StoryClient, WIP_TOKEN_ADDRESS, PILFlavor, royaltyPolicyLapAddress, aeneid, mainnet } from "@story-protocol/core-sdk"
+import { createWalletClient, fallback, http } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
-import { resolveStoryChainId, resolveStoryRpcUrl, resolveStoryRuntimeSignerTargetBalanceWei } from "./story-runtime-config"
+import {
+  resolveStoryChainId,
+  resolveStoryRpcUrls,
+  resolveStoryRuntimeSignerTargetBalanceWei,
+} from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
+import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-tx"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -90,6 +95,18 @@ type StoryRoyaltySdkClient = {
   license?: StoryLicenseClient
 }
 
+type JsonRpcPayload = {
+  id?: unknown
+  jsonrpc?: string
+  method?: string
+}
+
+type JsonRpcResponsePayload = {
+  id?: unknown
+  jsonrpc?: string
+  result?: unknown
+}
+
 let testRoyaltyRegistrar: ((input: {
   env: Env
   client: StoryRoyaltyClient
@@ -148,11 +165,236 @@ function createStoryRoyaltySdkClient(input: {
     return testStoryRoyaltySdkClientFactory(input)
   }
 
-  return StoryClient.newClient({
+  const gasPolicy = resolveStoryRoyaltyGasPolicy(input.env)
+  const transport = fallback(resolveStoryRpcUrls(input.env).map((url) => cappedStoryRoyaltyHttp(url, gasPolicy)))
+  const wallet = createWalletClient({
     account: privateKeyToAccount(input.operatorPrivateKey),
-    transport: http(resolveStoryRpcUrl(input.env)),
+    chain: resolveStoryViemChain(input.env),
+    transport,
+  })
+  const uncappedWriteContract = wallet.writeContract.bind(wallet)
+  wallet.writeContract = async (request: unknown) => {
+    return await uncappedWriteContract(capStoryRoyaltyWriteContractRequestForTests(request, gasPolicy) as never)
+  }
+
+  return StoryClient.newClient({
+    wallet,
+    transport,
     chainId: resolveStoryChainName(input.env),
   }) as StoryRoyaltySdkClient
+}
+
+function resolveStoryViemChain(env: Pick<Env, "STORY_CHAIN_ID">): typeof aeneid | typeof mainnet {
+  return resolveStoryChainId(env) === 1514 ? mainnet : aeneid
+}
+
+function resolveStoryRoyaltyGasPolicy(
+  env: Pick<
+    Env,
+    | "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
+    | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+  >,
+): DirectTxGasPolicy {
+  const gasPolicy = resolveDirectTxGasPolicy({
+    maxFeePerGasCapWeiRaw: env.STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI,
+    maxPriorityFeePerGasCapWeiRaw: env.STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI,
+    gasLimitCapRaw: env.STORY_DIRECT_TX_GAS_LIMIT_MAX,
+    gasEstimateBufferBpsRaw: env.STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS,
+    maxFeePerGasCapField: "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI",
+    maxPriorityFeePerGasCapField: "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI",
+    gasLimitCapField: "STORY_DIRECT_TX_GAS_LIMIT_MAX",
+    gasEstimateBufferBpsField: "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS",
+  })
+  if (!gasPolicy.ok) throw new Error(gasPolicy.error)
+  return gasPolicy.value
+}
+
+// Matches the direct-tx path (evm-direct-tx.ts) so the SDK path is bounded identically.
+const STORY_ROYALTY_GAS_LIMIT_PADDING = 15_000n
+
+function cappedStoryRoyaltyHttp(url: string, gasPolicy: DirectTxGasPolicy) {
+  return http(url, {
+    fetchFn: async (input, init) => {
+      const response = await fetch(input, init)
+      return await capStoryRoyaltyRpcFeeResponseForTests(response, init?.body, gasPolicy)
+    },
+  })
+}
+
+export async function capStoryRoyaltyRpcFeeResponseForTests(
+  response: Response,
+  requestBody: BodyInit | null | undefined,
+  gasPolicy: DirectTxGasPolicy,
+): Promise<Response> {
+  if (!response.ok || !requestBody) return response
+  const requestPayload = parseJsonRpcPayload(requestBody)
+  if (!requestPayload) return response
+
+  const text = await response.text()
+  if (!text) return new Response(text, response)
+  let responsePayload: unknown
+  try {
+    responsePayload = JSON.parse(text) as unknown
+  } catch {
+    return new Response(text, response)
+  }
+
+  const capped = Array.isArray(requestPayload) && Array.isArray(responsePayload)
+    ? responsePayload.map((entry, index) => capJsonRpcResponseResult(entry, requestPayload[index], gasPolicy))
+    : capJsonRpcResponseResult(responsePayload, Array.isArray(requestPayload) ? null : requestPayload, gasPolicy)
+
+  return new Response(JSON.stringify(capped), response)
+}
+
+function parseJsonRpcPayload(body: BodyInit): JsonRpcPayload | JsonRpcPayload[] | null {
+  if (typeof body !== "string") return null
+  try {
+    const parsed = JSON.parse(body) as unknown
+    if (Array.isArray(parsed)) return parsed.filter(isJsonRpcPayload)
+    return isJsonRpcPayload(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function isJsonRpcPayload(value: unknown): value is JsonRpcPayload {
+  return typeof value === "object" && value != null && "method" in value
+}
+
+function capJsonRpcResponseResult(
+  responsePayload: unknown,
+  requestPayload: JsonRpcPayload | null | undefined,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (
+    !requestPayload?.method ||
+    typeof responsePayload !== "object" ||
+    responsePayload == null ||
+    !("result" in responsePayload)
+  ) {
+    return responsePayload
+  }
+  const payload = responsePayload as JsonRpcResponsePayload
+  // Gas-limit enforcement (added on top of the ported fee caps): buffer the
+  // estimate exactly like the direct-tx path, then reject when it exceeds the
+  // policy cap so worst-case tx cost stays gasLimitCap * maxFeePerGasCap and the
+  // funding preflight can bound it. Rejecting fails before the tx is sent, so no
+  // gas is spent — parity with evm-direct-tx's direct_tx_gas_limit_exceeds_policy.
+  if (requestPayload.method === "eth_estimateGas") {
+    return enforceStoryRoyaltyGasEstimate(payload, gasPolicy)
+  }
+  return {
+    ...payload,
+    result: capStoryRoyaltyRpcResult(requestPayload.method, payload.result, gasPolicy),
+  }
+}
+
+function enforceStoryRoyaltyGasEstimate(
+  payload: JsonRpcResponsePayload,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  const estimate = parseRpcQuantity(payload.result)
+  if (estimate == null) return payload
+  const gasLimit = (estimate * gasPolicy.gasEstimateBufferBps) / 10_000n + STORY_ROYALTY_GAS_LIMIT_PADDING
+  if (gasLimit > gasPolicy.gasLimitCap) {
+    return {
+      id: payload.id,
+      jsonrpc: payload.jsonrpc ?? "2.0",
+      error: {
+        code: -32000,
+        message: `story_royalty_gas_limit_exceeds_policy:${gasLimit.toString()}:${gasPolicy.gasLimitCap.toString()}`,
+      },
+    }
+  }
+  return { ...payload, result: `0x${gasLimit.toString(16)}` }
+}
+
+function capStoryRoyaltyRpcResult(
+  method: string,
+  result: unknown,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (method === "eth_maxPriorityFeePerGas") {
+    return capRpcQuantity(result, gasPolicy.maxPriorityFeePerGasCapWei)
+  }
+  if (method === "eth_gasPrice") {
+    return capRpcQuantity(result, gasPolicy.maxFeePerGasCapWei)
+  }
+  if (method === "eth_feeHistory") {
+    return capFeeHistoryResult(result, gasPolicy)
+  }
+  return result
+}
+
+function capFeeHistoryResult(result: unknown, gasPolicy: DirectTxGasPolicy): unknown {
+  if (typeof result !== "object" || result == null) return result
+  const value = result as {
+    baseFeePerGas?: unknown
+    reward?: unknown
+  }
+  return {
+    ...value,
+    baseFeePerGas: Array.isArray(value.baseFeePerGas)
+      ? value.baseFeePerGas.map((entry) => capRpcQuantity(entry, gasPolicy.maxFeePerGasCapWei))
+      : value.baseFeePerGas,
+    reward: Array.isArray(value.reward)
+      ? value.reward.map((row) =>
+        Array.isArray(row)
+          ? row.map((entry) => capRpcQuantity(entry, gasPolicy.maxPriorityFeePerGasCapWei))
+          : row
+      )
+      : value.reward,
+  }
+}
+
+function capRpcQuantity(value: unknown, cap: bigint): unknown {
+  const parsed = parseRpcQuantity(value)
+  if (parsed == null || parsed <= cap) return value
+  return `0x${cap.toString(16)}`
+}
+
+function parseRpcQuantity(value: unknown): bigint | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) return BigInt(trimmed)
+  if (/^\d+$/.test(trimmed)) return BigInt(trimmed)
+  return null
+}
+
+export function capStoryRoyaltyWriteContractRequestForTests(
+  request: unknown,
+  gasPolicy: DirectTxGasPolicy,
+): unknown {
+  if (typeof request !== "object" || request == null) return request
+  const value = request as Record<string, unknown>
+  return {
+    ...value,
+    gasPrice: undefined,
+    gas: capStoryRoyaltyGasLimitField(value.gas, gasPolicy.gasLimitCap),
+    maxFeePerGas: capBigintField(value.maxFeePerGas, gasPolicy.maxFeePerGasCapWei),
+    maxPriorityFeePerGas: capBigintField(value.maxPriorityFeePerGas, gasPolicy.maxPriorityFeePerGasCapWei),
+  }
+}
+
+function capBigintField(value: unknown, cap: bigint): bigint {
+  if (typeof value === "bigint" && value > 0n && value < cap) return value
+  return cap
+}
+
+// Enforce a caller-supplied gas limit the same way the estimate path does:
+// pass through when under the cap, reject when over it (throwing before send, so
+// no gas is burned on an under-gassed tx), and leave it undefined when absent so
+// viem estimates via eth_estimateGas (which enforceStoryRoyaltyGasEstimate then
+// buffers + caps). Never silently clamp a flat cap here — that would skip revert
+// detection and burn gas on doomed txs.
+function capStoryRoyaltyGasLimitField(value: unknown, cap: bigint): bigint | undefined {
+  if (typeof value !== "bigint" || value <= 0n) return undefined
+  if (value > cap) {
+    throw new Error(`story_royalty_gas_limit_exceeds_policy:${value.toString()}:${cap.toString()}`)
+  }
+  return value
 }
 
 function normalizeStoryRoyaltyRightsBasis(
