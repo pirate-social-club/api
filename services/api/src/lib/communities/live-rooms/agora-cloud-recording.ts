@@ -40,24 +40,17 @@ type Fetcher = typeof fetch
 
 const DEFAULT_BASE_URL = "https://api.agora.io"
 const DEFAULT_RESOURCE_EXPIRED_HOURS = 24
-const AGORA_STORAGE_VENDOR_S3_COMPATIBLE = 11
-const AGORA_STORAGE_REGION_S3_COMPATIBLE = 0
 
 export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingConfig | null {
   const appId = firstTrimmed(env.AGORA_APP_ID)
   const customerId = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_ID)
-    ?? firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_KEY)
   const customerSecret = firstTrimmed(env.AGORA_CLOUD_RECORDING_CUSTOMER_SECRET)
   const endpoint = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT)
-    ?? firstTrimmed(env.AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT)
-    ?? firstTrimmed(env.FILEBASE_S3_ENDPOINT)
   const vendor = positiveIntegerOrNull(env.AGORA_CLOUD_RECORDING_STORAGE_VENDOR)
-    ?? (endpoint ? AGORA_STORAGE_VENDOR_S3_COMPATIBLE : null)
   const region = nonNegativeIntegerOrNull(env.AGORA_CLOUD_RECORDING_STORAGE_REGION)
-    ?? (endpoint ? AGORA_STORAGE_REGION_S3_COMPATIBLE : null)
-  const bucket = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET) ?? firstTrimmed(env.FILEBASE_MEDIA_BUCKET)
-  const accessKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY) ?? firstTrimmed(env.FILEBASE_S3_ACCESS_KEY)
-  const secretKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY) ?? firstTrimmed(env.FILEBASE_S3_SECRET_KEY)
+  const bucket = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET)
+  const accessKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY)
+  const secretKey = firstTrimmed(env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY)
   if (!appId || !customerId || !customerSecret || vendor == null || region == null || !bucket || !accessKey || !secretKey) {
     return null
   }
@@ -72,7 +65,7 @@ export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingC
       bucket,
       accessKey,
       secretKey,
-      ...(endpoint && vendor === AGORA_STORAGE_VENDOR_S3_COMPATIBLE ? { extensionParams: { endpoint } } : {}),
+      ...(endpoint ? { extensionParams: { endpoint } } : {}),
       fileNamePrefix: fileNamePrefixFromEnv(env.AGORA_CLOUD_RECORDING_STORAGE_FILE_PREFIX),
     },
     resourceExpiredHour: positiveIntegerOrNull(env.AGORA_CLOUD_RECORDING_RESOURCE_EXPIRED_HOURS) ?? DEFAULT_RESOURCE_EXPIRED_HOURS,

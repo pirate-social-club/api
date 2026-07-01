@@ -46,8 +46,8 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
     })
   })
 
-  test("defaults Agora capture storage to the existing Filebase bucket", () => {
-    const config = agoraCloudRecordingConfigFromEnv({
+  test("does not silently reuse the Filebase media bucket for Agora capture storage", () => {
+    expect(agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: "agora-app",
       AGORA_CLOUD_RECORDING_CUSTOMER_ID: "customer-id",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
@@ -56,38 +56,20 @@ describe("agoraCloudRecordingConfigFromEnv", () => {
       FILEBASE_S3_SECRET_KEY: "filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
       FILEBASE_S3_REGION: "us-east-1",
-    })
-
-    expect(config).toMatchObject({
-      appId: "agora-app",
-      customerId: "customer-id",
-      customerSecret: "customer-secret",
-      storageConfig: {
-        vendor: 11,
-        region: 0,
-        bucket: "psc-media-bucket",
-        accessKey: "filebase-access",
-        secretKey: "filebase-secret",
-        extensionParams: {
-          endpoint: "https://s3.filebase.com",
-        },
-      },
-    })
+    })).toBeNull()
   })
 
-  test("accepts the legacy customer key env var as a fallback", () => {
-    const config = agoraCloudRecordingConfigFromEnv({
+  test("requires the Agora Customer ID env name used by Agora's dashboard", () => {
+    expect(agoraCloudRecordingConfigFromEnv({
       AGORA_APP_ID: "agora-app",
-      AGORA_CLOUD_RECORDING_CUSTOMER_KEY: "legacy-customer-key",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
-      FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
-      FILEBASE_S3_ACCESS_KEY: "filebase-access",
-      FILEBASE_S3_SECRET_KEY: "filebase-secret",
-      FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
-      FILEBASE_S3_REGION: "us-east-1",
-    })
-
-    expect(config?.customerId).toBe("legacy-customer-key")
+      AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT: "https://s3.filebase.com",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "11",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "0",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
+    })).toBeNull()
   })
 })
 
@@ -162,11 +144,12 @@ describe("Agora Cloud Recording REST adapter", () => {
       AGORA_CLOUD_RECORDING_BASE_URL: "https://agora.test",
       AGORA_CLOUD_RECORDING_CUSTOMER_ID: "customer-id",
       AGORA_CLOUD_RECORDING_CUSTOMER_SECRET: "customer-secret",
-      FILEBASE_MEDIA_BUCKET: "psc-media-bucket",
-      FILEBASE_S3_ACCESS_KEY: "filebase-access",
-      FILEBASE_S3_SECRET_KEY: "filebase-secret",
-      FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
-      FILEBASE_S3_REGION: "us-east-1",
+      AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT: "https://s3.filebase.com",
+      AGORA_CLOUD_RECORDING_STORAGE_VENDOR: "11",
+      AGORA_CLOUD_RECORDING_STORAGE_REGION: "0",
+      AGORA_CLOUD_RECORDING_STORAGE_BUCKET: "capture-bucket",
+      AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY: "capture-access",
+      AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY: "capture-secret",
     })
     if (!config) {
       throw new Error("expected test config")
@@ -187,9 +170,9 @@ describe("Agora Cloud Recording REST adapter", () => {
         storageConfig: {
           vendor: 11,
           region: 0,
-          bucket: "psc-media-bucket",
-          accessKey: "filebase-access",
-          secretKey: "filebase-secret",
+          bucket: "capture-bucket",
+          accessKey: "capture-access",
+          secretKey: "capture-secret",
           extensionParams: {
             endpoint: "https://s3.filebase.com",
           },

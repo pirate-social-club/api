@@ -137,26 +137,26 @@ export async function fetchLiveRoomRecordingCaptureObject(input: {
 
 function resolveAgoraCaptureS3Config(env: Env): S3SigningConfig {
   const endpoint = trimRequired(
-    env.AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT ?? env.AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT ?? env.FILEBASE_S3_ENDPOINT,
-    "AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT or FILEBASE_S3_ENDPOINT is not configured",
+    env.AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT,
+    "AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT is not configured",
   )
   return {
     accessKey: trimRequired(
-      env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY ?? env.FILEBASE_S3_ACCESS_KEY,
-      "AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY or FILEBASE_S3_ACCESS_KEY is not configured",
+      env.AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY,
+      "AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY is not configured",
     ),
     secretKey: trimRequired(
-      env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY ?? env.FILEBASE_S3_SECRET_KEY,
-      "AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY or FILEBASE_S3_SECRET_KEY is not configured",
+      env.AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY,
+      "AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY is not configured",
     ),
     bucket: trimRequired(
-      env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET ?? env.FILEBASE_MEDIA_BUCKET,
-      "AGORA_CLOUD_RECORDING_STORAGE_BUCKET or FILEBASE_MEDIA_BUCKET is not configured",
+      env.AGORA_CLOUD_RECORDING_STORAGE_BUCKET,
+      "AGORA_CLOUD_RECORDING_STORAGE_BUCKET is not configured",
     ),
     endpoint: new URL(endpoint),
     region: trimRequired(
-      env.AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION ?? env.FILEBASE_S3_REGION,
-      "AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION or FILEBASE_S3_REGION is not configured",
+      env.AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION,
+      "AGORA_CLOUD_RECORDING_CAPTURE_S3_REGION is not configured",
     ),
   }
 }

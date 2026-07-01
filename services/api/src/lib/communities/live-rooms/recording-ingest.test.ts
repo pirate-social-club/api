@@ -68,21 +68,15 @@ describe("ingestAgoraRecordingToPrivateStorage", () => {
     }
   })
 
-  test("can fetch capture objects from the existing Filebase bucket defaults", async () => {
+  test("does not fetch capture objects from implicit Filebase media defaults", async () => {
     const originalFetch = globalThis.fetch
-    const captureBytes = new TextEncoder().encode("recording")
-    const requests: string[] = []
     globalThis.fetch = (async (request: RequestInfo | URL) => {
-      const url = request instanceof Request ? request.url : String(request)
-      requests.push(url)
-      if (url.startsWith("https://s3.filebase.com/")) {
-        return new Response(captureBytes, { status: 200, headers: { "content-type": "video/mp4" } })
-      }
+      void request
       return new Response("not found", { status: 404 })
     }) as typeof fetch
 
     try {
-      const ref = await ingestAgoraRecordingToPrivateStorage({
+      await expect(ingestAgoraRecordingToPrivateStorage({
         env: {
           FILEBASE_S3_ENDPOINT: "https://s3.filebase.com",
           FILEBASE_S3_REGION: "us-east-1",
@@ -98,17 +92,7 @@ describe("ingestAgoraRecordingToPrivateStorage", () => {
             fileList: [{ fileName: "agora/output/replay.mp4" }],
           },
         },
-      })
-
-      expect(ref).toMatchObject({
-        provider: "agora_capture",
-        bucket: "psc-media-bucket",
-        object_key: "agora/output/replay.mp4",
-        endpoint: "https://s3.filebase.com/",
-        ipfs_cid: null,
-      })
-      expect(requests[0]).toContain("https://s3.filebase.com/psc-media-bucket/agora/output/replay.mp4")
-      expect(requests).toHaveLength(1)
+      })).rejects.toThrow("AGORA_CLOUD_RECORDING_CAPTURE_S3_ENDPOINT is not configured")
     } finally {
       globalThis.fetch = originalFetch
     }
