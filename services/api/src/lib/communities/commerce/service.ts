@@ -37,6 +37,11 @@ import {
 } from "../../story/story-royalty-registration-service"
 import type { AssetRow } from "./row-types"
 import {
+  classifyStoryRegistrationFailure,
+  sanitizeStoryRegistrationFailure,
+  storyRegistrationFailureMessage,
+} from "./story-registration-failure"
+import {
   buildAssetContentPath,
   getActiveEntitlementForBuyer,
   getActiveEntitlementForBuyerIdentity,
@@ -196,26 +201,6 @@ async function derivativeSourceRowsToResponse(input: {
     items,
     next_cursor: null,
   }
-}
-
-function sanitizeStoryRegistrationFailure(value: string | null): string | null {
-  const normalized = value?.replace(/\s+/g, " ").trim()
-  if (!normalized) return null
-  return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
-}
-
-function storyRegistrationFailureMessage(storyError: string | null): string {
-  const sanitized = sanitizeStoryRegistrationFailure(storyError)
-  if (!sanitized) {
-    return "Story registration failed before publishing this asset"
-  }
-  if (sanitized.includes("story_royalty_config_missing")) {
-    return "Story registration failed before publishing this asset: Story royalty configuration is missing"
-  }
-  if (sanitized.includes("story_royalty_registration_unavailable")) {
-    return "Story registration failed before publishing this asset: Story registration returned no result"
-  }
-  return `Story registration failed before publishing this asset: ${sanitized.replace(/^royalty_registration_failed:/, "")}`
 }
 
 function shouldAttemptStoryRoyaltyRegistration(input: {
@@ -595,6 +580,7 @@ export async function createAssetForPost(input: {
 
   if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed" && input.requireStoryRoyaltyRegistration) {
     const sanitizedStoryError = sanitizeStoryRegistrationFailure(storyError)
+    const storyErrorClass = classifyStoryRegistrationFailure(storyError)
     console.error("[commerce] required Story registration failed", {
       community_id: input.communityId,
       post_id: input.post.post_id,
@@ -603,8 +589,11 @@ export async function createAssetForPost(input: {
       rights_basis: input.post.rights_basis ?? "none",
       primary_content_hash: resolvedPrimaryContentHash,
       upstream_asset_ref_count: input.post.upstream_asset_refs?.length ?? 0,
-      story_error: sanitizedStoryError,
+      story_error_class: storyErrorClass,
+      story_error: sanitizedStoryError, // raw detail — server logs only, never returned to the client
     })
+    // Detail is serialized into the HTTP response (errors.ts errorResponse), so it
+    // must not carry raw SDK/contract/RPC text — only the coarse class.
     throw providerUnavailable(storyRegistrationFailureMessage(storyError), {
       reason: "story_royalty_registration_failed",
       community_id: input.communityId,
@@ -614,7 +603,7 @@ export async function createAssetForPost(input: {
       rights_basis: input.post.rights_basis ?? "none",
       primary_content_hash: resolvedPrimaryContentHash,
       upstream_asset_ref_count: input.post.upstream_asset_refs?.length ?? 0,
-      story_error: sanitizedStoryError,
+      story_error_class: storyErrorClass,
     })
   }
 

@@ -397,6 +397,81 @@ function capStoryRoyaltyGasLimitField(value: unknown, cap: bigint): bigint | und
   return value
 }
 
+const STORY_REGISTRATION_MAX_ATTEMPTS = 3
+const STORY_REGISTRATION_RETRY_BASE_DELAY_MS = 400
+
+function collectStoryErrorMessages(error: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const obj = current as { message?: unknown; cause?: unknown }
+    if (typeof obj.message === "string") parts.push(obj.message)
+    else if (!(current instanceof Error)) parts.push(String(current))
+    current = obj.cause
+  }
+  return parts.join(" | ")
+}
+
+// A tx hash or a post-broadcast viem error anywhere in the chain means a
+// transaction may already be in flight; retrying the mint (allowDuplicates:true)
+// could double-mint, so such errors are never retryable.
+function storyErrorChainHasBroadcastTx(error: unknown): boolean {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const obj = current as { transactionHash?: unknown; name?: unknown; cause?: unknown }
+    if (typeof obj.transactionHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(obj.transactionHash)) {
+      return true
+    }
+    if (
+      obj.name === "TransactionExecutionError" ||
+      obj.name === "WaitForTransactionReceiptTimeoutError" ||
+      obj.name === "TransactionReceiptNotFoundError"
+    ) {
+      return true
+    }
+    current = obj.cause
+  }
+  return false
+}
+
+// Retry ONLY pre-broadcast transport/simulate failures (the observed
+// `mintAndRegisterIpAndAttachPILTerms reverted ... RPC Request failed` is a viem
+// RpcRequestError from the pre-write eth_call, so no tx was sent). Never retry
+// deterministic failures (insufficient operator funds, gas-policy rejection) or
+// anything that may have already broadcast a tx.
+export function isRetryableStoryRegistrationError(error: unknown): boolean {
+  const message = collectStoryErrorMessages(error)
+  if (/exceeds the balance|insufficient funds|story_royalty_gas_limit_exceeds_policy|funding below floor|funding_below_floor/i.test(message)) {
+    return false
+  }
+  if (storyErrorChainHasBroadcastTx(error)) return false
+  return /RPC Request failed|HTTP request failed|fetch failed|Failed to fetch|timed out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|\b(429|500|502|503|504)\b|rate.?limit|InternalRpcError|took too long|network error/i.test(message)
+}
+
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export async function withStoryRegistrationRetry<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= STORY_REGISTRATION_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      if (attempt >= STORY_REGISTRATION_MAX_ATTEMPTS || !isRetryableStoryRegistrationError(error)) {
+        throw error
+      }
+      await delayMs(STORY_REGISTRATION_RETRY_BASE_DELAY_MS * attempt)
+    }
+  }
+  throw lastError
+}
+
 function normalizeStoryRoyaltyRightsBasis(
   rightsBasis: Post["rights_basis"] | null | undefined,
 ): StoryRoyaltyRightsBasis | null {
@@ -681,24 +756,26 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
 
   if (rightsBasis === "derivative") {
-    const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset({
-      nft: {
-        type: "mint",
-        spgNftContract,
-        recipient: input.creatorWalletAddress as `0x${string}`,
-        allowDuplicates: true,
-      },
-      derivData: {
-        parentIpIds: derivativeParents!.map((parent) => parent.ipId),
-        licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
-      },
-      ipMetadata: {
-        ipMetadataURI: metadata.ipMetadataUri,
-        ipMetadataHash: metadata.ipMetadataHash,
-        nftMetadataURI: metadata.nftMetadataUri,
-        nftMetadataHash: metadata.nftMetadataHash,
-      },
-    })
+    const derivativeResponse = await withStoryRegistrationRetry(() =>
+      storyClient.ipAsset.registerDerivativeIpAsset({
+        nft: {
+          type: "mint",
+          spgNftContract,
+          recipient: input.creatorWalletAddress as `0x${string}`,
+          allowDuplicates: true,
+        },
+        derivData: {
+          parentIpIds: derivativeParents!.map((parent) => parent.ipId),
+          licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
+        },
+        ipMetadata: {
+          ipMetadataURI: metadata.ipMetadataUri,
+          ipMetadataHash: metadata.ipMetadataHash,
+          nftMetadataURI: metadata.nftMetadataUri,
+          nftMetadataHash: metadata.nftMetadataHash,
+        },
+      }),
+    )
     const derivativeIpId = derivativeResponse.ipId!
 
     return {
@@ -722,26 +799,28 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     currency: WIP_TOKEN_ADDRESS,
     royaltyPolicy,
   })
-  const originalResponse = await storyClient.ipAsset.registerIpAsset({
-    nft: {
-      type: "mint",
-      spgNftContract,
-      recipient: input.creatorWalletAddress as `0x${string}`,
-      allowDuplicates: true,
-    },
-    licenseTermsData: [
-      {
-        terms: licenseTerms,
-        maxLicenseTokens,
+  const originalResponse = await withStoryRegistrationRetry(() =>
+    storyClient.ipAsset.registerIpAsset({
+      nft: {
+        type: "mint",
+        spgNftContract,
+        recipient: input.creatorWalletAddress as `0x${string}`,
+        allowDuplicates: true,
       },
-    ],
-    ipMetadata: {
-      ipMetadataURI: metadata.ipMetadataUri,
-      ipMetadataHash: metadata.ipMetadataHash,
-      nftMetadataURI: metadata.nftMetadataUri,
-      nftMetadataHash: metadata.nftMetadataHash,
-    },
-  })
+      licenseTermsData: [
+        {
+          terms: licenseTerms,
+          maxLicenseTokens,
+        },
+      ],
+      ipMetadata: {
+        ipMetadataURI: metadata.ipMetadataUri,
+        ipMetadataHash: metadata.ipMetadataHash,
+        nftMetadataURI: metadata.nftMetadataUri,
+        nftMetadataHash: metadata.nftMetadataHash,
+      },
+    }),
+  )
 
   return {
     storyIpId: originalResponse.ipId!,

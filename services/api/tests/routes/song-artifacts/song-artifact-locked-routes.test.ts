@@ -2339,15 +2339,20 @@ describe("song artifact locked routes", () => {
     }
     expect(failedPostBody).toMatchObject({
       code: "provider_unavailable",
-      message: "Story registration failed before publishing this asset: Story royalty configuration is missing",
+      message: "This asset could not be published because Story registration is not configured. Please contact support.",
       retryable: true,
       details: {
         reason: "story_royalty_registration_failed",
         rights_basis: "derivative",
         upstream_asset_ref_count: 1,
-        story_error: "royalty_registration_failed:story_royalty_config_missing",
+        story_error_class: "config_missing",
       },
     })
+    // raw SDK/contract/RPC text must not leak to the client (logs + story_error col only).
+    // `royalty_registration_failed:` is the raw-concatenation prefix; the non-sensitive
+    // details.reason "story_royalty_registration_failed" (no colon) is fine.
+    expect(JSON.stringify(failedPostBody)).not.toContain("royalty_registration_failed:")
+    expect(JSON.stringify(failedPostBody)).not.toContain("story_royalty_config_missing")
 
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
