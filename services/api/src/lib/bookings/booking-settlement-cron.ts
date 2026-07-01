@@ -5,6 +5,8 @@ import {
   type ReconcileGlobalBookingSettlementResult,
 } from "./booking-lifecycle-service";
 import { bookingIdFromRow, resolveGlobalDueBooking, type ResolveGlobalDueBookingResult } from "./booking-settlement-evaluator";
+import { createPaymentIntentRepository, createPaymentIntentWriteRepository } from "./payment-intent-repository";
+import type { PaymentIntent } from "./types";
 
 export function isGlobalBookingSettlementCronEnabled(env: Env): boolean {
   return String(env.BOOKINGS_SETTLEMENT_CRON_ENABLED ?? "").trim().toLowerCase() === "true";
@@ -22,6 +24,8 @@ export interface GlobalBookingSettlementSweepSummary {
   settled: number;
   pending: number;
   ambiguous: number;
+  orphanRefundsChecked: number;
+  orphanRefundsConfirmed: number;
   terminal: number;
   skipped: number;
   errors: number;
@@ -39,6 +43,8 @@ export function emptyGlobalBookingSettlementSummary(enabled: boolean): GlobalBoo
     settled: 0,
     pending: 0,
     ambiguous: 0,
+    orphanRefundsChecked: 0,
+    orphanRefundsConfirmed: 0,
     terminal: 0,
     skipped: 0,
     errors: 0,
@@ -178,6 +184,48 @@ export async function processGlobalBookingSettlements(input: ProcessGlobalBookin
       nowUtc: input.nowUtc,
       confirmPollMs: [...input.confirmPollMs],
     }));
+  }
+
+  const orphanedIntents = await createPaymentIntentRepository(input.client).listOrphanedVerifiedPaymentIntents(input.nowUtc, input.maxBookings);
+  for (const intent of orphanedIntents) {
+    if (input.shouldStop()) {
+      input.summary.deadlineReached = true;
+      return;
+    }
+    input.summary.orphanRefundsChecked += 1;
+    await refundOneOrphanedPaymentIntent(input, intent);
+  }
+}
+
+async function refundOneOrphanedPaymentIntent(
+  input: ProcessGlobalBookingSettlementsInput,
+  intent: PaymentIntent,
+): Promise<void> {
+  try {
+    if (!intent.verifiedSenderAddress) throw new Error("booking_orphan_payment_verified_sender_missing");
+    const { executeGlobalBookingOrphanPaymentRefund } = await import("./booking-custody-adapter");
+    await executeGlobalBookingOrphanPaymentRefund({
+      env: input.env,
+      paymentIntentId: intent.paymentIntentId,
+      recipientAddress: intent.verifiedSenderAddress,
+      amountCents: intent.grossCents,
+      confirmPollMs: [...input.confirmPollMs],
+    });
+    await createPaymentIntentWriteRepository(input.client).markOrphanedVerifiedPaymentIntentRefunded(intent.paymentIntentId, input.nowUtc);
+    input.summary.orphanRefundsConfirmed += 1;
+  } catch (error) {
+    const { globalBookingSettlementErrorKind: custodySettlementErrorKind } = await import("./booking-custody-adapter");
+    const kind = globalSettlementErrorKind(error) ?? custodySettlementErrorKind(error);
+    if (kind === "pending") {
+      input.summary.pending += 1;
+      return;
+    }
+    if (kind === "terminal") {
+      input.summary.terminal += 1;
+      return;
+    }
+    input.summary.errors += 1;
+    logSettlementFailure("orphan_payment_refund", intent.paymentIntentId, error);
   }
 }
 

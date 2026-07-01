@@ -46,13 +46,55 @@ describe("booking settlement chain config", () => {
     expect(resolveBookingSettlementOperatorAddress(env)).toBe(new Wallet(KEY).address)
   })
 
-  test("requires an explicit booking USDC token for unknown booking chains", () => {
+  test("rejects a non-allowlisted booking settlement chain", () => {
     const env = {
       PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "999999",
       PIRATE_BOOKING_SETTLEMENT_RPC_URL: "https://custom.example",
       PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
     } as Env
 
-    expect(() => resolveBookingSettlementUsdcTokenAddress(env)).toThrow(/PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS/)
+    expect(() => resolveBookingSettlementChainId(env)).toThrow(/not an allowlisted/)
+    expect(() => resolveBookingSettlementUsdcTokenAddress(env)).toThrow(/not an allowlisted/)
+  })
+
+  test("pins the USDC token to the canonical address unless override is allowlisted", () => {
+    const base = {
+      PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_BOOKING_SETTLEMENT_RPC_URL: "https://sepolia.example",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+    }
+    const canonical = getAddress("0x036cbd53842c5426634e7929541ec2318f3dcf7e")
+    const rogue = "0x000000000000000000000000000000000000dEaD"
+
+    // A canonical override is fine.
+    expect(resolveBookingSettlementUsdcTokenAddress({ ...base, PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: canonical } as Env)).toBe(canonical)
+    // A non-canonical override is refused by default...
+    expect(() => resolveBookingSettlementUsdcTokenAddress({ ...base, PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: rogue } as Env)).toThrow(/does not match the canonical/)
+    // ...unless explicitly opted out.
+    expect(resolveBookingSettlementUsdcTokenAddress({
+      ...base,
+      PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: rogue,
+      PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "true",
+    } as Env)).toBe(getAddress(rogue))
+  })
+
+  test("refuses when the configured operator address does not derive from the signing key", () => {
+    const env = {
+      PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_BOOKING_SETTLEMENT_RPC_URL: "https://sepolia.example",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+    } as Env
+    expect(() => resolveBookingSettlementOperatorAddress(env)).toThrow(/mismatch/)
+  })
+
+  test("accepts a configured operator address that matches the signing key", () => {
+    const env = {
+      PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_BOOKING_SETTLEMENT_RPC_URL: "https://sepolia.example",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: new Wallet(KEY).address,
+    } as Env
+    expect(resolveBookingSettlementOperatorAddress(env)).toBe(new Wallet(KEY).address)
   })
 })

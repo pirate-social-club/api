@@ -274,7 +274,10 @@ export type ConfirmGlobalBookingResult =
       | "verification_in_progress"
       | "replay_mismatch"
       | "wallet_attachment_invalid"
-      | "finalization_conflict";
+      | "finalization_conflict"
+      // Verified on-chain payment, but the hold/slot expired before it could become a booking. The
+      // custody funds are NOT stranded: the verified-and-unconsumed intent is a durable refund record.
+      | "hold_expired_refund_pending";
   }
   | { ok: true; already: boolean; booking: BookingSnapshot };
 
@@ -326,16 +329,20 @@ export async function confirmGlobalBookingHold(input: {
   }
 
   await createOrGetIntent({ env: input.env, executor: input.executor, hold, nowUtc: input.nowUtc });
-  await intentRepo.expirePaymentIntentIfDue(intentId, input.nowUtc);
+  // Verify-before-expire: do NOT eagerly mark the intent expired. A real on-chain payment that lands
+  // near/after the hold TTL must be verified and then salvaged into a booking (if the slot is still
+  // held) or recorded for refund (if not) — never silently discarded. Only a genuinely UNCONFIRMED
+  // payment on an expired hold falls through to hold_expired below.
   let intent = await intentRepo.getPaymentIntent(intentId);
   if (!intent) throw new Error("payment_intent_missing");
 
   if (intent.status === "consumed") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
-  if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
-  if (intent.status === "expired") return { ok: false, reason: "hold_expired" };
   if (intent.status === "verified") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
-  if (hold.status !== "active") return { ok: false, reason: "hold_not_active" };
-  if (hold.expiresAtUtc <= input.nowUtc) return { ok: false, reason: "hold_expired" };
+  if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
+  if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
+  // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
+  // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
+  const holdExpired = hold.status !== "active" || hold.expiresAtUtc <= input.nowUtc;
 
   const claimToken = crypto.randomUUID();
   const reserved = await intentRepo.reservePaymentIntentForVerification({
@@ -370,6 +377,12 @@ export async function confirmGlobalBookingHold(input: {
   });
   if (outcome.kind === "pending") {
     await intentRepo.markPaymentIntentVerificationFailed({ paymentIntentId: intentId, claimToken, nowUtc: input.nowUtc });
+    // No CONFIRMED funds are at risk for a pending (unmined / not-found) tx. If the hold window has
+    // already closed, retire the intent as expired; otherwise let the buyer retry as the tx mines.
+    if (holdExpired) {
+      await intentRepo.expirePaymentIntentIfDue(intentId, input.nowUtc);
+      return { ok: false, reason: "hold_expired" };
+    }
     return { ok: false, reason: "payment_pending" };
   }
   if (outcome.kind === "rejected") {
@@ -428,6 +441,25 @@ async function finalizeFromVerifiedIntent(
     hostPayoutWalletAddress: settlement.payoutWalletAddress,
     nowUtc: input.nowUtc,
   });
-  if (!result.ok) return { ok: false, reason: "finalization_conflict" };
+  if (!result.ok) {
+    // A finalization-conflict on a VERIFIED intent means the slot lock / hold is no longer active — the
+    // buyer's funds are confirmed on-chain but the booking can't form. If the hold window has closed this
+    // is the paid-but-expired orphan: leave the intent verified-and-unconsumed (the durable refund
+    // record) so custody funds are refunded, never silently stranded.
+    if (result.reason === "finalization-conflict" && (hold.status !== "active" || hold.expiresAtUtc <= input.nowUtc)) {
+      logBookingConfirmIncident("paid_expired_orphan_refund_pending", intent.paymentIntentId, hold.holdId);
+      return { ok: false, reason: "hold_expired_refund_pending" };
+    }
+    return { ok: false, reason: result.reason === "replay-conflict" ? "replay_mismatch" : "finalization_conflict" };
+  }
   return { ok: true, already: result.already || intent.status === "consumed", booking: bookingSnapshot(result.booking) };
+}
+
+// Durable, alertable marker for the paid-but-expired orphan case. The verified-and-unconsumed payment
+// intent is the source of truth; this log gives ops an incident id to reconcile against.
+function logBookingConfirmIncident(code: string, paymentIntentId: string, holdId: string): void {
+  console.error(
+    "[global-booking-confirm] incident",
+    JSON.stringify({ code, paymentIntentId, holdId, incidentId: crypto.randomUUID() }),
+  );
 }

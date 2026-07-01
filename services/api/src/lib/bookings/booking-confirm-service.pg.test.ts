@@ -13,7 +13,7 @@ import {
   type BookingConfirmSqlExecutor,
 } from "./booking-confirm-service";
 import { bookingIdForHold } from "./booking-finalization-repository";
-import { paymentIntentIdForHold } from "./payment-intent-repository";
+import { createPaymentIntentRepository, paymentIntentIdForHold } from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
 const RUN = Boolean(ADMIN_URL);
@@ -300,5 +300,72 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       nowUtc: "2026-07-01T09:51:00Z",
     })).toEqual({ ok: false, reason: "host_payout_unconfigured" });
     expect((await repoDb.unsafe(`SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`, ["hold_confirm_no_payout"]) as Record<string, unknown>[])[0].n).toBe(0);
+  });
+
+  // H2: verify-before-expire. A real payment that lands after the hold TTL must be salvaged into a
+  // booking when the slot is still held — never discarded as hold_expired.
+  test("salvages a verified payment on an expired hold when the slot lock is still active", async () => {
+    await seedHold({ holdId: "hold_confirm_salvage" }); // hold/lock expire at 09:59, lock left active
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({ kind: "verified", senderAddress: BUYER, txRef: fundingTxRef }));
+
+    const result = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_salvage"),
+      holdId: "hold_confirm_salvage",
+      bookerUserId: "booker_hold_confirm_salvage",
+      fundingTxRef: "0xTX_SALVAGE",
+      walletAttachmentId: "wal_confirm_salvage",
+      nowUtc: "2026-07-01T10:05:00Z", // AFTER hold expiry
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected salvage confirm");
+    expect(result.booking.booking_id).toBe(bookingIdForHold("hold_confirm_salvage"));
+    expect(result.booking.status).toBe("confirmed");
+  });
+
+  // H2: paid-but-expired orphan. When the slot lock is gone the payment cannot become a booking, but the
+  // funds must not be silently stranded — the verified-and-unconsumed intent is picked up by the cron's
+  // orphan-refund pass.
+  test("routes a verified payment with no reclaimable slot to a durable refund record", async () => {
+    await seedHold({ holdId: "hold_confirm_orphan" });
+    await repoDb.unsafe(`UPDATE bookings.host_slot_locks SET status = 'released' WHERE hold_id = $1`, ["hold_confirm_orphan"]);
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({ kind: "verified", senderAddress: BUYER, txRef: fundingTxRef }));
+
+    const result = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_orphan"),
+      holdId: "hold_confirm_orphan",
+      bookerUserId: "booker_hold_confirm_orphan",
+      fundingTxRef: "0xTX_ORPHAN",
+      walletAttachmentId: "wal_confirm_orphan",
+      nowUtc: "2026-07-01T10:05:00Z",
+    });
+    expect(result).toEqual({ ok: false, reason: "hold_expired_refund_pending" });
+
+    // No booking created; the intent stays verified and is discoverable as an orphan to refund.
+    expect((await repoDb.unsafe(`SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`, ["hold_confirm_orphan"]) as Record<string, unknown>[])[0].n).toBe(0);
+    const intentRows = await repoDb.unsafe(`SELECT status FROM bookings.payment_intents WHERE hold_id = $1`, ["hold_confirm_orphan"]) as Record<string, unknown>[];
+    expect(intentRows[0].status).toBe("verified");
+    const orphans = await createPaymentIntentRepository(makeExecutor(repoDb)).listOrphanedVerifiedPaymentIntents("2026-07-01T10:05:00Z", 50);
+    expect(orphans.some((o) => o.holdId === "hold_confirm_orphan")).toBe(true);
+  });
+
+  // H2: an UNCONFIRMED payment on an expired hold has no funds at risk, so it retires as hold_expired.
+  test("retires an expired hold as hold_expired when the payment is still pending", async () => {
+    await seedHold({ holdId: "hold_confirm_pending_expired" });
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_pending_expired"),
+      holdId: "hold_confirm_pending_expired",
+      bookerUserId: "booker_hold_confirm_pending_expired",
+      fundingTxRef: "0xTX_PENDING_EXPIRED",
+      walletAttachmentId: "wal_confirm_pending_expired",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "hold_expired" });
   });
 });

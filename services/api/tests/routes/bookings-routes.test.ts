@@ -75,6 +75,7 @@ let cancelResult: unknown
 let startResult: unknown
 let completeResult: unknown
 let noShowResult: unknown
+let resolveByPartyResult: unknown
 let attachResult: unknown
 let heartbeatResult: unknown
 
@@ -89,6 +90,7 @@ const calls: Record<string, unknown[]> = {
   start: [],
   complete: [],
   noShow: [],
+  resolveByParty: [],
   attach: [],
   heartbeat: [],
 }
@@ -151,6 +153,7 @@ function resetMocks(): void {
   startResult = { ok: true, already: false, booking: lifecycleSnapshot }
   completeResult = { ok: true, already: false, booking: { ...lifecycleSnapshot, status: "settled" } }
   noShowResult = { ok: true, already: false, booking: { ...lifecycleSnapshot, status: "refunded" } }
+  resolveByPartyResult = { ok: true, outcome: "completed", settled: true, underReview: false, pending: false }
   attachResult = {
     ok: true,
     party: "booker",
@@ -215,6 +218,10 @@ function routeServices(): GlobalBookingRouteServices {
     noShowGlobalBooking: async (input: unknown) => {
       calls.noShow.push(input)
       return noShowResult
+    },
+    resolveGlobalBookingByParty: async (input: unknown) => {
+      calls.resolveByParty.push(input)
+      return resolveByPartyResult
     },
     startGlobalBookingSession: async (input: unknown) => {
       calls.start.push(input)
@@ -400,13 +407,11 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "not_found" })
   })
 
-  test("wires lifecycle routes to the matching global services", async () => {
+  test("wires cancel/start to their matching global services", async () => {
     const app = loadApp()
     const routeCases = [
       ["cancel", calls.cancel],
       ["start", calls.start],
-      ["complete", calls.complete],
-      ["no-show", calls.noShow],
     ] as const
 
     for (const [action, callLog] of routeCases) {
@@ -423,6 +428,49 @@ describe("/bookings routes", () => {
         actorUserId: "actor_route",
       })
     }
+  })
+
+  test("routes /complete and /no-show through attendance-based settlement, not party claims", async () => {
+    const app = loadApp()
+    for (const action of ["complete", "no-show"] as const) {
+      const res = await app.request(`http://pirate.test/bookings/bkg_route/${action}`, {
+        method: "POST",
+        headers: adminHeaders({ "content-type": "application/json" }),
+        body: "{}",
+      }, env())
+      expect(res.status).toBe(200)
+      expect(await json(res)).toMatchObject({ outcome: "completed", settled: true, under_review: false })
+    }
+    // Both endpoints funnel into the single attendance evaluator; the self-attested complete/no-show
+    // services are no longer reachable from the routes.
+    expect(calls.resolveByParty).toHaveLength(2)
+    expect(calls.complete).toHaveLength(0)
+    expect(calls.noShow).toHaveLength(0)
+    expect(calls.resolveByParty[0]).toMatchObject({ bookingId: "bkg_route", actorUserId: "actor_route" })
+  })
+
+  test("returns 202 when attendance settlement is pending on-chain", async () => {
+    const app = loadApp()
+    resolveByPartyResult = { ok: true, outcome: "completed", settled: true, underReview: false, pending: true }
+    const res = await app.request("http://pirate.test/bookings/bkg_route/complete", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: "{}",
+    }, env())
+    expect(res.status).toBe(202)
+    expect(await json(res)).toMatchObject({ settlement_pending: true })
+  })
+
+  test("maps session_not_ended to 409 (no premature settlement)", async () => {
+    const app = loadApp()
+    resolveByPartyResult = { ok: false, reason: "session_not_ended" }
+    const res = await app.request("http://pirate.test/bookings/bkg_route/no-show", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: "{}",
+    }, env())
+    expect(res.status).toBe(409)
+    expect(await json(res)).toMatchObject({ error: "session_not_ended" })
   })
 
   test("attaches and heartbeats booking sessions", async () => {

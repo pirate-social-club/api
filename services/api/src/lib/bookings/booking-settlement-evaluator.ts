@@ -139,6 +139,67 @@ export async function resolveGlobalDueBooking(input: {
   }
 }
 
+export type ManualGlobalBookingSettlementResult =
+  | { ok: false; reason: "not_found" | "not_settleable" | "session_not_ended" | "settlement_failed" }
+  | { ok: true; outcome: AttendanceOutcome | "skipped" | "settling"; settled: boolean; underReview: boolean; pending: boolean };
+
+// Party-triggered settlement that is DECIDED BY ATTENDANCE, never by the caller's claim. Manual
+// /complete and /no-show route through here: once the booked window has closed, the recorded attendance
+// (heartbeats clipped to the slot) determines the outcome exactly as the settlement cron would, and
+// genuine ambiguity is parked in settlement review with NO automatic money movement. This removes the
+// prior first-mover-wins path where either party could unilaterally finalize funds in their own favor.
+export async function resolveGlobalBookingByParty(input: {
+  env: Env;
+  executor: GlobalSettlementExecutor;
+  bookingId: string;
+  actorUserId: string;
+  nowUtc: string;
+  config?: AttendanceConfig;
+  confirmPollMs?: number[];
+}): Promise<ManualGlobalBookingSettlementResult> {
+  const booking = await loadDueBooking(input.executor, input.bookingId);
+  // Non-parties are told "not found" — consistent with the rest of the booking routes (no existence leak).
+  if (!booking || (input.actorUserId !== booking.hostUserId && input.actorUserId !== booking.bookerUserId)) {
+    return { ok: false, reason: "not_found" };
+  }
+  if (!RESOLVABLE_STATES.has(booking.status)) return { ok: false, reason: "not_settleable" };
+  // Attendance can only be judged after the full window has elapsed; before then the cron would not act
+  // either. This is the gate that replaces the old "after slot_start + grace" self-attested settlement.
+  if (Date.parse(input.nowUtc) < Date.parse(booking.slotEndUtc)) return { ok: false, reason: "session_not_ended" };
+
+  try {
+    const result = await resolveGlobalDueBooking({
+      env: input.env,
+      executor: input.executor,
+      bookingId: input.bookingId,
+      nowUtc: input.nowUtc,
+      config: input.config,
+      confirmPollMs: input.confirmPollMs,
+    });
+    return {
+      ok: true,
+      outcome: result.outcome,
+      settled: result.acted,
+      underReview: result.outcome === "ambiguous",
+      pending: false,
+    };
+  } catch (error) {
+    const { globalBookingSettlementErrorKind } = await import("./booking-custody-adapter");
+    const kind = globalBookingSettlementErrorKind(error);
+    if (kind === "pending") {
+      // The booking already transitioned to its intent state; the on-chain effect is in flight and the
+      // settlement cron's resume pass will finish it idempotently. Report the intent outcome, not a 500.
+      const latest = await loadDueBooking(input.executor, input.bookingId);
+      const outcome = (latest?.status === "completed" || latest?.status === "no_show_host" || latest?.status === "no_show_booker")
+        ? (latest.status as AttendanceOutcome)
+        : "settling";
+      return { ok: true, outcome, settled: true, underReview: false, pending: true };
+    }
+    if (kind === "terminal") return { ok: false, reason: "settlement_failed" };
+    throw error;
+  }
+}
+
 export function bookingIdFromRow(row: QueryResultRow): string {
   return text(row.booking_id);
 }

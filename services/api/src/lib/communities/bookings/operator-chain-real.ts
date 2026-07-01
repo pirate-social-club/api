@@ -2,7 +2,7 @@ import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethe
 
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
-import { parseExpectedEvmAddress } from "../../evm-signer"
+import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import {
   resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorPrivateKey,
@@ -24,8 +24,20 @@ const ERC20_ABI = [
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 
 function resolveConfig(env: Env): { privateKey: string; rpcUrl: string; chainId: number; usdc: string } {
+  const privateKey = resolveBookingSettlementOperatorPrivateKey(env)
+  // Last-line guard on the signing path: if an operator address is configured (it names the nonce DO),
+  // the key we are about to sign with MUST derive it — otherwise refuse to sign rather than broadcast
+  // from a wallet whose nonce is being tracked under a different DO.
+  const expectedOperator = parseExpectedEvmAddress(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS)
+  if (expectedOperator) {
+    assertPrivateKeyMatchesExpectedAddress({
+      privateKey,
+      expectedAddress: expectedOperator,
+      expectedField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS",
+    })
+  }
   return {
-    privateKey: resolveBookingSettlementOperatorPrivateKey(env),
+    privateKey,
     rpcUrl: resolveBookingSettlementRpcUrl(env),
     chainId: resolveBookingSettlementChainId(env),
     usdc: resolveBookingSettlementUsdcTokenAddress(env),

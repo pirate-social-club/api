@@ -160,6 +160,46 @@ export async function executeGlobalBookingOperatorEffect(
   throw settlementError("Booking settlement confirmation pending (retryable)", "pending");
 }
 
+export async function executeGlobalBookingOrphanPaymentRefund(
+  ctx: {
+    env: Env;
+    paymentIntentId: string;
+    recipientAddress: string;
+    amountCents: number;
+    confirmPollMs?: number[];
+  },
+): Promise<{ txRef: string }> {
+  if (ctx.amountCents <= 0) throw badRequestError("Booking settlement amount must be positive");
+  const recipient = normalizeRecipientAddress(ctx.recipientAddress);
+  const req: OperatorSettleRequest = {
+    communityId: "global",
+    bookingId: `payment_intent:${ctx.paymentIntentId}`,
+    effectKind: "booking_refund",
+    amountCents: ctx.amountCents,
+    recipientAddress: recipient,
+  };
+
+  let settled = await coordinator(ctx.env).settle(req);
+  for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
+    settled = await coordinator(ctx.env).reconcile(req);
+  }
+  if (settled.state === "confirmed") return { txRef: settled.txHash! };
+  if (settled.state === "replaced" || settled.state === "failed_onchain") {
+    throw settlementError(`Booking orphan payment refund terminal at coordinator (${settled.state}); reconciliation required`, "terminal");
+  }
+  if (settled.state === "reserving" || settled.state === "failed_preparation") {
+    throw settlementError("Booking orphan payment refund is not yet broadcast (retryable)", "pending");
+  }
+  if (!settled.txHash) throw conflictError("Booking orphan payment refund broadcast missing transaction hash");
+
+  const confirmed = await pollConfirm(ctx, req, settled.txHash);
+  if (confirmed.state === "confirmed") return { txRef: confirmed.txHash ?? settled.txHash };
+  if (confirmed.state === "failed_onchain" || confirmed.state === "replaced") {
+    throw settlementError(`Booking orphan payment refund terminal at coordinator (${confirmed.state}); reconciliation required`, "terminal");
+  }
+  throw settlementError("Booking orphan payment refund confirmation pending (retryable)", "pending");
+}
+
 async function mirrorCoordinator(ctx: GlobalBookingOperatorEffectContext, effect: GlobalBookingOperatorEffect, result: OperatorSettleResult): Promise<void> {
   const mirrored = await createSettlementEffectWriteRepository(ctx.executor).mirrorSettlementCoordinatorEffect({
     idempotencyKey: effect.idempotencyKey,
@@ -177,7 +217,7 @@ async function ledgerConfirm(ctx: GlobalBookingOperatorEffectContext, effect: Gl
   if (!confirmed) throw conflictError("Booking settlement confirmation transaction reference mismatch");
 }
 
-async function pollConfirm(ctx: GlobalBookingOperatorEffectContext, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
+async function pollConfirm(ctx: { env: Env; confirmPollMs?: number[] }, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
   const plan = ctx.confirmPollMs ?? confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS;
   let result = await coordinator(ctx.env).confirm(req, txHash);
   for (let i = 0; result.state === "broadcast" && i < plan.length; i++) {

@@ -199,6 +199,43 @@ async function getPaymentIntentByHold(exec: PaymentIntentSqlExecutor, holdId: st
   return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
 }
 
+// Paid-but-expired orphans: a verified on-chain payment whose hold window has closed and which was never
+// consumed into a booking. These hold real custody funds owed back to the payer. `olderThanUtc` should be
+// now minus a small grace so freshly-verified intents mid-confirm are not misread as orphans.
+async function listOrphanedVerifiedPaymentIntents(
+  exec: PaymentIntentSqlExecutor,
+  olderThanUtc: string,
+  limit: number,
+): Promise<PaymentIntent[]> {
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS} FROM bookings.payment_intents
+          WHERE status = 'verified' AND hold_expires_at <= ?1::timestamptz
+          ORDER BY updated_at ASC, payment_intent_id ASC
+          LIMIT ?2`,
+    args: [isoUtcToArg(olderThanUtc), intToArg("limit", limit)],
+  });
+  return res.rows.map(decodePaymentIntent);
+}
+
+async function markOrphanedVerifiedPaymentIntentRefunded(
+  exec: PaymentIntentSqlExecutor,
+  paymentIntentId: string,
+  nowUtc: string,
+): Promise<PaymentIntent | null> {
+  const res = await exec.execute({
+    sql: `UPDATE bookings.payment_intents
+          SET status = 'expired',
+              version = version + 1,
+              updated_at = ?2::timestamptz
+          WHERE payment_intent_id = ?1
+            AND status = 'verified'
+            AND consumed_at IS NULL
+          RETURNING ${COLUMNS}`,
+    args: [textToArg("paymentIntentId", paymentIntentId), isoUtcToArg(nowUtc)],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
 async function createOrGetPaymentIntent(
   exec: PaymentIntentSqlExecutor,
   rawInput: CreatePaymentIntentInput,
@@ -389,6 +426,7 @@ async function consumePaymentIntent(
 export interface PaymentIntentRepository {
   getPaymentIntent(paymentIntentId: string): Promise<PaymentIntent | null>;
   getPaymentIntentByHold(holdId: string): Promise<PaymentIntent | null>;
+  listOrphanedVerifiedPaymentIntents(olderThanUtc: string, limit: number): Promise<PaymentIntent[]>;
 }
 
 export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
@@ -399,12 +437,14 @@ export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
   markPaymentIntentRejected(input: ClaimPaymentIntentInput): Promise<PaymentIntent | null>;
   expirePaymentIntentIfDue(paymentIntentId: string, nowUtc: string): Promise<PaymentIntent | null>;
   consumePaymentIntent(paymentIntentId: string, holdId: string, nowUtc: string): Promise<PaymentIntent | null>;
+  markOrphanedVerifiedPaymentIntentRefunded(paymentIntentId: string, nowUtc: string): Promise<PaymentIntent | null>;
 }
 
 function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepository {
   return {
     getPaymentIntent: (paymentIntentId) => getPaymentIntent(executor, paymentIntentId),
     getPaymentIntentByHold: (holdId) => getPaymentIntentByHold(executor, holdId),
+    listOrphanedVerifiedPaymentIntents: (olderThanUtc, limit) => listOrphanedVerifiedPaymentIntents(executor, olderThanUtc, limit),
   };
 }
 
@@ -418,6 +458,7 @@ function buildWriteRepository(executor: PaymentIntentSqlExecutor): PaymentIntent
     markPaymentIntentRejected: (input) => markPaymentIntentRejected(executor, input),
     expirePaymentIntentIfDue: (paymentIntentId, nowUtc) => expirePaymentIntentIfDue(executor, paymentIntentId, nowUtc),
     consumePaymentIntent: (paymentIntentId, holdId, nowUtc) => consumePaymentIntent(executor, paymentIntentId, holdId, nowUtc),
+    markOrphanedVerifiedPaymentIntentRefunded: (paymentIntentId, nowUtc) => markOrphanedVerifiedPaymentIntentRefunded(executor, paymentIntentId, nowUtc),
   };
 }
 

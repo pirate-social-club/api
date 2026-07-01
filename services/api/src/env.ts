@@ -154,6 +154,8 @@ export type Env = {
   PIRATE_BOOKING_SETTLEMENT_RPC_URL?: string
   PIRATE_BOOKING_SETTLEMENT_CHAIN_ID?: string
   PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
+  // Opt out of the canonical-USDC pin (only honor a non-canonical token override when "true").
+  PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   // Caps RPC receipt waits for routed checkout funding confirmation. Paid
   // handle claims can be retried with the same funding_tx_ref after timeout.
   // Use 15000-30000 for pilot smoke.

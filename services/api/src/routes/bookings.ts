@@ -24,6 +24,7 @@ import {
   resolveGlobalBookingSettlementReview as realResolveGlobalBookingSettlementReview,
   startGlobalBookingSession as realStartGlobalBookingSession,
 } from "../lib/bookings/booking-lifecycle-service"
+import { resolveGlobalBookingByParty as realResolveGlobalBookingByParty } from "../lib/bookings/booking-settlement-evaluator"
 import {
   getGlobalBookingSettlementReview as realGetGlobalBookingSettlementReview,
   getGlobalBookingForParty as realGetGlobalBookingForParty,
@@ -68,6 +69,7 @@ export type GlobalBookingRouteServices = {
   startGlobalBookingSession: typeof realStartGlobalBookingSession
   completeGlobalBooking: typeof realCompleteGlobalBooking
   noShowGlobalBooking: typeof realNoShowGlobalBooking
+  resolveGlobalBookingByParty: typeof realResolveGlobalBookingByParty
   attachGlobalBookingSession: typeof realAttachGlobalBookingSession
   heartbeatGlobalBookingSession: typeof realHeartbeatGlobalBookingSession
 }
@@ -88,6 +90,7 @@ const realServices: GlobalBookingRouteServices = {
   startGlobalBookingSession: realStartGlobalBookingSession,
   completeGlobalBooking: realCompleteGlobalBooking,
   noShowGlobalBooking: realNoShowGlobalBooking,
+  resolveGlobalBookingByParty: realResolveGlobalBookingByParty,
   attachGlobalBookingSession: realAttachGlobalBookingSession,
   heartbeatGlobalBookingSession: realHeartbeatGlobalBookingSession,
 }
@@ -127,6 +130,12 @@ function sourceCommunityIdFromBody(value: unknown): string | null {
 
 function conflictOrNotFound(reason: string): 404 | 409 {
   return reason === "not_found" || reason === "hold_not_found" ? 404 : 409
+}
+
+function settlementReasonStatus(reason: "not_found" | "not_settleable" | "session_not_ended" | "settlement_failed"): 404 | 409 | 502 {
+  if (reason === "not_found") return 404
+  if (reason === "settlement_failed") return 502 // on-chain terminal failure; the cron/operator review will follow up
+  return 409
 }
 
 async function slotsHandler(c: BookingContext) {
@@ -367,29 +376,37 @@ bookings.post("/:bookingId/start", async (c) => {
   return c.json({ booking: result.booking, already_live: result.already }, 200)
 })
 
-bookings.post("/:bookingId/complete", async (c) => {
-  const result = await routeServices().completeGlobalBooking({
+// /complete and /no-show no longer let a party assert an outcome and move money. Both trigger the SAME
+// attendance-based resolution (only after the slot window closes): recorded heartbeats decide
+// completed / no_show_*, and genuine ambiguity is parked in operator settlement review with no automatic
+// funds. Kept as two paths for client compatibility; the server decides the outcome, not the caller.
+async function resolveByAttendanceHandler(c: BookingContext) {
+  const bookingId = routeParam(c, "bookingId")
+  const actorUserId = c.get("actor").userId
+  const result = await routeServices().resolveGlobalBookingByParty({
     env: c.env,
     executor: executor(c),
-    bookingId: routeParam(c, "bookingId"),
-    actorUserId: c.get("actor").userId,
+    bookingId,
+    actorUserId,
     nowUtc: new Date().toISOString(),
   })
-  if (!result.ok) return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
-  return c.json({ booking: result.booking, already_settled: result.already }, 200)
-})
+  if (!result.ok) return c.json({ error: result.reason }, settlementReasonStatus(result.reason))
+  const booking = await routeServices().getGlobalBookingForParty({
+    executor: executor(c),
+    bookingId,
+    actorUserId,
+  })
+  return c.json({
+    booking,
+    outcome: result.outcome,
+    settled: result.settled,
+    under_review: result.underReview,
+    settlement_pending: result.pending,
+  }, result.pending ? 202 : 200)
+}
 
-bookings.post("/:bookingId/no-show", async (c) => {
-  const result = await routeServices().noShowGlobalBooking({
-    env: c.env,
-    executor: executor(c),
-    bookingId: routeParam(c, "bookingId"),
-    actorUserId: c.get("actor").userId,
-    nowUtc: new Date().toISOString(),
-  })
-  if (!result.ok) return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
-  return c.json({ booking: result.booking, already_resolved: result.already }, 200)
-})
+bookings.post("/:bookingId/complete", resolveByAttendanceHandler)
+bookings.post("/:bookingId/no-show", resolveByAttendanceHandler)
 
 bookings.post("/:bookingId/session/attach", async (c) => {
   const result = await routeServices().attachGlobalBookingSession({
