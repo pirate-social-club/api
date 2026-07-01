@@ -55,7 +55,6 @@ const BINDING = {
   shardWorkerId: "shard-1",
   bindingName: "DB_CMTY_PILOT",
   region: "enam",
-  tursoDatabaseBindingId: null,
   decommissionedAt: null,
 } as ResolvedCommunityBinding
 

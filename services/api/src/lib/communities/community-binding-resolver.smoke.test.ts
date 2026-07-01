@@ -142,7 +142,7 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     })
   }
 
-  test("provision -> route read (d1) -> remove binding -> fallback (turso) -> decommission", async () => {
+  test("provision -> route read (d1) -> legacy route metadata -> decommission", async () => {
     const clock = makeClock()
     const resolver = new CommunityBindingResolver({ now: clock.now })
 
@@ -154,13 +154,13 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     expect(d1Binding.backend).toBe("d1")
     expect(d1Binding.shardWorkerId).toBe(SHARD_WORKER)
     expect(d1Binding.bindingName).toBe(BINDING_NAME)
-    expect(d1Binding.tursoDatabaseBindingId).toBeNull()
 
     const shard = makeShard([SYNTHETIC_COMMUNITY], libsqlD1Stub(communityDb))
     const read = await shard.read(d1Binding.communityId, "SELECT id, title FROM posts WHERE id = ?1", ["post_1"])
     expect(read.rows).toEqual([{ id: "post_1", title: "hello from d1" }])
 
-    // 3. remove binding: routing flips back to turso (the migration plan's fallback)
+    // 3. legacy route metadata can still be resolved, but there is no Turso
+    // dispatch path in the API read/write router after the D1 cutover.
     await cp.execute({
       sql: `
         UPDATE community_database_routing
@@ -172,11 +172,10 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     })
     resolver.invalidate(SYNTHETIC_COMMUNITY)
 
-    // 4. route fallback: resolver now reports turso
+    // 4. resolver now reports the legacy backend shape
     const tursoBinding = await resolver.resolve(cp, SYNTHETIC_COMMUNITY)
     expect(tursoBinding.backend).toBe("turso")
     expect(tursoBinding.shardWorkerId).toBeNull()
-    expect(tursoBinding.tursoDatabaseBindingId).toBe("tdb_synthetic")
 
     // 5. decommission
     await cp.execute({

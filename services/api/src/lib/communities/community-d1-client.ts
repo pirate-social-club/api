@@ -145,6 +145,9 @@ class ReadThroughD1Transaction implements Transaction {
 }
 
 export function makeCommunityD1Client(shard: ShardRpc, binding: ResolvedCommunityBinding): Client {
+  if (binding.backend !== "d1") {
+    throw new HttpError(500, "d1_backend_not_provisioned", `Community ${binding.communityId} does not route to d1`)
+  }
   const bindingName = binding.bindingName
   if (!bindingName) {
     throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)

@@ -85,13 +85,10 @@ describe("routeCommunityRead", () => {
       calls.push(`shard:${b.bindingName}`)
       return stubReadClient("d1")
     }
-    const openTursoReadClient: CommunityReadInvoker = async () => {
-      throw new Error("turso should not be called")
-    }
     const resolver = new CommunityBindingResolver()
 
     const { binding, client } = await routeCommunityRead(
-      { resolver, controlPlane: cp, openShardReadClient, openTursoReadClient },
+      { resolver, controlPlane: cp, openShardReadClient },
       COMMUNITY,
     )
 
@@ -100,25 +97,37 @@ describe("routeCommunityRead", () => {
     expect((await client.execute("SELECT 1")).rows).toEqual([{ served_by: "d1" }])
   })
 
-  test("turso backend dispatches to the turso shim read client", async () => {
+  test("turso backend is still opened through the shard invoker and fails there", async () => {
+    await insertRow({ backend: "turso", tursoBindingId: "tdb_1" })
+    const openShardReadClient: CommunityReadInvoker = async () => {
+      throw new HttpError(500, "d1_backend_not_provisioned", "non-d1 route", true)
+    }
+    const resolver = new CommunityBindingResolver()
+
+    await expect(
+      routeCommunityRead(
+        { resolver, controlPlane: cp, openShardReadClient },
+        COMMUNITY,
+      ),
+    ).rejects.toMatchObject({ code: "d1_backend_not_provisioned" })
+  })
+
+  test("turso route metadata can still be resolved but is not dispatched to a Turso client", async () => {
     await insertRow({ backend: "turso", tursoBindingId: "tdb_1" })
     const calls: string[] = []
-    const openShardReadClient: CommunityReadInvoker = async () => {
-      throw new Error("shard should not be called")
-    }
-    const openTursoReadClient: CommunityReadInvoker = async (b) => {
-      calls.push(`turso:${b.tursoDatabaseBindingId}`)
-      return stubReadClient("turso")
+    const openShardReadClient: CommunityReadInvoker = async (b) => {
+      calls.push(`${b.backend}:${b.bindingName ?? "no-binding"}`)
+      return stubReadClient("d1")
     }
     const resolver = new CommunityBindingResolver()
 
     const { binding } = await routeCommunityRead(
-      { resolver, controlPlane: cp, openShardReadClient, openTursoReadClient },
+      { resolver, controlPlane: cp, openShardReadClient },
       COMMUNITY,
     )
 
     expect(binding.backend).toBe("turso")
-    expect(calls).toEqual(["turso:tdb_1"])
+    expect(calls).toEqual(["turso:no-binding"])
   })
 
   test("a stale-binding error invalidates the cache so the next request re-resolves", async () => {
@@ -133,8 +142,7 @@ describe("routeCommunityRead", () => {
       }
       return stubReadClient(`d1:${b.bindingName}`)
     }
-    const openTursoReadClient: CommunityReadInvoker = async () => stubReadClient("turso")
-    const deps = { resolver, controlPlane: cp, openShardReadClient: flakyShard, openTursoReadClient }
+    const deps = { resolver, controlPlane: cp, openShardReadClient: flakyShard }
 
     await expect(routeCommunityRead(deps, COMMUNITY)).rejects.toMatchObject({ code: "binding_stale" })
 
@@ -160,8 +168,7 @@ describe("routeCommunityRead", () => {
       }
       return stubReadClient(`d1:${b.bindingName}`)
     }
-    const openTursoReadClient: CommunityReadInvoker = async () => stubReadClient("turso")
-    const deps = { resolver, controlPlane: cp, openShardReadClient: flakyShard, openTursoReadClient }
+    const deps = { resolver, controlPlane: cp, openShardReadClient: flakyShard }
 
     await expect(routeCommunityRead(deps, COMMUNITY)).rejects.toMatchObject({ code: "binding_unreachable" })
 
@@ -187,7 +194,7 @@ describe("routeCommunityRead", () => {
 
     await expect(
       routeCommunityRead(
-        { resolver, controlPlane: cp, openShardReadClient: invoker, openTursoReadClient: invoker },
+        { resolver, controlPlane: cp, openShardReadClient: invoker },
         COMMUNITY,
       ),
     ).rejects.toMatchObject({ status: 410, code: "community_decommissioned" })
@@ -199,10 +206,9 @@ describe("routeCommunityRead", () => {
     const openShardReadClient: CommunityReadInvoker = async () => {
       throw new Error("should not dispatch")
     }
-    const openTursoReadClient = openShardReadClient
 
     await expect(
-      routeCommunityRead({ resolver, controlPlane: cp, openShardReadClient, openTursoReadClient }, "cmty_absent"),
+      routeCommunityRead({ resolver, controlPlane: cp, openShardReadClient }, "cmty_absent"),
     ).rejects.toMatchObject({ code: "community_not_found" })
   })
 })

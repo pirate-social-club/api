@@ -12,7 +12,6 @@ import {
  * `resolve` reads the control-plane `community_database_routing` directory,
  * caches the result, and returns the routing target the caller dispatches on.
  * The caller (router) is responsible for the actual dispatch on `backend`:
- *   - `turso`: invoke the Turso shim with the community id.
  *   - `d1`: invoke the shard service binding with `shardWorkerId` + `bindingName`.
  *
  * Caching follows the design's dual-TTL rule: a 60s TTL for live routing entries
@@ -27,7 +26,6 @@ export type ResolvedCommunityBinding = {
   shardWorkerId: string | null
   bindingName: string | null
   region: string | null
-  tursoDatabaseBindingId: string | null
   decommissionedAt: string | null
 }
 
@@ -108,7 +106,6 @@ export class CommunityBindingResolver {
       shardWorkerId: row.shard_worker_id,
       bindingName: row.binding_name,
       region: row.region,
-      tursoDatabaseBindingId: row.turso_database_binding_id,
       decommissionedAt: row.decommissioned_at,
     }
 

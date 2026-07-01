@@ -17,18 +17,14 @@ function isStaleBindingError(error: unknown): boolean {
 }
 
 /**
- * Router read path (Phase 0.1). Composes the binding resolver with backend
+ * Router read path. Composes the binding resolver with backend
  * dispatch — the documented hot path for a community-touching read:
  *
  *   1. resolve the binding from the control-plane directory (cached)
- *   2. dispatch on backend:
- *        - `d1`:    open the shard read client (real impl: shard service binding)
- *        - `turso`: open the Turso shim read client
+ *   2. open the shard read client through the service binding
  *   3. on a binding error, invalidate the cache one-shot and rethrow
  *
- * The two invokers are injected seams. In production they call out to the shard
- * Worker / Turso shim over service bindings; in tests they are backed by the
- * D1 read adapter or a libSQL handle. This boundary owns dispatch and cache
+ * The shard invoker is injected for tests. This boundary owns cache
  * invalidation only — it does not own the binding's lifecycle (the shard does).
  */
 export type CommunityReadInvoker = (binding: ResolvedCommunityBinding) => Promise<ReadClient>
@@ -37,7 +33,6 @@ export type CommunityReadRouterDeps = {
   resolver: CommunityBindingResolver
   controlPlane: DbExecutor
   openShardReadClient: CommunityReadInvoker
-  openTursoReadClient: CommunityReadInvoker
 }
 
 export type RoutedCommunityRead = {
@@ -51,10 +46,7 @@ export async function routeCommunityRead(
 ): Promise<RoutedCommunityRead> {
   const binding = await deps.resolver.resolve(deps.controlPlane, communityId)
   try {
-    const client =
-      binding.backend === "d1"
-        ? await deps.openShardReadClient(binding)
-        : await deps.openTursoReadClient(binding)
+    const client = await deps.openShardReadClient(binding)
     return { binding, client }
   } catch (error) {
     // Only drop the cache when the directory pointed at a binding the backend

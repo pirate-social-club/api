@@ -25,8 +25,6 @@ export type Env = {
   TURSO_COMMUNITY_DB_WRAP_KEY?: string
   TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
-  /** Phase-0 flag: route community reads through the routing directory. "true" enables; default off. */
-  COMMUNITY_READ_ROUTING_ENABLED?: string
   /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
   COMMUNITY_D1_SHARD?: ShardRpc
   /**

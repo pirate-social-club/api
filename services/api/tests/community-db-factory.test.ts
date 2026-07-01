@@ -6,7 +6,6 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createClient } from "@libsql/client"
 import { openCommunityDb, withRequestCommunityDbClients } from "../src/lib/communities/community-db-factory"
-import { encryptCommunityDbCredential } from "../src/lib/communities/community-db-credential-crypto"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
@@ -264,8 +263,7 @@ async function seedPostWithComment(databasePath: string): Promise<void> {
 }
 
 describe("openCommunityDb", () => {
-  test("does not run local migrations for remote provisioned community databases", async () => {
-    const wrapKey = "11".repeat(32)
+  test("refuses remote provisioned community database bindings", async () => {
     const databaseUrl = "libsql://main-cmt-remote-test-pirate-prod.aws-us-east-1.turso.io"
     const now = new Date().toISOString()
     const repo = {
@@ -289,198 +287,13 @@ describe("openCommunityDb", () => {
         }
       },
       async getActiveCommunityDbCredential() {
-        return {
-          community_db_credential_id: "cdc_remote",
-          community_database_binding_id: "cdb_remote",
-          credential_kind: "database_token",
-          token_name: "worker-cmt_remote-v1",
-          encrypted_token: encryptCommunityDbCredential({
-            plaintextToken: "remote-token",
-            wrapKey,
-          }),
-          encryption_key_version: 1,
-          token_scope: "database",
-          status: "active",
-          issued_at: now,
-          invalidated_at: null,
-          expires_at: null,
-          created_at: now,
-          updated_at: now,
-        }
+        throw new Error("credentials should not be read for remote bindings")
       },
     } satisfies CommunityDatabaseBindingRepository
 
-    let ensureCalls = 0
-    let ensureLockColumnCalls = 0
-    let ensureLiveRoomTableCalls = 0
-    let ensureSongTitleColumnCalls = 0
-    let ensureGuestAuthorshipCalls = 0
-    let ensureVinylReleaseColumnCalls = 0
-    const db = await openCommunityDb(
-      {
-        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
-      },
-      repo,
-      "cmt_remote",
-      {
-        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
-        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
-        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
-        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
-        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
-        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
-      },
+    await expect(openCommunityDb({}, repo, "cmt_remote")).rejects.toThrow(
+      "Remote community database bindings are no longer opened through openCommunityDb",
     )
-
-    expect(db.databaseUrl).toBe(databaseUrl)
-    db.close()
-
-    const secondDb = await openCommunityDb(
-      {
-        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
-      },
-      repo,
-      "cmt_remote",
-      {
-        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
-        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
-        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
-        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
-        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
-        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
-      },
-    )
-
-    expect(secondDb.databaseUrl).toBe(databaseUrl)
-    secondDb.close()
-    expect(ensureCalls).toBe(1)
-    expect(ensureLockColumnCalls).toBe(1)
-    expect(ensureGuestAuthorshipCalls).toBe(1)
-    expect(ensureSongTitleColumnCalls).toBe(1)
-    expect(ensureVinylReleaseColumnCalls).toBe(1)
-    expect(ensureLiveRoomTableCalls).toBe(1)
-  })
-
-  test("continues opening remote community databases when runtime preflight fails", async () => {
-    const wrapKey = "11".repeat(32)
-    const databaseUrl = "libsql://main-cmt-remote-preflight-fail-pirate-prod.aws-us-east-1.turso.io"
-    const now = new Date().toISOString()
-    const repo = {
-      async getPrimaryCommunityDatabaseBinding() {
-        return {
-          community_database_binding_id: "cdb_remote_preflight_fail",
-          community_id: "cmt_remote_preflight_fail",
-          binding_role: "primary",
-          organization_slug: "pirate-prod",
-          group_name: "region-aws-us-east-1",
-          group_id: "grp_remote",
-          database_name: "main-cmt-remote-preflight-fail",
-          database_id: "db_remote",
-          database_url: databaseUrl,
-          location: "aws-us-east-1",
-          requires_credentials: true,
-          status: "active",
-          transferred_at: null,
-          created_at: now,
-          updated_at: now,
-        }
-      },
-      async getActiveCommunityDbCredential() {
-        return {
-          community_db_credential_id: "cdc_remote_preflight_fail",
-          community_database_binding_id: "cdb_remote_preflight_fail",
-          credential_kind: "database_token",
-          token_name: "worker-cmt_remote_preflight_fail-v1",
-          encrypted_token: encryptCommunityDbCredential({
-            plaintextToken: "remote-token",
-            wrapKey,
-          }),
-          encryption_key_version: 1,
-          token_scope: "database",
-          status: "active",
-          issued_at: now,
-          invalidated_at: null,
-          expires_at: null,
-          created_at: now,
-          updated_at: now,
-        }
-      },
-    } satisfies CommunityDatabaseBindingRepository
-
-    let ensureCalls = 0
-    let ensureLockColumnCalls = 0
-    let ensureLiveRoomTableCalls = 0
-    let ensureSongTitleColumnCalls = 0
-    let ensureGuestAuthorshipCalls = 0
-    let ensureVinylReleaseColumnCalls = 0
-    const db = await openCommunityDb(
-      {
-        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
-      },
-      repo,
-      "cmt_remote_preflight_fail",
-      {
-        ensureRemoteMembershipStateIndexes: async () => {
-          ensureCalls += 1
-          throw Object.assign(new Error("SQLite error: init_step failed: out of memory"), {
-            code: "SQLITE_NOMEM",
-          })
-        },
-        ensureRemoteThreadCommentLockColumns: async () => {
-          ensureLockColumnCalls += 1
-          throw Object.assign(new Error("SQLite error: out of memory"), {
-            code: "SQLITE_NOMEM",
-          })
-        },
-        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
-        ensureRemotePostSongTitleColumn: async () => {
-          ensureSongTitleColumnCalls += 1
-          throw Object.assign(new Error("SQLite error: out of memory"), {
-            code: "SQLITE_NOMEM",
-          })
-        },
-        ensureRemoteCommerceVinylReleaseColumns: async () => {
-          ensureVinylReleaseColumnCalls += 1
-          throw Object.assign(new Error("SQLite error: out of memory"), {
-            code: "SQLITE_NOMEM",
-          })
-        },
-        ensureRemoteLiveRoomTables: async () => {
-          ensureLiveRoomTableCalls += 1
-          throw Object.assign(new Error("SQLite error: out of memory"), {
-            code: "SQLITE_NOMEM",
-          })
-        },
-      },
-    )
-
-    expect(db.databaseUrl).toBe(databaseUrl)
-    db.close()
-
-    const secondDb = await openCommunityDb(
-      {
-        TURSO_COMMUNITY_DB_WRAP_KEY: wrapKey,
-      },
-      repo,
-      "cmt_remote_preflight_fail",
-      {
-        ensureRemoteMembershipStateIndexes: async () => { ensureCalls += 1 },
-        ensureRemoteThreadCommentLockColumns: async () => { ensureLockColumnCalls += 1 },
-        ensureRemoteCommentGuestAuthorship: async () => { ensureGuestAuthorshipCalls += 1 },
-        ensureRemotePostSongTitleColumn: async () => { ensureSongTitleColumnCalls += 1 },
-        ensureRemoteCommerceVinylReleaseColumns: async () => { ensureVinylReleaseColumnCalls += 1 },
-        ensureRemoteLiveRoomTables: async () => { ensureLiveRoomTableCalls += 1 },
-      },
-    )
-
-    expect(secondDb.databaseUrl).toBe(databaseUrl)
-    secondDb.close()
-    expect(ensureCalls).toBe(1)
-    expect(ensureLockColumnCalls).toBe(1)
-    expect(ensureGuestAuthorshipCalls).toBe(1)
-    expect(ensureSongTitleColumnCalls).toBe(1)
-    expect(ensureVinylReleaseColumnCalls).toBe(1)
-    expect(ensureLiveRoomTableCalls).toBe(1)
   })
 
   testWithTimeout("applies pending template migrations for existing local community databases", async () => {
@@ -682,7 +495,7 @@ describe("openCommunityDb", () => {
     expect(repairedChecksum).toBe(currentChecksum)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures membership state indexes on remote community database open", async () => {
+  testWithTimeout("ensures membership state indexes on community database schema helper", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-schema-"))
     cleanupPaths.push(rootDir)
 
@@ -707,7 +520,7 @@ describe("openCommunityDb", () => {
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures thread and comment lock columns on remote community database open", async () => {
+  testWithTimeout("ensures thread and comment lock columns on community database schema helper", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-lock-columns-"))
     cleanupPaths.push(rootDir)
 
@@ -846,7 +659,7 @@ describe("openCommunityDb", () => {
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures live room tables on remote community database open", async () => {
+  testWithTimeout("ensures live room tables on community database schema helper", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-live-rooms-"))
     cleanupPaths.push(rootDir)
 
@@ -932,7 +745,7 @@ describe("openCommunityDb", () => {
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures post song presentation columns on remote community database open", async () => {
+  testWithTimeout("ensures post song presentation columns on community database schema helper", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-song-title-"))
     cleanupPaths.push(rootDir)
 
@@ -968,7 +781,7 @@ describe("openCommunityDb", () => {
     }
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures commerce vinyl release columns on remote community database open", async () => {
+  testWithTimeout("ensures commerce vinyl release columns on community database schema helper", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-vinyl-release-"))
     cleanupPaths.push(rootDir)
 
@@ -1065,7 +878,7 @@ describe("openCommunityDb", () => {
 })
 
 describe("withRequestCommunityDbClients", () => {
-  test("shares the same Turso handle across openCommunityDb calls in one request and opens a fresh one outside", async () => {
+  test("shares the same community database handle across openCommunityDb calls in one request and opens a fresh one outside", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-share-handle-"))
     cleanupPaths.push(rootDir)
     const databasePath = join(rootDir, `${randomUUID()}.db`)

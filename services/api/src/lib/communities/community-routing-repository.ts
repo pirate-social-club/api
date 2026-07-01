@@ -68,55 +68,6 @@ export async function getCommunityDatabaseRoutingRow(
   return row ? toCommunityDatabaseRoutingRow(row) : null
 }
 
-export type UpsertTursoRoutingRowInput = {
-  communityId: string
-  tursoDatabaseBindingId: string
-  now: string
-  provisioningState?: CommunityProvisioningState
-}
-
-/**
- * Seed (or no-op) a `backend='turso'` routing row for an existing community.
- *
- * This is the Phase-0 backfill writer: it makes the routing directory describe
- * the world as it already is (every live community is on Turso) so the read
- * router can be consulted without 404-ing communities that predate the
- * directory. It is intentionally `ON CONFLICT DO NOTHING` — re-running never
- * mutates an existing row (including one already flipped to `d1`), so the
- * backfill is safe to run repeatedly and cannot regress a migrated community.
- *
- * Returns whether a new row was inserted (false = the community already had a
- * routing row). D1 rows are written by the provisioning path (PR2+), not here.
- *
- * Home of the runtime (in-worker) seeding path: PR2+ provisioning calls this
- * when a community is created/migrated. The Phase-0 bulk backfill deliberately
- * does NOT call this — it runs as a one-shot operator script
- * (`community-provision-operator/scripts/backfill-community-routing.ts`) over
- * the operator's Postgres layer. This function and its test pin the routing
- * INSERT contract (column shape + idempotent, non-regressing ON CONFLICT).
- */
-export async function upsertTursoCommunityRoutingRow(
-  executor: DbExecutor,
-  input: UpsertTursoRoutingRowInput,
-): Promise<{ inserted: boolean }> {
-  const result = await executor.execute({
-    sql: `
-      INSERT INTO community_database_routing
-        (community_id, backend, provisioning_state, turso_database_binding_id, created_at, updated_at)
-      VALUES (?1, 'turso', ?2, ?3, ?4, ?4)
-      ON CONFLICT (community_id) DO NOTHING
-    `,
-    args: [
-      input.communityId,
-      input.provisioningState ?? "ready",
-      input.tursoDatabaseBindingId,
-      input.now,
-    ],
-  })
-
-  return { inserted: (result.rowsAffected ?? 0) > 0 }
-}
-
 export type UpsertD1RoutingRowInput = {
   communityId: string
   shardWorkerId: string
@@ -129,14 +80,9 @@ export type UpsertD1RoutingRowInput = {
 /**
  * Seed (or advance) a `backend='d1'` routing row for a community born on D1.
  *
- * Unlike the Turso backfill writer (`upsertTursoCommunityRoutingRow`, which is
- * `DO NOTHING` because it only describes pre-existing Turso communities), the
- * D1-native provisioning path owns the row's lifecycle: it may write the row at
- * `provisioning_state='provisioning'` while the shard binding is being loaded
- * and then advance it to `'ready'` (or `'degraded'`) once load completes. So
- * this is `DO UPDATE`, but guarded `WHERE backend = 'd1'` so it can NEVER
- * clobber or downgrade a `backend='turso'` row that happens to share the
- * community_id — a stale call cannot steal a Turso community onto a shard.
+ * The D1-native provisioning path owns the row's lifecycle: it may write the row
+ * at `provisioning_state='provisioning'` while the shard binding is being loaded
+ * and then advance it to `'ready'` (or `'degraded'`) once load completes.
  *
  * The d1 column shape satisfies the 0117 `chk_d1_fields` CHECK
  * (`shard_worker_id`/`binding_name`/`region` NOT NULL, `turso_database_binding_id`
