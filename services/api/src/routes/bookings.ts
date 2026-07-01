@@ -46,8 +46,14 @@ function isSettlementReviewOperatorPath(pathname: string): boolean {
     || /\/bookings\/[^/]+\/settlement-review(?:\/resolve)?$/u.test(pathname)
 }
 
+function isPublicSlotsRead(method: string, pathname: string): boolean {
+  return method.toUpperCase() === "GET"
+    && /\/bookings\/(?:booking-)?hosts\/[^/]+\/slots$/u.test(pathname)
+}
+
 bookings.use("*", async (c, next) => {
-  if (isSettlementReviewOperatorPath(new URL(c.req.url).pathname)) return next()
+  const pathname = new URL(c.req.url).pathname
+  if (isSettlementReviewOperatorPath(pathname) || isPublicSlotsRead(c.req.method, pathname)) return next()
   return authenticateAdminOrUser(c, next)
 })
 
