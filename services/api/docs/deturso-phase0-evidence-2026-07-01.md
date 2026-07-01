@@ -32,3 +32,41 @@ Staging `/services/control-plane`:
 Production has substantial namespace-attached community usage (`64` route-backed
 communities), so Phase 1 uses the D1-native namespaced provisioning path instead
 of gating namespaced creates off.
+
+## Phase 1 Deploy And Smoke
+
+Production `api-core` was redeployed from `origin/main` after the D1-native
+production vars landed.
+
+- Deployed Worker version: `a11782d7-4c64-401b-9f2e-daa7c7e34272`.
+- Deploy output showed `COMMUNITY_PROVISION_BACKEND="d1_native"` and
+  `COMMUNITY_D1_SHARD_REGION="eeur"` in the production environment.
+- Health check after deploy: `GET https://api.pirate.sc/health` returned
+  `{"ok":true}`.
+
+Production smoke `scripts/smoke-d1-provisioning-cutover.ts`:
+
+- Namespaceless create:
+  `com_cmt_d4f69eeb5f124320a8260ec8f015ff75` -> `DB_CMTY_0076`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0076'`.
+- Namespaced create:
+  `com_cmt_37462fc649904deeb96b0a51067bbf21` with
+  `nv_deturso_smoke_20260701190344` -> `DB_CMTY_0077`,
+  `backend='d1'`, `provisioning_state='ready'`, `database_url='d1://shard/DB_CMTY_0077'`.
+
+An earlier smoke run before the corrected redeploy created two throwaway Turso
+communities. Both were copied to D1 and flipped:
+
+- `cmt_7f9f95dc8e154ce99649eac9be64c500` -> `DB_CMTY_0078`,
+  no active `community_db_credentials`.
+- `cmt_f66ce238319345b3846beaf45f25ca11` -> `DB_CMTY_0079`,
+  no active `community_db_credentials`.
+
+Post-smoke production aggregates:
+
+- `community_database_routing`: `d1/ready = 79`; no `turso` rows.
+- `community-d1-shard-pool-prod`: `total = 100`, `allocated = 79`,
+  `free = 21`, `quarantined = 0`.
+- Remaining primary `libsql://` rows without D1 routing are not ready
+  communities: `32` active/error pending sentinels, `1` archived/active legacy
+  row, and `1` deleted/active legacy row.
