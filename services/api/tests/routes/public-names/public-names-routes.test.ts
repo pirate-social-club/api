@@ -222,6 +222,52 @@ describe("public names routes", () => {
     expect(fundingCalls).toHaveLength(1)
   })
 
+  test("rejects reusing a claimed funding transaction across public name quotes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const fundingCalls: Array<{
+      quoteId: string
+      buyerAddress: string
+      amountUsd: number
+      fundingTxRef: string
+    }> = []
+    setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls })
+    const buyerWallet = "0x2000000000000000000000000000000000000002"
+    const firstQuote = await createPublicNameQuote({
+      env: ctx.env,
+      desiredLabel: "first-replay-target",
+      buyerWalletAddress: buyerWallet,
+    })
+    const secondQuote = await createPublicNameQuote({
+      env: ctx.env,
+      desiredLabel: "other-replay-target",
+      buyerWalletAddress: buyerWallet,
+    })
+
+    const firstClaim = await requestJson("http://pirate.test/public-names/claims", {
+      quote: firstQuote.quote,
+      funding_tx_ref: "0xsharedpublicnamefunding",
+    }, ctx.env)
+    expect(firstClaim.status).toBe(200)
+
+    const secondClaim = await requestJson("http://pirate.test/public-names/claims", {
+      quote: secondQuote.quote,
+      funding_tx_ref: "0xsharedpublicnamefunding",
+    }, ctx.env)
+    expect(secondClaim.status).toBe(403)
+    const secondBody = await json(secondClaim) as { code: string; message: string }
+    expect(secondBody.code).toBe("eligibility_failed")
+    expect(secondBody.message).toBe("Funding transaction has already been used to claim a name")
+
+    const secondQuoteRow = (await ctx.client.execute({
+      sql: "SELECT status, funding_tx_ref FROM pirate_name_quotes WHERE pirate_name_quote_id = ?1 LIMIT 1",
+      args: [secondQuote.quote],
+    })).rows[0]
+    expect(secondQuoteRow?.status).toBe("quoted")
+    expect(secondQuoteRow?.funding_tx_ref).toBeNull()
+    expect(fundingCalls.map((call) => call.quoteId)).toEqual([firstQuote.quote, secondQuote.quote])
+  })
+
   test("expired public name quote is rejected and marked expired", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
