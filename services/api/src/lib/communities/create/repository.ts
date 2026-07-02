@@ -113,10 +113,8 @@ export async function loadCommunityLocalSnapshot(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
-  // Routed read: follows the community's backend (D1 via shard read RPC when flipped,
-  // else legacy Turso). Read-only (SELECTs only), so a flipped community's snapshot
-  // reads reflect D1 instead of stale Turso. Closes #48 for donation/rules/gate
-  // snapshot reads. Falls back to null on any open failure, as before.
+  // Routed read via the D1 shard read RPC. Read-only (SELECTs only). Closes #48 for
+  // donation/rules/gate snapshot reads. Falls back to null on any open failure, as before.
   const db = await openCommunityReadClient(env, repo, communityId).catch(() => null)
   if (!db) {
     return null

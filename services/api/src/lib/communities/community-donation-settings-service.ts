@@ -219,11 +219,9 @@ export async function updateCommunityDonationPolicy(input: {
     actor: input.actor ?? communityMutationActorFromUserId(input.userId ?? ""),
     action: "community.donation_policy_updated",
   })
-  // Routed through openCommunityWriteClient: when COMMUNITY_READ_ROUTING is off this is
-  // legacy Turso; when on it follows the community's control_plane_routing backend (D1
-  // or Turso fallback). The pre-tx settings read runs on the base client and the tx body
-  // is write-only (INSERT donation_partners ON CONFLICT + UPDATE communities), so it is
-  // D1-buffer-safe.
+  // Routed through openCommunityWriteClient to the community's D1 shard. The pre-tx
+  // settings read runs on the base client and the tx body is write-only
+  // (INSERT donation_partners ON CONFLICT + UPDATE communities), so it is D1-buffer-safe.
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
 
   try {

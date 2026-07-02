@@ -7,8 +7,8 @@ import type { UpstreamIdentity } from "../../types"
 const encoder = new TextEncoder()
 
 /**
- * Dedicated, staging-ONLY test issuer for driving authenticated validation (e.g. the
- * Turso→D1 write-cutover pilot) without minting real upstream tokens.
+ * Dedicated, staging-ONLY test issuer for driving authenticated validation
+ * without minting real upstream tokens.
  *
  * Security model (do not weaken):
  *  - Deliberately NOT the real upstream issuer (`pirate-staging-upstream`) and NOT

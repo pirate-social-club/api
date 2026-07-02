@@ -8,7 +8,7 @@ import { HttpError } from "../errors"
  * Phase 0.1 synthetic binding smoke — LOGIC PROOF, NOT THE EXIT GATE.
  *
  * This exercises the router read path end to end against stubs:
- *   provision -> route read (d1) -> remove binding -> route fallback (turso) -> decommission.
+ *   provision -> route read (d1) -> decommission.
  * It also covers the dual-TTL cache, the binding_pending / community_not_found
  * error paths, and the shard-rejects-unknown-community open question.
  *
