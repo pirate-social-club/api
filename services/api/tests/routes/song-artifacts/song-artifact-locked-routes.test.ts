@@ -316,6 +316,24 @@ describe("song artifact locked routes", () => {
     expect(buyerAccessBeforeJobBody.locked_delivery_status).toBe("requested")
     expect(buyerAccessBeforeJobBody.delivery_kind).toBeNull()
 
+    const publicContentBeforeJob = await app.request(
+      `http://pirate.test/public-communities/${communityId}/assets/${assetId}/content`,
+      {},
+      ctx.env,
+    )
+    expect(publicContentBeforeJob.status).toBe(404)
+
+    const creatorContentBeforeJob = await app.request(
+      `http://pirate.test/communities/${communityId}/assets/${assetId}/content`,
+      {
+        headers: {
+          authorization: `Bearer ${author.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(creatorContentBeforeJob.status).toBe(404)
+
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {

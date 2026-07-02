@@ -1525,12 +1525,15 @@ export async function fetchPublicCommunityAssetContent(input: {
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset content not found")
     }
-    if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref) {
+    if (asset.access_mode === "public") {
       return await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
       })
+    }
+    if (!asset.locked_delivery_storage_ref) {
+      throw notFoundError("Asset content is not ready")
     }
     return await fetchSongArtifactBytes({
       env: input.env,
@@ -1559,12 +1562,15 @@ export async function fetchCommunityAssetContent(input: {
       notFoundMessage: "Asset not found",
       unpublishedMessage: "Asset content not found",
     })
-    if (asset.access_mode === "public" || !asset.locked_delivery_storage_ref) {
+    if (asset.access_mode === "public") {
       return await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
       })
+    }
+    if (!asset.locked_delivery_storage_ref) {
+      throw notFoundError("Asset content is not ready")
     }
     return await fetchSongArtifactBytes({
       env: input.env,
