@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url"
 import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
-import { getPostStudyPayload, runSongStudyGenerate, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
+import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
+import { getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
 import type { Env } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -95,7 +96,7 @@ async function runStudyGenerationJob(input: {
   postId?: string
   targetLanguage?: string
 }): Promise<string | null> {
-  return runSongStudyGenerate({
+  return runCommunityJob({
     env: input.env,
     communityRepository: repo as never,
     job: {
