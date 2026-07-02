@@ -4,7 +4,7 @@ import { createClient } from "@libsql/client"
 import type { CreatePostRequest, Post } from "../../types"
 import { assertPostCreateRequest } from "./community-post-create-store"
 import { insertPostForTest as insertPost } from "../../../tests/community-test-helpers"
-import { sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
+import { listPublishedLocalizedPosts, sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
 import { getPostReadMetrics } from "./community-post-metrics-store"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
 import { getPostById } from "./community-post-query-store"
@@ -313,6 +313,88 @@ describe("getPostReadMetrics", () => {
       like_count: 1,
       viewer_vote: 1,
     })
+  })
+})
+
+describe("listPublishedLocalizedPosts", () => {
+  test("omits asset-backed posts when the asset row is missing", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client, { assets: true })
+    await client.batch([
+      "CREATE TABLE post_votes (post_id TEXT NOT NULL, user_id TEXT NOT NULL, vote_value INTEGER NOT NULL)",
+      "CREATE TABLE comments (thread_root_post_id TEXT NOT NULL, status TEXT NOT NULL)",
+      "CREATE TABLE post_reactions (post_id TEXT NOT NULL, reaction_key TEXT NOT NULL)",
+    ])
+    await client.batch([
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            asset_id, source_language, translation_policy, rights_basis,
+            analysis_state, content_safety_state, age_gate_policy, idempotency_key,
+            created_at, updated_at
+          ) VALUES (
+            'pst_missing_asset', 'cmt_test', 'usr_test', 'human_direct', 'public',
+            'pending', 'song', 'published', 'public', 'Missing asset', '',
+            'asset_ast_missing', 'en', 'none', 'original',
+            'allow', 'safe', 'none', 'missing-asset',
+            '2026-05-06T00:00:02.000Z', '2026-05-06T00:00:02.000Z'
+          )
+        `,
+      },
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            source_language, translation_policy, rights_basis, analysis_state,
+            content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+          ) VALUES (
+            'pst_text', 'cmt_test', 'usr_test', 'human_direct', 'public',
+            'pending', 'text', 'published', 'public', 'Visible text', '',
+            'en', 'none', 'none', 'allow',
+            'safe', 'none', 'visible-text', '2026-05-06T00:00:01.000Z', '2026-05-06T00:00:01.000Z'
+          )
+        `,
+      },
+    ])
+
+    const withoutAsset = await listPublishedLocalizedPosts({
+      client,
+      communityId: "cmt_test",
+      viewerUserId: "",
+      limit: 10,
+      sort: "new",
+      visibility: "public",
+    })
+
+    expect(withoutAsset.items.map((item) => item.post.post_id)).toEqual(["pst_text"])
+
+    await client.execute({
+      sql: `
+        INSERT INTO assets (
+          asset_id, community_id, story_ip_id, story_royalty_registration_status
+        ) VALUES (
+          'asset_ast_missing', 'cmt_test', NULL, 'failed'
+        )
+      `,
+    })
+
+    const withAsset = await listPublishedLocalizedPosts({
+      client,
+      communityId: "cmt_test",
+      viewerUserId: "",
+      limit: 10,
+      sort: "new",
+      visibility: "public",
+    })
+
+    expect(withAsset.items.map((item) => item.post.post_id)).toEqual([
+      "pst_missing_asset",
+      "pst_text",
+    ])
   })
 })
 

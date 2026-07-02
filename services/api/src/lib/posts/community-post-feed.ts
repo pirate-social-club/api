@@ -4,6 +4,7 @@ import type { Post } from "../../types"
 import {
   postAssetStoryJoinForSchema,
   postSelectColumnsForSchema,
+  requiredAssetRowFilterForSchema,
   resolvePostProjectionSchema,
 } from "./community-post-projection"
 import {
@@ -137,6 +138,7 @@ export async function listPublishedLocalizedPosts(input: {
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)
         AND (?4 IS NULL OR visibility = ?4)
+        ${requiredAssetRowFilterForSchema(projectionSchema)}
         ${eventFilterSql}
         AND (
           ?5 = 0
@@ -251,6 +253,7 @@ export async function listPublishedLocalizedEventPosts(input: {
       JOIN posts ON posts.post_id = event_posts.event_post_id
       ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE posts.status = 'published'
+        ${requiredAssetRowFilterForSchema(projectionSchema)}
       ORDER BY event_posts.event_sort_start ASC, event_posts.event_post_id ASC
       LIMIT ?6
     `,

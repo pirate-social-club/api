@@ -194,3 +194,17 @@ export function postAssetStoryJoinForSchema(schema: PostProjectionSchema): strin
        AND post_asset_story.asset_story_asset_id = posts.asset_id
   `
 }
+
+export function requiredAssetRowFilterForSchema(schema: PostProjectionSchema): string {
+  if (!schema.hasAssetStoryColumns) {
+    return ""
+  }
+
+  return `
+        AND (
+          posts.asset_id IS NULL
+          OR posts.post_type NOT IN ('song', 'video')
+          OR post_asset_story.asset_story_asset_id IS NOT NULL
+        )
+  `
+}
