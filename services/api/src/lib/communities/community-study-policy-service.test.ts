@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createClient } from "@libsql/client"
+import type { ShardQueryResult, ShardResult, ShardRpc, ShardSqlStatement } from "@pirate/api-shared"
 import { describe, expect, test } from "bun:test"
 import {
   getCommunityStudyPolicy,
@@ -11,6 +12,49 @@ import {
 import type { CommunityDatabaseBindingRow, CommunityRow } from "../auth/auth-db-rows"
 import type { Client } from "../sql-client"
 import type { Env } from "../../env"
+
+function normalizeShardStatement(statement: ShardSqlStatement | string): { sql: string; args?: unknown[] } {
+  return typeof statement === "string" ? { sql: statement } : { sql: statement.sql, args: statement.args }
+}
+
+function makeLocalCommunityShard(databaseUrl: string): ShardRpc {
+  return {
+    async execute(input: { statement: ShardSqlStatement | string }): Promise<ShardResult<ShardQueryResult>> {
+      const client = createClient({ url: databaseUrl })
+      try {
+        const statement = normalizeShardStatement(input.statement)
+        return { ok: true, value: await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }) }
+      } finally {
+        client.close()
+      }
+    },
+    async batch(input: { statements: Array<ShardSqlStatement | string> }): Promise<ShardResult<ShardQueryResult[]>> {
+      const client = createClient({ url: databaseUrl })
+      try {
+        const results: ShardQueryResult[] = []
+        for (const raw of input.statements) {
+          const statement = normalizeShardStatement(raw)
+          results.push(await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }))
+        }
+        return { ok: true, value: results }
+      } finally {
+        client.close()
+      }
+    },
+    async batchWrite(input: { statements: ShardSqlStatement[] }): Promise<ShardResult<ShardQueryResult[]>> {
+      const client = createClient({ url: databaseUrl })
+      try {
+        const results: ShardQueryResult[] = []
+        for (const statement of input.statements) {
+          results.push(await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }))
+        }
+        return { ok: true, value: results }
+      } finally {
+        client.close()
+      }
+    },
+  } as ShardRpc
+}
 
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), "study-policy-"))
@@ -61,7 +105,60 @@ async function setup() {
     listActiveCommunities: async () => [],
     searchActiveCommunities: async () => [],
   }
+  const communityDb = createClient({ url: `file:${communityDbPath}` })
+  await communityDb.execute(`
+    CREATE TABLE communities (
+      community_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL,
+      artist_identity_id TEXT,
+      artist_governance_state TEXT NOT NULL,
+      membership_mode TEXT NOT NULL,
+      default_age_gate_policy TEXT NOT NULL,
+      allow_anonymous_identity INTEGER NOT NULL DEFAULT 0,
+      anonymous_identity_scope TEXT,
+      donation_partner_id TEXT,
+      donation_policy_mode TEXT NOT NULL,
+      donation_partner_status TEXT NOT NULL,
+      governance_mode TEXT NOT NULL,
+      settings_json TEXT,
+      created_by_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  communityDb.close()
   const control = createClient({ url: `file:${controlDbPath}` })
+  await control.execute(`
+    CREATE TABLE community_database_routing (
+      community_id TEXT PRIMARY KEY,
+      backend TEXT NOT NULL,
+      provisioning_state TEXT NOT NULL,
+      shard_worker_id TEXT,
+      binding_name TEXT,
+      region TEXT,
+      turso_database_binding_id TEXT,
+      migrated_at TEXT,
+      decommissioned_at TEXT,
+      last_error_at TEXT,
+      last_error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await control.execute({
+    sql: `
+      INSERT INTO community_database_routing (
+        community_id, backend, provisioning_state, shard_worker_id, binding_name,
+        region, turso_database_binding_id, migrated_at, decommissioned_at,
+        last_error_at, last_error_message, created_at, updated_at
+      )
+      VALUES (?1, 'd1', 'ready', 'test-shard', 'DB_CMTY_STUDY_POLICY', 'test',
+              NULL, ?2, NULL, NULL, NULL, ?2, ?2)
+    `,
+    args: [communityId, now],
+  })
   await control.execute(`
     CREATE TABLE audit_log (
       audit_event_id TEXT PRIMARY KEY,
@@ -82,6 +179,7 @@ async function setup() {
     communityId,
     env: {
       ENVIRONMENT: "test",
+      COMMUNITY_D1_SHARD: makeLocalCommunityShard(`file:${communityDbPath}`) as never,
       CONTROL_PLANE_DATABASE_URL: `file:${controlDbPath}`,
     } as Env,
     repo,

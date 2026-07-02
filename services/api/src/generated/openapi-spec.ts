@@ -16997,7 +16997,8 @@ const spec = {
           "not_song",
           "no_lyrics",
           "unsupported_language",
-          "generation_failed"
+          "generation_failed",
+          "missing_transcription_provider"
         ]
       },
       "ModerationCaseListItem": {

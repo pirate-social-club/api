@@ -178,6 +178,26 @@ async function readCredential(input: {
   return serializeCredentialRow(row)
 }
 
+async function hasActiveCredential(input: {
+  env: Env
+  communityId: string
+  provider: CommunityAssistantCredentialProvider
+}): Promise<boolean> {
+  const client = getControlPlaneClient(input.env)
+  const row = await executeFirst(client, {
+    sql: `
+      SELECT 1 AS present
+      FROM community_assistant_credentials
+      WHERE community_id = ?1
+        AND provider = ?2
+        AND status = 'active'
+      LIMIT 1
+    `,
+    args: [input.communityId, input.provider],
+  })
+  return Boolean(row)
+}
+
 export async function getCommunityAssistantCredentialStatus(input: {
   env: Env
   communityId: string
@@ -334,6 +354,7 @@ export async function saveCommunityAssistantCredential(input: {
 export async function decryptActiveCommunityAssistantCredential(input: {
   env: Env
   communityId: string
+  missingCredentialMessage?: string
   provider: CommunityAssistantCredentialProvider
 }): Promise<string> {
   const active = await readCredential({
@@ -343,9 +364,9 @@ export async function decryptActiveCommunityAssistantCredential(input: {
     status: "active",
   })
   if (!active) {
-    throw badRequestError(input.provider === OPENROUTER_PROVIDER
+    throw badRequestError(input.missingCredentialMessage ?? (input.provider === OPENROUTER_PROVIDER
       ? "OpenRouter API key is required before chatting with the community assistant"
-      : "ElevenLabs API key is required before using assistant voice")
+      : "ElevenLabs API key is required before using assistant voice"))
   }
 
   return decryptCredentialKey({
@@ -369,9 +390,21 @@ export async function decryptActiveCommunityOpenRouterKey(input: {
 export async function decryptActiveCommunityElevenLabsKey(input: {
   env: Env
   communityId: string
+  missingCredentialMessage?: string
 }): Promise<string> {
   return decryptActiveCommunityAssistantCredential({
     ...input,
+    provider: ELEVENLABS_PROVIDER,
+  })
+}
+
+export async function hasActiveCommunityElevenLabsCredential(input: {
+  env: Env
+  communityId: string
+}): Promise<boolean> {
+  return hasActiveCredential({
+    env: input.env,
+    communityId: input.communityId,
     provider: ELEVENLABS_PROVIDER,
   })
 }
