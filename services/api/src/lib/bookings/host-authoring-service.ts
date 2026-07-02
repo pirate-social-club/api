@@ -30,6 +30,11 @@ export type RuleRow = AvailabilityRule
 export type ExceptionRow = AvailabilityException
 export type PriceRuleRow = PriceRule
 
+// platform_fee_bps is a PLATFORM-controlled commission and must not be settable by
+// hosts via self-service profile writes. It is fixed to the platform default here;
+// only an operator-gated path may change it. (Security fix: host fee mass-assignment.)
+const DEFAULT_PLATFORM_FEE_BPS = 1000
+
 const REQUIRED_PROFILE_FIELDS: ReadonlyArray<keyof BookingProfileInput> = [
   "host_timezone",
   "base_price_cents",
@@ -76,7 +81,7 @@ function toProfileUpdateInput(
     ...(input.host_timezone !== undefined ? { hostTimezone: input.host_timezone } : {}),
     ...(input.base_price_cents !== undefined ? { basePriceCents: input.base_price_cents } : {}),
     ...(input.default_slot_duration_seconds !== undefined ? { defaultSlotDurationSeconds: input.default_slot_duration_seconds } : {}),
-    ...(input.platform_fee_bps !== undefined ? { platformFeeBps: input.platform_fee_bps } : {}),
+    // platform_fee_bps intentionally NOT host-writable (platform-controlled commission).
     ...(payoutWallet !== undefined ? { payoutWalletAddress: payoutWallet } : {}),
     updatedAt,
   }
@@ -120,7 +125,7 @@ export async function upsertBookingProfile(
       hostTimezone: input.host_timezone!,
       basePriceCents: input.base_price_cents!,
       defaultSlotDurationSeconds: input.default_slot_duration_seconds!,
-      platformFeeBps: input.platform_fee_bps ?? 1000,
+      platformFeeBps: DEFAULT_PLATFORM_FEE_BPS,
       payoutWalletAddress: payoutWallet.data ?? null,
       isPublished: false,
       createdAt: now,
