@@ -170,7 +170,10 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
       data: log.data,
     })
     const amount = parsed?.args.value as bigint | undefined
-    if (amount == null || amount < expectedAmount) {
+    // EXACT amount — a larger transfer (intended for something else) must not
+    // confirm this quote, mirroring the booking rail. Single-use already removes
+    // the multi-quote amplification; exact-match closes the wrong-amount edge.
+    if (amount == null || amount !== expectedAmount) {
       continue
     }
     matched = {
