@@ -1,0 +1,58 @@
+name: staging-song-submit-smoke
+
+# MANUAL ONLY — no `schedule:` trigger by design.
+#
+# This smoke performs a REAL Story IP registration and spends operator IP on
+# every run, and creates a throwaway staging community. Putting it on a timer
+# would slowly drain the signer wallet (the exact failure the funding watchdog
+# guards against). Run it on demand after changes that touch: song/video upload,
+# post creation, asset creation, Story registration, wallet funding, or deploy
+# config. Continuous funding-drift detection is handled cheaply by the in-worker
+# funding watchdog (read-only balance check), not by this smoke.
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Pirate API base URL to smoke"
+        required: true
+        default: "https://api-staging.pirate.sc"
+      subject:
+        description: "JWT subject / test user id to post as"
+        required: false
+        default: "usr_song_submit_ci_smoke"
+
+permissions:
+  contents: read
+
+jobs:
+  song-submit-smoke:
+    name: Staging song submit smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
+      AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
+      AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      PIRATE_SMOKE_API_BASE_URL: ${{ inputs.api_base_url }}
+      PIRATE_SMOKE_SUBJECT: ${{ inputs.subject }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install shared dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
+      - name: Run staging song submit smoke
+        working-directory: services/api
+        run: bun run smoke:song-submit
