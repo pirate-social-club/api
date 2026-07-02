@@ -53,10 +53,10 @@ async function setup() {
   const nowIso = new Date().toISOString()
   await cp.execute({
     sql: `INSERT INTO community_database_routing
-            (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
-          VALUES (?1, 'd1', 'ready', 'community-d1-shard-test', 'DB_CMTY_TEST', 'enam', ?2, ?2)
+            (community_id, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+          VALUES (?1, 'ready', 'community-d1-shard-test', 'DB_CMTY_TEST', 'enam', ?2, ?2)
           ON CONFLICT (community_id) DO UPDATE SET
-            backend = 'd1', provisioning_state = 'ready', decommissioned_at = NULL, turso_database_binding_id = NULL,
+            provisioning_state = 'ready', decommissioned_at = NULL,
             shard_worker_id = 'community-d1-shard-test', binding_name = 'DB_CMTY_TEST', region = 'enam', updated_at = ?2`,
     args: [communityId, nowIso],
   })

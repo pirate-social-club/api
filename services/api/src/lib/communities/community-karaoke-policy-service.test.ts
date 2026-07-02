@@ -73,7 +73,6 @@ async function setup() {
     route_slug: null,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: "cdb_karaoke_policy",
     follower_count: 0,
     created_at: now,
     updated_at: now,
@@ -136,7 +135,6 @@ async function setup() {
       shard_worker_id TEXT,
       binding_name TEXT,
       region TEXT,
-      turso_database_binding_id TEXT,
       migrated_at TEXT,
       decommissioned_at TEXT,
       last_error_at TEXT,
@@ -149,11 +147,11 @@ async function setup() {
     sql: `
       INSERT INTO community_database_routing (
         community_id, backend, provisioning_state, shard_worker_id, binding_name,
-        region, turso_database_binding_id, migrated_at, decommissioned_at,
+        region, migrated_at, decommissioned_at,
         last_error_at, last_error_message, created_at, updated_at
       )
       VALUES (?1, 'd1', 'ready', 'test-shard', 'DB_CMTY_KARAOKE_POLICY', 'test',
-              NULL, ?2, NULL, NULL, NULL, ?2, ?2)
+              ?2, NULL, NULL, NULL, ?2, ?2)
     `,
     args: [communityId, now],
   })

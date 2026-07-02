@@ -862,8 +862,8 @@ describe("community Telegram routes", () => {
     })
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-bot-owner")
@@ -958,8 +958,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
       TELEGRAM_BOT_TOKEN: "999999999:PLATFORMTOKENSHOULDNOTBEUSED",
       TELEGRAM_BOT_USERNAME: "PlatformBot",
     })
@@ -1041,8 +1041,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
       TELEGRAM_BOT_TOKEN: "999999999:PLATFORMTOKENSHOULDNOTBEUSED",
       TELEGRAM_BOT_USERNAME: "PlatformBot",
     })
@@ -1122,8 +1122,8 @@ describe("community Telegram routes", () => {
     })
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-bot-username-owner")
@@ -1188,8 +1188,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-bot-join-owner")
@@ -1254,8 +1254,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-bot-auto-join-owner")
@@ -1353,8 +1353,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-bot-join-mismatch-owner")
@@ -2243,8 +2243,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-owner")
@@ -2334,8 +2334,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-trigger-owner")
@@ -2446,8 +2446,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-provider-owner")
@@ -2518,8 +2518,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-ignore-owner")
@@ -2573,8 +2573,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-disabled-owner")
@@ -2627,8 +2627,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_TIMEOUT_MS: "1000",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Direct answer.")
@@ -2736,8 +2736,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_TIMEOUT_MS: "1000",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const openRouterCalls: Request[] = []
@@ -2859,8 +2859,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       OPENROUTER_TIMEOUT_MS: "1000",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const openRouterCalls: Array<{ authorization: string | null; body: { messages?: Array<{ role?: string; content?: string }> } }> = []
@@ -3024,8 +3024,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Preview answer.")
@@ -3099,8 +3099,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Should not be used.")
@@ -3192,8 +3192,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Should not be used.")
@@ -3302,8 +3302,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:platform-token",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "2",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "2",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-auto-exchange-active-bot-owner")
@@ -3391,8 +3391,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Should not be used.")
@@ -3448,8 +3448,8 @@ describe("community Telegram routes", () => {
     const ctx = await createRouteTestContext({
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Should not be used.")
@@ -3507,8 +3507,8 @@ describe("community Telegram routes", () => {
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
       TELEGRAM_BOT_INTEGRATION_SECRET: "test-telegram-secret",
       TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const owner = await exchangeJwt(ctx.env, "telegram-group-assistant-rate-limit-owner")
@@ -3666,8 +3666,8 @@ describe("community Telegram routes", () => {
       OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       PIRATE_API_PUBLIC_ORIGIN: "https://api.pirate.test",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://staging.pirate.test",
-      TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-      TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
     const mock = installTelegramAndOpenRouterMock("Should not be used.")

@@ -51,8 +51,8 @@ async function createAssistantChatRouteContext() {
   const ctx = await createRouteTestContext({
     OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
     OPENROUTER_TIMEOUT_MS: "1000",
-    TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-    TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+    CREDENTIAL_WRAP_KEY_VERSION: "1",
   })
   cleanup = ctx.cleanup
   return ctx

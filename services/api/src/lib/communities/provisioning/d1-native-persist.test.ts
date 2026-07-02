@@ -47,25 +47,7 @@ const SCHEMA_STATEMENTS = [
     route_slug TEXT,
     namespace_verification_id TEXT,
     pending_namespace_verification_session_id TEXT,
-    primary_database_binding_id TEXT,
     follower_count INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE TABLE community_database_bindings (
-    community_database_binding_id TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL REFERENCES communities(community_id),
-    binding_role TEXT NOT NULL,
-    organization_slug TEXT NOT NULL,
-    group_name TEXT NOT NULL,
-    group_id TEXT,
-    database_name TEXT NOT NULL,
-    database_id TEXT,
-    database_url TEXT NOT NULL,
-    location TEXT,
-    requires_credentials INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL,
-    transferred_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
@@ -173,23 +155,11 @@ test("d1-native persist flow: create + succeed lands provisioning_state=active w
   // Community row: provisioning_state flipped to 'active'.
   expect(finalized.community.provisioning_state).toBe("active")
   expect(finalized.community.status).toBe("active")
-  expect(finalized.community.primary_database_binding_id).toBe(prepared.binding.community_database_binding_id)
 
   // Job row: succeeded with the d1:// resultRef preserved.
   expect(finalized.job.status).toBe("succeeded")
   expect(finalized.job.result_ref).toBe(resolvedD1Url)
   expect(finalized.job.error_code).toBeNull()
-
-  // Binding row: the pending sentinel URL is still there because
-  // persistProvisionedD1Binding has not been called in this test — that is
-  // the orchestrator's job (gap 1 / slice 3). What matters here is that the
-  // persist path left it intact rather than crashing on the d1 shape.
-  const binding = (await cp.execute({
-    sql: "SELECT database_url, requires_credentials FROM community_database_bindings WHERE community_database_binding_id = ?1",
-    args: [prepared.binding.community_database_binding_id],
-  })).rows[0]
-  expect(binding.database_url).toBe("d1://pending-cmt_d1_persist.invalid")
-  expect(Number(binding.requires_credentials)).toBe(0)
 
   // The audit log records a provisioning_succeeded event with the d1_native
   // mode in metadata — proves the persist path's metadata is mode-aware

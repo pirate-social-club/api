@@ -45,13 +45,12 @@ describe("public community routes", () => {
           route_slug,
           namespace_verification_id,
           pending_namespace_verification_session_id,
-          primary_database_binding_id,
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
-          (?5, ?2, ?6, 'request', 'active', 'active', 'none', ?7, NULL, NULL, NULL, ?8, ?8),
-          (?9, ?2, ?10, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?11, ?11)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, ?4, ?4),
+          (?5, ?2, ?6, 'request', 'active', 'active', 'none', ?7, NULL, NULL, ?8, ?8),
+          (?9, ?2, ?10, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, ?11, ?11)
       `,
       args: [
         "cmt_infinity",
@@ -97,7 +96,7 @@ describe("public community routes", () => {
       agent_posting_scope: "replies_only",
       agent_daily_post_cap: null,
       agent_daily_reply_cap: null,
-      accepted_agent_ownership_providers: [],
+      accepted_agent_ownership_providers: ["clawkey"],
       membership_gate_summaries: [],
     })
   })

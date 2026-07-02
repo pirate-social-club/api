@@ -1,7 +1,7 @@
 import { normalizeCommunityMediaRef } from "../community-identity-media"
 import { resolveCommunityProvisioningBackend } from "./backend"
 import type { UserRepository } from "../../auth/repositories"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
+import type { CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityJobReadRepository,
@@ -220,8 +220,7 @@ async function createNamespacelessCommunity(input: {
     })
     const localSnapshot = provisioned.localSnapshot
       ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
-    const resolvedBinding = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
-    const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
+    const databaseUrl = provisioned.binding.databaseUrl
 
     const finalized = await input.communityRepository.markCommunityProvisioningSucceeded({
       communityId,
@@ -297,37 +296,6 @@ async function createNamespacelessCommunity(input: {
   }
 }
 
-async function finalizeExistingCommunity(input: {
-  env: Env
-  body: CreateCommunityRequestBody
-  auth: CreateCommunityAuth
-  existingCommunity: CommunityRow
-  existingJob: JobRow
-  binding: CommunityDatabaseBindingRow
-  communityRepository: CommunityProvisioningServiceRepository
-  namespaceVerificationId: string
-  namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
-}): Promise<CommunityCreateAcceptedResponse> {
-  const finalized = await input.communityRepository.markCommunityProvisioningSucceeded({
-    communityId: input.existingCommunity.community_id,
-    communityDatabaseBindingId: input.binding.community_database_binding_id,
-    jobId: input.existingJob.job_id,
-    actorUserId: input.auth.userId,
-    resultRef: input.binding.database_url,
-    createdAt: nowIso(),
-    metadata: {
-      binding_id: input.binding.community_database_binding_id,
-      database_url: input.binding.database_url,
-      mode: "finalize_after_crash",
-    },
-  })
-  const local = await loadCommunityLocalSnapshot(input.env, input.communityRepository, input.existingCommunity.community_id)
-  return serializeCommunityCreateAcceptedResponse({
-    community: serializeCommunity(input.env, finalized.community, local),
-    job: serializeJob(finalized.job),
-  })
-}
-
 async function provisionNamespacedCommunity(input: {
   env: Env
   body: CreateCommunityRequestBody
@@ -340,7 +308,7 @@ async function provisionNamespacedCommunity(input: {
   const { env, body, auth, existingCommunity, namespaceVerificationId, namespaceVerification, communityRepository: repo } = input
   const routeSlug = namespaceRouteSlug(namespaceVerification)
   const communityId = existingCommunity?.community_id ?? makeId("cmt")
-  const bindingId = existingCommunity?.primary_database_binding_id ?? makeId("cdb")
+  const bindingId = makeId("cdb")
   const jobId = makeId("job")
   const backend = resolveCommunityProvisioningBackend(env, { hasNamespace: true })
   const initialBinding = backend.initialBinding({
@@ -392,8 +360,7 @@ async function provisionNamespacedCommunity(input: {
       communityRepository: repo,
     })
     localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
-    const resolvedBinding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
-    const databaseUrl = resolvedBinding?.database_url ?? provisioned.binding.databaseUrl
+    const databaseUrl = provisioned.binding.databaseUrl
 
     provisioningFinalized = await repo.markCommunityProvisioningSucceeded({
       communityId,
@@ -508,19 +475,6 @@ export async function createCommunity(input: {
       return serializeCommunityCreateAcceptedResponse({
         community: await loadCommunityProjection(input.env, input.communityRepository, existingCommunity),
         job: serializeJob(existingJob),
-      })
-    }
-    if (retryAction.action === "finalize") {
-      return finalizeExistingCommunity({
-        env: input.env,
-        body: input.body,
-        auth,
-        existingCommunity,
-        existingJob,
-        binding: retryAction.binding,
-        communityRepository: input.communityRepository,
-        namespaceVerificationId: auth.namespaceVerificationId,
-        namespaceVerification,
       })
     }
   }

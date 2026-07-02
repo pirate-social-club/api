@@ -29,7 +29,7 @@ import {
 } from "./shard-read"
 
 /**
- * Community D1 shard (Turso→D1). Hosts per-community D1 bindings and exposes a
+ * Community D1 shard. Hosts per-community D1 bindings and exposes a
  * read RPC surface (PR2) + an atomic-batch write RPC (PR3) + a binding
  * allocator RPC (step 2) + a snapshot-loader RPC (step 3) to the API Worker.
  *
@@ -39,7 +39,7 @@ import {
  * criteria (the API must distinguish `shard_pool_write_conflict` from
  * `shard_pool_exhausted` to implement its retry semantics).
  *
- * Invariants (see [[turso-d1-pr2-design]]):
+ * Invariants:
  *  1. `bindingName` is validated against this shard's OWN bound D1 namespaces
  *     (`resolveD1`) — a stale/poisoned control-plane row cannot point us at an
  *     arbitrary binding.

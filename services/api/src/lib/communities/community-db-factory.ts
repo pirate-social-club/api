@@ -115,13 +115,8 @@ async function openCommunityDbEntry(
   communityId: string,
   options?: OpenCommunityDbOptions,
 ): Promise<CommunityDbHandle> {
-  const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
-  if (!binding || binding.status !== "active") {
-    const localRoot = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
-    if (!localRoot) {
-      throw notFoundError("Community database binding not found")
-    }
-
+  const localRoot = String(env.LOCAL_COMMUNITY_DB_ROOT || "").trim()
+  if (localRoot) {
     const databaseUrl = buildLocalCommunityDbUrl(localRoot, communityId)
     const client = createClient({ url: databaseUrl })
     await configureLocalCommunityDbClient(client)
@@ -135,6 +130,11 @@ async function openCommunityDbEntry(
       databaseUrl,
       close: () => client.close(),
     }
+  }
+
+  const binding = await repo.getPrimaryCommunityDatabaseBinding(communityId)
+  if (!binding || binding.status !== "active") {
+    throw notFoundError("Community database binding not found")
   }
   if (!binding.database_url) {
     throw internalError("Community database URL is missing")

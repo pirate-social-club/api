@@ -10,7 +10,7 @@ describe("verification endpoint environment config", () => {
     for (const environment of ["development", "staging", "production"]) {
       const vars = readWranglerVars(wranglerConfigPath, environment)
 
-      expect(vars.TURSO_COMMUNITY_DB_WRAP_KEY_VERSION).toBe("2")
+      expect(vars.CREDENTIAL_WRAP_KEY_VERSION).toBe("2")
     }
   })
 

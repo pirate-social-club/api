@@ -4,10 +4,8 @@ import { withTransaction } from "../../transactions"
 import { auditEventInsert } from "../../audit"
 import {
   getCommunityRowById,
-  getCommunityDatabaseBindingRowById,
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
-  getPrimaryCommunityDatabaseBindingRow,
 } from "../../auth/auth-db-community-queries"
 import type {
   CommunityDatabaseBindingRow,
@@ -15,6 +13,31 @@ import type {
   JobRow,
 } from "../../auth/auth-db-rows"
 import type { InitialCommunityDatabaseBinding } from "../community-repository-types"
+
+function syntheticBindingRow(input: {
+  communityDatabaseBindingId: string
+  communityId: string
+  binding: InitialCommunityDatabaseBinding
+  createdAt: string
+}): CommunityDatabaseBindingRow {
+  return {
+    community_database_binding_id: input.communityDatabaseBindingId,
+    community_id: input.communityId,
+    binding_role: "primary",
+    organization_slug: input.binding.organizationSlug,
+    group_name: input.binding.groupName,
+    group_id: input.binding.groupId,
+    database_name: input.binding.databaseName,
+    database_id: input.binding.databaseId,
+    database_url: input.binding.databaseUrl,
+    location: input.binding.location,
+    requires_credentials: input.binding.requiresCredentials,
+    status: "active",
+    transferred_at: null,
+    created_at: input.createdAt,
+    updated_at: input.createdAt,
+  }
+}
 
 export async function createCommunityProvisioningRequest(
   client: Client,
@@ -44,9 +67,9 @@ export async function createCommunityProvisioningRequest(
         INSERT INTO communities (
           community_id, creator_user_id, display_name, description, avatar_ref, banner_ref, membership_mode, status, provisioning_state, transfer_state,
           route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-          primary_database_binding_id, created_at, updated_at
+          created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', 'provisioning', 'none', ?8, ?9, NULL, NULL, ?10, ?10
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', 'provisioning', 'none', ?8, ?9, NULL, ?10, ?10
         )
       `,
       args: [
@@ -61,41 +84,6 @@ export async function createCommunityProvisioningRequest(
         input.namespaceVerificationId,
         input.createdAt,
       ],
-    })
-
-    await tx.execute({
-      sql: `
-        INSERT INTO community_database_bindings (
-          community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-          database_name, database_id, database_url, location, requires_credentials, status,
-          transferred_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, 'primary', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11, ?11
-        )
-      `,
-      args: [
-        input.communityDatabaseBindingId,
-        input.communityId,
-        input.binding.organizationSlug,
-        input.binding.groupName,
-        input.binding.groupId,
-        input.binding.databaseName,
-        input.binding.databaseId,
-        input.binding.databaseUrl,
-        input.binding.location,
-        input.binding.requiresCredentials ? 1 : 0,
-        input.createdAt,
-      ],
-    })
-
-    await tx.execute({
-      sql: `
-        UPDATE communities
-        SET primary_database_binding_id = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [input.communityId, input.communityDatabaseBindingId, input.createdAt],
     })
 
     await tx.execute({
@@ -121,9 +109,14 @@ export async function createCommunityProvisioningRequest(
     })
 
     const communityRow = await getCommunityRowById(tx, input.communityId)
-    const bindingRow = await getCommunityDatabaseBindingRowById(tx, input.communityDatabaseBindingId)
+    const bindingRow = syntheticBindingRow({
+      communityDatabaseBindingId: input.communityDatabaseBindingId,
+      communityId: input.communityId,
+      binding: input.binding,
+      createdAt: input.createdAt,
+    })
     const jobRow = await getJobRowById(tx, input.jobId)
-    if (!communityRow || !bindingRow || !jobRow) {
+    if (!communityRow || !jobRow) {
       throw internalError("Community provisioning request rows are missing after insert")
     }
 
@@ -153,47 +146,12 @@ export async function retryCommunityProvisioningRequest(
       throw internalError("Community row is missing for retry")
     }
 
-    let bindingRow = communityRow.primary_database_binding_id
-      ? await getCommunityDatabaseBindingRowById(tx, communityRow.primary_database_binding_id)
-      : await getPrimaryCommunityDatabaseBindingRow(tx, input.communityId)
-
-    if (!bindingRow) {
-      await tx.execute({
-        sql: `
-          INSERT INTO community_database_bindings (
-            community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-            database_name, database_id, database_url, location, requires_credentials, status,
-            transferred_at, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, 'primary', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11, ?11
-          )
-        `,
-        args: [
-          input.fallbackBindingId,
-          input.communityId,
-          input.binding.organizationSlug,
-          input.binding.groupName,
-          input.binding.groupId,
-          input.binding.databaseName,
-          input.binding.databaseId,
-          input.binding.databaseUrl,
-          input.binding.location,
-          input.binding.requiresCredentials ? 1 : 0,
-          input.createdAt,
-        ],
-      })
-
-      await tx.execute({
-        sql: `
-          UPDATE communities
-          SET primary_database_binding_id = ?2,
-              updated_at = ?3
-          WHERE community_id = ?1
-        `,
-        args: [input.communityId, input.fallbackBindingId, input.createdAt],
-      })
-      bindingRow = await getCommunityDatabaseBindingRowById(tx, input.fallbackBindingId)
-    }
+    const bindingRow = syntheticBindingRow({
+      communityDatabaseBindingId: input.fallbackBindingId,
+      communityId: input.communityId,
+      binding: input.binding,
+      createdAt: input.createdAt,
+    })
 
     const latestJob = await getLatestCommunityProvisioningJobRow(tx, input.communityId)
     const attemptCount = (latestJob?.attempt_count ?? 0) + 1
@@ -225,7 +183,7 @@ export async function retryCommunityProvisioningRequest(
         JSON.stringify({
           namespace_verification_id: input.namespaceVerificationId,
           mode: input.binding.provisioningMode,
-          database_url: bindingRow?.database_url ?? input.binding.databaseUrl,
+          database_url: bindingRow.database_url,
           retry: true,
         }),
         attemptCount,
@@ -235,7 +193,7 @@ export async function retryCommunityProvisioningRequest(
 
     const refreshedCommunityRow = await getCommunityRowById(tx, input.communityId)
     const jobRow = await getJobRowById(tx, input.jobId)
-    if (!refreshedCommunityRow || !bindingRow || !jobRow) {
+    if (!refreshedCommunityRow || !jobRow) {
       throw internalError("Community provisioning retry rows are missing after insert")
     }
 
@@ -268,16 +226,14 @@ export async function markCommunityProvisioningSucceeded(
           UPDATE communities
           SET status = 'active',
               provisioning_state = 'active',
-              primary_database_binding_id = ?2,
-              description = ?3,
-              avatar_ref = ?4,
-              banner_ref = ?5,
-              updated_at = ?6
+              description = ?2,
+              avatar_ref = ?3,
+              banner_ref = ?4,
+              updated_at = ?5
           WHERE community_id = ?1
         `,
         args: [
           input.communityId,
-          input.communityDatabaseBindingId,
           input.description ?? null,
           input.avatarRef ?? null,
           input.bannerRef ?? null,
@@ -317,23 +273,6 @@ export async function markCommunityProvisioningSucceeded(
   })
 }
 
-/**
- * Finalize a D1-native community's binding row once the shard has allocated a
- * concrete binding. The D1 path is credential-free, so this writes only the
- * `community_database_bindings` row.
- *
- * Replaces the `d1://pending-…invalid` sentinel written at create time with the
- * resolved `d1://shard/<bindingName>` URL and flips `requires_credentials` to 0,
- * so the legacy `openCommunityDb` path no longer hands libsql a `d1://pending`
- * URL it cannot parse (audit gap 1).
- *
- * `database_name` is set to the (unique) `bindingName` — NOT a constant like
- * "main" — because `idx_community_bindings_active_target` is UNIQUE over
- * `(organization_slug, group_name, database_name)` among active rows; every
- * D1-native community shares `organization_slug='shard'`/`group_name='shard'`,
- * so the binding name is what keeps each active target distinct (matches the
- * 1:1 database-per-community allocation model).
- */
 export async function persistProvisionedD1Binding(
   client: Client,
   input: {
@@ -344,30 +283,8 @@ export async function persistProvisionedD1Binding(
     updatedAt: string
   },
 ): Promise<void> {
-  await client.execute({
-    sql: `
-      UPDATE community_database_bindings
-      SET organization_slug = 'shard',
-          group_name = 'shard',
-          group_id = NULL,
-          database_name = ?2,
-          database_id = NULL,
-          database_url = ?3,
-          location = ?4,
-          requires_credentials = 0,
-          status = 'active',
-          transferred_at = NULL,
-          updated_at = ?5
-      WHERE community_database_binding_id = ?1
-    `,
-    args: [
-      input.communityDatabaseBindingId,
-      input.bindingName,
-      input.databaseUrl,
-      input.region,
-      input.updatedAt,
-    ],
-  })
+  void client
+  void input
 }
 
 export async function markCommunityProvisioningFailed(

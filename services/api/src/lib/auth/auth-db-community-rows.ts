@@ -19,7 +19,6 @@ export type CommunityRow = {
   route_slug: string | null
   namespace_verification_id: string | null
   pending_namespace_verification_session_id: string | null
-  primary_database_binding_id: string | null
   follower_count: number | null
   created_at: string
   updated_at: string
@@ -129,7 +128,6 @@ export function toCommunityRow(row: unknown): CommunityRow {
     route_slug: stringOrNull(rowValue(row, "route_slug")),
     namespace_verification_id: stringOrNull(rowValue(row, "namespace_verification_id")),
     pending_namespace_verification_session_id: stringOrNull(rowValue(row, "pending_namespace_verification_session_id")),
-    primary_database_binding_id: stringOrNull(rowValue(row, "primary_database_binding_id")),
     follower_count: typeof rowValue(row, "follower_count") === "number"
       ? rowValue(row, "follower_count") as number
       : null,

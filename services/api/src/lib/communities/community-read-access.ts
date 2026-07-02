@@ -72,9 +72,6 @@ function unwrap<T>(r: ShardResult<T>): T {
  * and re-runs the read-only guard server-side; this side rejects write batch.
  */
 export function makeShardReadClient(shard: ShardReadRpc, binding: ResolvedCommunityBinding): ReadClient {
-  if (binding.backend !== "d1") {
-    throw new HttpError(500, "d1_backend_not_provisioned", `Community ${binding.communityId} does not route to d1`)
-  }
   const bindingName = binding.bindingName
   if (!bindingName) {
     throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)

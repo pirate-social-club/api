@@ -631,14 +631,12 @@ publicCommunities.get("/", async (c) => {
   const matches = await Promise.all(rankedMatches
     .slice(0, limit)
     .map(async (community) => {
-      const preview = community.primary_database_binding_id
-        ? await getPublicCommunityPreview({
-            env: c.env,
-            communityId: community.community_id,
-            locale: null,
-            communityRepository: repository,
-          }).catch(() => null)
-        : null
+      const preview = await getPublicCommunityPreview({
+        env: c.env,
+        communityId: community.community_id,
+        locale: null,
+        communityRepository: repository,
+      }).catch(() => null)
       return {
         community: publicCommunityId(community.community_id),
         display_name: community.display_name,

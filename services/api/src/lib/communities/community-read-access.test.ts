@@ -21,12 +21,10 @@ beforeEach(async () => {
   await cp.execute(`
     CREATE TABLE community_database_routing (
       community_id TEXT PRIMARY KEY,
-      backend TEXT NOT NULL,
       provisioning_state TEXT NOT NULL,
       shard_worker_id TEXT,
       binding_name TEXT,
       region TEXT,
-      turso_database_binding_id TEXT,
       migrated_at TEXT,
       decommissioned_at TEXT,
       last_error_at TEXT,
@@ -55,17 +53,6 @@ function makeDeps(overrides: Partial<CommunityReadAccessDeps>): CommunityReadAcc
   }
 }
 
-async function seedTursoRow(communityId: string): Promise<void> {
-  await cp.execute({
-    sql: `
-      INSERT INTO community_database_routing
-        (community_id, backend, provisioning_state, turso_database_binding_id, created_at, updated_at)
-      VALUES (?1, 'turso', 'ready', 'cdb_1', 't0', 't0')
-    `,
-    args: [communityId],
-  })
-}
-
 test("d1 row → routed through the shard invoker", async () => {
   await seedD1Row("cmty_1")
   const handle = await resolveCommunityReadHandle(makeDeps({}), "cmty_1")
@@ -89,8 +76,8 @@ test("decommissioned row → propagates 410", async () => {
   await cp.execute({
     sql: `
       INSERT INTO community_database_routing
-        (community_id, backend, provisioning_state, turso_database_binding_id, decommissioned_at, created_at, updated_at)
-      VALUES (?1, 'turso', 'decommissioned', 'cdb_1', 't1', 't0', 't1')
+        (community_id, provisioning_state, decommissioned_at, created_at, updated_at)
+      VALUES (?1, 'decommissioned', 't1', 't0', 't1')
     `,
     args: ["cmty_gone"],
   })
@@ -122,7 +109,6 @@ test("makeShardReadClient dispatches execute/batch to the shard RPC with communi
   } as unknown as Parameters<typeof makeShardReadClient>[0]
   const binding = {
     communityId: "cmt_d1",
-    backend: "d1",
     provisioningState: "ready",
     shardWorkerId: "shard-1",
     bindingName: "DB_CMTY_PILOT",
@@ -171,7 +157,6 @@ test("makeShardReadClient preserves shard error codes across the boundary (step 
     } as unknown as Parameters<typeof makeShardReadClient>[0]
     const binding = {
       communityId: "cmt_d1",
-      backend: "d1",
       provisioningState: "ready",
       shardWorkerId: "shard-1",
       bindingName: "DB_CMTY_PILOT",
@@ -190,7 +175,6 @@ test("makeShardReadClient preserves shard error codes across the boundary (step 
 test("makeShardReadClient throws if the d1 routing row has no binding_name", () => {
   const binding = {
     communityId: "cmt_d1",
-    backend: "d1",
     provisioningState: "ready",
     shardWorkerId: "shard-1",
     bindingName: null,
@@ -217,8 +201,8 @@ async function seedD1Row(communityId: string): Promise<void> {
   await cp.execute({
     sql: `
       INSERT INTO community_database_routing
-        (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, migrated_at, created_at, updated_at)
-      VALUES (?1, 'd1', 'ready', 'shard-1', 'DB_CMTY_PILOT', 'enam', 't1', 't0', 't1')
+        (community_id, provisioning_state, shard_worker_id, binding_name, region, migrated_at, created_at, updated_at)
+      VALUES (?1, 'ready', 'shard-1', 'DB_CMTY_PILOT', 'enam', 't1', 't0', 't1')
     `,
     args: [communityId],
   })
@@ -230,32 +214,15 @@ test("write: backend='d1' → D1 client", async () => {
   expect((h.client as { __tag?: string }).__tag).toBe("d1")
 })
 
-test("write: backend='d1' never opens the Turso/legacy client (enqueue backend consistency)", async () => {
+test("write: backend='d1' never opens the legacy external client (enqueue backend consistency)", async () => {
   // Regression for #48: a write-on-read route (e.g. listCommentReplies' prewarm enqueue) routed
   // through openCommunityWriteClient must enqueue into the community's actual backend. For a
-  // D1-backed community it must hit the D1 client and NEVER fall to the Turso/legacy client —
-  // otherwise jobs split-brain (enqueued to Turso, consumed from D1 by the routed runner).
+  // D1-backed community it must hit the D1 client and NEVER fall to the legacy external client —
+  // otherwise jobs split-brain (enqueued to a legacy external DB, consumed from D1 by the routed runner).
   await seedD1Row("cmt_d1consistency")
   const deps = writeDeps({})
   const h = await resolveCommunityWriteHandle(deps, "cmt_d1consistency")
   expect((h.client as { __tag?: string }).__tag).toBe("d1")
-})
-
-test("write: backend='turso' is rejected by the D1 client opener", async () => {
-  await seedTursoRow("cmt_tw")
-  await expect(
-    resolveCommunityWriteHandle(
-      writeDeps({
-        openD1: (binding) => {
-          if (binding.backend !== "d1") {
-            throw new HttpError(500, "d1_backend_not_provisioned", "non-d1 route", true)
-          }
-          return {} as Client
-        },
-      }),
-      "cmt_tw",
-    ),
-  ).rejects.toMatchObject({ code: "d1_backend_not_provisioned" })
 })
 
 test("write: no routing row → propagates community_not_found", async () => {

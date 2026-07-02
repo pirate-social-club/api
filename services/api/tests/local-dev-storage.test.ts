@@ -340,7 +340,7 @@ describe("applyLocalControlPlaneMigrations", () => {
     const currentLocalDir = join(serviceRoot, ".local")
     await mkdir(currentLocalDir, { recursive: true })
 
-    const dbFilename = "turso-live-smoke-control-plane.db"
+    const dbFilename = "local-live-smoke-control-plane.db"
     const currentDbPath = join(currentLocalDir, dbFilename)
     await writeFile(currentDbPath, "")
 
@@ -367,7 +367,7 @@ describe("applyLocalControlPlaneMigrations", () => {
     const currentLocalDir = join(serviceRoot, ".local")
     await mkdir(currentLocalDir, { recursive: true })
 
-    const dbFilename = "turso-live-smoke-control-plane.db"
+    const dbFilename = "local-live-smoke-control-plane.db"
     const currentDbPath = join(currentLocalDir, dbFilename)
     await writeFile(currentDbPath, "")
 

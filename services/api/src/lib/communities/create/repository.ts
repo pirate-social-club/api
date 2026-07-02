@@ -11,7 +11,7 @@ import {
 } from "../provisioning/generated/community-schema-snapshot"
 import { serializeLocalDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
+import type { CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -77,10 +77,9 @@ const RUNNING_JOB_HEARTBEAT_TIMEOUT_MS = 30_000
 export type ProvisioningRetryAction =
   | { action: "return_existing" }
   | { action: "retry" }
-  | { action: "finalize"; binding: CommunityDatabaseBindingRow }
 
 export async function resolveProvisioningRetryAction(
-  repo: CommunityDatabaseBindingRepository,
+  _repo: CommunityDatabaseBindingRepository,
   community: CommunityRow,
   latestJob: JobRow,
 ): Promise<ProvisioningRetryAction> {
@@ -100,12 +99,7 @@ export async function resolveProvisioningRetryAction(
     return { action: "retry" }
   }
 
-  const binding = await repo.getPrimaryCommunityDatabaseBinding(community.community_id)
-  if (!binding || binding.status !== "active" || isPendingD1CommunityBindingUrl(binding.database_url)) {
-    return { action: "retry" }
-  }
-
-  return { action: "finalize", binding }
+  return { action: "retry" }
 }
 
 export async function loadCommunityLocalSnapshot(
@@ -113,10 +107,8 @@ export async function loadCommunityLocalSnapshot(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
-  // Routed read: follows the community's backend (D1 via shard read RPC when flipped,
-  // else legacy Turso). Read-only (SELECTs only), so a flipped community's snapshot
-  // reads reflect D1 instead of stale Turso. Closes #48 for donation/rules/gate
-  // snapshot reads. Falls back to null on any open failure, as before.
+  // Routed read via the D1 shard read RPC. Read-only (SELECTs only). Closes #48 for
+  // donation/rules/gate snapshot reads. Falls back to null on any open failure, as before.
   const db = await openCommunityReadClient(env, repo, communityId).catch(() => null)
   if (!db) {
     return null

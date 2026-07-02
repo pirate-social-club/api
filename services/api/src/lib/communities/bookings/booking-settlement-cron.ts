@@ -7,8 +7,8 @@ import { resolveDueBooking, type ResolveDueResult } from "./booking-settlement-e
 
 type CommunityRepository = Parameters<typeof openCommunityReadClient>[1] & {
   // Settlement-capable routes ONLY: ready D1 bindings that are not decommissioned. The cron
-  // must enumerate from authoritative routing/backend state — never the generic active-community
-  // list — so Turso, decommissioned, unsupported-backend, and not-yet-ready routes are skipped
+  // must enumerate from authoritative routing state — never the generic active-community
+  // list — so decommissioned and not-yet-ready routes are skipped
   // before any open attempt (no spurious settlement errors for never-eligible routes).
   listSettlementEligibleCommunities: (input?: { limit?: number }) => Promise<Array<{ community_id: string; created_at?: string | null }>>
 }
@@ -120,7 +120,7 @@ export async function sweepDueBookingSettlements(input: SweepBookingSettlementsI
   try {
     // Fair rotation across ticks using the existing scheduler utility (newest kept + remainder rotated).
     // Enumerate ONLY settlement-capable routes (ready, non-decommissioned D1) from authoritative
-    // routing state — Turso / decommissioned / unsupported / not-yet-ready routes are excluded here,
+    // routing state — decommissioned / not-yet-ready routes are excluded here,
     // so the sweep never attempts (and never error-logs) a community that could not settle anyway.
     const communities = await input.communityRepository.listSettlementEligibleCommunities()
     const communityIds = selectScheduledCommunityJobPollIds(communities, maxCommunities, now())

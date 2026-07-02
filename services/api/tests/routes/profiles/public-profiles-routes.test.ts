@@ -107,13 +107,12 @@ describe("public profile routes", () => {
           route_slug,
           namespace_verification_id,
           pending_namespace_verification_session_id,
-          primary_database_binding_id,
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?4, ?4),
-          (?5, ?2, ?6, 'request', 'active', 'active', 'none', NULL, NULL, NULL, NULL, ?7, ?7),
-          (?8, ?2, ?9, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, NULL, ?10, ?10)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, ?4, ?4),
+          (?5, ?2, ?6, 'request', 'active', 'active', 'none', NULL, NULL, NULL, ?7, ?7),
+          (?8, ?2, ?9, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, ?10, ?10)
       `,
       args: [
         "cmt_public_alpha",

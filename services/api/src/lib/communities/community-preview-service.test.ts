@@ -57,7 +57,6 @@ async function buildCommunityDb(karaokeEnabled: 0 | 1) {
     route_slug: "@preview",
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: null,
     follower_count: 0,
     created_at: now,
     updated_at: now,

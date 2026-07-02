@@ -109,7 +109,7 @@ async function seedVerifiedNamespace(sql: SQL, input: {
 }): Promise<void> {
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
   const challengePayload = JSON.stringify({
-    smoke: "deturso-d1-provisioning-cutover",
+    smoke: "d1-provisioning-cutover",
     root_label: input.rootLabel,
   })
 
@@ -124,10 +124,10 @@ async function seedVerifiedNamespace(sql: SQL, input: {
         accepted_at, expires_at, failure_reason, created_at, updated_at
       ) VALUES (
         ${input.namespaceVerificationSessionId}, ${input.namespaceVerificationId}, ${input.userId}, 'hns', ${input.rootLabel},
-        ${input.rootLabel}, 'verified', 'dns_txt', ${challengePayload}, '_pirate-smoke', 'deturso-smoke',
+        ${input.rootLabel}, 'verified', 'dns_txt', ${challengePayload}, '_pirate-smoke', 'd1-cutover-smoke',
         NULL, ${expiresAt}, 1, 1, 1,
         1, 1, 1, 1,
-        1, 'single_holder_root', 'owner_managed_namespace', 'deturso_smoke_seed', 'deturso_smoke_seed',
+        1, 'single_holder_root', 'owner_managed_namespace', 'd1_cutover_smoke_seed', 'd1_cutover_smoke_seed',
         ${input.now}, ${expiresAt}, NULL, ${input.now}, ${input.now}
       )
     `
@@ -141,7 +141,7 @@ async function seedVerifiedNamespace(sql: SQL, input: {
         ${input.namespaceVerificationId}, ${input.namespaceVerificationSessionId}, ${input.userId}, 'hns', ${input.rootLabel},
         'verified', 1, 1, 1, 1,
         1, 1, 1, 1,
-        'single_holder_root', 'owner_managed_namespace', 'deturso_smoke_seed', 'deturso_smoke_seed', ${input.now}, ${expiresAt}, ${input.now}, ${input.now}
+        'single_holder_root', 'owner_managed_namespace', 'd1_cutover_smoke_seed', 'd1_cutover_smoke_seed', ${input.now}, ${expiresAt}, ${input.now}, ${input.now}
       )
     `
   })
@@ -161,7 +161,7 @@ async function createCommunity(input: {
     ok: [202],
     body: {
       display_name: input.displayName,
-      description: "Temporary de-Turso D1 provisioning cutover smoke.",
+      description: "Temporary D1 provisioning cutover smoke.",
       membership_mode: "request",
       default_age_gate_policy: "none",
       ...(input.namespaceVerificationId
@@ -179,23 +179,18 @@ async function createCommunity(input: {
 
 async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<string, unknown>> {
   const rows = await sql`
-    SELECT r.backend, r.provisioning_state, r.shard_worker_id, r.binding_name, r.region,
-           b.database_url, b.database_name, b.requires_credentials
+    SELECT r.provisioning_state, r.shard_worker_id, r.binding_name, r.region
     FROM community_database_routing r
-    JOIN community_database_bindings b ON b.community_id = r.community_id AND b.binding_role = 'primary'
     WHERE r.community_id = ${communityId}
     LIMIT 1
   `
   const row = rows[0] as Record<string, unknown> | undefined
   if (!row) throw new Error(`missing routing row for ${communityId}`)
-  if (row.backend !== "d1" || row.provisioning_state !== "ready") {
-    throw new Error(`routing row is not d1/ready for ${communityId}: ${JSON.stringify(row)}`)
+  if (row.provisioning_state !== "ready") {
+    throw new Error(`routing row is not ready for ${communityId}: ${JSON.stringify(row)}`)
   }
-  if (typeof row.database_url !== "string" || !row.database_url.startsWith("d1://shard/")) {
-    throw new Error(`binding URL is not d1://shard for ${communityId}: ${JSON.stringify(row)}`)
-  }
-  if (Number(row.requires_credentials) !== 0) {
-    throw new Error(`D1 binding unexpectedly requires credentials for ${communityId}: ${JSON.stringify(row)}`)
+  if (typeof row.binding_name !== "string" || !row.binding_name.startsWith("DB_CMTY_")) {
+    throw new Error(`routing row does not carry a D1 binding for ${communityId}: ${JSON.stringify(row)}`)
   }
   return row
 }
@@ -203,7 +198,7 @@ async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<st
 async function main(): Promise<void> {
   const apiBase = optionalEnv("PIRATE_API_BASE_URL", "https://api.pirate.sc")
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)
-  const subject = `deturso-d1-smoke-${runId}`
+  const subject = `d1-cutover-smoke-${runId}`
   const now = new Date().toISOString()
   const sql = new SQL(sqlUrl())
 
@@ -212,22 +207,22 @@ async function main(): Promise<void> {
     const namespaceless = await createCommunity({
       apiBase,
       token: session.accessToken,
-      displayName: `Deturso D1 Namespaceless Smoke ${runId}`,
+      displayName: `D1 Cutover Namespaceless Smoke ${runId}`,
     })
 
-    const namespaceVerificationId = `nv_deturso_smoke_${runId}`
-    const namespaceVerificationSessionId = `nvs_deturso_smoke_${runId}`
+    const namespaceVerificationId = `nv_d1_cutover_smoke_${runId}`
+    const namespaceVerificationSessionId = `nvs_d1_cutover_smoke_${runId}`
     await seedVerifiedNamespace(sql, {
       userId: session.userId,
       namespaceVerificationId,
       namespaceVerificationSessionId,
-      rootLabel: `deturso-smoke-${runId}`,
+      rootLabel: `d1-cutover-smoke-${runId}`,
       now,
     })
     const namespaced = await createCommunity({
       apiBase,
       token: session.accessToken,
-      displayName: `Deturso D1 Namespaced Smoke ${runId}`,
+      displayName: `D1 Cutover Namespaced Smoke ${runId}`,
       namespaceVerificationId,
     })
 

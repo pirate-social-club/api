@@ -147,8 +147,8 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   }
 
   // Settlement-capable routes only (ready D1, not decommissioned). Used by the
-  // unattended booking-settlement cron so it never enumerates Turso / decommissioned
-  // / not-yet-ready communities (which cannot settle and would only emit errors).
+  // unattended booking-settlement cron so it never enumerates decommissioned
+  // or not-yet-ready communities (which cannot settle and would only emit errors).
   async listSettlementEligibleCommunities(input?: {
     limit?: number
   }): Promise<SettlementEligibleCommunity[]> {

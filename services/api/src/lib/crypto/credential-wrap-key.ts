@@ -2,7 +2,7 @@ import type { Env } from "../../env"
 import { internalError } from "../errors"
 
 export function resolveCredentialWrapKey(env: Env): string {
-  const configured = String(env.TURSO_COMMUNITY_DB_WRAP_KEY || "").trim()
+  const configured = String(env.CREDENTIAL_WRAP_KEY || "").trim()
   if (configured) {
     return configured
   }
@@ -11,7 +11,7 @@ export function resolveCredentialWrapKey(env: Env): string {
 }
 
 export function resolveCredentialWrapKeyVersion(env: Env): number {
-  const parsed = Number(String(env.TURSO_COMMUNITY_DB_WRAP_KEY_VERSION || "").trim())
+  const parsed = Number(String(env.CREDENTIAL_WRAP_KEY_VERSION || "").trim())
   if (Number.isInteger(parsed) && parsed > 0) {
     return parsed
   }

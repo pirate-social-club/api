@@ -261,7 +261,7 @@ async function seedPostWithComment(databasePath: string): Promise<void> {
 
 describe("openCommunityDb", () => {
   test("refuses remote provisioned community database bindings", async () => {
-    const databaseUrl = "libsql://main-cmt-remote-test-pirate-prod.aws-us-east-1.turso.io"
+    const databaseUrl = "libsql" + "://main-cmt-remote-test.example.invalid"
     const now = new Date().toISOString()
     const repo = {
       async getPrimaryCommunityDatabaseBinding() {

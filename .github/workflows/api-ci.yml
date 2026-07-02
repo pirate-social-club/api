@@ -6,7 +6,6 @@ on:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
-      - "services/community-protocol-issuer/**"
       - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
@@ -17,7 +16,6 @@ on:
       - ".github/workflows/api-ci.yml"
       - "services/api/**"
       - "services/cli/**"
-      - "services/community-protocol-issuer/**"
       - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
@@ -359,49 +357,6 @@ jobs:
 
       - name: Run CLI tests
         working-directory: services/cli
-        run: bun run test
-
-      - name: Show iron-proxy egress summary
-        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
-        if: always()
-
-  community-protocol-issuer:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Start iron-proxy egress audit
-        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
-        with:
-          version: 0.41.0
-          egress-rules: egress-rules.yaml
-          warn: true
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.2.21
-
-      - name: Install shared dependencies
-        working-directory: services/shared
-        run: bun install --frozen-lockfile
-
-      - name: Install issuer dependencies
-        working-directory: services/community-protocol-issuer
-        run: bun install --frozen-lockfile
-
-      - name: Audit issuer dependencies
-        working-directory: services/community-protocol-issuer
-        run: bun audit --audit-level=high
-
-      - name: Typecheck issuer
-        working-directory: services/community-protocol-issuer
-        run: bun run check
-
-      - name: Run issuer tests
-        working-directory: services/community-protocol-issuer
         run: bun run test
 
       - name: Show iron-proxy egress summary

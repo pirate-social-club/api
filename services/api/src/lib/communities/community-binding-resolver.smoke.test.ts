@@ -8,7 +8,7 @@ import { HttpError } from "../errors"
  * Phase 0.1 synthetic binding smoke — LOGIC PROOF, NOT THE EXIT GATE.
  *
  * This exercises the router read path end to end against stubs:
- *   provision -> route read (d1) -> remove binding -> route fallback (turso) -> decommission.
+ *   provision -> route read (d1) -> decommission.
  * It also covers the dual-TTL cache, the binding_pending / community_not_found
  * error paths, and the shard-rejects-unknown-community open question.
  *
@@ -40,12 +40,10 @@ async function createRoutingDirectory(): Promise<Client> {
   await client.execute(`
     CREATE TABLE community_database_routing (
       community_id TEXT PRIMARY KEY,
-      backend TEXT NOT NULL,
       provisioning_state TEXT NOT NULL,
       shard_worker_id TEXT,
       binding_name TEXT,
       region TEXT,
-      turso_database_binding_id TEXT,
       migrated_at TEXT,
       decommissioned_at TEXT,
       last_error_at TEXT,
@@ -134,15 +132,15 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     await cp.execute({
       sql: `
         INSERT INTO community_database_routing
-          (community_id, backend, provisioning_state, shard_worker_id, binding_name, region,
-           turso_database_binding_id, created_at, updated_at)
-        VALUES (?1, 'd1', 'ready', ?2, ?3, 'enam', NULL, 't0', 't0')
+          (community_id, provisioning_state, shard_worker_id, binding_name, region,
+           created_at, updated_at)
+        VALUES (?1, 'ready', ?2, ?3, 'enam', 't0', 't0')
       `,
       args: [SYNTHETIC_COMMUNITY, SHARD_WORKER, BINDING_NAME],
     })
   }
 
-  test("provision -> route read (d1) -> legacy route metadata -> decommission", async () => {
+  test("provision -> route read (d1) -> decommission", async () => {
     const clock = makeClock()
     const resolver = new CommunityBindingResolver({ now: clock.now })
 
@@ -151,7 +149,6 @@ describe("Phase 0.1 synthetic binding smoke", () => {
 
     // 2. route read on d1: resolve, dispatch to the shard, read a real row
     const d1Binding = await resolver.resolve(cp, SYNTHETIC_COMMUNITY)
-    expect(d1Binding.backend).toBe("d1")
     expect(d1Binding.shardWorkerId).toBe(SHARD_WORKER)
     expect(d1Binding.bindingName).toBe(BINDING_NAME)
 
@@ -159,25 +156,7 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     const read = await shard.read(d1Binding.communityId, "SELECT id, title FROM posts WHERE id = ?1", ["post_1"])
     expect(read.rows).toEqual([{ id: "post_1", title: "hello from d1" }])
 
-    // 3. legacy route metadata can still be resolved, but there is no Turso
-    // dispatch path in the API read/write router after the D1 cutover.
-    await cp.execute({
-      sql: `
-        UPDATE community_database_routing
-        SET backend = 'turso', shard_worker_id = NULL, binding_name = NULL, region = NULL,
-            turso_database_binding_id = 'tdb_synthetic', updated_at = 't1'
-        WHERE community_id = ?1
-      `,
-      args: [SYNTHETIC_COMMUNITY],
-    })
-    resolver.invalidate(SYNTHETIC_COMMUNITY)
-
-    // 4. resolver now reports the legacy backend shape
-    const tursoBinding = await resolver.resolve(cp, SYNTHETIC_COMMUNITY)
-    expect(tursoBinding.backend).toBe("turso")
-    expect(tursoBinding.shardWorkerId).toBeNull()
-
-    // 5. decommission
+    // 3. decommission
     await cp.execute({
       sql: `
         UPDATE community_database_routing
@@ -232,8 +211,8 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     await cp.execute({
       sql: `
         INSERT INTO community_database_routing
-          (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
-        VALUES (?1, 'd1', 'degraded', ?2, ?3, 'enam', 't0', 't0')
+          (community_id, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+        VALUES (?1, 'degraded', ?2, ?3, 'enam', 't0', 't0')
       `,
       args: [SYNTHETIC_COMMUNITY, SHARD_WORKER, BINDING_NAME],
     })
@@ -266,9 +245,8 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     await cp.execute({
       sql: `
         INSERT INTO community_database_routing
-          (community_id, backend, provisioning_state, turso_database_binding_id,
-           decommissioned_at, created_at, updated_at)
-        VALUES (?1, 'turso', 'decommissioned', 'tdb_x', 't0', 't0', 't0')
+          (community_id, provisioning_state, decommissioned_at, created_at, updated_at)
+        VALUES (?1, 'decommissioned', 't0', 't0', 't0')
       `,
       args: [SYNTHETIC_COMMUNITY],
     })
@@ -294,8 +272,8 @@ describe("Phase 0.1 synthetic binding smoke", () => {
     await cp.execute({
       sql: `
         INSERT INTO community_database_routing
-          (community_id, backend, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
-        VALUES (?1, 'd1', 'provisioning', ?2, ?3, 'enam', 't0', 't0')
+          (community_id, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+        VALUES (?1, 'provisioning', ?2, ?3, 'enam', 't0', 't0')
       `,
       args: [SYNTHETIC_COMMUNITY, SHARD_WORKER, BINDING_NAME],
     })
@@ -310,7 +288,6 @@ describe("Phase 0.1 synthetic binding smoke", () => {
       SYNTHETIC_COMMUNITY,
     ])
     const resolved = await resolver.resolve(cp, SYNTHETIC_COMMUNITY)
-    expect(resolved.backend).toBe("d1")
     expect(resolved.provisioningState).toBe("ready")
   })
 

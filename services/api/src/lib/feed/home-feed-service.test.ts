@@ -40,7 +40,6 @@ function createCommunityRow(input: {
     route_slug: input.communityId,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: null,
     follower_count: 0,
     created_at: "2026-04-18T00:00:00.000Z",
     updated_at: "2026-04-18T00:00:00.000Z",

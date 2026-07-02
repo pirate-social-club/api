@@ -8,7 +8,6 @@ import {
   getLatestCommunityProvisioningJobRow,
   listActiveCommunityRows,
   searchActiveCommunityRows,
-  getPrimaryCommunityDatabaseBindingRow,
 } from "../auth/auth-db-community-queries"
 import type {
   CommunityDatabaseBindingRow,
@@ -61,7 +60,9 @@ export async function getPrimaryCommunityDatabaseBinding(
   client: Client,
   communityId: string,
 ): Promise<CommunityDatabaseBindingRow | null> {
-  return getPrimaryCommunityDatabaseBindingRow(client, communityId)
+  void client
+  void communityId
+  return null
 }
 
 export async function getJobById(client: Client, jobId: string): Promise<JobRow | null> {

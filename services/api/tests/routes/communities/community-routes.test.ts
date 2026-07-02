@@ -964,18 +964,6 @@ describe("community routes", () => {
         route_slug: string | null
       }
     }
-    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
-
-    await ctx.client.execute({
-      sql: `
-        UPDATE community_database_bindings
-        SET database_url = 'libsql://unreachable-seo-preview.invalid',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE community_id = ?1
-      `,
-      args: [communityId],
-    })
-
     const preview = await app.request(
       `http://pirate.test/public-communities/${communityCreateBody.community.id}?preview=seo`,
       {},

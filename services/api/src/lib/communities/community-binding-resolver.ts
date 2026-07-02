@@ -2,7 +2,6 @@ import type { DbExecutor } from "../db-helpers"
 import { HttpError } from "../errors"
 import {
   getCommunityDatabaseRoutingRow,
-  type CommunityBackend,
   type CommunityProvisioningState,
 } from "./community-routing-repository"
 
@@ -11,8 +10,8 @@ import {
  *
  * `resolve` reads the control-plane `community_database_routing` directory,
  * caches the result, and returns the routing target the caller dispatches on.
- * The caller (router) is responsible for the actual dispatch on `backend`:
- *   - `d1`: invoke the shard service binding with `shardWorkerId` + `bindingName`.
+ * The caller (router) invokes the shard service binding with `shardWorkerId` +
+ * `bindingName`.
  *
  * Caching follows the design's dual-TTL rule: a 60s TTL for live routing entries
  * and a shorter 5s TTL for rows carrying `decommissioned_at`, so a decommission
@@ -21,7 +20,6 @@ import {
  */
 export type ResolvedCommunityBinding = {
   communityId: string
-  backend: CommunityBackend
   provisioningState: CommunityProvisioningState
   shardWorkerId: string | null
   bindingName: string | null
@@ -101,7 +99,6 @@ export class CommunityBindingResolver {
 
     const value: ResolvedCommunityBinding = {
       communityId: row.community_id,
-      backend: row.backend,
       provisioningState: row.provisioning_state,
       shardWorkerId: row.shard_worker_id,
       bindingName: row.binding_name,
