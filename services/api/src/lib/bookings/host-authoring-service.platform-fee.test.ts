@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import {
+  setBookingHostConfigRepositoriesForTests,
+  upsertBookingProfile,
+} from "./host-authoring-service"
 
 // Regression: platform_fee_bps is a platform-controlled commission and must NOT be
 // settable by a host via self-service profile writes (mass-assignment → revenue loss).
@@ -21,14 +25,6 @@ const fakeWriteRepo = {
   },
 }
 
-mock.module("../runtime-deps", () => ({ getControlPlaneClient: () => ({}) }))
-mock.module("./host-config-repository", () => ({
-  createBookingHostConfigRepository: () => fakeReadRepo,
-  createBookingHostConfigWriteRepository: () => fakeWriteRepo,
-}))
-
-const { upsertBookingProfile } = await import("./host-authoring-service")
-
 const validProfile = {
   host_timezone: "UTC",
   base_price_cents: 5000,
@@ -42,6 +38,14 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     createdInput = null
     updatedInput = null
     existingProfile = null
+    setBookingHostConfigRepositoriesForTests({
+      read: fakeReadRepo as never,
+      write: fakeWriteRepo as never,
+    })
+  })
+
+  afterEach(() => {
+    setBookingHostConfigRepositoriesForTests(null)
   })
 
   test("create ignores a host-supplied platform_fee_bps and uses the platform default (1000)", async () => {
