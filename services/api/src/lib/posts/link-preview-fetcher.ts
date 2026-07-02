@@ -7,6 +7,7 @@ export type LinkPreviewMetadata = {
 
 const LINK_PREVIEW_FETCH_TIMEOUT_MS = 8_000
 const LINK_PREVIEW_FALLBACK_MAX_BYTES = 128 * 1024
+const LINK_PREVIEW_MAX_REDIRECTS = 4
 
 type MetaImageCandidate = {
   priority: number
@@ -23,6 +24,44 @@ type MetaTitleCandidate = {
   value: string
 }
 
+// SSRF guard: reject hosts that are not safely public. Blocks literal private/
+// reserved/loopback/link-local IPs (including the 169.254.169.254 cloud-metadata
+// address), localhost, and single-label / *.local / *.internal names. NOTE: a
+// Worker cannot resolve DNS before fetch, so a public hostname that *resolves* to
+// a private IP (DNS rebinding) is not caught here — the durable fix is to route
+// unfurling through the sandboxed third party. This closes the direct-literal and
+// redirect-based vectors as defense-in-depth.
+export function isBlockedSsrfHostname(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "")
+  if (!host) return true
+
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (v4) {
+    const octets = v4.slice(1, 5).map((part) => Number(part))
+    if (octets.some((n) => n > 255)) return true
+    const [a, b] = octets
+    if (a === 0 || a === 10 || a === 127) return true
+    if (a === 169 && b === 254) return true // link-local incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT
+    if (a >= 224) return true // multicast / reserved
+    return false
+  }
+
+  if (host.includes(":")) { // IPv6 literal
+    if (host === "::1" || host === "::") return true
+    if (host.startsWith("fe80") || host.startsWith("fc") || host.startsWith("fd")) return true
+    if (host.startsWith("::ffff:")) return true // IPv4-mapped
+    return false
+  }
+
+  if (host === "localhost") return true
+  if (host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".intranet")) return true
+  if (!host.includes(".")) return true // single-label host (e.g. "metadata", "router")
+  return false
+}
+
 function normalizePreviewUrl(value: string | null | undefined, baseUrl: string): string | null {
   const trimmed = String(value ?? "").trim()
   if (!trimmed) {
@@ -31,9 +70,13 @@ function normalizePreviewUrl(value: string | null | undefined, baseUrl: string):
 
   try {
     const parsed = new URL(trimmed, baseUrl)
-    return parsed.protocol === "http:" || parsed.protocol === "https:"
-      ? parsed.href
-      : null
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null
+    }
+    if (isBlockedSsrfHostname(parsed.hostname)) {
+      return null
+    }
+    return parsed.href
   } catch {
     return null
   }
@@ -269,14 +312,30 @@ export async function fetchLinkPreviewMetadata(input: {
   )
 
   try {
-    const response = await (input.fetcher ?? fetch)(pageUrl, {
+    const doFetch = input.fetcher ?? fetch
+    const requestInit = {
       headers: {
         accept: "text/html,application/xhtml+xml",
         "user-agent": input.userAgent ?? "Pirate link preview fetcher",
       },
-      redirect: "follow",
+      // Follow redirects manually so every hop is re-checked against the SSRF guard
+      // (a public host must not be able to 302 us to an internal target).
+      redirect: "manual" as const,
       signal: controller.signal,
-    })
+    }
+    let currentUrl = pageUrl
+    let response = await doFetch(currentUrl, requestInit)
+    for (let hop = 0; hop < LINK_PREVIEW_MAX_REDIRECTS; hop++) {
+      if (response.status < 300 || response.status >= 400) {
+        break
+      }
+      const location = normalizePreviewUrl(response.headers.get("location"), currentUrl)
+      if (!location) {
+        return { imageUrl: null, title: null }
+      }
+      currentUrl = location
+      response = await doFetch(currentUrl, requestInit)
+    }
 
     if (!response.ok) {
       return { imageUrl: null, title: null }
@@ -284,7 +343,7 @@ export async function fetchLinkPreviewMetadata(input: {
 
     return extractLinkPreviewMetadata({
       response,
-      pageUrl: response.url || pageUrl,
+      pageUrl: response.url || currentUrl,
     })
   } finally {
     clearTimeout(timeout)
