@@ -1,5 +1,53 @@
 import { describe, expect, test } from "bun:test"
-import { extractLinkPreviewMetadata, fetchLinkPreviewMetadata } from "./link-preview-fetcher"
+import { extractLinkPreviewMetadata, fetchLinkPreviewMetadata, isBlockedSsrfHostname } from "./link-preview-fetcher"
+
+describe("isBlockedSsrfHostname (SSRF guard)", () => {
+  test("blocks private, loopback, link-local, CGNAT, and internal hosts", () => {
+    for (const host of [
+      "127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1", "172.31.255.255",
+      "169.254.169.254", "100.64.0.1", "0.0.0.0", "localhost", "metadata",
+      "foo.internal", "printer.local", "::1", "fe80::1", "fd00::1", "[::1]",
+    ]) {
+      expect(isBlockedSsrfHostname(host)).toBe(true)
+    }
+  })
+  test("allows normal public hosts (incl. public IPs just outside private ranges)", () => {
+    for (const host of [
+      "example.com", "www.youtube.com", "8.8.8.8", "sub.domain.co.uk",
+      "172.15.0.1", "172.32.0.1", "11.0.0.1",
+    ]) {
+      expect(isBlockedSsrfHostname(host)).toBe(false)
+    }
+  })
+})
+
+describe("fetchLinkPreviewMetadata SSRF enforcement", () => {
+  test("never fetches a directly-private URL", async () => {
+    let called = false
+    const result = await fetchLinkPreviewMetadata({
+      url: "http://127.0.0.1:8080/admin",
+      fetcher: (async () => { called = true; return new Response("x") }) as typeof fetch,
+    })
+    expect(called).toBe(false)
+    expect(result).toEqual({ imageUrl: null, title: null })
+  })
+
+  test("does not follow a redirect to a private/metadata target", async () => {
+    let calls = 0
+    const result = await fetchLinkPreviewMetadata({
+      url: "https://public.example.com/start",
+      fetcher: (async () => {
+        calls += 1
+        if (calls === 1) {
+          return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } })
+        }
+        return new Response("<html><head><title>secret</title></head></html>", { headers: { "content-type": "text/html" } })
+      }) as typeof fetch,
+    })
+    expect(result).toEqual({ imageUrl: null, title: null })
+    expect(calls).toBe(1) // stopped at the redirect; never fetched the internal target
+  })
+})
 
 describe("link-preview-fetcher", () => {
   test("extracts and resolves Open Graph preview metadata from html", async () => {
