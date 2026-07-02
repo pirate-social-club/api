@@ -104,6 +104,10 @@ With those caps, one registration attempt is bounded at:
 ```
 
 Using 2x retry headroom gives a required per-run signer balance floor of
-0.015 IP. The configured `STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI` is 0.1 IP and
-`STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI` is 0.25 IP, so the runtime funding
-preflight stays above the bounded worst-case registration cost.
+0.015 IP. Royalty registration intentionally requires the runtime signer target
+balance, not only the generic minimum floor, before it submits Story writes.
+Keep the configured `STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI` at 0.25 IP and
+`STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI` at 0.5 IP. This gives enough
+operational headroom for repeated staging/prod smoke posts: staging registration
+failed below the old 0.25 IP target and passed after the operator signer was
+rebalanced to about 0.49 IP.
