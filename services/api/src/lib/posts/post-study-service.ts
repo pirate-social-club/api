@@ -1065,6 +1065,12 @@ export async function getPostStudyPayload(input: {
       targetLanguage,
     })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
+      if (!includeSayItBack && canGenerateStudyTranslations(input.env)) {
+        return {
+          ...basePayload({ access: "processing", post, targetLanguage }),
+          source_language: pack?.source_language ?? post.source_language,
+        }
+      }
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
         source_language: pack?.source_language ?? post.source_language,
