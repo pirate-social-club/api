@@ -302,9 +302,9 @@ describe("community role routes", () => {
     const uploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
       {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/wav",
-        filename: "moderator.wav",
+        artifact_kind: "cover_art",
+        mime_type: "image/png",
+        filename: "moderator.png",
         size_bytes: 44,
       },
       ctx.env,

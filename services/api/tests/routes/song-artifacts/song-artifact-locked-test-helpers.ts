@@ -70,6 +70,13 @@ export function installLockedSongFetchMocks(input: {
       return await input.originalFetch(request)
     }
 
+    if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+      return new Response(
+        "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+        { status: 200, headers: { "content-type": "application/xml" } },
+      )
+    }
+
     if (request.method === "PUT") {
       input.storedObjects.set(request.url, {
         body: new Uint8Array(await request.arrayBuffer()),
@@ -246,6 +253,7 @@ export async function uploadSongArtifact(input: {
   const uploadIntent = await requestJson(
     `http://pirate.test/communities/${input.communityId}/song-artifact-uploads`,
     {
+      upload_mode: "direct_multipart",
       artifact_kind: input.artifactKind,
       mime_type: input.mimeType,
       filename: input.filename,
