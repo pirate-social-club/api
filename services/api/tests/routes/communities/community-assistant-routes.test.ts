@@ -28,8 +28,8 @@ afterEach(async () => {
 
 async function createAssistantRouteContext() {
   const ctx = await createRouteTestContext({
-    TURSO_COMMUNITY_DB_WRAP_KEY: VALID_WRAP_KEY,
-    TURSO_COMMUNITY_DB_WRAP_KEY_VERSION: "1",
+    CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+    CREDENTIAL_WRAP_KEY_VERSION: "1",
   })
   cleanup = ctx.cleanup
   return ctx

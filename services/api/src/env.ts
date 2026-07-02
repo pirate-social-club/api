@@ -23,8 +23,8 @@ export type Env = {
   TINYBIRD_EVENTS_DATASOURCE?: string
 
   // Community databases and provisioning
-  TURSO_COMMUNITY_DB_WRAP_KEY?: string
-  TURSO_COMMUNITY_DB_WRAP_KEY_VERSION?: string
+  CREDENTIAL_WRAP_KEY?: string
+  CREDENTIAL_WRAP_KEY_VERSION?: string
   LOCAL_COMMUNITY_DB_ROOT?: string
   /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
   COMMUNITY_D1_SHARD?: ShardRpc
