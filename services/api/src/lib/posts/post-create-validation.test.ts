@@ -43,6 +43,27 @@ function lockedVideoRequest(royalty_allocations?: RoyaltyAllocationRequest[] | n
   } as CreatePostRequest
 }
 
+function linkRequest(link_url: string): CreatePostRequest {
+  return {
+    idempotency_key: "idem_link",
+    post_type: "link",
+    identity_mode: "public",
+    link_url,
+  } as CreatePostRequest
+}
+
+describe("assertPostCreateRequest link_url scheme", () => {
+  test("rejects a javascript: scheme (would be an XSS sink when rendered as href)", () => {
+    expect(() => assertPostCreateRequest(linkRequest("javascript:alert(document.domain)"), COMMUNITY_ID)).toThrow(/valid http/)
+  })
+  test("rejects a data: scheme", () => {
+    expect(() => assertPostCreateRequest(linkRequest("data:text/html,<script>alert(1)</script>"), COMMUNITY_ID)).toThrow(/valid http/)
+  })
+  test("accepts a normal https URL", () => {
+    expect(() => assertPostCreateRequest(linkRequest("https://example.com/article"), COMMUNITY_ID)).not.toThrow()
+  })
+})
+
 describe("assertPostCreateRequest royalty_allocations", () => {
   test("accepts a valid creator+collaborator split on a song", () => {
     expect(() => assertPostCreateRequest(songRequest(validSplit()), COMMUNITY_ID)).not.toThrow()
