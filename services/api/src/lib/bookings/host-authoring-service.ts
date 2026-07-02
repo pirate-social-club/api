@@ -41,15 +41,34 @@ const REQUIRED_PROFILE_FIELDS: ReadonlyArray<keyof BookingProfileInput> = [
   "default_slot_duration_seconds",
 ]
 
+type BookingHostConfigReadRepository = ReturnType<typeof createBookingHostConfigRepository>
+type BookingHostConfigWriteRepository = ReturnType<typeof createBookingHostConfigWriteRepository>
+
+let repositoriesForTests: {
+  read: BookingHostConfigReadRepository
+  write: BookingHostConfigWriteRepository
+} | null = null
+
+export function setBookingHostConfigRepositoriesForTests(
+  repositories: {
+    read: BookingHostConfigReadRepository
+    write: BookingHostConfigWriteRepository
+  } | null,
+): void {
+  repositoriesForTests = repositories
+}
+
 function nowIso(): string {
   return new Date().toISOString()
 }
 
 function readRepo(env: Env) {
+  if (repositoriesForTests) return repositoriesForTests.read
   return createBookingHostConfigRepository(getControlPlaneClient(env))
 }
 
 function writeRepo(env: Env) {
+  if (repositoriesForTests) return repositoriesForTests.write
   return createBookingHostConfigWriteRepository(getControlPlaneClient(env))
 }
 
