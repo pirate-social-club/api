@@ -2,8 +2,6 @@ import type { DbExecutor } from "../db-helpers"
 import { firstRow } from "../auth/auth-db-query-helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 
-export type CommunityBackend = "turso" | "d1"
-
 export type CommunityProvisioningState = "provisioning" | "ready" | "degraded" | "decommissioned"
 
 /**
@@ -13,12 +11,10 @@ export type CommunityProvisioningState = "provisioning" | "ready" | "degraded" |
  */
 export type CommunityDatabaseRoutingRow = {
   community_id: string
-  backend: CommunityBackend
   provisioning_state: CommunityProvisioningState
   shard_worker_id: string | null
   binding_name: string | null
   region: string | null
-  turso_database_binding_id: string | null
   migrated_at: string | null
   decommissioned_at: string | null
   last_error_at: string | null
@@ -28,20 +24,18 @@ export type CommunityDatabaseRoutingRow = {
 }
 
 const ROUTING_ROW_COLUMNS = `
-  community_id, backend, provisioning_state, shard_worker_id, binding_name, region,
-  turso_database_binding_id, migrated_at, decommissioned_at, last_error_at, last_error_message,
+  community_id, provisioning_state, shard_worker_id, binding_name, region,
+  migrated_at, decommissioned_at, last_error_at, last_error_message,
   created_at, updated_at
 `
 
 export function toCommunityDatabaseRoutingRow(row: unknown): CommunityDatabaseRoutingRow {
   return {
     community_id: requiredString(row, "community_id"),
-    backend: requiredString(row, "backend") as CommunityBackend,
     provisioning_state: requiredString(row, "provisioning_state") as CommunityProvisioningState,
     shard_worker_id: stringOrNull(rowValue(row, "shard_worker_id")),
     binding_name: stringOrNull(rowValue(row, "binding_name")),
     region: stringOrNull(rowValue(row, "region")),
-    turso_database_binding_id: stringOrNull(rowValue(row, "turso_database_binding_id")),
     migrated_at: stringOrNull(rowValue(row, "migrated_at")),
     decommissioned_at: stringOrNull(rowValue(row, "decommissioned_at")),
     last_error_at: stringOrNull(rowValue(row, "last_error_at")),
@@ -84,15 +78,11 @@ export type UpsertD1RoutingRowInput = {
  * at `provisioning_state='provisioning'` while the shard binding is being loaded
  * and then advance it to `'ready'` (or `'degraded'`) once load completes.
  *
- * The d1 column shape satisfies the 0117 `chk_d1_fields` CHECK
- * (`shard_worker_id`/`binding_name`/`region` NOT NULL, `turso_database_binding_id`
- * NULL). Each community is allocated its OWN shard binding 1:1 (the binding name
- * is unique to the community) — the shard authorizes the (community_id,
- * bindingName) pair, so isolation is at the binding/database level, not a shared
- * partition.
+ * Each community is allocated its OWN shard binding 1:1 (the binding name is
+ * unique to the community) — the shard authorizes the (community_id, bindingName)
+ * pair, so isolation is at the binding/database level, not a shared partition.
  *
- * Returns whether the row was inserted or updated (false = a conflicting
- * `backend='turso'` row blocked the write).
+ * Returns whether the row was inserted or updated.
  */
 export async function upsertD1CommunityRoutingRow(
   executor: DbExecutor,
@@ -101,16 +91,15 @@ export async function upsertD1CommunityRoutingRow(
   const result = await executor.execute({
     sql: `
       INSERT INTO community_database_routing
-        (community_id, backend, provisioning_state, shard_worker_id, binding_name, region,
+        (community_id, provisioning_state, shard_worker_id, binding_name, region,
          created_at, updated_at)
-      VALUES (?1, 'd1', ?2, ?3, ?4, ?5, ?6, ?6)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
       ON CONFLICT (community_id) DO UPDATE SET
         provisioning_state = excluded.provisioning_state,
         shard_worker_id = excluded.shard_worker_id,
         binding_name = excluded.binding_name,
         region = excluded.region,
         updated_at = excluded.updated_at
-      WHERE community_database_routing.backend = 'd1'
     `,
     args: [
       input.communityId,
@@ -136,8 +125,8 @@ export type StuckD1ProvisioningBinding = {
  * Find `backend='d1'` routing rows stranded at `provisioning_state='provisioning'`
  * past a cutoff — the input to the step-5 reconciler sweep (§6.1). A row is stuck
  * if a `provision()` run crashed after writing the 'provisioning' routing row but
- * before flipping it to 'ready'. `chk_d1_fields` guarantees shard_worker_id /
- * binding_name / region are NON-NULL for d1 rows, so the cast is safe.
+ * before flipping it to 'ready'. A ready/provisioning routing row always carries
+ * NON-NULL shard_worker_id / binding_name / region, so the cast is safe.
  *
  * `cutoffIso` is `now - graceWindow` (e.g. 15 min); pass it in for determinism.
  */
@@ -149,8 +138,7 @@ export async function findStuckD1ProvisioningBindings(
     sql: `
       SELECT community_id, binding_name, shard_worker_id, region
       FROM community_database_routing
-      WHERE backend = 'd1'
-        AND provisioning_state = 'provisioning'
+      WHERE provisioning_state = 'provisioning'
         AND updated_at < ?1
       ORDER BY updated_at ASC
     `,
@@ -167,24 +155,22 @@ export async function findStuckD1ProvisioningBindings(
 
 /**
  * A community route is "settlement-capable" only when its authoritative
- * control-plane routing state is a fully-ready D1 binding that has not been
+ * control-plane routing state is a fully-ready binding that has not been
  * decommissioned. The unattended booking-settlement cron MUST enumerate from
- * this predicate rather than the generic active-community list: only D1 has the
- * shard binding the cron can open, and a Turso / decommissioned / not-yet-ready
- * route cannot settle. Skipping them here (instead of attempting + failing) keeps
- * the sweep free of spurious settlement errors for routes that were never eligible.
+ * this predicate rather than the generic active-community list: a decommissioned
+ * or not-yet-ready route cannot settle. Skipping them here (instead of attempting
+ * + failing) keeps the sweep free of spurious settlement errors for routes that
+ * were never eligible.
  *
- * `backend === 'd1'` is a deliberate ALLOWLIST: any other backend (a future
- * value, or 'turso') is excluded by construction, never assumed D1.
  * `provisioning_state === 'ready'` excludes 'provisioning' (no usable binding yet)
  * and 'degraded' (a known-unhealthy DB should not be hammered by settlement; it
  * recovers to 'ready' before its bookings settle). `decommissioned_at === null`
  * is belt-and-suspenders alongside the 'decommissioned' provisioning state.
  */
 export function isSettlementEligibleRoute(
-  row: Pick<CommunityDatabaseRoutingRow, "backend" | "provisioning_state" | "decommissioned_at">,
+  row: Pick<CommunityDatabaseRoutingRow, "provisioning_state" | "decommissioned_at">,
 ): boolean {
-  return row.backend === "d1" && row.provisioning_state === "ready" && row.decommissioned_at === null
+  return row.provisioning_state === "ready" && row.decommissioned_at === null
 }
 
 export type SettlementEligibleCommunity = { community_id: string; created_at: string }
@@ -202,10 +188,9 @@ export async function listSettlementEligibleCommunities(
   const limit = input?.limit
   const result = await executor.execute({
     sql: `
-      SELECT community_id, backend, provisioning_state, decommissioned_at, created_at
+      SELECT community_id, provisioning_state, decommissioned_at, created_at
       FROM community_database_routing
-      WHERE backend = 'd1'
-        AND provisioning_state = 'ready'
+      WHERE provisioning_state = 'ready'
         AND decommissioned_at IS NULL
       ORDER BY created_at ASC, community_id ASC
       ${limit === undefined ? "" : "LIMIT ?1"}
@@ -216,7 +201,6 @@ export async function listSettlementEligibleCommunities(
   return (result.rows ?? [])
     .filter((row) =>
       isSettlementEligibleRoute({
-        backend: requiredString(row, "backend") as CommunityBackend,
         provisioning_state: requiredString(row, "provisioning_state") as CommunityProvisioningState,
         decommissioned_at: stringOrNull(rowValue(row, "decommissioned_at")),
       }),

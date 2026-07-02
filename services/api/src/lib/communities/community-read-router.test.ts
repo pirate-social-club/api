@@ -12,12 +12,10 @@ async function createRoutingDirectory(): Promise<Client> {
   await client.execute(`
     CREATE TABLE community_database_routing (
       community_id TEXT PRIMARY KEY,
-      backend TEXT NOT NULL,
       provisioning_state TEXT NOT NULL,
       shard_worker_id TEXT,
       binding_name TEXT,
       region TEXT,
-      turso_database_binding_id TEXT,
       migrated_at TEXT,
       decommissioned_at TEXT,
       last_error_at TEXT,
@@ -52,34 +50,30 @@ describe("routeCommunityRead", () => {
   })
 
   async function insertRow(values: {
-    backend: "d1" | "turso"
     state?: string
     shard?: string | null
     binding?: string | null
     region?: string | null
-    tursoBindingId?: string | null
   }): Promise<void> {
     await cp.execute({
       sql: `
         INSERT INTO community_database_routing
-          (community_id, backend, provisioning_state, shard_worker_id, binding_name, region,
-           turso_database_binding_id, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 't0', 't0')
+          (community_id, provisioning_state, shard_worker_id, binding_name, region,
+           created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, 't0', 't0')
       `,
       args: [
         COMMUNITY,
-        values.backend,
         values.state ?? "ready",
         values.shard ?? null,
         values.binding ?? null,
         values.region ?? null,
-        values.tursoBindingId ?? null,
       ],
     })
   }
 
-  test("d1 backend dispatches to the shard read client", async () => {
-    await insertRow({ backend: "d1", shard: "shard-1", binding: "DB_X", region: "enam" })
+  test("dispatches to the shard read client", async () => {
+    await insertRow({ shard: "shard-1", binding: "DB_X", region: "enam" })
     const calls: string[] = []
     const openShardReadClient: CommunityReadInvoker = async (b) => {
       calls.push(`shard:${b.bindingName}`)
@@ -87,51 +81,17 @@ describe("routeCommunityRead", () => {
     }
     const resolver = new CommunityBindingResolver()
 
-    const { binding, client } = await routeCommunityRead(
+    const { client } = await routeCommunityRead(
       { resolver, controlPlane: cp, openShardReadClient },
       COMMUNITY,
     )
 
-    expect(binding.backend).toBe("d1")
     expect(calls).toEqual(["shard:DB_X"])
     expect((await client.execute("SELECT 1")).rows).toEqual([{ served_by: "d1" }])
   })
 
-  test("turso backend is still opened through the shard invoker and fails there", async () => {
-    await insertRow({ backend: "turso", tursoBindingId: "tdb_1" })
-    const openShardReadClient: CommunityReadInvoker = async () => {
-      throw new HttpError(500, "d1_backend_not_provisioned", "non-d1 route", true)
-    }
-    const resolver = new CommunityBindingResolver()
-
-    await expect(
-      routeCommunityRead(
-        { resolver, controlPlane: cp, openShardReadClient },
-        COMMUNITY,
-      ),
-    ).rejects.toMatchObject({ code: "d1_backend_not_provisioned" })
-  })
-
-  test("turso route metadata can still be resolved but is not dispatched to a Turso client", async () => {
-    await insertRow({ backend: "turso", tursoBindingId: "tdb_1" })
-    const calls: string[] = []
-    const openShardReadClient: CommunityReadInvoker = async (b) => {
-      calls.push(`${b.backend}:${b.bindingName ?? "no-binding"}`)
-      return stubReadClient("d1")
-    }
-    const resolver = new CommunityBindingResolver()
-
-    const { binding } = await routeCommunityRead(
-      { resolver, controlPlane: cp, openShardReadClient },
-      COMMUNITY,
-    )
-
-    expect(binding.backend).toBe("turso")
-    expect(calls).toEqual(["turso:no-binding"])
-  })
-
   test("a stale-binding error invalidates the cache so the next request re-resolves", async () => {
-    await insertRow({ backend: "d1", shard: "shard-1", binding: "DB_X", region: "enam" })
+    await insertRow({ shard: "shard-1", binding: "DB_X", region: "enam" })
     const resolver = new CommunityBindingResolver()
 
     let attempts = 0
@@ -157,7 +117,7 @@ describe("routeCommunityRead", () => {
   })
 
   test("a transient open error does NOT invalidate the cache", async () => {
-    await insertRow({ backend: "d1", shard: "shard-1", binding: "DB_X", region: "enam" })
+    await insertRow({ shard: "shard-1", binding: "DB_X", region: "enam" })
     const resolver = new CommunityBindingResolver()
 
     let attempts = 0
@@ -183,7 +143,7 @@ describe("routeCommunityRead", () => {
   })
 
   test("a decommissioned community fails closed without dispatching", async () => {
-    await insertRow({ backend: "turso", state: "decommissioned", tursoBindingId: "tdb_x" })
+    await insertRow({ state: "decommissioned" })
     const resolver = new CommunityBindingResolver()
 
     let dispatched = false
