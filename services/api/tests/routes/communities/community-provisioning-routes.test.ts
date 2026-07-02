@@ -146,20 +146,6 @@ describe("d1_native community provisioning", () => {
       region: "weur",
     })
 
-    const bindingRow = (await ctx.client.execute({
-      sql: `SELECT database_url, database_name, organization_slug, group_name, location, requires_credentials, status
-            FROM community_database_bindings WHERE community_id = ?1`,
-      args: [communityIdBare],
-    })).rows[0] as Record<string, unknown>
-    expect(bindingRow).toMatchObject({
-      database_url: "d1://shard/DB_CMTY_ROUTE_TEST",
-      database_name: "DB_CMTY_ROUTE_TEST",
-      organization_slug: "shard",
-      group_name: "shard",
-      location: "weur",
-      requires_credentials: 0,
-      status: "active",
-    })
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("namespaced create reaches provisioning_succeeded with namespace metadata and a ready d1 routing row", async () => {

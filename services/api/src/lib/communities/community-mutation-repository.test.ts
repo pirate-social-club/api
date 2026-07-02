@@ -23,7 +23,6 @@ async function setupControl(): Promise<Client> {
       route_slug TEXT,
       namespace_verification_id TEXT,
       pending_namespace_verification_session_id TEXT,
-      primary_database_binding_id TEXT,
       follower_count INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -43,9 +42,9 @@ async function insertCommunity(
       INSERT INTO communities (
         community_id, creator_user_id, display_name, description, avatar_ref, banner_ref,
         status, provisioning_state, transfer_state, route_slug, namespace_verification_id,
-        pending_namespace_verification_session_id, primary_database_binding_id, follower_count,
+        pending_namespace_verification_session_id, follower_count,
         created_at, updated_at
-      ) VALUES (?1, 'usr_owner', ?1, NULL, NULL, NULL, ?2, ?3, 'none', NULL, NULL, NULL, NULL, 0,
+      ) VALUES (?1, 'usr_owner', ?1, NULL, NULL, NULL, ?2, ?3, 'none', NULL, NULL, NULL, 0,
         '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
     `,
     args: [communityId, status, provisioningState],

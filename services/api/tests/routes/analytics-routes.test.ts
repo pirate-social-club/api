@@ -203,7 +203,6 @@ describe("analytics routes", () => {
           route_slug,
           namespace_verification_id,
           pending_namespace_verification_session_id,
-          primary_database_binding_id,
           created_at,
           updated_at
         ) VALUES (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5)

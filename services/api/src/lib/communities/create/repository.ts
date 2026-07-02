@@ -11,7 +11,7 @@ import {
 } from "../provisioning/generated/community-schema-snapshot"
 import { serializeLocalDonationPartnerRow } from "../community-donation-partner-serialization"
 import { normalizeCommunityMediaRef } from "../community-identity-media"
-import type { CommunityDatabaseBindingRow, CommunityRow, JobRow } from "../../auth/auth-db-rows"
+import type { CommunityRow, JobRow } from "../../auth/auth-db-rows"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -77,10 +77,9 @@ const RUNNING_JOB_HEARTBEAT_TIMEOUT_MS = 30_000
 export type ProvisioningRetryAction =
   | { action: "return_existing" }
   | { action: "retry" }
-  | { action: "finalize"; binding: CommunityDatabaseBindingRow }
 
 export async function resolveProvisioningRetryAction(
-  repo: CommunityDatabaseBindingRepository,
+  _repo: CommunityDatabaseBindingRepository,
   community: CommunityRow,
   latestJob: JobRow,
 ): Promise<ProvisioningRetryAction> {
@@ -100,12 +99,7 @@ export async function resolveProvisioningRetryAction(
     return { action: "retry" }
   }
 
-  const binding = await repo.getPrimaryCommunityDatabaseBinding(community.community_id)
-  if (!binding || binding.status !== "active" || isPendingD1CommunityBindingUrl(binding.database_url)) {
-    return { action: "retry" }
-  }
-
-  return { action: "finalize", binding }
+  return { action: "retry" }
 }
 
 export async function loadCommunityLocalSnapshot(

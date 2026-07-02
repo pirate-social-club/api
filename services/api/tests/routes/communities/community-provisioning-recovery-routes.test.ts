@@ -42,7 +42,7 @@ function fakeProvisioningShard(bindingName: string, calls: Array<{ m: string; in
 }
 
 describe("community provisioning recovery routes", () => {
-  test("community create finalizes a local namespaced community after a provisioning-state crash without creating a new job", async () => {
+  test("community create retries a stale local namespaced provisioning state without binding-table recovery", async () => {
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "/tmp/pirate-api-test-community-dbs",
     })
@@ -72,19 +72,6 @@ describe("community provisioning recovery routes", () => {
     }
     expect(firstBody.community.provisioning_state).toBe("active")
     expect(firstBody.job.status).toBe("succeeded")
-
-    const bindingRows = await ctx.client.execute({
-      sql: `
-        SELECT database_url, requires_credentials
-        FROM community_database_bindings
-        WHERE community_id = ?1
-          AND binding_role = 'primary'
-        LIMIT 1
-      `,
-      args: [firstBody.community.id.replace(/^com_/, "")],
-    })
-    expect(String(bindingRows.rows[0]?.database_url ?? "")).not.toStartWith("libsql" + "://")
-    expect(Number(bindingRows.rows[0]?.requires_credentials ?? 1)).toBe(0)
 
     await ctx.client.execute({
       sql: `
@@ -117,11 +104,11 @@ describe("community provisioning recovery routes", () => {
     }
     expect(secondBody.community.id.replace(/^com_/, "")).toBe(firstBody.community.id.replace(/^com_/, ""))
     expect(secondBody.community.provisioning_state).toBe("active")
-    expect(secondBody.job.id).toBe(firstBody.job.id)
+    expect(secondBody.job.id).not.toBe(firstBody.job.id)
     expect(secondBody.job.status).toBe("succeeded")
   })
 
-  testWithTimeout("community create finalizes a recently running D1 job without re-provisioning", async () => {
+  testWithTimeout("community create returns a recently running D1 job without re-provisioning", async () => {
     const calls: Array<{ m: string; input: unknown }> = []
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
@@ -172,7 +159,7 @@ describe("community provisioning recovery routes", () => {
             updated_at = ?2
         WHERE job_id = ?1
       `,
-      args: [firstBody.job.id, new Date().toISOString()],
+      args: [firstBody.job.id.replace(/^job_/, ""), new Date().toISOString()],
     })
 
     const secondResponse = await requestJson("http://pirate.test/communities", {
@@ -195,9 +182,9 @@ describe("community provisioning recovery routes", () => {
       }
     }
     expect(secondBody.community.id.replace(/^com_/, "")).toBe(firstBody.community.id.replace(/^com_/, ""))
-    expect(secondBody.community.provisioning_state).toBe("active")
+    expect(secondBody.community.provisioning_state).toBe("provisioning")
     expect(secondBody.job.id).toBe(firstBody.job.id)
-    expect(secondBody.job.status).toBe("succeeded")
+    expect(secondBody.job.status).toBe("running")
     expect(calls.map((c) => c.m)).toEqual(["communityD1Bind", "communityD1LoadSnapshot"])
   }, 10_000)
 })

@@ -1690,7 +1690,6 @@ describe("community-job-runner", () => {
           return {
             ...healthyCommunity!,
             community_id: failedCommunityId,
-            primary_database_binding_id: "cdb_decommissioned",
           }
         }
         return healthyRepo.getCommunityById(id)
@@ -1700,7 +1699,6 @@ describe("community-job-runner", () => {
           {
             ...healthyCommunity!,
             community_id: failedCommunityId,
-            primary_database_binding_id: "cdb_decommissioned",
           },
           healthyCommunity!,
         ]
@@ -1774,7 +1772,6 @@ describe("community-job-runner", () => {
           return {
             ...healthyCommunity!,
             community_id: failedCommunityId,
-            primary_database_binding_id: "cdb_decommissioned",
           }
         }
         return healthyRepo.getCommunityById(id)
@@ -1784,7 +1781,6 @@ describe("community-job-runner", () => {
           {
             ...healthyCommunity!,
             community_id: failedCommunityId,
-            primary_database_binding_id: "cdb_decommissioned",
           },
           healthyCommunity!,
         ]

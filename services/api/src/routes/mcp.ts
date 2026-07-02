@@ -455,14 +455,12 @@ async function callFindPirateBoardsTool(c: McpContext, rawArgs: unknown) {
     ? await communityRepository.searchActiveCommunities({ query, limit: limit * 2 })
     : await communityRepository.listActiveCommunities({ limit: limit * 2 })
   const previews = await Promise.all(communities.map(async (community) => {
-    const preview = community.primary_database_binding_id
-      ? await getPublicCommunityPreview({
-          env: c.env,
-          communityId: community.community_id,
-          locale: null,
-          communityRepository,
-        }).catch(() => null)
-      : null
+    const preview = await getPublicCommunityPreview({
+      env: c.env,
+      communityId: community.community_id,
+      locale: null,
+      communityRepository,
+    }).catch(() => null)
     const boardProfile = preview
       ? mcpBoardProfile(c, preview)
       : {

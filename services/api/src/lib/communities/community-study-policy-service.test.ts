@@ -73,7 +73,6 @@ async function setup() {
     follower_count: 0,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: "cdb_study_policy",
     provisioning_state: "active",
     route_slug: null,
     status: "active",

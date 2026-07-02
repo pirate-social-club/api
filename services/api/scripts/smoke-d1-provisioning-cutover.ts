@@ -179,10 +179,8 @@ async function createCommunity(input: {
 
 async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<string, unknown>> {
   const rows = await sql`
-    SELECT r.provisioning_state, r.shard_worker_id, r.binding_name, r.region,
-           b.database_url, b.database_name, b.requires_credentials
+    SELECT r.provisioning_state, r.shard_worker_id, r.binding_name, r.region
     FROM community_database_routing r
-    JOIN community_database_bindings b ON b.community_id = r.community_id AND b.binding_role = 'primary'
     WHERE r.community_id = ${communityId}
     LIMIT 1
   `
@@ -191,11 +189,8 @@ async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<st
   if (row.provisioning_state !== "ready") {
     throw new Error(`routing row is not ready for ${communityId}: ${JSON.stringify(row)}`)
   }
-  if (typeof row.database_url !== "string" || !row.database_url.startsWith("d1://shard/")) {
-    throw new Error(`binding URL is not d1://shard for ${communityId}: ${JSON.stringify(row)}`)
-  }
-  if (Number(row.requires_credentials) !== 0) {
-    throw new Error(`D1 binding unexpectedly requires credentials for ${communityId}: ${JSON.stringify(row)}`)
+  if (typeof row.binding_name !== "string" || !row.binding_name.startsWith("DB_CMTY_")) {
+    throw new Error(`routing row does not carry a D1 binding for ${communityId}: ${JSON.stringify(row)}`)
   }
   return row
 }

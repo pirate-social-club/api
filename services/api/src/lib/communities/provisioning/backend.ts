@@ -140,10 +140,9 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
   },
   /**
    * Step 4 of the D1-native workstream: the d1_native orchestrator. Allocates
-   * a binding from the shard pool, loads the snapshot (idempotent no-op for
-   * v1 — the schema is in the binding's pre-applied migrations, the data load
-   * is a follow-up slice), seeds the routing row at 'ready', and persists the
-   * resolved d1:// URL on the binding row.
+   * a binding from the shard pool, loads the snapshot, and seeds the routing row
+   * at 'ready'. The control plane no longer stores a separate database binding
+   * row; the routing row is the authoritative D1 directory.
    *
    * Branches on raw `ShardResult` (`.ok` / `.code`) at every step, not via
    * throw+re-catch — each error code has a distinct recovery path that the
@@ -250,11 +249,8 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       )
     }
 
-    // 3. Seed the routing row at 'ready' (the §8.1 acceptance criterion:
-    //    a community_database_routing row at backend='d1', state='ready').
-    //    Bumping the routing row happens BEFORE persistProvisionedD1Binding
-    //    so that any concurrent routed read sees a consistent
-    //    (binding-name, routing-state) pair.
+    // 3. Seed the routing row at 'ready'. Any concurrent routed read sees a
+    //    consistent (binding-name, routing-state) pair from this row alone.
     await input.communityRepository.upsertD1CommunityRoutingRow({
       communityId,
       shardWorkerId,
@@ -264,27 +260,7 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       provisioningState: "ready",
     })
 
-    // 4. Persist the resolved d1:// URL on the binding row, replacing the
-    //    d1://pending-<communityId>.invalid sentinel written at create time
-    //    (gap 1 of the prior audit, fixed in PR #57 slice 3). The binding ID
-    //    is the one createCommunityProvisioningRequest generated; we look it
-    //    up rather than threading it through ProvisionInput.
     const databaseUrl = `d1://shard/${bindingName}`
-    const bindingRow = await input.communityRepository.getPrimaryCommunityDatabaseBinding(communityId)
-    if (!bindingRow) {
-      // createCommunityProvisioningRequest just inserted this row; if it's
-      // gone, something deleted it. Fail loud.
-      throw internalError(
-        `d1_native provisioning: binding row for communityId ${communityId} is missing after createCommunityProvisioningRequest`,
-      )
-    }
-    await input.communityRepository.persistProvisionedD1Binding({
-      communityDatabaseBindingId: bindingRow.community_database_binding_id,
-      bindingName,
-      databaseUrl,
-      region: initialBinding.location as string,
-      updatedAt: now,
-    })
 
     return {
       mode: "d1_native",

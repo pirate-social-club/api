@@ -2,14 +2,12 @@ import type { DbExecutor } from "../db-helpers"
 import { makeId } from "../helpers"
 import {
   type CommunityCommentProjectionRow,
-  type CommunityDatabaseBindingRow,
   type CommunityFollowProjectionRow,
   type CommunityMembershipProjectionRow,
   type CommunityPostProjectionRow,
   type CommunityRow,
   type JobRow,
   toCommunityCommentProjectionRow,
-  toCommunityDatabaseBindingRow,
   toCommunityFollowProjectionRow,
   toCommunityMembershipProjectionRow,
   toCommunityPostProjectionRow,
@@ -21,7 +19,7 @@ import { firstRow } from "./auth-db-query-helpers"
 const COMMUNITY_ROW_COLUMNS = `
   community_id, creator_user_id, display_name, description, avatar_ref, banner_ref, status, provisioning_state,
   transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-  primary_database_binding_id, follower_count, created_at, updated_at
+  follower_count, created_at, updated_at
 `
 
 async function firstCommunityRow(
@@ -211,46 +209,6 @@ export async function searchActiveCommunityRows(
     `,
     [normalizedQuery, containsQuery, startsWithQuery, input.limit],
   )
-}
-
-export async function getCommunityDatabaseBindingRowById(
-  executor: DbExecutor,
-  communityDatabaseBindingId: string,
-): Promise<CommunityDatabaseBindingRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-             database_name, database_id, database_url, location, requires_credentials, status,
-             transferred_at, created_at, updated_at
-      FROM community_database_bindings
-      WHERE community_database_binding_id = ?1
-      LIMIT 1
-    `,
-    args: [communityDatabaseBindingId],
-  })
-
-  return row ? toCommunityDatabaseBindingRow(row) : null
-}
-
-export async function getPrimaryCommunityDatabaseBindingRow(
-  executor: DbExecutor,
-  communityId: string,
-): Promise<CommunityDatabaseBindingRow | null> {
-  const row = await firstRow(executor, {
-    sql: `
-      SELECT community_database_binding_id, community_id, binding_role, organization_slug, group_name, group_id,
-             database_name, database_id, database_url, location, requires_credentials, status,
-             transferred_at, created_at, updated_at
-      FROM community_database_bindings
-      WHERE community_id = ?1
-        AND binding_role = 'primary'
-      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC
-      LIMIT 1
-    `,
-    args: [communityId],
-  })
-
-  return row ? toCommunityDatabaseBindingRow(row) : null
 }
 
 export async function getJobRowById(executor: DbExecutor, jobId: string): Promise<JobRow | null> {

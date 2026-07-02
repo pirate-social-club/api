@@ -45,7 +45,7 @@ async function seedControlPlaneCommunity(input: {
       INSERT INTO communities (
         community_id, creator_user_id, display_name, membership_mode, status,
         provisioning_state, transfer_state, route_slug, namespace_verification_id,
-        pending_namespace_verification_session_id, primary_database_binding_id,
+        pending_namespace_verification_session_id,
         created_at, updated_at
       ) VALUES (
         ?1, 'usr_owner', 'Profile Activity Club', 'request', 'active',

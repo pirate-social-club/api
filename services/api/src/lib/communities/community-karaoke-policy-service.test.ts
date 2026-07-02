@@ -73,7 +73,6 @@ async function setup() {
     route_slug: null,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: "cdb_karaoke_policy",
     follower_count: 0,
     created_at: now,
     updated_at: now,

@@ -24,7 +24,6 @@ function makeCommunity(overrides: Partial<CommunityRow> = {}): CommunityRow {
     route_slug: null,
     namespace_verification_id: null,
     pending_namespace_verification_session_id: null,
-    primary_database_binding_id: null,
     follower_count: 0,
     created_at: "2026-06-22T00:00:00.000Z",
     updated_at: "2026-06-22T00:00:00.000Z",

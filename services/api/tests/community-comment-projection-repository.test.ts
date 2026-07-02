@@ -34,8 +34,7 @@ describe("community comment projection repository", () => {
       sql: `
         INSERT INTO communities (
           community_id, creator_user_id, display_name, membership_mode, status, provisioning_state,
-          transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
-          primary_database_binding_id, created_at, updated_at
+          transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, 'request', 'active', 'active',
           'none', NULL, NULL, NULL,
