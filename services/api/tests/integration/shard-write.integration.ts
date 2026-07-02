@@ -34,7 +34,6 @@ const shard = {
 function bindingFor(communityId: string): ResolvedCommunityBinding {
   return {
     communityId,
-    backend: "d1",
     provisioningState: "ready",
     shardWorkerId: "shard-1",
     bindingName: "DB_CMTY_PILOT",

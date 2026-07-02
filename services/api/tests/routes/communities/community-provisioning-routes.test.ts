@@ -104,7 +104,7 @@ describe("community provisioning routes", () => {
 })
 
 describe("d1_native community provisioning", () => {
-  testWithTimeout("namespaceless create reaches provisioning_succeeded with a backend='d1' routing row at 'ready'", async () => {
+  testWithTimeout("namespaceless create reaches provisioning_succeeded with a ready d1 routing row", async () => {
     const calls: Array<{ m: string; input: unknown }> = []
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
@@ -135,12 +135,11 @@ describe("d1_native community provisioning", () => {
 
     const communityIdBare = body.community.id.replace(/^com_/, "")
     const routingRow = (await ctx.client.execute({
-      sql: `SELECT backend, provisioning_state, shard_worker_id, binding_name, region
+      sql: `SELECT provisioning_state, shard_worker_id, binding_name, region
             FROM community_database_routing WHERE community_id = ?1`,
       args: [communityIdBare],
     })).rows[0] as Record<string, unknown>
     expect(routingRow).toMatchObject({
-      backend: "d1",
       provisioning_state: "ready",
       shard_worker_id: "community-d1-shard-staging",
       binding_name: "DB_CMTY_ROUTE_TEST",
@@ -163,7 +162,7 @@ describe("d1_native community provisioning", () => {
     })
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
-  testWithTimeout("namespaced create reaches provisioning_succeeded with namespace metadata and a backend='d1' routing row", async () => {
+  testWithTimeout("namespaced create reaches provisioning_succeeded with namespace metadata and a ready d1 routing row", async () => {
     const calls: Array<{ m: string; input: unknown }> = []
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
@@ -204,12 +203,11 @@ describe("d1_native community provisioning", () => {
 
     const communityIdBare = body.community.id.replace(/^com_/, "")
     const routingRow = (await ctx.client.execute({
-      sql: `SELECT backend, provisioning_state, shard_worker_id, binding_name, region
+      sql: `SELECT provisioning_state, shard_worker_id, binding_name, region
             FROM community_database_routing WHERE community_id = ?1`,
       args: [communityIdBare],
     })).rows[0] as Record<string, unknown>
     expect(routingRow).toMatchObject({
-      backend: "d1",
       provisioning_state: "ready",
       shard_worker_id: "community-d1-shard-staging",
       binding_name: "DB_CMTY_ROUTE_NS_TEST",

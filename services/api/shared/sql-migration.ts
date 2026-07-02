@@ -206,6 +206,17 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         "mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')",
       )
   }
+  if (normalized.startsWith("CREATE TABLE COMMUNITY_DATABASE_ROUTING")) {
+    // Migration 0124 drops the Turso `backend` column, but it does so inside a
+    // Postgres DO block that this SQLite mirror skips — so the column survives here.
+    // The API no longer writes it, so make it nullable (and drop the value CHECK) so
+    // backend-less inserts succeed. chk_d1_fields still passes: a NULL backend makes
+    // the whole predicate NULL, which SQLite treats as a satisfied CHECK.
+    sqliteCompat = sqliteCompat.replace(
+      /backend\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*backend\s+IN\s*\('turso',\s*'d1'\)\s*\)/i,
+      "backend TEXT",
+    )
+  }
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")

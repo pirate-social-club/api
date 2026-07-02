@@ -1,11 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
 import { internalError } from "../errors"
 
-// Neutral AES-256-GCM credential wrapping used for secrets encrypted at rest in the
-// control plane (telegram bot tokens, assistant-policy provider keys, etc.). The
-// ciphertext format (`v1:iv:tag:ciphertext`) and the wrap key material are unchanged
-// from the former community-db-credential-crypto module, so existing ciphertext stays
-// decryptable — do NOT change the algorithm, format, or key material.
 const ALGORITHM = "aes-256-gcm"
 const FORMAT_PREFIX = "v1"
 const IV_BYTES = 12
@@ -18,22 +13,13 @@ function requireWrapKeyHex(wrapKey: string): Buffer {
   return Buffer.from(normalized, "hex")
 }
 
-<<<<<<<< HEAD:services/api/src/lib/crypto/credential-secret.ts
 export function encryptCredentialSecret(input: {
   plaintext: string
-========
-export function encryptCredential(input: {
-  plaintextToken: string
->>>>>>>> 10e76444 (chore(deturso): remove Turso community-database backend from the API):services/api/src/lib/crypto/credential-crypto.ts
   wrapKey: string
 }): string {
   const plaintext = input.plaintext.trim()
   if (!plaintext) {
-<<<<<<<< HEAD:services/api/src/lib/crypto/credential-secret.ts
     throw internalError("Credential plaintext is required")
-========
-    throw internalError("Credential plaintext token is required")
->>>>>>>> 10e76444 (chore(deturso): remove Turso community-database backend from the API):services/api/src/lib/crypto/credential-crypto.ts
   }
 
   const key = requireWrapKeyHex(input.wrapKey)
@@ -47,13 +33,8 @@ export function encryptCredential(input: {
   return `${FORMAT_PREFIX}:${iv.toString("hex")}:${tag.toString("hex")}:${ciphertext.toString("hex")}`
 }
 
-<<<<<<<< HEAD:services/api/src/lib/crypto/credential-secret.ts
 export function decryptCredentialSecret(input: {
   encryptedSecret: string
-========
-export function decryptCredential(input: {
-  encryptedToken: string
->>>>>>>> 10e76444 (chore(deturso): remove Turso community-database backend from the API):services/api/src/lib/crypto/credential-crypto.ts
   encryptionKeyVersion: number
   wrapKey: string
 }): string {
