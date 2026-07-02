@@ -17,6 +17,7 @@ import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { DatabaseCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processNextCommunityJob } from "../../../src/lib/communities/jobs/runner"
+import { uploadSongArtifact } from "../song-artifacts/song-artifact-locked-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -183,33 +184,15 @@ async function createSongArtifactBundleForLiveRoom(input: {
   communityId: string
 }): Promise<{ id: string; title: string }> {
   const audioBytes = makeSilentWavBytes()
-  const uploadIntent = await requestJson(
-    `http://pirate.test/communities/${input.communityId}/song-artifact-uploads`,
-    {
-      artifact_kind: "primary_audio",
-      mime_type: "audio/wav",
-      filename: "live-room-song.wav",
-      size_bytes: audioBytes.byteLength,
-    },
-    input.env,
-    input.accessToken,
-  )
-  expect(uploadIntent.status).toBe(201)
-  const uploadIntentBody = await json(uploadIntent) as { id: string }
-
-  const uploadContent = await app.request(
-    `http://pirate.test/communities/${input.communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-    {
-      method: "PUT",
-      headers: {
-        authorization: `Bearer ${input.accessToken}`,
-        "content-type": "application/octet-stream",
-      },
-      body: Buffer.from(audioBytes),
-    },
-    input.env,
-  )
-  expect(uploadContent.status).toBe(200)
+  const uploadIntentBody = await uploadSongArtifact({
+    env: input.env,
+    communityId: input.communityId,
+    accessToken: input.accessToken,
+    artifactKind: "primary_audio",
+    mimeType: "audio/wav",
+    filename: "live-room-song.wav",
+    bytes: audioBytes,
+  })
 
   const bundleCreate = await requestJson(
     `http://pirate.test/communities/${input.communityId}/song-artifacts`,

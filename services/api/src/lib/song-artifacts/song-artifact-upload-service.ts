@@ -53,6 +53,13 @@ function validateUploadMatch(upload: SongArtifactUpload, bytes: Uint8Array): voi
   }
 }
 
+function assertProxyUploadAllowed(upload: SongArtifactUpload): void {
+  if (upload.artifact_kind === "cover_art") {
+    return
+  }
+  throw badRequestError(`${upload.artifact_kind} must be uploaded with direct_multipart`)
+}
+
 export async function createSongArtifactUpload(input: {
   env: Env
   userId: string
@@ -110,6 +117,7 @@ export async function uploadSongArtifactContent(input: {
     if (upload.status !== "pending_upload") {
       throw badRequestError(`Song artifact upload ${upload.id} is not ready for content upload`)
     }
+    assertProxyUploadAllowed(upload)
 
     const bytes = normalizeUploadBytes(input.content)
     validateUploadMatch(upload, bytes)
