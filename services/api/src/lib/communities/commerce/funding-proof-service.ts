@@ -15,6 +15,7 @@ import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
+  findConfirmedBuyerFundingEffectByTx,
 } from "./settlement-effects"
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -291,6 +292,19 @@ export async function confirmBuyerFundingForSettlement(input: {
   const txRef = input.fundingTxRef.trim()
   if (!txRef) {
     throw badRequestError("funding_tx_ref is required")
+  }
+  // Global single-use: a funding tx already consumed by a DIFFERENT quote in this
+  // community must not be replayed to settle another quote (free content / operator
+  // drain). Migration 1116's partial-unique index is the race-safe backstop; this
+  // gives a clean error and avoids a wasted on-chain read. Same-quote retries are
+  // allowed (idempotency below returns the existing receipt).
+  const priorUse = await findConfirmedBuyerFundingEffectByTx({
+    client: input.client,
+    communityId: input.communityId,
+    txRef,
+  })
+  if (priorUse && priorUse.quote_id !== input.quote.quote_id) {
+    throw badRequestError("Funding transaction has already been used for another purchase")
   }
   const idempotencyKey = `${input.quote.quote_id}:buyer_funding:${txRef}`
   const effect = await beginPurchaseSettlementEffectAttempt({

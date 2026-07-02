@@ -77,6 +77,32 @@ export async function getPurchaseSettlementEffectByIdempotencyKey(input: {
   return row ? toSettlementEffectRow(row) : null
 }
 
+// Global single-use lookup for a buyer funding tx within a community, regardless of
+// quote. Used to reject replay of the same on-chain payment across different quotes
+// (the DB partial-unique index is the race-safe backstop; this gives a clean error).
+export async function findConfirmedBuyerFundingEffectByTx(input: {
+  client: DbExecutor
+  communityId: string
+  txRef: string
+}): Promise<PurchaseSettlementEffectRow | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+             effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
+             failed_at, created_at, updated_at
+      FROM purchase_settlement_effects
+      WHERE community_id = ?1
+        AND effect_kind = 'buyer_funding_receipt'
+        AND effect_key = ?2
+        AND status = 'confirmed'
+      LIMIT 1
+    `,
+    args: [input.communityId, input.txRef],
+  })
+  return row ? toSettlementEffectRow(row) : null
+}
+
 export async function listPurchaseSettlementEffectsByQuote(input: {
   client: DbExecutor
   communityId: string
