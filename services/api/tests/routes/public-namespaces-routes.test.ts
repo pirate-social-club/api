@@ -77,7 +77,7 @@ async function insertVerifiedHnsNamespace(input: {
       ) VALUES (
         'cmt_public_namespace_test', 'usr_public_namespace_test', 'Imported Root', 'request', ?1, 'active',
         'none', ?2, 'namespace_public_test', NULL,
-        NULL, ?3, ?3
+        ?3, ?3
       )
     `,
     args: [input.communityStatus ?? "active", input.rootLabel, now],

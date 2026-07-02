@@ -84,8 +84,8 @@ describe("feed routes", () => {
           created_at,
           updated_at
         ) VALUES
-          (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5),
-          (?6, ?2, ?7, 'request', 'draft', 'requested', 'none', ?8, NULL, NULL, NULL, ?9, ?9)
+          (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, ?5, ?5),
+          (?6, ?2, ?7, 'request', 'draft', 'requested', 'none', ?8, NULL, NULL, ?9, ?9)
       `,
       args: [
         "cmt_feed_active",
@@ -501,7 +501,6 @@ describe("feed routes", () => {
             'active',
             'none',
             'missing-feed-route',
-            NULL,
             NULL,
             NULL,
             ?1,

@@ -205,7 +205,7 @@ describe("analytics routes", () => {
           pending_namespace_verification_session_id,
           created_at,
           updated_at
-        ) VALUES (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, NULL, ?5, ?5)
+        ) VALUES (?1, ?2, ?3, 'request', 'active', 'active', 'none', ?4, NULL, NULL, ?5, ?5)
       `,
       args: [
         "cmt_route_canonical",

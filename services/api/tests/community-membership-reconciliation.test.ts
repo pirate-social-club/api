@@ -51,7 +51,7 @@ describe("community membership projection reconciliation", () => {
         ) VALUES (
           ?1, ?2, 'Reconcile Test', 'request', 'active', 'active',
           'none', NULL, NULL, NULL,
-          NULL, ?3, ?3
+          ?3, ?3
         )
       `,
       args: [communityId, ownerUserId, now],
