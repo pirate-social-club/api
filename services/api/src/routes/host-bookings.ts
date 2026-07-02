@@ -69,7 +69,6 @@ hostBookings.post("/me/profile", async (c) => {
     bio?: unknown
     topics?: unknown
     intro_video_ref?: unknown
-    platform_fee_bps?: unknown
     payout_wallet_address?: unknown
   }>().catch(() => null)
   if (!body || typeof body !== "object") {
@@ -84,7 +83,6 @@ hostBookings.post("/me/profile", async (c) => {
   if (body.bio !== undefined) input.bio = body.bio
   if (body.topics !== undefined) input.topics = body.topics
   if (body.intro_video_ref !== undefined) input.intro_video_ref = body.intro_video_ref
-  if (body.platform_fee_bps !== undefined) input.platform_fee_bps = body.platform_fee_bps
   if (body.payout_wallet_address !== undefined) input.payout_wallet_address = body.payout_wallet_address
 
   const result = await withHostAuthoring(c.env, async (service) =>
