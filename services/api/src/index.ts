@@ -60,6 +60,7 @@ import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
+import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
@@ -678,6 +679,15 @@ const handler: ExportedHandler<Env> = {
   fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
 
   scheduled: (controller, env, ctx) => {
+    // Story signer funding watchdog. Read-only RPC (no control-plane connection),
+    // internally rate-limited and fully fail-soft, so it runs independently of the
+    // DO-leased batch below and cannot destabilise it.
+    ctx.waitUntil(
+      runStoryRuntimeFundingWatchdog(env).catch((error) => {
+        console.error("[scheduled] story funding watchdog crashed (fail-soft)", error)
+      }),
+    )
+
     // Each job opens its OWN control-plane connection (its own
     // withRequestControlPlaneClients — one connection, opened and closed
     // independently). Bounded concurrency caps peak connections; the deadline
