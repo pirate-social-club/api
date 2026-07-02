@@ -8,6 +8,7 @@ import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { buildLocalCommunityDbPath } from "../../../src/lib/communities/community-local-db"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { processCommunityJobsForCommunity } from "../../../src/lib/communities/jobs/runner"
+import { sha256Hex } from "../../../src/lib/crypto"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
 import { setStoryAssetPublisherForTests } from "../../../src/lib/story/story-publish-service"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
@@ -222,36 +223,15 @@ describe("song artifact routes", () => {
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/wav",
-        filename: "owner.wav",
-        size_bytes: makeSilentWavBytes().byteLength,
-      },
-      ctx.env,
-      owner.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as {
-      id: string
-      storage_ref: string
-    }
-
-    const uploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${owner.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: Buffer.from(makeSilentWavBytes()),
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/wav",
+      filename: "owner.wav",
+      bytes: makeSilentWavBytes(),
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -459,33 +439,15 @@ describe("song artifact routes", () => {
     installSuccessfulStoryRoyaltyRegistrarForTests()
 
     const primaryBytes = makeSilentWavBytes()
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/wav",
-        filename: "altcha-song.wav",
-        size_bytes: primaryBytes.byteLength,
-      },
-      ctx.env,
-      member.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as { id: string }
-
-    const uploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "PUT",
-        headers: {
-          authorization: `Bearer ${member.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: Buffer.from(primaryBytes),
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: member.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/wav",
+      filename: "altcha-song.wav",
+      bytes: primaryBytes,
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -714,38 +676,15 @@ describe("song artifact routes", () => {
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
     const primaryBytes = makeSilentWavBytes()
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/wav",
-        filename: "preview-source.wav",
-        size_bytes: primaryBytes.byteLength,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as {
-      id: string
-      upload_url: string
-    }
-    const primaryBody = new ArrayBuffer(primaryBytes.byteLength)
-    new Uint8Array(primaryBody).set(primaryBytes)
-
-    const uploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/wav",
-        },
-        body: primaryBody,
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/wav",
+      filename: "preview-source.wav",
+      bytes: primaryBytes,
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -1000,26 +939,15 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "anthem.mp3",
-        size_bytes: 8,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as {
-      id: string
-      upload_url: string
-      storage_ref: string
-      status: string
-    }
-    expect(uploadIntentBody.status).toBe("pending_upload")
-    expect(`http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`).toContain(`/communities/${communityId}/song-artifact-uploads/`)
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "anthem.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
 
     const previewUploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -1033,30 +961,6 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       author.accessToken,
     )
     expect(previewUploadIntent.status).toBe(400)
-
-    const uploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
-    const uploaded = await json(uploadContent) as {
-      id: string
-      status: string
-      content_hash: string
-      ipfs_cid?: string | null
-    }
-    expect(uploaded.id).toBe(uploadIntentBody.id)
-    expect(uploaded.status).toBe("uploaded")
-    expect(uploaded.content_hash).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(uploaded.ipfs_cid).toBe("bafysongartifactcid")
 
     const coverUploadIntent = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
@@ -1088,65 +992,25 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(coverUploadContent.status).toBe(200)
 
-    const instrumentalUploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "instrumental_audio",
-        mime_type: "audio/mpeg",
-        filename: "instrumental.mp3",
-        size_bytes: 4,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(instrumentalUploadIntent.status).toBe(201)
-    const instrumentalUploadIntentBody = await json(instrumentalUploadIntent) as {
-      id: string
-      storage_ref: string
-    }
-    const instrumentalUploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${instrumentalUploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/mpeg",
-        },
-        body: new Uint8Array([1, 3, 3, 7]).buffer,
-      },
-      ctx.env,
-    )
-    expect(instrumentalUploadContent.status).toBe(200)
+    const instrumentalUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "instrumental_audio",
+      mimeType: "audio/mpeg",
+      filename: "instrumental.mp3",
+      bytes: new Uint8Array([1, 3, 3, 7]),
+    })
 
-    const vocalUploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "vocal_audio",
-        mime_type: "audio/mpeg",
-        filename: "vocals.mp3",
-        size_bytes: 4,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(vocalUploadIntent.status).toBe(201)
-    const vocalUploadIntentBody = await json(vocalUploadIntent) as {
-      id: string
-      storage_ref: string
-    }
-    const vocalUploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${vocalUploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "audio/mpeg",
-        },
-        body: new Uint8Array([4, 4, 4, 4]).buffer,
-      },
-      ctx.env,
-    )
-    expect(vocalUploadContent.status).toBe(200)
+    const vocalUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "vocal_audio",
+      mimeType: "audio/mpeg",
+      filename: "vocals.mp3",
+      bytes: new Uint8Array([4, 4, 4, 4]),
+    })
 
     const readContent = await app.request(
       `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
@@ -1217,13 +1081,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleBody.media_refs[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
     expect(bundleBody.media_refs[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
     expect(bundleBody.primary_audio.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
     expect(bundleBody.cover_art?.storage_ref).toBe(coverUploadIntentBody.storage_ref)
     expect(bundleBody.moderation_status).toBe("completed")
@@ -1232,6 +1096,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(openRouterCallCount).toBe(1)
     expect(acrCloudCallCount).toBe(1)
     expect(elevenLabsCallCount).toBe(1)
+
+    const uploadedContentHash = `0x${await sha256Hex(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))}`
 
     await ctx.client.execute({
       sql: `
@@ -1244,12 +1110,12 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           storage_ref: uploadIntentBody.storage_ref,
           mime_type: "audio/mpeg",
           size_bytes: 8,
-          content_hash: uploaded.content_hash,
+          content_hash: uploadedContentHash,
           duration_ms: 123_456,
           decentralized_storage: {
             provider: "filebase_ipfs",
-            cid: "bafysongartifactcid",
-            gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+            cid: "bafytestsongartifactcid",
+            gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
           },
         }),
         bundleBody.id.replace(/^sab_/, ""),
@@ -1296,8 +1162,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(postBody.media_refs?.[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
     expect(postBody.media_refs?.[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
 
     const postRead = await app.request(
@@ -1345,13 +1211,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     })
     expect(postReadBody.post?.media_refs?.[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
     expect(postReadBody.song_presentation?.downloadable_audio?.[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
     expect(postReadBody.song_presentation?.downloadable_audio?.map((item) => ({
       kind: item.kind,
@@ -1420,8 +1286,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     ])
     expect(publicThreadBody.post?.song_presentation?.downloadable_audio?.[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
-      cid: "bafysongartifactcid",
-      gateway_url: "https://dweb.link/ipfs/bafysongartifactcid",
+      cid: "bafytestsongartifactcid",
+      gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
 
     const bundleRead = await app.request(
@@ -1476,35 +1342,15 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     )
     expect(deleteOriginalPost.status).toBe(200)
 
-    const retryUploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "anthem-retry.mp3",
-        size_bytes: 8,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(retryUploadIntent.status).toBe(201)
-    const retryUploadIntentBody = await json(retryUploadIntent) as {
-      id: string
-      storage_ref: string
-    }
-    const retryUploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${retryUploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
-      },
-      ctx.env,
-    )
-    expect(retryUploadContent.status).toBe(200)
+    const retryUploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "anthem-retry.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
 
     const retryBundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -1536,7 +1382,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
           storage_ref: retryUploadIntentBody.storage_ref,
           mime_type: "audio/mpeg",
           size_bytes: 8,
-          content_hash: uploaded.content_hash,
+          content_hash: uploadedContentHash,
           duration_ms: 123_456,
         }),
         retryBundleBody.id.replace(/^sab_/, ""),
@@ -1978,37 +1824,15 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "local-dev-song.mp3",
-        size_bytes: 8,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    expect(uploadIntent.status).toBe(201)
-    const uploadIntentBody = await json(uploadIntent) as {
-      id: string
-      upload_url: string
-      storage_ref: string
-    }
-
-    const uploadContent = await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
-      },
-      ctx.env,
-    )
-    expect(uploadContent.status).toBe(200)
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "local-dev-song.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,

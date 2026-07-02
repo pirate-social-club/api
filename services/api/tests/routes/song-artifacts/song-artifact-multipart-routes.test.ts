@@ -134,6 +134,39 @@ async function createMultipartIntent(input: Awaited<ReturnType<typeof createMult
 }
 
 describe("song artifact multipart routes", () => {
+  test("rejects legacy proxy content uploads for primary audio", async () => {
+    const setup = await createMultipartRouteSetup()
+    const response = await requestJson(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads`,
+      {
+        artifact_kind: "primary_audio",
+        mime_type: "audio/mpeg",
+        filename: "legacy.mp3",
+        size_bytes: 4,
+      },
+      setup.env,
+      setup.owner.accessToken,
+    )
+    expect(response.status).toBe(201)
+    const intent = await json(response) as { id: string }
+
+    const upload = await app.request(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads/${intent.id}/content`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${setup.owner.accessToken}`,
+          "content-type": "audio/mpeg",
+        },
+        body: new Uint8Array([1, 2, 3, 4]).buffer,
+      },
+      setup.env,
+    )
+
+    expect(upload.status).toBe(400)
+    expect(await upload.text()).toContain("primary_audio must be uploaded with direct_multipart")
+  })
+
   test("creates a direct multipart upload session and signs part URLs", async () => {
     const setup = await createMultipartRouteSetup()
     const intent = await createMultipartIntent(setup)

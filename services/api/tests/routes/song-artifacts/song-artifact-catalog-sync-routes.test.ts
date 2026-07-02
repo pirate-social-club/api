@@ -7,7 +7,7 @@ import {
   exchangeJwt,
   requestJson,
 } from "./song-artifact-test-helpers"
-import { attachPrimaryWallet } from "./song-artifact-locked-test-helpers"
+import { attachPrimaryWallet, uploadSongArtifact } from "./song-artifact-locked-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -176,31 +176,15 @@ describe("song artifact catalog sync routes", () => {
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "anthem.mp3",
-        size_bytes: 8,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    const uploadIntentBody = await json(uploadIntent) as { id: string }
-
-    await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
-      },
-      ctx.env,
-    )
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "anthem.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
@@ -392,31 +376,15 @@ describe("song artifact catalog sync routes", () => {
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
 
-    const uploadIntent = await requestJson(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads`,
-      {
-        artifact_kind: "primary_audio",
-        mime_type: "audio/mpeg",
-        filename: "anthem.mp3",
-        size_bytes: 8,
-      },
-      ctx.env,
-      author.accessToken,
-    )
-    const uploadIntentBody = await json(uploadIntent) as { id: string }
-
-    await app.request(
-      `http://pirate.test/communities/${communityId}/song-artifact-uploads/${uploadIntentBody.id}/content`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${author.accessToken}`,
-          "content-type": "application/octet-stream",
-        },
-        body: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
-      },
-      ctx.env,
-    )
+    const uploadIntentBody = await uploadSongArtifact({
+      env: ctx.env,
+      communityId,
+      accessToken: author.accessToken,
+      artifactKind: "primary_audio",
+      mimeType: "audio/mpeg",
+      filename: "anthem.mp3",
+      bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    })
 
     const bundleCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/song-artifacts`,
