@@ -17,6 +17,13 @@
   "observability": {
     "enabled": true
   },
+  "ratelimits": [
+    {
+      "name": "LINK_PREVIEW_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -109,6 +116,13 @@
       // hits this worker; it's a deploy-and-verify surface for step 1-7 of
       // the D1-native workstream.
       "name": "pirate-api-d1-staging",
+      "ratelimits": [
+        {
+          "name": "LINK_PREVIEW_RATE_LIMITER",
+          "namespace_id": "1001",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ],
       "durable_objects": {
         "bindings": [
           {
@@ -213,6 +227,13 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "ratelimits": [
+        {
+          "name": "LINK_PREVIEW_RATE_LIMITER",
+          "namespace_id": "1001",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ],
       "durable_objects": {
         "bindings": [
           {
@@ -317,6 +338,13 @@
     },
     "production": {
       "name": "api-core",
+      "ratelimits": [
+        {
+          "name": "LINK_PREVIEW_RATE_LIMITER",
+          "namespace_id": "1001",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ],
       "durable_objects": {
         "bindings": [
           {

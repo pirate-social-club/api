@@ -1,4 +1,5 @@
 import type { ShardRpc } from "@pirate/api-shared"
+import type { RateLimiterBinding } from "./lib/rate-limit"
 
 export type Env = {
   // Runtime
@@ -212,6 +213,8 @@ export type Env = {
   LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
   LIVE_ROOM_RUNTIME?: DurableObjectNamespace
   KARAOKE_SESSION_RUNTIME?: DurableObjectNamespace
+  // Cloudflare native rate limiter (configured under `ratelimits` in wrangler).
+  LINK_PREVIEW_RATE_LIMITER?: RateLimiterBinding
   KARAOKE_GATEWAY_SIGNING_KEY?: string
   ELEVENLABS_STT_MODEL?: string
   ELEVENLABS_STT_WEBSOCKET_URL?: string

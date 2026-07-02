@@ -5,6 +5,7 @@ import { trackApiEvent } from "../lib/analytics/track"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { badRequestError, eligibilityFailed } from "../lib/errors"
+import { enforceRateLimit } from "../lib/rate-limit"
 import {
   applyAdminLinkPreviewOverride,
   type LinkPreviewOverrideRequest,
@@ -281,6 +282,14 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
 
   communities.get("/:communityId/link-preview", async (c) => {
     await getResolvedCommunityRouteContext(c)
+    // Bound abuse of the server-side unfurl fetch (egress / open-proxy) per user.
+    const actor = c.get("actor")
+    await enforceRateLimit(
+      c.env.LINK_PREVIEW_RATE_LIMITER,
+      `link-preview:${actor.userId}`,
+      "Too many link preview requests. Please slow down and try again shortly.",
+      { scope: "link_preview" },
+    )
     const url = c.req.query("url")
     if (!url || !url.trim()) {
       throw badRequestError("url is required")
