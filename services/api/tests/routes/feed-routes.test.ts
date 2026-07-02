@@ -471,6 +471,89 @@ describe("feed routes", () => {
     expect(Object.keys(body)).toEqual(["items", "top_communities", "next_cursor"])
   })
 
+  test("GET /feed/home/public skips projected communities with missing routing", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "feed-route-missing-routing")
+    const now = "2026-05-12T10:04:00.000Z"
+
+    await ctx.client.batch([
+      {
+        sql: `
+          INSERT INTO communities (
+            community_id,
+            creator_user_id,
+            display_name,
+            membership_mode,
+            status,
+            provisioning_state,
+            transfer_state,
+            route_slug,
+            namespace_verification_id,
+            pending_namespace_verification_session_id,
+            primary_database_binding_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            'cmt_missing_feed_route',
+            ?2,
+            'Missing Feed Route',
+            'request',
+            'active',
+            'active',
+            'none',
+            'missing-feed-route',
+            NULL,
+            NULL,
+            NULL,
+            ?1,
+            ?1
+          )
+        `,
+        args: [now, session.userId],
+      },
+      {
+        sql: `
+          INSERT INTO community_post_projections (
+            projection_id, community_id, source_post_id, author_user_id, identity_mode,
+            post_type, status, visibility, upvote_count, downvote_count, comment_count,
+            like_count, source_created_at, projected_payload_json, projection_version,
+            created_at, updated_at
+          ) VALUES (
+            'cpp_missing_feed_route',
+            'cmt_missing_feed_route',
+            'pst_missing_feed_route',
+            'usr_missing_feed_route',
+            'public',
+            'text',
+            'published',
+            'public',
+            0,
+            0,
+            0,
+            0,
+            ?1,
+            '{}',
+            1,
+            ?1,
+            ?1
+          )
+        `,
+        args: [now],
+      },
+    ])
+
+    const response = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en&dedupe=miss", {}, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      items: unknown[]
+      next_cursor: string | null
+    }
+
+    expect(body.items).toEqual([])
+    expect(body.next_cursor).toBeNull()
+  })
+
   test("GET /feed/home/public serves a fresh materialized default public feed", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

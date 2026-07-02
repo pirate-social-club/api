@@ -353,8 +353,32 @@ export async function readHomeFeedCommunityItems(input: {
 }): Promise<HomeFeedCommunityReadResult> {
   const communityStartedAt = performance.now()
   const openStartedAt = performance.now()
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId).catch((error: unknown) => {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "community_not_found") {
+      return null
+    }
+    throw error
+  })
   const openMs = elapsedMs(openStartedAt)
+  if (!db) {
+    return {
+      items: [],
+      identity: null,
+      timing: {
+        community_id: input.communityId,
+        rows: input.rows.length,
+        returned_items: 0,
+        total_ms: elapsedMs(communityStartedAt),
+        open_ms: openMs,
+        identity_ms: 0,
+        posts_ms: 0,
+        snapshots_ms: 0,
+        votes_ms: 0,
+        localize_ms: 0,
+        enqueue_ms: 0,
+      },
+    }
+  }
   try {
     const identityStartedAt = performance.now()
     const identity = await getHomeFeedCommunityIdentity(db.client, input.communityId)
