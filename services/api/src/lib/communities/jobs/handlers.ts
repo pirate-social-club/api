@@ -25,6 +25,7 @@ import {
 import { runLockedAssetDeliveryPrepare } from "./locked-asset-delivery-handler"
 import { runSongArtifactSessionReaper } from "./song-artifact-session-reaper-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
+import { runSongStudyGenerate } from "../../posts/post-study-service"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
 export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -54,6 +55,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runCommunityTextTranslationMaterialize(input)
     case "song_preview_generate":
       return runSongPreviewGenerate(input)
+    case "song_study_generate":
+      return runSongStudyGenerate(input)
     case "locked_asset_delivery_prepare":
       return runLockedAssetDeliveryPrepare(input)
     case "song_artifact_session_reaper":
