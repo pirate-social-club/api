@@ -367,9 +367,13 @@ async function assertCommentTargetExists(input: {
   communityId: string
   threadRootPostId: string
   parentCommentId: string | null
+  requirePublicThread?: boolean
 }): Promise<void> {
   const post = await getPostById(input.client, input.threadRootPostId)
   if (!post || post.community_id !== input.communityId || post.status !== "published") {
+    throw badRequestError("post_id was not found")
+  }
+  if (input.requirePublicThread === true && post.visibility !== "public") {
     throw badRequestError("post_id was not found")
   }
   if (input.parentCommentId) {
@@ -569,6 +573,7 @@ async function callPrepareGuestCommentTool(c: McpContext, rawArgs: unknown) {
       communityId: target.communityId,
       threadRootPostId: target.threadRootPostId,
       parentCommentId: target.parentCommentId,
+      requirePublicThread: true,
     })
     guest = await resolveOrCreateGuestUser({
       env: c.env,
@@ -629,6 +634,13 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
     })
     const db = await openCommunityWriteClient(c.env, communityRepository, target.communityId)
     try {
+      await assertCommentTargetExists({
+        client: db.client,
+        communityId: target.communityId,
+        threadRootPostId: target.threadRootPostId,
+        parentCommentId: target.parentCommentId,
+        requirePublicThread: true,
+      })
       await upsertCommunityMembership({
         client: db.client,
         communityId: target.communityId,

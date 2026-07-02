@@ -942,6 +942,149 @@ describe("mcp routes", () => {
     expect(prepareResult.error?.data?.details?.hint).toContain("get_pirate_board_capabilities")
   })
 
+  test("guest comments cannot target members-only threads", async () => {
+    const ctx = await createRouteTestContext({
+      ALTCHA_HMAC_SECRET: "test-altcha-secret",
+      ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
+      ALTCHA_POW_COST: "1",
+      ALTCHA_POW_COUNTER_MIN: "1",
+      ALTCHA_POW_COUNTER_MAX: "2",
+    })
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "mcp-guest-members-only-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+
+    const communityCreate = await requestJson(
+      "http://pirate.test/communities",
+      {
+        display_name: "MCP Guest Members Only Guard",
+        membership_mode: "request",
+        allow_anonymous_identity: true,
+        anonymous_identity_scope: "community_stable",
+        guest_comment_policy: "altcha_required",
+        namespace: {
+          namespace_verification: namespaceVerificationId,
+        },
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(communityCreate.status).toBe(202)
+    const communityBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityBody.community.id
+    const rawCommunityId = communityId.replace(/^com_/, "")
+
+    await addCommunityMember(ctx.communityDbRoot, rawCommunityId, creator.userId)
+
+    const postCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Members-only guest target",
+        body: "Guest comments must not be able to target this thread.",
+        idempotency_key: "mcp-guest-members-only-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(postCreate.status).toBe(201)
+    const postBody = await json(postCreate) as { id: string }
+    const postId = postBody.id
+    const guestId = "test-guest-members-only-1"
+
+    await setPostVisibility({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: rawCommunityId,
+      postId,
+      visibility: "members_only",
+    })
+
+    const blockedPrepareResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "prepare-members-only",
+      method: "tools/call",
+      params: {
+        name: "prepare_guest_comment",
+        arguments: {
+          guest_id: guestId,
+          community_id: communityId,
+          post_id: postId,
+        },
+      },
+    })
+    expect(blockedPrepareResponse.status).toBe(200)
+    const blockedPrepare = await json(blockedPrepareResponse) as {
+      error?: { message?: string }
+    }
+    expect(blockedPrepare.error?.message).toContain("post_id was not found")
+
+    await setPostVisibility({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: rawCommunityId,
+      postId,
+      visibility: "public",
+    })
+    const prepareResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "prepare-public",
+      method: "tools/call",
+      params: {
+        name: "prepare_guest_comment",
+        arguments: {
+          guest_id: guestId,
+          community_id: communityId,
+          post_id: postId,
+        },
+      },
+    })
+    expect(prepareResponse.status).toBe(200)
+    const prepareResult = await json(prepareResponse) as {
+      result?: { structuredContent?: { challenge?: Challenge } }
+    }
+    const challenge = prepareResult.result?.structuredContent?.challenge
+    expect(challenge).toBeDefined()
+    if (!challenge) {
+      throw new Error("ALTCHA challenge was not returned")
+    }
+    const solution = await solveChallenge({ challenge, deriveKey })
+    if (!solution) {
+      throw new Error("ALTCHA challenge did not solve")
+    }
+    const altchaPayload = btoa(JSON.stringify({ challenge, solution } satisfies Payload))
+
+    await setPostVisibility({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: rawCommunityId,
+      postId,
+      visibility: "members_only",
+    })
+    const blockedReplyResponse = await mcpCall(ctx.env, {
+      jsonrpc: "2.0",
+      id: "reply-members-only",
+      method: "tools/call",
+      params: {
+        name: "reply",
+        arguments: {
+          authorship_mode: "guest",
+          guest_id: guestId,
+          community_id: communityId,
+          post_id: postId,
+          body: "Blocked guest reply",
+          idempotency_key: "mcp-guest-members-only-reply-1",
+          altcha: altchaPayload,
+        },
+      },
+    })
+    expect(blockedReplyResponse.status).toBe(200)
+    const blockedReply = await json(blockedReplyResponse) as {
+      error?: { message?: string }
+    }
+    expect(blockedReply.error?.message).toContain("post_id was not found")
+  })
+
   test("guest comment on non-gated community requires and verifies ALTCHA", async () => {
     const ctx = await createRouteTestContext({
       ALTCHA_HMAC_SECRET: "test-altcha-secret",
