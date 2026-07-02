@@ -442,6 +442,34 @@ describe("post study service", () => {
     expect(payload.unavailable_reason).toBe("missing_transcription_provider")
   })
 
+  test("reports processing when translations can generate but say-it-back is gated by missing ElevenLabs", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+    await seedReadyPack()
+    await exec("DELETE FROM song_study_unit_localization")
+
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_TRANSLATION_MODEL: "test/study-generator",
+    })
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("processing")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
+    expect(payload.unavailable_reason).toBeUndefined()
+    const processingRows = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'processing'")
+    expect(Number(processingRows.rows[0]?.count ?? 0)).toBe(2)
+  })
+
   test("returns unavailable without lazy generation when study is disabled", async () => {
     await setStudyEnabled(false)
     await seedSongPost()
