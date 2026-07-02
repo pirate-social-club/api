@@ -1,4 +1,5 @@
 import { badRequestError } from "../errors"
+import { normalizeLinkUrl } from "./link-enrichment/url-normalization"
 import type { CreatePostRequest } from "../../types"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
@@ -178,6 +179,11 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   }
   if (body.post_type === "link" && !body.link_url?.trim()) {
     throw badRequestError("link_url is required for link posts")
+  }
+  if (body.post_type === "link" && body.link_url && !normalizeLinkUrl(body.link_url)) {
+    // Reject non-http(s) schemes (e.g. javascript:, data:) so a persisted link_url
+    // can never become an XSS sink when later rendered into an <a href>.
+    throw badRequestError("link_url must be a valid http or https URL")
   }
   if (body.crosspost_source) {
     throw badRequestError("crosspost_source must not be provided in the post body")
