@@ -478,6 +478,25 @@ export async function claimPublicPirateName(input: {
     sourceChainJson: buildSourceChainJson(input.env),
   })
 
+  // Single-use funding tx: reject a payment already consumed by a DIFFERENT claimed
+  // quote. This flow is unauthenticated and the name price is per-label-length, so
+  // without this one on-chain payment could register unlimited same-length names by
+  // reusing the same funding_tx_ref across quotes. Migration 0124's partial-unique
+  // index (pirate_name_quotes(funding_tx_ref) WHERE status='claimed') is the
+  // race-safe backstop; this gives a clean error before the write.
+  const priorFundingClaim = await input.client.execute({
+    sql: `
+      SELECT pirate_name_quote_id
+      FROM pirate_name_quotes
+      WHERE funding_tx_ref = ?1 AND status = 'claimed' AND pirate_name_quote_id <> ?2
+      LIMIT 1
+    `,
+    args: [fundingTxRef, quoteId],
+  })
+  if (priorFundingClaim.rows.length > 0) {
+    throw eligibilityFailed("Funding transaction has already been used to claim a name")
+  }
+
   const tx = await input.client.transaction("write")
   let deferredEligibilityError: Error | null = null
   let createdRegistration: QueryResultRow | null = null
