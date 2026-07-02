@@ -14,6 +14,12 @@ export function isPubliclyReadablePost(post: Pick<Post, "status" | "visibility">
   return post.status === "published" && post.visibility === "public"
 }
 
+export function isAssetBackedPostMissingAsset(post: Pick<Post, "asset_id" | "asset_story" | "post_type">): boolean {
+  return (post.post_type === "song" || post.post_type === "video")
+    && Boolean(post.asset_id?.trim())
+    && post.asset_story == null
+}
+
 export async function requireMemberAccess(
   client: Client,
   communityId: string,

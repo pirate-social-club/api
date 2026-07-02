@@ -16,6 +16,7 @@ import {
   type PostWriteDraft,
 } from "./community-post-create-store"
 import { getPostById } from "./community-post-query-store"
+import { markPostDeleted } from "./community-post-mutation-store"
 import { resolvePostProjectionSchema } from "./community-post-projection"
 import { consumeSongPostBundle } from "../song-artifacts/song-artifact-post-resolution-service"
 import {
@@ -331,8 +332,26 @@ export async function createPost(input: {
         })
       })
     }
-    for (const runPostCommitAssetTask of postCommitAssetTasks) {
-      await runPostCommitAssetTask()
+    try {
+      for (const runPostCommitAssetTask of postCommitAssetTasks) {
+        await runPostCommitAssetTask()
+      }
+    } catch (error) {
+      try {
+        await markPostDeleted({
+          executor: db.client,
+          postId: post.post_id,
+          now: nowIso(),
+        })
+      } catch (cleanupError) {
+        console.error("[posts] failed to delete post after asset creation failure", {
+          community_id: input.communityId,
+          post_id: post.post_id,
+          asset_id: post.asset_id ?? null,
+          error: cleanupError,
+        })
+      }
+      throw error
     }
 
     await input.communityRepository.recordCommunityPostProjection({

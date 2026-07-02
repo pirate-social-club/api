@@ -9,6 +9,7 @@ import { getCommunityPreview } from "../communities/community-preview-service"
 import { badRequestError, notFoundError } from "../errors"
 import {
   canReadNonPublishedPost,
+  isAssetBackedPostMissingAsset,
   isPubliclyReadablePost,
   requireMemberAccess,
 } from "./post-access"
@@ -118,6 +119,9 @@ export async function getPost(input: {
     if (!post) {
       throw notFoundError("Post not found")
     }
+    if (isAssetBackedPostMissingAsset(post)) {
+      throw notFoundError("Post not found")
+    }
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
     if (post.status === "deleted") {
       return buildDeletedPostStubResponse({ post, threadSnapshot, viewerUserId: input.userId })
@@ -196,7 +200,12 @@ export async function getPublicPostFromCommunityDb(input: {
   locale?: string | null
 }): Promise<LocalizedPostResponse> {
   const post = await getPostById(input.client, input.postId)
-  if (!post || post.community_id !== input.communityId || !isPubliclyReadablePost(post)) {
+  if (
+    !post
+    || post.community_id !== input.communityId
+    || !isPubliclyReadablePost(post)
+    || isAssetBackedPostMissingAsset(post)
+  ) {
     throw notFoundError("Post not found")
   }
   const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
