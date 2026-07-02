@@ -179,7 +179,7 @@ async function createCommunity(input: {
 
 async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<string, unknown>> {
   const rows = await sql`
-    SELECT r.backend, r.provisioning_state, r.shard_worker_id, r.binding_name, r.region,
+    SELECT r.provisioning_state, r.shard_worker_id, r.binding_name, r.region,
            b.database_url, b.database_name, b.requires_credentials
     FROM community_database_routing r
     JOIN community_database_bindings b ON b.community_id = r.community_id AND b.binding_role = 'primary'
@@ -188,8 +188,8 @@ async function assertD1Routing(sql: SQL, communityId: string): Promise<Record<st
   `
   const row = rows[0] as Record<string, unknown> | undefined
   if (!row) throw new Error(`missing routing row for ${communityId}`)
-  if (row.backend !== "d1" || row.provisioning_state !== "ready") {
-    throw new Error(`routing row is not d1/ready for ${communityId}: ${JSON.stringify(row)}`)
+  if (row.provisioning_state !== "ready") {
+    throw new Error(`routing row is not ready for ${communityId}: ${JSON.stringify(row)}`)
   }
   if (typeof row.database_url !== "string" || !row.database_url.startsWith("d1://shard/")) {
     throw new Error(`binding URL is not d1://shard for ${communityId}: ${JSON.stringify(row)}`)
