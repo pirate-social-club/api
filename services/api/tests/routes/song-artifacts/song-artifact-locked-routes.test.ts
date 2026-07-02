@@ -2357,8 +2357,10 @@ describe("song artifact locked routes", () => {
     }
     expect(failedPostBody).toMatchObject({
       code: "provider_unavailable",
+      // config_missing is an operator/config failure — not resolvable by retrying,
+      // so retryable must be false (a user retry loop can never fix missing config).
       message: "This asset could not be published because Story registration is not configured. Please contact support.",
-      retryable: true,
+      retryable: false,
       details: {
         reason: "story_royalty_registration_failed",
         rights_basis: "derivative",

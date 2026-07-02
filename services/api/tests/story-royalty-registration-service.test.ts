@@ -778,9 +778,12 @@ describe("story royalty registration service", () => {
 
       expect(fundingAssertionNames).toEqual(["story-operator"])
       expect(caughtError).toBeInstanceOf(Error)
-      expect((caughtError as Error).message).toContain("Story registration is temporarily unavailable")
-      // raw operator-funding detail must not leak into the user-facing message
+      // Operator funding below floor is not user-retryable — the message must say
+      // so (no "try again") and must never leak raw wallet/balance detail.
+      expect((caughtError as Error).message).toContain("operator funding issue")
+      expect((caughtError as Error).message).not.toContain("try again")
       expect((caughtError as Error).message).not.toContain("funding below floor")
+      expect((caughtError as Error).message).not.toContain("0xc77Ad4de")
 
       const posts = await db.client.execute({
         sql: "SELECT post_id FROM posts WHERE post_id = ?1",

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   classifyStoryRegistrationFailure,
+  isStoryRegistrationFailureRetryable,
   sanitizeStoryRegistrationFailure,
   storyRegistrationFailureMessage,
 } from "./story-registration-failure"
@@ -22,16 +23,35 @@ describe("storyRegistrationFailureMessage", () => {
     expect(message).not.toContain("RPC Request failed")
   })
 
-  test("insufficient funds and gas-policy failures stay generic (no raw text)", () => {
-    for (const raw of [
+  test("insufficient-funds failures do NOT tell the user to retry (operator-side)", () => {
+    const raw =
+      "royalty_registration_failed:Story runtime signer funding below floor: " +
+      "story-operator:0xc77Ad4de7d179FFFBa417cA24c055d86Af69F4BB:0.4877<0.5"
+    const message = storyRegistrationFailureMessage(raw)
+    expect(message).toContain("operator funding issue")
+    expect(message).not.toContain("try again")
+    // raw wallet/balance detail must never surface to the user
+    expect(message).not.toContain("0xc77Ad4de")
+    expect(message).not.toContain("funding below floor")
+    expect(message).not.toContain("0.4877")
+  })
+
+  test("also classifies 'exceeds the balance' as insufficient funds (no retry prompt)", () => {
+    const message = storyRegistrationFailureMessage(
       "royalty_registration_failed:The total cost (gas * gas fee + value) ... exceeds the balance of the account",
+    )
+    expect(message).toContain("operator funding issue")
+    expect(message).not.toContain("try again")
+    expect(message).not.toContain("exceeds the balance")
+  })
+
+  test("gas-policy failures do NOT tell the user to retry (config-side)", () => {
+    const message = storyRegistrationFailureMessage(
       "royalty_registration_failed:story_royalty_gas_limit_exceeds_policy:2415000:2000000",
-    ]) {
-      const message = storyRegistrationFailureMessage(raw)
-      expect(message).toContain("temporarily unavailable")
-      expect(message).not.toContain("exceeds the balance")
-      expect(message).not.toContain("story_royalty_gas_limit_exceeds_policy")
-    }
+    )
+    expect(message).toContain("configuration issue")
+    expect(message).not.toContain("try again")
+    expect(message).not.toContain("story_royalty_gas_limit_exceeds_policy")
   })
 
   test("config-missing gets a distinct, non-retry message", () => {
@@ -40,8 +60,21 @@ describe("storyRegistrationFailureMessage", () => {
     expect(message).not.toContain("try again")
   })
 
-  test("null/empty error still yields a safe message", () => {
+  test("transient (RPC) failure keeps the retry prompt", () => {
+    expect(storyRegistrationFailureMessage(RAW_RPC_FAILURE)).toContain("try again in a few minutes")
+  })
+
+  test("null/empty error still yields a safe retryable message", () => {
     expect(storyRegistrationFailureMessage(null)).toContain("temporarily unavailable")
+  })
+})
+
+describe("isStoryRegistrationFailureRetryable", () => {
+  test("only transient failures are retryable", () => {
+    expect(isStoryRegistrationFailureRetryable("transient")).toBe(true)
+    expect(isStoryRegistrationFailureRetryable("insufficient_funds")).toBe(false)
+    expect(isStoryRegistrationFailureRetryable("gas_policy")).toBe(false)
+    expect(isStoryRegistrationFailureRetryable("config_missing")).toBe(false)
   })
 })
 
