@@ -1532,18 +1532,14 @@ function buildReviewSchedule(input: {
 
 async function upsertReviewState(input: {
   client: ReadClient
+  existing: StudyReviewStateRow | null
   exercise: Awaited<ReturnType<typeof getExerciseForAttempt>> & {}
   now: string
   rating: FsrsRating
   userId: string
 }): Promise<FsrsRating> {
-  const existing = await getReviewState({
-    client: input.client,
-    exercise: input.exercise,
-    userId: input.userId,
-  })
   const schedule = buildReviewSchedule({
-    existing,
+    existing: input.existing,
     now: input.now,
     rating: input.rating,
   })
@@ -1673,9 +1669,15 @@ export async function submitPostStudyAttempt(input: {
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
     const now = nowIso()
+    const existingReviewState = await getReviewState({
+      client: db.client,
+      exercise,
+      userId: input.actor.userId,
+    })
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
       const reviewRating = await upsertReviewState({
         client: tx,
+        existing: existingReviewState,
         exercise,
         now,
         rating,
