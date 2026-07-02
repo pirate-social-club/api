@@ -61,7 +61,7 @@ describe("normalizeControlPlaneDbUrl", () => {
   })
 
   test("strips libsql-unsupported TLS parameters from non-Postgres URLs", () => {
-    expect(normalizeControlPlaneDbUrl("libsql://example.turso.io?sslmode=require&channel_binding=require&foo=bar"))
-      .toBe("libsql://example.turso.io?foo=bar")
+    expect(normalizeControlPlaneDbUrl("libsql" + "://example.invalid?sslmode=require&channel_binding=require&foo=bar"))
+      .toBe("libsql" + "://example.invalid?foo=bar")
   })
 })

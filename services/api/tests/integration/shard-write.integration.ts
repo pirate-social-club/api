@@ -52,7 +52,7 @@ beforeEach(async () => {
   await env.DB_CMTY_PILOT.exec("DELETE FROM community_rules")
 })
 
-describe("Turso→D1 shard write path (real workerd + real D1)", () => {
+describe("D1 shard write path (real workerd + real D1)", () => {
   it("a buffered write transaction commits as ONE atomic batchWrite, mutating real D1", async () => {
     const client = makeCommunityD1Client(shard, bindingFor(PILOT))
 

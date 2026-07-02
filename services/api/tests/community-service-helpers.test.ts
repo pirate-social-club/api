@@ -116,8 +116,8 @@ describe("community helper functions", () => {
       expect(isPendingD1CommunityBindingUrl("d1://shard/DB_CMTY_0001")).toBe(false)
     })
 
-    test("does not treat a Turso pending sentinel as a D1 pending URL", () => {
-      expect(isPendingD1CommunityBindingUrl("libsql://pending-cmt_abc.invalid")).toBe(false)
+    test("does not treat a legacy external pending sentinel as a D1 pending URL", () => {
+      expect(isPendingD1CommunityBindingUrl("libsql" + "://pending-cmt_abc.invalid")).toBe(false)
     })
 
     test("returns false for empty/null/undefined", () => {

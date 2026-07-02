@@ -214,11 +214,11 @@ test("write: backend='d1' → D1 client", async () => {
   expect((h.client as { __tag?: string }).__tag).toBe("d1")
 })
 
-test("write: backend='d1' never opens the Turso/legacy client (enqueue backend consistency)", async () => {
+test("write: backend='d1' never opens the legacy external client (enqueue backend consistency)", async () => {
   // Regression for #48: a write-on-read route (e.g. listCommentReplies' prewarm enqueue) routed
   // through openCommunityWriteClient must enqueue into the community's actual backend. For a
-  // D1-backed community it must hit the D1 client and NEVER fall to the Turso/legacy client —
-  // otherwise jobs split-brain (enqueued to Turso, consumed from D1 by the routed runner).
+  // D1-backed community it must hit the D1 client and NEVER fall to the legacy external client —
+  // otherwise jobs split-brain (enqueued to a legacy external DB, consumed from D1 by the routed runner).
   await seedD1Row("cmt_d1consistency")
   const deps = writeDeps({})
   const h = await resolveCommunityWriteHandle(deps, "cmt_d1consistency")

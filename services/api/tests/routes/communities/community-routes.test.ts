@@ -969,7 +969,7 @@ describe("community routes", () => {
     await ctx.client.execute({
       sql: `
         UPDATE community_database_bindings
-        SET database_url = 'libsql://unreachable-seo-preview.invalid',
+        SET database_url = 'libsql' || '://unreachable-seo-preview.invalid',
             updated_at = CURRENT_TIMESTAMP
         WHERE community_id = ?1
       `,

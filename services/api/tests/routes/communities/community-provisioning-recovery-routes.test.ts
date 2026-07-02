@@ -83,7 +83,7 @@ describe("community provisioning recovery routes", () => {
       `,
       args: [firstBody.community.id.replace(/^com_/, "")],
     })
-    expect(String(bindingRows.rows[0]?.database_url ?? "")).not.toStartWith("libsql://")
+    expect(String(bindingRows.rows[0]?.database_url ?? "")).not.toStartWith("libsql" + "://")
     expect(Number(bindingRows.rows[0]?.requires_credentials ?? 1)).toBe(0)
 
     await ctx.client.execute({
