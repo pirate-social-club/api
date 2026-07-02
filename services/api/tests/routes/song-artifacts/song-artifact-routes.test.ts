@@ -160,6 +160,13 @@ describe("song artifact routes", () => {
         return await originalFetch(request)
       }
 
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
+      }
+
       if (request.method === "PUT") {
         storedObjects.set(request.url, {
           body: new Uint8Array(await request.arrayBuffer()),
@@ -336,6 +343,13 @@ describe("song artifact routes", () => {
 
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
+      }
+
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
       }
 
       if (request.method === "PUT") {
@@ -554,6 +568,13 @@ describe("song artifact routes", () => {
 
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
+      }
+
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
       }
 
       if (request.method === "PUT") {
@@ -865,6 +886,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
+      }
+
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
       }
 
       if (request.method === "PUT") {
@@ -1539,6 +1567,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         return await originalFetch(request)
       }
 
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
+      }
+
       if (request.method === "PUT") {
         storedObjects.set(request.url, {
           body: new Uint8Array(await request.arrayBuffer()),
@@ -1761,6 +1796,13 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
 
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
+      }
+
+      if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+        return new Response(
+          "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+          { status: 200, headers: { "content-type": "application/xml" } },
+        )
       }
 
       if (request.method === "PUT") {

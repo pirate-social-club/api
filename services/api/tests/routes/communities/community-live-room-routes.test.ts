@@ -149,6 +149,13 @@ function installSongArtifactProviderStubs(): void {
       return new Response(`unstubbed external call: ${request.url}`, { status: 500 })
     }
 
+    if (request.method === "POST" && new URL(request.url).searchParams.has("uploads")) {
+      return new Response(
+        "<InitiateMultipartUploadResult><UploadId>fixture-multipart-upload</UploadId></InitiateMultipartUploadResult>",
+        { status: 200, headers: { "content-type": "application/xml" } },
+      )
+    }
+
     if (request.method === "PUT") {
       storedObjects.set(request.url, {
         body: new Uint8Array(await request.arrayBuffer()),

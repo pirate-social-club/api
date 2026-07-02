@@ -28,8 +28,8 @@ import type { SongArtifactCommunityRepository } from "./song-artifact-types"
 
 function assertUploadRequest(input: CreateSongArtifactUploadRequest): void {
   const kind = input.artifact_kind as SongArtifactKind
-  if (kind === "preview_audio") {
-    throw badRequestError("preview_audio upload intents are not supported; use preview_window")
+  if (kind !== "cover_art") {
+    throw badRequestError(`${kind} must be uploaded with direct_multipart`)
   }
   const mimeType = input.mime_type.trim().toLowerCase()
   if (!mimeType) {
