@@ -38,6 +38,7 @@ import {
 import type { AssetRow } from "./row-types"
 import {
   classifyStoryRegistrationFailure,
+  isStoryRegistrationFailureRetryable,
   sanitizeStoryRegistrationFailure,
   storyRegistrationFailureMessage,
 } from "./story-registration-failure"
@@ -594,17 +595,21 @@ export async function createAssetForPost(input: {
     })
     // Detail is serialized into the HTTP response (errors.ts errorResponse), so it
     // must not carry raw SDK/contract/RPC text — only the coarse class.
-    throw providerUnavailable(storyRegistrationFailureMessage(storyError), {
-      reason: "story_royalty_registration_failed",
-      community_id: input.communityId,
-      post_id: input.post.post_id,
-      asset_id: input.post.asset_id,
-      asset_kind: input.assetKind,
-      rights_basis: input.post.rights_basis ?? "none",
-      primary_content_hash: resolvedPrimaryContentHash,
-      upstream_asset_ref_count: input.post.upstream_asset_refs?.length ?? 0,
-      story_error_class: storyErrorClass,
-    })
+    throw providerUnavailable(
+      storyRegistrationFailureMessage(storyError),
+      {
+        reason: "story_royalty_registration_failed",
+        community_id: input.communityId,
+        post_id: input.post.post_id,
+        asset_id: input.post.asset_id,
+        asset_kind: input.assetKind,
+        rights_basis: input.post.rights_basis ?? "none",
+        primary_content_hash: resolvedPrimaryContentHash,
+        upstream_asset_ref_count: input.post.upstream_asset_refs?.length ?? 0,
+        story_error_class: storyErrorClass,
+      },
+      isStoryRegistrationFailureRetryable(storyErrorClass),
+    )
   }
 
   const requestedAllocations = input.royaltyAllocations ?? []
@@ -1047,6 +1052,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
 
   if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "failed") {
     const sanitizedStoryError = sanitizeStoryRegistrationFailure(storyError)
+    const storyErrorClass = classifyStoryRegistrationFailure(storyError)
     await input.client.execute({
       sql: `
         UPDATE assets
@@ -1061,16 +1067,30 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       `,
       args: [input.communityId, asset.asset_id, sanitizedStoryError, nowIso()],
     })
-    throw providerUnavailable(storyRegistrationFailureMessage(storyError), {
-      reason: "story_royalty_registration_failed",
+    console.error("[commerce] required Story registration failed (locked delivery)", {
       community_id: input.communityId,
       asset_id: asset.asset_id,
       asset_kind: asset.asset_kind,
       rights_basis: asset.rights_basis,
-      primary_content_hash: resolvedPrimaryContentHash,
-      upstream_asset_ref_count: post.upstream_asset_refs?.length ?? 0,
-      story_error: sanitizedStoryError,
+      story_error_class: storyErrorClass,
+      story_error: sanitizedStoryError, // raw detail — server logs only, never returned to the client
     })
+    // Detail is serialized into the HTTP response (errors.ts errorResponse), so it
+    // must not carry raw SDK/contract/RPC text — only the coarse class.
+    throw providerUnavailable(
+      storyRegistrationFailureMessage(storyError),
+      {
+        reason: "story_royalty_registration_failed",
+        community_id: input.communityId,
+        asset_id: asset.asset_id,
+        asset_kind: asset.asset_kind,
+        rights_basis: asset.rights_basis,
+        primary_content_hash: resolvedPrimaryContentHash,
+        upstream_asset_ref_count: post.upstream_asset_refs?.length ?? 0,
+        story_error_class: storyErrorClass,
+      },
+      isStoryRegistrationFailureRetryable(storyErrorClass),
+    )
   }
 
   const updatedAt = nowIso()

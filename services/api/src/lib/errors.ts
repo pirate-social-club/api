@@ -63,8 +63,12 @@ export function structuredSurfaceDisabled(message: string, details: Record<strin
   return new HttpError(403, "structured_surface_disabled", message, false, details)
 }
 
-export function providerUnavailable(message: string, details: Record<string, unknown> | null = null): HttpError {
-  return new HttpError(502, "provider_unavailable", message, true, details)
+export function providerUnavailable(
+  message: string,
+  details: Record<string, unknown> | null = null,
+  retryable = true,
+): HttpError {
+  return new HttpError(502, "provider_unavailable", message, retryable, details)
 }
 
 export function fundingConfirmationTimeout(message: string, details: Record<string, unknown> | null = null): HttpError {
