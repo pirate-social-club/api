@@ -1,6 +1,6 @@
 /**
  * RPC contract between the API Worker and the community D1 shard Worker
- * (Turso→D1 PR2, read-only). Shared so both sides compile against one shape.
+ * (read-only). Shared so both sides compile against one shape.
  *
  * READ-ONLY BY DESIGN: there is no mutation/transaction/write-batch method here.
  * Adding a write surface is PR3 and must be a deliberate, separate contract
