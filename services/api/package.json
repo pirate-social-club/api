@@ -21,6 +21,7 @@
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
     "zkpassport:verifier": "bun run scripts/zkpassport-verifier-service.ts",
     "check:community-schema-guards": "bun run scripts/check-community-schema-guards.ts",
+    "check:community-schema-snapshot": "bun run scripts/generate-community-schema-snapshot.ts --check",
     "check:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts",
     "backfill:source-language-detection": "bun run scripts/backfill-source-language-detection.ts",
     "sync:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts --write",
