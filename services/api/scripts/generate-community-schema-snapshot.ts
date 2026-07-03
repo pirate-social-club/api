@@ -75,6 +75,33 @@ async function main(): Promise<void> {
     `export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: string }[] = ${JSON.stringify(migrations, null, 2)}\n`
 
   const outPath = join(dirname(fileURLToPath(import.meta.url)), OUT_REL)
+
+  // Explicit ledger-coverage assertion: every core template migration must be recorded.
+  const covered = new Set(migrations.map((m) => m.name))
+  const uncovered = files.filter((f) => !covered.has(f))
+  if (uncovered.length > 0) {
+    console.error(`community schema snapshot ledger is missing migrations: ${uncovered.join(", ")}`)
+    process.exit(1)
+  }
+
+  if (process.argv.includes("--check")) {
+    let existing = ""
+    try {
+      existing = await readFile(outPath, "utf8")
+    } catch {
+      existing = ""
+    }
+    if (existing !== body) {
+      console.error("community schema snapshot is STALE (does not match a fresh regeneration from core).")
+      console.error("Regenerate and commit it:")
+      console.error("  PIRATE_CORE_REPO=<core checkout> bun run scripts/generate-community-schema-snapshot.ts")
+      console.error(`Expected ${statements.length} schema statements and ${migrations.length} migrations from ${files.length} core template files.`)
+      process.exit(1)
+    }
+    console.log(`community schema snapshot is fresh: ${migrations.length} migrations, ${statements.length} schema statements`)
+    return
+  }
+
   await mkdir(dirname(outPath), { recursive: true })
   await writeFile(outPath, body)
   console.log(`generated: ${statements.length} schema statements, ${migrations.length} migrations from ${files.length} files`)

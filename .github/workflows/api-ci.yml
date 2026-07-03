@@ -215,6 +215,16 @@ jobs:
         working-directory: services/api
         run: bun run check:community-schema-guards
 
+      - name: Check community schema snapshot freshness
+        working-directory: services/api
+        env:
+          # Regenerate the provisioning snapshot from the core community-template
+          # migrations and fail if the committed snapshot drifts (or if any core
+          # migration is missing from the recorded ledger). Prevents a stale
+          # generated snapshot from provisioning communities with the wrong schema.
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+        run: bun run check:community-schema-snapshot
+
       - name: Install ZKPassport verifier container dependencies
         working-directory: services/zkpassport-verifier-container
         run: bun install --frozen-lockfile
