@@ -18,6 +18,7 @@ import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } 
 import { publicCommunityId, publicPostId } from "../public-ids"
 import { withTransaction } from "../transactions"
 import { logPipelineError } from "../observability/pipeline-log"
+import { sameLanguageLocale } from "../localization/content-locale"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
@@ -307,6 +308,18 @@ function normalizeStudyTargetLanguage(value: unknown): string {
   return canonical
 }
 
+// Translation-choice exercises only make sense when the learner's target language
+// differs from the song's source language. When they coincide (e.g. an English
+// speaker studying an English song) "translate this line" collapses into paraphrase
+// and actively mis-teaches (there is no correct answer), so we suppress translation
+// generation AND serving and fall back to say-it-back (source-language recall) only.
+// Locale-aware via sameLanguageLocale so en-US / en_GB source vs. en target count as
+// the same language; an unknown/null source_language returns false and is left to a
+// separate policy decision (i.e. translations are still offered).
+function isSameLanguageStudyPair(sourceLanguage: string | null | undefined, targetLanguage: string): boolean {
+  return sameLanguageLocale(sourceLanguage, targetLanguage)
+}
+
 function resolveStudyGenerationTargetLanguageLimit(env: Env): number {
   return parsePositiveInteger(env.SONG_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT)
     ?? DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT
@@ -531,6 +544,7 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
 async function listExercises(input: {
   client: ReadClient
   includeSayItBack: boolean
+  includeTranslation: boolean
   postId: string
   targetLanguage: string
 }): Promise<StudyExerciseRow[]> {
@@ -556,6 +570,7 @@ async function listExercises(input: {
       FROM song_study_unit u
       JOIN song_study_unit_localization l ON l.unit_id = u.id
       WHERE u.post_id = ?1
+        AND ?4 = 1
         AND l.target_language = ?2
         AND l.status = 'ready'
         AND l.translation_text IS NOT NULL
@@ -563,7 +578,7 @@ async function listExercises(input: {
         AND l.correct_option_id IS NOT NULL
       ORDER BY line_index ASC, sort_order ASC, id ASC
     `,
-    args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0],
+    args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0, input.includeTranslation ? 1 : 0],
   })
   return result.rows.map((row) => ({
     correct_option_id: readString(row.correct_option_id),
@@ -716,6 +731,9 @@ async function createReadyStudyPack(input: {
 }): Promise<StudyPack | null> {
   const units = await ensureStudyUnits(input.client, input.post)
   if (units.length === 0) return null
+  // Defensive: refuse to generate translations into the song's own language even if
+  // a stale/racing caller reaches here — same-language translation is never valid.
+  if (isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)) return null
 
   const generatedLines = new Map<string, StudyGeneratedLine>()
   const generationFailureCodes: string[] = []
@@ -935,11 +953,15 @@ async function enqueueStudyGenerationIfNeeded(input: {
   communityId: string
   env: Env
   postId: string
+  sourceLanguage: string | null
   targetLanguage: string
   units: StudyUnitRow[]
 }): Promise<void> {
   if (!canGenerateStudyTranslations(input.env)) return
   if (input.units.length === 0) return
+  // Never enqueue same-language translation generation: it would burn LLM tokens
+  // producing degenerate "translate X into the same language" paraphrase MCQs.
+  if (isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)) return
   const pack = await getLatestPack({
     client: input.client,
     postId: input.postId,
@@ -1036,17 +1058,22 @@ export async function getPostStudyPayload(input: {
         unavailable_reason: "no_lyrics",
       }
     }
+    // Suppress translation_choice entirely when the learner's target language matches
+    // the song's source language — the read path must exclude already-generated rows,
+    // not just stop future enqueues (existing en localizations would otherwise serve).
+    const includeTranslation = !isSameLanguageStudyPair(post.source_language, targetLanguage)
     await enqueueStudyGenerationIfNeeded({
       client: db.client,
       communityId: input.communityId,
       env: input.env,
       postId: input.postId,
+      sourceLanguage: post.source_language,
       targetLanguage,
       units,
     })
 
     const pack = await getLatestPack({ client: db.client, postId: input.postId, targetLanguage })
-    if (pack?.status === "unavailable") {
+    if (includeTranslation && pack?.status === "unavailable") {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
         source_language: pack.source_language ?? post.source_language,
@@ -1061,11 +1088,15 @@ export async function getPostStudyPayload(input: {
     const exercises = (await listExercises({
       client: db.client,
       includeSayItBack,
+      includeTranslation,
       postId: input.postId,
       targetLanguage,
     })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
-      if (!includeSayItBack && canGenerateStudyTranslations(input.env)) {
+      // Only report "processing" (translations still generating) when translations are
+      // actually expected. For a same-language pair nothing will ever generate, so an
+      // empty pack means say-it-back is the only possible type and its provider is missing.
+      if (!includeSayItBack && includeTranslation && canGenerateStudyTranslations(input.env)) {
         return {
           ...basePayload({ access: "processing", post, targetLanguage }),
           source_language: pack?.source_language ?? post.source_language,
@@ -1107,6 +1138,11 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
     }
     if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.job.community_id })) {
       return "skipped:study_disabled"
+    }
+    // A queued job for a same-language pair (e.g. enqueued before this guard existed)
+    // must not generate degenerate same-language translation MCQs.
+    if (isSameLanguageStudyPair(post.source_language, targetLanguage)) {
+      return "skipped:same_language"
     }
     const units = await ensureStudyUnits(db.client, post)
     if (units.length === 0) return "skipped:no_lyrics"
@@ -1623,6 +1659,13 @@ export async function submitPostStudyAttempt(input: {
     }
     if (exercise.exercise_type !== type) {
       throw badRequestError("type does not match exercise")
+    }
+    // Refuse to grade same-language translation_choice attempts (e.g. from a client that
+    // still holds an exercise id generated before this exercise type was suppressed).
+    // Mirror the read-path exclusion so it reads as "not offered", not a server error.
+    if (exercise.exercise_type === "translation_choice"
+      && isSameLanguageStudyPair(exercise.source_language, exercise.target_language)) {
+      throw notFoundError("Study exercise not found")
     }
     if (attemptNumber > exercise.max_attempts) {
       throw badRequestError("attempt_number exceeds max_attempts")

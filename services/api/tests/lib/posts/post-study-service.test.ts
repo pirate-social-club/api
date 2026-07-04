@@ -1812,3 +1812,163 @@ describe("post study service", () => {
     expect(fetchCalled).toBe(false)
   })
 })
+
+describe("post study same-language suppression", () => {
+  // A same-language translation row is deliberately degenerate: it "translates"
+  // an English line into English. Markers let us prove the read path hides it.
+  async function seedSameLanguageUnits(sourceLanguage: string): Promise<void> {
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES
+        ('stu_1', ?1, 'line_001', 0, ?2, 'I was lost in the midnight waves',
+         'I was lost in the midnight waves', 'ready', 1, 2, ?3, ?3),
+        ('stu_2', ?1, 'line_002', 1, ?2, 'Hold me close until the morning',
+         'Hold me close until the morning', 'ready', 1, 2, ?3, ?3)
+    `, [POST_ID, sourceLanguage, NOW])
+    await exec(`
+      INSERT INTO song_study_unit_localization (
+        id, unit_id, target_language, localization_version, status,
+        question, translation_text, options_json, correct_option_id,
+        explanation_text, max_attempts, generated_at, created_at, updated_at
+      )
+      VALUES (
+        'sul_2_en', 'stu_2', 'en', 4, 'ready',
+        'Choose the best translation.',
+        'SAME_LANG_TRANSLATION_MARKER', ?1, 'opt_a',
+        'Paraphrase explanation marker.', 2, ?2, ?2, ?2
+      )
+    `, [
+      JSON.stringify([
+        { id: "opt_a", text: "SAME_LANG_TRANSLATION_MARKER" },
+        { id: "opt_b", text: "SAME_LANG_DISTRACTOR_B" },
+        { id: "opt_c", text: "SAME_LANG_DISTRACTOR_C" },
+      ]),
+      NOW,
+    ])
+  }
+
+  async function seedEnglishRegionalSongPost(): Promise<void> {
+    await exec(`
+      INSERT INTO posts (
+        post_id, community_id, author_user_id, identity_mode, post_type,
+        status, song_mode, title, lyrics, source_language, rights_basis,
+        analysis_state, content_safety_state, age_gate_policy, created_at,
+        updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+      )
+      VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+              'Midnight Waves', 'I was lost in the midnight waves', 'en-US',
+              'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
+              'public', 'Midnight Waves', 'ipfs://cover')
+    `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
+  }
+
+  test("hides an existing ready en localization when target language equals source", async () => {
+    await seedSongPost()
+    await seedSameLanguageUnits("en")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(2)
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual(["say_it_back", "say_it_back"])
+    const serialized = JSON.stringify(payload)
+    expect(serialized).not.toContain("translation_choice")
+    expect(serialized).not.toContain("SAME_LANG_TRANSLATION_MARKER")
+    expect(serialized).not.toContain("SAME_LANG_DISTRACTOR_B")
+  })
+
+  test("treats a regional source (en-US) as the same language as an en target", async () => {
+    await seedEnglishRegionalSongPost()
+    await seedSameLanguageUnits("en-US")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    expect(JSON.stringify(payload)).not.toContain("SAME_LANG_TRANSLATION_MARKER")
+  })
+
+  test("skips a queued same-language generation job without calling the model", async () => {
+    await seedSongPost()
+
+    let fetchCalled = false
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      OPENROUTER_TRANSLATION_MODEL: "test/study-generator",
+    })
+    const jobResult = await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => runStudyGenerationJob({
+      env: generationEnv,
+      targetLanguage: "en",
+    }))
+
+    expect(jobResult).toBe("skipped:same_language")
+    expect(fetchCalled).toBe(false)
+    const localizations = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization")
+    expect(Number(localizations.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("rejects a same-language translation_choice attempt as not found", async () => {
+    await seedSongPost()
+    await seedSameLanguageUnits("en")
+
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:en",
+        idempotency_key: "same-language-attempt",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })).rejects.toThrow(/Study exercise not found/)
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("still serves cross-language (en source, es target) translation_choice", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    const translationChoice = payload.exercises.find((exercise) => exercise.type === "translation_choice")
+    expect(translationChoice).toBeDefined()
+    expect(translationChoice?.line_id).toBe("line_002")
+    expect(JSON.stringify(payload)).toContain("Abrázame fuerte hasta la mañana")
+  })
+})
