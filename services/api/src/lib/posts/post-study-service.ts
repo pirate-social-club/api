@@ -311,16 +311,27 @@ function normalizeStudyTargetLanguage(value: unknown): string {
   return canonical
 }
 
+// The song-study pilot is English-source only, so a post with no reliably detected
+// source_language is assumed English for the same-language decision below. Without
+// this, an English song whose source_language is null/undetected takes the
+// cross-language path and gets degenerate English->English "translation" MCQs (the
+// same failure the strict guard fixes for explicitly-English posts).
+const ASSUMED_STUDY_SOURCE_LANGUAGE = "en"
+
 // Translation-choice exercises only make sense when the learner's target language
 // differs from the song's source language. When they coincide (e.g. an English
 // speaker studying an English song) "translate this line" collapses into paraphrase
 // and actively mis-teaches (there is no correct answer), so we suppress translation
 // generation AND serving and fall back to say-it-back (source-language recall) only.
 // Locale-aware via sameLanguageLocale so en-US / en_GB source vs. en target count as
-// the same language; an unknown/null source_language returns false and is left to a
-// separate policy decision (i.e. translations are still offered).
+// the same language. A null/unknown source_language falls back to the pilot's assumed
+// English source, so it suppresses only for an English target and still offers real
+// translations into other languages. NOTE: this cannot rescue a source_language that
+// is confidently WRONG (e.g. English lyrics mislabeled "tr") — that is a data-quality
+// problem the source_language must be corrected for; revisit the assumption when study
+// expands beyond English-source songs.
 function isSameLanguageStudyPair(sourceLanguage: string | null | undefined, targetLanguage: string): boolean {
-  return sameLanguageLocale(sourceLanguage, targetLanguage)
+  return sameLanguageLocale(readString(sourceLanguage) ?? ASSUMED_STUDY_SOURCE_LANGUAGE, targetLanguage)
 }
 
 function resolveStudyGenerationTargetLanguageLimit(env: Env): number {

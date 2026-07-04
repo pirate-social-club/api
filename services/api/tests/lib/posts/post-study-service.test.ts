@@ -1971,6 +1971,59 @@ describe("post study same-language suppression", () => {
     expect(translationChoice?.line_id).toBe("line_002")
     expect(JSON.stringify(payload)).toContain("Abrázame fuerte hasta la mañana")
   })
+
+  async function seedNullSourceSongPost(): Promise<void> {
+    await exec(`
+      INSERT INTO posts (
+        post_id, community_id, author_user_id, identity_mode, post_type,
+        status, song_mode, title, lyrics, source_language, rights_basis,
+        analysis_state, content_safety_state, age_gate_policy, created_at,
+        updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+      )
+      VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+              'Midnight Waves', 'I was lost in the midnight waves', NULL,
+              'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song',
+              'public', 'Midnight Waves', 'ipfs://cover')
+    `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
+  }
+
+  test("suppresses en translation when source_language is null (assumed English pilot source)", async () => {
+    await seedNullSourceSongPost()
+    await seedSameLanguageUnits("en")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
+    expect(JSON.stringify(payload)).not.toContain("translation_choice")
+    expect(JSON.stringify(payload)).not.toContain("SAME_LANG_TRANSLATION_MARKER")
+  })
+
+  test("still offers cross-language translation for a null source with a non-English target", async () => {
+    await seedNullSourceSongPost()
+    await seedReadyPack()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    const translationChoice = payload.exercises.find((exercise) => exercise.type === "translation_choice")
+    expect(translationChoice).toBeDefined()
+    expect(JSON.stringify(payload)).toContain("Abrázame fuerte hasta la mañana")
+  })
 })
 
 describe("post study unit punctuation canonicalization", () => {
