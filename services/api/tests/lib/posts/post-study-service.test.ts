@@ -241,11 +241,11 @@ async function seedReadyPack(): Promise<void> {
       ('stu_1', ?1, 'line_001', 0, 'en',
        'I was lost in the midnight waves',
        'I was lost in the midnight waves',
-       'ready', 1, 2, ?2, ?2),
+       'ready', 2, 2, ?2, ?2),
       ('stu_2', ?1, 'line_002', 1, 'en',
        'Hold me close until the morning',
        'Hold me close until the morning',
-       'ready', 1, 2, ?2, ?2)
+       'ready', 2, 2, ?2, ?2)
   `, [POST_ID, NOW])
   await exec(`
     INSERT INTO song_study_unit_localization (
@@ -395,7 +395,7 @@ describe("post study service", () => {
 
     expect(payload.access).toBe("ready")
     expect(payload.exercise_count).toBe(3)
-    expect(payload.study_pack_version).toBe(1)
+    expect(payload.study_pack_version).toBe(2)
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
     expect(serialized).not.toContain("correct_option_id")
@@ -1706,7 +1706,7 @@ describe("post study service", () => {
       WHERE target_language = 'es' AND status = 'ready'
     `)
     expect(Number(rows.rows[0]?.ready_count ?? 0)).toBe(2)
-    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(4)
+    expect(Number(rows.rows[0]?.min_version ?? 0)).toBe(5)
   })
 
   test("canonicalizes regional target languages before enqueueing generation", async () => {
@@ -1825,9 +1825,9 @@ describe("post study same-language suppression", () => {
       )
       VALUES
         ('stu_1', ?1, 'line_001', 0, ?2, 'I was lost in the midnight waves',
-         'I was lost in the midnight waves', 'ready', 1, 2, ?3, ?3),
+         'I was lost in the midnight waves', 'ready', 2, 2, ?3, ?3),
         ('stu_2', ?1, 'line_002', 1, ?2, 'Hold me close until the morning',
-         'Hold me close until the morning', 'ready', 1, 2, ?3, ?3)
+         'Hold me close until the morning', 'ready', 2, 2, ?3, ?3)
     `, [POST_ID, sourceLanguage, NOW])
     await exec(`
       INSERT INTO song_study_unit_localization (
@@ -1970,5 +1970,199 @@ describe("post study same-language suppression", () => {
     expect(translationChoice).toBeDefined()
     expect(translationChoice?.line_id).toBe("line_002")
     expect(JSON.stringify(payload)).toContain("Abrázame fuerte hasta la mañana")
+  })
+})
+
+describe("post study unit punctuation canonicalization", () => {
+  async function seedSongPostWithLyrics(lyrics: string): Promise<void> {
+    await exec(`
+      INSERT INTO posts (
+        post_id, community_id, author_user_id, identity_mode, post_type,
+        status, song_mode, title, lyrics, source_language, rights_basis,
+        analysis_state, content_safety_state, age_gate_policy, created_at,
+        updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+      )
+      VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+              'Midnight Waves', ?4, 'en',
+              'original', 'allow', 'safe', 'none', ?5, ?5, 'public', 'ast_song',
+              'public', 'Midnight Waves', 'ipfs://cover')
+    `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, lyrics, NOW])
+  }
+
+  async function getExercisePromptTexts(targetLanguage = "es"): Promise<string[]> {
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage,
+    })
+    return payload.exercises.map((exercise) => exercise.prompt_text)
+  }
+
+  test("strips trailing comma/period/dash at unit creation but keeps ? and !", async () => {
+    await seedSongPostWithLyrics(
+      "Blues have overtaken me,\n" +
+      "The shadows have followed me.\n" +
+      "The music has captured me -\n" +
+      "Why did you leave me?\n" +
+      "Do not go!",
+    )
+
+    const prompts = await getExercisePromptTexts()
+
+    expect(prompts).toEqual([
+      "Blues have overtaken me",
+      "The shadows have followed me",
+      "The music has captured me",
+      "Why did you leave me?",
+      "Do not go!",
+    ])
+    expect(prompts.every((text) => !/[,;:]$/u.test(text))).toBe(true)
+  })
+
+  test("re-splits stale units to canonicalize stored text while preserving review state", async () => {
+    await seedSongPostWithLyrics("Blues have overtaken me,")
+    // A pre-canonicalization (v1) unit whose stored text still carries the comma.
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES ('stu_stale', ?1, 'line_001', 0, 'en',
+              'Blues have overtaken me,', 'Blues have overtaken me,',
+              'ready', 1, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+    // Per-user FSRS state for that line must survive the re-split (keyed by line_id).
+    await exec(`
+      INSERT INTO song_study_review_state (
+        user_id, post_id, line_id, exercise_type, target_language, state,
+        stability, difficulty, due_at, last_reviewed_at, reps, lapses,
+        fsrs_params_version, updated_at
+      )
+      VALUES (?1, ?2, 'line_001', 'say_it_back', 'en', 'review',
+              4.2, 5.0, ?3, ?3, 3, 1, 1, ?3)
+    `, [LEARNER_ID, POST_ID, NOW])
+
+    const prompts = await getExercisePromptTexts()
+    expect(prompts).toEqual(["Blues have overtaken me"])
+
+    const unit = await client!.execute(
+      "SELECT id, prompt_text, reference_text, unit_version FROM song_study_unit WHERE post_id = ?1 AND line_id = 'line_001'",
+      [POST_ID],
+    )
+    expect(unit.rows).toHaveLength(1)
+    // Same primary key kept (upsert), so FK localizations / exercise ids stay valid.
+    expect(unit.rows[0]?.id).toBe("stu_stale")
+    expect(unit.rows[0]?.prompt_text).toBe("Blues have overtaken me")
+    expect(unit.rows[0]?.reference_text).toBe("Blues have overtaken me")
+    expect(Number(unit.rows[0]?.unit_version ?? 0)).toBe(2)
+
+    const review = await client!.execute(
+      "SELECT reps, lapses, state FROM song_study_review_state WHERE post_id = ?1 AND line_id = 'line_001' AND exercise_type = 'say_it_back'",
+      [POST_ID],
+    )
+    expect(review.rows).toHaveLength(1)
+    expect(Number(review.rows[0]?.reps ?? 0)).toBe(3)
+    expect(Number(review.rows[0]?.lapses ?? 0)).toBe(1)
+    expect(review.rows[0]?.state).toBe("review")
+  })
+
+  test("deletes stale units the re-split no longer produces and cascades their localizations", async () => {
+    // Post now yields only line_001, but stale (v1) units + a localization exist for a
+    // line the current lyrics no longer produce (edited lyrics / heuristic change).
+    await seedSongPostWithLyrics("I was lost in the midnight waves")
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES
+        ('stu_keep', ?1, 'line_001', 0, 'en', 'I was lost in the midnight waves',
+         'I was lost in the midnight waves', 'ready', 1, 2, ?2, ?2),
+        ('stu_drop', ?1, 'line_002', 1, 'en', 'A line that no longer exists',
+         'A line that no longer exists', 'ready', 1, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+    await exec(`
+      INSERT INTO song_study_unit_localization (
+        id, unit_id, target_language, localization_version, status,
+        question, translation_text, options_json, correct_option_id,
+        explanation_text, max_attempts, generated_at, created_at, updated_at
+      )
+      VALUES ('sul_drop_es', 'stu_drop', 'es', 4, 'ready',
+              'Choose the best translation.', 'Una línea que ya no existe', ?1,
+              'opt_a', 'explicación', 2, ?2, ?2, ?2)
+    `, [
+      JSON.stringify([
+        { id: "opt_a", text: "Una línea que ya no existe" },
+        { id: "opt_b", text: "Otra opción" },
+        { id: "opt_c", text: "Tercera opción" },
+      ]),
+      NOW,
+    ])
+
+    const prompts = await getExercisePromptTexts()
+    expect(prompts).toEqual(["I was lost in the midnight waves"])
+
+    const units = await client!.execute("SELECT line_id FROM song_study_unit WHERE post_id = ?1", [POST_ID])
+    expect(units.rows.map((row) => row.line_id)).toEqual(["line_001"])
+    const orphanLocalizations = await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE unit_id = 'stu_drop'",
+    )
+    expect(Number(orphanLocalizations.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("treats old-version localizations as stale and re-queues generation", async () => {
+    await seedMultilineSongPost()
+    // Two current-version units with COMPLETE es localizations at the previous
+    // localization version — bumping the version must force a regeneration.
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES
+        ('stu_1', ?1, 'line_001', 0, 'en', 'I was lost in the midnight waves',
+         'I was lost in the midnight waves', 'ready', 2, 2, ?2, ?2),
+        ('stu_2', ?1, 'line_002', 1, 'en', 'Hold me close until the morning',
+         'Hold me close until the morning', 'ready', 2, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+    for (const unitId of ["stu_1", "stu_2"]) {
+      await exec(`
+        INSERT INTO song_study_unit_localization (
+          id, unit_id, target_language, localization_version, status,
+          question, translation_text, options_json, correct_option_id,
+          explanation_text, max_attempts, generated_at, created_at, updated_at
+        )
+        VALUES (?1, ?2, 'es', 4, 'ready',
+                'Choose the best translation.', 'traducción vieja', ?3,
+                'opt_a', 'explicación', 2, ?4, ?4, ?4)
+      `, [`sul_${unitId}_es_old`, unitId, JSON.stringify([
+        { id: "opt_a", text: "traducción vieja" },
+        { id: "opt_b", text: "otra" },
+        { id: "opt_c", text: "tercera" },
+      ]), NOW])
+    }
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+      }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    const processing = await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE target_language = 'es' AND status = 'processing'",
+    )
+    expect(Number(processing.rows[0]?.count ?? 0)).toBe(2)
   })
 })
