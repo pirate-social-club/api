@@ -52,6 +52,10 @@ const DETECTION_RULES: Array<{ locale: string; pattern: RegExp }> = [
   { locale: "it", pattern: /\b(ciao|grazie|con|per|una|che|non|sono)\b/giu },
   { locale: "tr", pattern: /\b(merhaba|teşekkür|için|ile|bir|değil|ve)\b/giu },
   { locale: "id", pattern: /\b(halo|terima|kasih|dan|yang|untuk|dengan|ini)\b/giu },
+  // English is scored last so ties resolve to a more specific language above; without a
+  // rule of its own English text can only ever reach the score-0 fallback and loses to
+  // any incidental foreign-stopword match.
+  { locale: "en", pattern: /\b(the|and|you|are|for|with|this|that|have|not|but|your|from|they|will|would|could|should|been|were|what|when)\b/giu },
 ]
 
 function toLowerTrimmed(value: string | null | undefined): string {
@@ -136,7 +140,12 @@ export function detectSourceLanguageFromText(parts: Array<string | null | undefi
     return null
   }
 
-  const lowered = toLowerTrimmed(text)
+  // Strip English enclitic contractions ("I've", "you're", "don't", "she'll") before
+  // stopword matching. The apostrophe is a regex word boundary, so the contraction tail
+  // otherwise matches short foreign stopwords — most damagingly Turkish "ve" ("and"),
+  // which mislabelled English songs full of "I've/we've/…" as Turkish (source_language=tr)
+  // and silently broke their Study generation. Real space-delimited "ve" is untouched.
+  const lowered = toLowerTrimmed(text).replace(/['’](ve|re|ll|d|s|m|t)\b/g, "")
   let bestLocale: string | null = null
   let bestScore = 0
 
