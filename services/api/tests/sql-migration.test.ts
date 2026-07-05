@@ -113,6 +113,14 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`,
     ])
   })
 
+  test("ignores trailing comment-only fragments with semicolons", () => {
+    const sql = `CREATE TABLE example (id TEXT PRIMARY KEY);
+-- Historical duplicate detector:
+--   GROUP BY community_id, effect_key HAVING c > 1;`
+
+    expect(splitSqlStatements(sql)).toEqual(["CREATE TABLE example (id TEXT PRIMARY KEY);"])
+  })
+
   test("skips postgres-only ownership/grant statements for the sqlite mirror", () => {
     expect(toSqliteCompatibleStatement("ALTER TABLE booking_profiles OWNER TO control_plane_migrator;")).toBeNull()
     expect(toSqliteCompatibleStatement("GRANT SELECT ON booking_profiles TO control_plane_api_rw;")).toBeNull()

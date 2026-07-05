@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { createClient } from "@libsql/client"
 import type { Client } from "@libsql/client"
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
+import { splitSqlStatements } from "../../../shared/sql-migration"
 import { internalError } from "../errors"
 import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
 import type { GatePolicy } from "./membership/gate-types"
@@ -128,43 +129,6 @@ function resolveCommunityTemplateMigrationsDir(): string {
   return resolveCoreRepoPath("db/community-template/migrations", {
     serviceRoot: fileURLToPath(new URL("../../..", import.meta.url)),
   })
-}
-
-function splitSqlStatements(sql: string): string[] {
-  const statements: string[] = []
-  let current = ""
-  let inSingleQuote = false
-
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index]
-    const next = sql[index + 1]
-    current += char
-
-    if (char === "'" && sql[index - 1] !== "\\") {
-      if (inSingleQuote && next === "'") {
-        current += next
-        index += 1
-        continue
-      }
-      inSingleQuote = !inSingleQuote
-      continue
-    }
-
-    if (char === ";" && !inSingleQuote) {
-      const statement = current.trim()
-      if (statement) {
-        statements.push(statement)
-      }
-      current = ""
-    }
-  }
-
-  const trailing = current.trim()
-  if (trailing) {
-    statements.push(trailing)
-  }
-
-  return statements
 }
 
 function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStatement | null {
