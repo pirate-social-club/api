@@ -1,6 +1,8 @@
 import { trimEnv } from "../../env-strings"
+import { openCommunityWriteClient } from "../community-read-access"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
-import { updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
+import { getSongArtifactBundle, updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
+import { syncLockedSongPreviewMediaRefsForBundle } from "../../posts/community-post-mutation-store"
 import { HttpError, providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
@@ -23,15 +25,21 @@ type SongPreviewServiceResponse = {
 }
 
 type SongPreviewFailureUpdater = typeof updateSongArtifactBundlePreview
+type CompletedPreviewPostSyncer = typeof syncCompletedPreviewToLockedSongPosts
 
 type BunRuntime = {
   spawn?: unknown
 }
 
 let songPreviewFailureUpdater: SongPreviewFailureUpdater = updateSongArtifactBundlePreview
+let completedPreviewPostSyncer: CompletedPreviewPostSyncer = syncCompletedPreviewToLockedSongPosts
 
 export function setSongPreviewFailureUpdaterForTests(updater: SongPreviewFailureUpdater | null): void {
   songPreviewFailureUpdater = updater ?? updateSongArtifactBundlePreview
+}
+
+export function setCompletedPreviewPostSyncerForTests(syncer: CompletedPreviewPostSyncer | null): void {
+  completedPreviewPostSyncer = syncer ?? syncCompletedPreviewToLockedSongPosts
 }
 
 function positiveIntegerEnv(value: string | undefined, fallback: number): number {
@@ -167,13 +175,43 @@ async function runRemoteSongPreviewGenerate(
   return body.storage_ref ?? null
 }
 
+async function syncCompletedPreviewToLockedSongPosts(input: CommunityJobHandlerInput, songArtifactBundleId: string): Promise<void> {
+  const controlClient = getControlPlaneClient(input.env)
+  const bundle = await getSongArtifactBundle(controlClient, input.job.community_id, songArtifactBundleId)
+  if (!bundle?.preview_audio || bundle.preview_status !== "completed") {
+    return
+  }
+
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const updatedAt = nowIso()
+    const posts = await syncLockedSongPreviewMediaRefsForBundle({
+      executor: db.client,
+      songArtifactBundleId,
+      previewAudio: bundle.preview_audio,
+      now: updatedAt,
+    })
+    for (const post of posts) {
+      await input.communityRepository.updateCommunityPostProjectionPayload({
+        postId: post.post_id,
+        projectedPayloadJson: JSON.stringify(post),
+        updatedAt,
+      })
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): Promise<string | null> {
   const payload = parseJobPayload<SongPreviewGeneratePayload>(input.job.payload_json)
   const songArtifactBundleId = payload?.song_artifact_bundle ?? input.job.subject_id
   const endpoint = songPreviewServiceEndpoint(input)
   if (endpoint || input.env.SONG_PREVIEW_SERVICE) {
     try {
-      return await runRemoteSongPreviewGenerate(input, endpoint, payload)
+      const result = await runRemoteSongPreviewGenerate(input, endpoint, payload)
+      await completedPreviewPostSyncer(input, songArtifactBundleId)
+      return result
     } catch (error) {
       if (error instanceof HttpError && error.details) {
         console.warn(JSON.stringify({
@@ -197,10 +235,12 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
     })
   }
 
-  return await generateSongPreviewForBundle({
+  const result = await generateSongPreviewForBundle({
     env: input.env,
     communityId: input.job.community_id,
     songArtifactBundleId,
     expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
   })
+  await completedPreviewPostSyncer(input, songArtifactBundleId)
+  return result
 }

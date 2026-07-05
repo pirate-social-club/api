@@ -189,6 +189,25 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     throw badRequestError("crosspost_source must not be provided in the post body")
   }
   validatePostEvent(body)
+  if (body.listing_draft && body.publish_mode !== "async") {
+    throw badRequestError("listing_draft requires publish_mode async")
+  }
+  if (body.publish_mode === "async" && body.post_type !== "song") {
+    throw badRequestError("publish_mode async is only supported for song posts")
+  }
+  if (body.publish_mode === "async" && !body.idempotency_key?.trim()) {
+    throw badRequestError("idempotency_key is required for async publishing")
+  }
+  if (
+    body.listing_draft
+    && (
+      Object.prototype.hasOwnProperty.call(body.listing_draft, "asset")
+      || Object.prototype.hasOwnProperty.call(body.listing_draft, "live_room")
+      || Object.prototype.hasOwnProperty.call(body.listing_draft, "replay_asset")
+    )
+  ) {
+    throw badRequestError("listing_draft target fields are assigned by the server")
+  }
   if (body.post_type === "crosspost") {
     if (!body.title?.trim()) {
       throw badRequestError("title is required for crossposts")

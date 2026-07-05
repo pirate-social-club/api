@@ -15,6 +15,10 @@ import {
   insertPost,
   type PostWriteDraft,
 } from "./community-post-create-store"
+import {
+  insertPostPublishRequest,
+  markPostPublishRequestStatus,
+} from "./community-post-publish-request-store"
 import { getPostById } from "./community-post-query-store"
 import { markPostDeleted } from "./community-post-mutation-store"
 import { resolvePostProjectionSchema } from "./community-post-projection"
@@ -32,11 +36,14 @@ import {
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
-import { enqueueCommunityJob } from "../communities/jobs/store"
+import {
+  enqueueCommunityJob,
+  findLatestCommunityJobBySubjectAndType,
+} from "../communities/jobs/store"
 import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
-import { eligibilityFailed, internalError } from "../errors"
+import { conflictError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
@@ -46,6 +53,7 @@ import type { AltchaProofInput } from "../verification/altcha-provider"
 import { preparePostCreate } from "./post-create-preparation"
 import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
+import { hashPostCreateRequestBody, isPostCreateIdempotencyConflict } from "./post-create-idempotency"
 
 type PostWaitUntil = (promise: Promise<void>) => void
 type PostAssetCreator = typeof createAssetForPost
@@ -76,11 +84,103 @@ export {
 export {
   getPost,
   getPublicPost,
+  listPendingCommunityPosts,
   listCommunityEvents,
   listCommunityPosts,
   listPublicCommunityPosts,
 } from "./post-read-service"
 export { castPostVote } from "./post-votes"
+
+export async function syncRetriedPostProjection(input: {
+  communityRepository: Pick<PostServiceCommunityRepository, "updateCommunityPostProjectionPayload" | "updateCommunityPostProjectionStatus">
+  post: Post
+  updatedAt: string
+}): Promise<void> {
+  await input.communityRepository.updateCommunityPostProjectionStatus({
+    postId: input.post.post_id,
+    status: "processing",
+    updatedAt: input.updatedAt,
+  })
+  await input.communityRepository.updateCommunityPostProjectionPayload({
+    postId: input.post.post_id,
+    projectedPayloadJson: JSON.stringify(input.post),
+    updatedAt: input.updatedAt,
+  })
+}
+
+export async function retryPostPublish(input: {
+  env: Env
+  userId: string
+  communityId: string
+  postId: string
+  communityRepository: PostServiceCommunityRepository
+  waitUntil?: PostWaitUntil
+}): Promise<Post> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+    const post = await getPostById(db.client, input.postId)
+    if (!post || post.community_id !== input.communityId || post.author_user_id !== input.userId) {
+      throw eligibilityFailed("Post is not available for retry")
+    }
+    if (post.status !== "failed") {
+      throw conflictError("Only failed posts can be retried")
+    }
+    if (post.publish_failure_retryable !== true) {
+      throw conflictError("This publish failure is not retryable")
+    }
+    const retryAt = nowIso()
+    await db.client.execute({
+      sql: `
+        UPDATE posts
+        SET status = 'processing',
+            publish_failure_code = NULL,
+            publish_failure_message = NULL,
+            publish_failure_retryable = NULL,
+            publish_failed_at = NULL,
+            updated_at = ?2
+        WHERE post_id = ?1
+      `,
+      args: [post.post_id, retryAt],
+    })
+    await markPostPublishRequestStatus({
+      client: db.client,
+      communityId: input.communityId,
+      postId: post.post_id,
+      status: "pending",
+      updatedAt: retryAt,
+    })
+    const job = await enqueueCommunityJob({
+      client: db.client,
+      communityId: input.communityId,
+      jobType: "post_publish_finalize",
+      subjectType: "post",
+      subjectId: input.postId,
+      payloadJson: JSON.stringify({ post_id: input.postId }),
+      createdAt: retryAt,
+    })
+    const updated = await getPostById(db.client, post.post_id)
+    if (!updated) {
+      throw internalError("Post row is missing after retry enqueue")
+    }
+    await syncRetriedPostProjection({
+      communityRepository: input.communityRepository,
+      post: updated,
+      updatedAt: retryAt,
+    })
+    input.waitUntil?.(withRequestControlPlaneClients(async () => {
+      await processCommunityJobById({
+        env: input.env,
+        communityId: input.communityId,
+        jobId: job.job_id,
+        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+      })
+    }))
+    return updated
+  } finally {
+    db.close()
+  }
+}
 
 type PostServiceCommunityRepository =
   & CommunityReadRepository
@@ -169,6 +269,7 @@ export async function createPost(input: {
     }
 
     const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
+    const idempotencyBodyHash = idempotencyKey ? await hashPostCreateRequestBody(input.body) : null
     const existing = idempotencyKey
       ? await findPostByIdempotencyKey({
           client: db.client,
@@ -178,6 +279,13 @@ export async function createPost(input: {
         })
       : null
     if (existing) {
+      if (isPostCreateIdempotencyConflict({
+        existingBodyHash: existing.idempotency_body_hash ?? null,
+        incomingBodyHash: idempotencyBodyHash,
+        incomingPublishMode: input.body.publish_mode,
+      })) {
+        throw conflictError("idempotency_key was already used with a different post create payload")
+      }
       return existing
     }
 
@@ -212,8 +320,14 @@ export async function createPost(input: {
     // Resolve the projection schema BEFORE the write tx — a buffered D1 write tx
     // can't see schema reads (or any read) until commit; threaded into insertPost.
     const projectionSchema = await resolvePostProjectionSchema(db.client)
+    if (!projectionSchema.hasAsyncPublishColumns && (input.body.publish_mode === "async" || input.body.listing_draft)) {
+      throw providerUnavailable("Community database migration is still rolling out", {
+        missing_column: "posts.idempotency_body_hash",
+      })
+    }
     const tx = await db.client.transaction("write")
     let draft: PostWriteDraft
+    let shouldKickPublishFinalize = false
     const requireStoryRoyaltyRegistration = true
     try {
       draft = await insertPost({
@@ -223,6 +337,7 @@ export async function createPost(input: {
         body: writeBody,
         createdAt,
         projectionSchema,
+        idempotencyBodyHash: projectionSchema.hasAsyncPublishColumns ? idempotencyBodyHash : null,
         analysisOverride,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
@@ -259,6 +374,42 @@ export async function createPost(input: {
         })
       }
 
+      if (input.body.publish_mode === "async") {
+        if (!idempotencyBodyHash) {
+          throw internalError("Async publishing requires an idempotency body hash")
+        }
+        await insertPostPublishRequest({
+          client: tx,
+          communityId: input.communityId,
+          postId: draft.post_id,
+          publishMode: "async",
+          requestBodyHash: idempotencyBodyHash,
+          listingDraft: input.body.listing_draft ?? null,
+          publishOptions: {
+            access_mode: input.body.access_mode ?? null,
+            commercial_rev_share_pct: input.body.commercial_rev_share_pct ?? null,
+            license_preset: input.body.license_preset ?? null,
+            royalty_allocations: input.body.royalty_allocations ?? null,
+            rights_basis: input.body.rights_basis ?? null,
+            song_mode: input.body.song_mode ?? null,
+            upstream_asset_refs: input.body.upstream_asset_refs ?? null,
+          },
+          status: "pending",
+          createdAt,
+        })
+        await enqueueCommunityJob({
+          client: tx,
+          communityId: input.communityId,
+          jobType: "post_publish_finalize",
+          subjectType: "post",
+          subjectId: draft.post_id,
+          payloadJson: JSON.stringify({ post_id: draft.post_id }),
+          createdAt,
+          dedupe: false,
+        })
+        shouldKickPublishFinalize = true
+      }
+
       await tx.commit()
     } catch (error) {
       await safeRollback(tx, "[posts] rollback failed while creating post")
@@ -272,6 +423,42 @@ export async function createPost(input: {
     const post = await getPostById(db.client, draft.post_id)
     if (!post) {
       throw internalError("Post row is missing after insert")
+    }
+
+    if (input.body.publish_mode === "async") {
+      if (shouldKickPublishFinalize) {
+        input.waitUntil?.(withRequestControlPlaneClients(async () => {
+          const job = await findLatestCommunityJobBySubjectAndType({
+            client: db.client,
+            jobType: "post_publish_finalize",
+            subjectType: "post",
+            subjectId: post.post_id,
+          })
+          if (!job || (job.status !== "queued" && job.status !== "running")) {
+            return
+          }
+          await processCommunityJobById({
+            env: input.env,
+            communityId: input.communityId,
+            jobId: job.job_id,
+            communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+          })
+        }))
+      }
+      await input.communityRepository.recordCommunityPostProjection({
+        communityId: input.communityId,
+        sourcePostId: post.post_id,
+        authorUserId: post.author_user_id ?? null,
+        identityMode: post.identity_mode,
+        postType: post.post_type,
+        status: post.status,
+        visibility: post.visibility,
+        sourceCreatedAt: post.created_at,
+        projectedPayloadJson: JSON.stringify(post),
+        actorUserId: input.userId,
+        createdAt,
+      })
+      return post
     }
 
     // Asset-creation side effects run post-commit and capture the CANONICAL post.

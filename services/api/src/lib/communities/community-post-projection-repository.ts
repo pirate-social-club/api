@@ -10,6 +10,7 @@ import {
   updateCommunityPostProjectionStatusRow,
 } from "../auth/auth-db-community-queries"
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
+import type { Post } from "../../types"
 
 export async function recordCommunityPostProjection(
   client: Client,
@@ -19,7 +20,7 @@ export async function recordCommunityPostProjection(
     authorUserId: string | null
     identityMode: "public" | "anonymous"
     postType: "text" | "image" | "video" | "link" | "song" | "crosspost"
-    status: "draft" | "published" | "hidden" | "removed" | "deleted"
+    status: Post["status"]
     visibility: "public" | "members_only"
     sourceCreatedAt: string
     projectedPayloadJson: string

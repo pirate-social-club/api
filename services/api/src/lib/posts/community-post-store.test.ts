@@ -4,10 +4,11 @@ import { createClient } from "@libsql/client"
 import type { CreatePostRequest, Post } from "../../types"
 import { assertPostCreateRequest } from "./community-post-create-store"
 import { insertPostForTest as insertPost } from "../../../tests/community-test-helpers"
-import { listPublishedLocalizedPosts, sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
+import { listAuthorPendingLocalizedPosts, listPublishedLocalizedPosts, sortPublishedLocalizedPostFeedItems } from "./community-post-feed"
 import { getPostReadMetrics } from "./community-post-metrics-store"
 import { MAX_POST_JSON_PROJECTION_LENGTH } from "./community-post-projection"
 import { getPostById } from "./community-post-query-store"
+import { isAsyncSongBundleStatusPublishable } from "./post-create-preparation"
 
 const clients: Array<{ close: () => void }> = []
 
@@ -316,6 +317,15 @@ describe("getPostReadMetrics", () => {
   })
 })
 
+describe("isAsyncSongBundleStatusPublishable", () => {
+  test("allows deferred and ready bundles but rejects consumed reuse", () => {
+    expect(isAsyncSongBundleStatusPublishable("validating")).toBe(true)
+    expect(isAsyncSongBundleStatusPublishable("ready")).toBe(true)
+    expect(isAsyncSongBundleStatusPublishable("consumed")).toBe(false)
+    expect(isAsyncSongBundleStatusPublishable("failed")).toBe(false)
+  })
+})
+
 describe("listPublishedLocalizedPosts", () => {
   test("omits asset-backed posts when the asset row is missing", async () => {
     const client = createClient({ url: "file::memory:" })
@@ -395,6 +405,107 @@ describe("listPublishedLocalizedPosts", () => {
       "pst_missing_asset",
       "pst_text",
     ])
+  })
+})
+
+describe("listAuthorPendingLocalizedPosts", () => {
+  test("returns author processing and failed posts without requiring an asset row", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client, { assets: true })
+    await client.batch([
+      "CREATE TABLE post_votes (post_id TEXT NOT NULL, user_id TEXT NOT NULL, vote_value INTEGER NOT NULL)",
+      "CREATE TABLE comments (thread_root_post_id TEXT NOT NULL, status TEXT NOT NULL)",
+      "CREATE TABLE post_reactions (post_id TEXT NOT NULL, reaction_key TEXT NOT NULL)",
+    ])
+    await client.batch([
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            asset_id, source_language, translation_policy, rights_basis,
+            analysis_state, content_safety_state, age_gate_policy, idempotency_key,
+            created_at, updated_at
+          ) VALUES (
+            'pst_processing_song', 'cmt_test', 'usr_author', 'human_direct', 'public',
+            'pending', 'song', 'processing', 'public', 'Processing song', '',
+            'asset_ast_processing', 'en', 'none', 'original',
+            'pending', 'pending', 'none', 'processing-song',
+            '2026-05-06T00:00:03.000Z', '2026-05-06T00:00:03.000Z'
+          )
+        `,
+      },
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            source_language, translation_policy, rights_basis, analysis_state,
+            content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+          ) VALUES (
+            'pst_failed_text', 'cmt_test', 'usr_author', 'human_direct', 'public',
+            'pending', 'text', 'failed', 'public', 'Failed text', '',
+            'en', 'none', 'none', 'allow',
+            'safe', 'none', 'failed-text', '2026-05-06T00:00:02.000Z', '2026-05-06T00:00:02.000Z'
+          )
+        `,
+      },
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            source_language, translation_policy, rights_basis, analysis_state,
+            content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+          ) VALUES (
+            'pst_other_author', 'cmt_test', 'usr_other', 'human_direct', 'public',
+            'pending', 'text', 'processing', 'public', 'Other author', '',
+            'en', 'none', 'none', 'allow',
+            'safe', 'none', 'other-author', '2026-05-06T00:00:01.000Z', '2026-05-06T00:00:01.000Z'
+          )
+        `,
+      },
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            asset_id, source_language, translation_policy, rights_basis,
+            analysis_state, content_safety_state, age_gate_policy, idempotency_key,
+            created_at, updated_at
+          ) VALUES (
+            'pst_published_missing_asset', 'cmt_test', 'usr_author', 'human_direct', 'public',
+            'pending', 'song', 'published', 'public', 'Published missing asset', '',
+            'asset_ast_published_missing', 'en', 'none', 'original',
+            'allow', 'safe', 'none', 'published-missing-asset',
+            '2026-05-06T00:00:04.000Z', '2026-05-06T00:00:04.000Z'
+          )
+        `,
+      },
+    ])
+
+    const pending = await listAuthorPendingLocalizedPosts({
+      client,
+      communityId: "cmt_test",
+      authorUserId: "usr_author",
+      limit: 10,
+    })
+    const published = await listPublishedLocalizedPosts({
+      client,
+      communityId: "cmt_test",
+      viewerUserId: "usr_author",
+      limit: 10,
+      sort: "new",
+      visibility: "public",
+    })
+
+    expect(pending.map((item) => item.post.post_id)).toEqual([
+      "pst_processing_song",
+      "pst_failed_text",
+    ])
+    expect(pending[0]?.post.asset_id).toBe("asset_ast_processing")
+    expect(published.items.map((item) => item.post.post_id)).toEqual([])
   })
 })
 
@@ -653,6 +764,59 @@ describe("assertPostCreateRequest", () => {
     } satisfies CreatePostRequest
 
     expect(() => assertPostCreateRequest(body, "cmt_test")).not.toThrow()
+  })
+
+  test("requires idempotency keys for async publishing", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          post_type: "song",
+          publish_mode: "async",
+          title: "Async song",
+          song_artifact_bundle: "sab_test",
+          rights_basis: "original",
+          license_preset: "non-commercial",
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("idempotency_key is required for async publishing")
+  })
+
+  test("rejects async publishing for post types without a finalize implementation", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "async-text",
+          post_type: "text",
+          publish_mode: "async",
+          title: "Async text",
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("publish_mode async is only supported for song posts")
+  })
+
+  test("rejects listing draft target fields even when null", () => {
+    expect(() =>
+      assertPostCreateRequest(
+        {
+          idempotency_key: "async-song-listing-target-null",
+          post_type: "song",
+          publish_mode: "async",
+          title: "Async paid song",
+          song_artifact_bundle: "sab_test",
+          rights_basis: "original",
+          license_preset: "non-commercial",
+          listing_draft: {
+            asset: null,
+            price_cents: 499,
+            regional_pricing_enabled: false,
+            status: "active",
+          },
+        } as CreatePostRequest,
+        "cmt_test",
+      )
+    ).toThrow("listing_draft target fields are assigned by the server")
   })
 
   test("rejects invalid event metadata", () => {
