@@ -1,5 +1,7 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
+import type { Profile } from "../../types"
+import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
@@ -34,6 +36,10 @@ const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
 const FIRST_LEARN_REVIEW_SESSION_ID = "learn"
+const STREAK_MIN_STUDY_ATTEMPTS = 10
+const STREAK_LEADERBOARD_DEFAULT_LIMIT = 50
+const STREAK_LEADERBOARD_MAX_LIMIT = 100
+const STREAK_LEADERBOARD_OVERFETCH = 25
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
   "ar",
   "de",
@@ -193,6 +199,7 @@ export type SongStudyAttemptRequest = {
   idempotency_key?: unknown
   review_session_id?: unknown
   selected_option_id?: unknown
+  target_language?: unknown
   transcript?: unknown
   type?: unknown
 }
@@ -220,6 +227,45 @@ export type SongStudyTranscriptionResponse = {
   object: "song_study_transcription"
   provider: "elevenlabs"
   text: string
+}
+
+export type SongStreakLeaderboardIdentity = {
+  avatar_ref?: string | null
+  display_name?: string | null
+  handle?: string | null
+  user_id: string
+}
+
+export type SongStreakLeaderboardEntry = {
+  best_streak: number
+  current_streak: number
+  identity: SongStreakLeaderboardIdentity
+  is_viewer: boolean
+  last_qualified_date: string
+  rank: number
+  streak_started_date: string
+  total_qualified_days: number
+}
+
+export type SongStreakViewerStanding = {
+  alive: boolean
+  best_streak: number
+  current_streak: number
+  karaoke_passed_today: boolean
+  qualified_today: boolean
+  study_attempts_today: number
+  study_target_today: number
+  total_qualified_days: number
+}
+
+export type SongStreakLeaderboard = {
+  community_id: string
+  date: string
+  entries: SongStreakLeaderboardEntry[]
+  object: "song_streak_leaderboard"
+  post_id: string
+  total_active_streaks: number
+  viewer: SongStreakViewerStanding | null
 }
 
 function readString(value: unknown): string | null {
@@ -324,6 +370,16 @@ function normalizeStudyTargetLanguage(value: unknown): string {
   return canonical
 }
 
+function resolveAttemptTargetLanguage(value: unknown, fallback: string | null | undefined): string {
+  const submitted = readString(value)
+  if (submitted) return normalizeStudyTargetLanguage(submitted)
+  const normalizedFallback = readString(fallback)
+  if (normalizedFallback && normalizedFallback !== "source") {
+    return normalizeStudyTargetLanguage(normalizedFallback)
+  }
+  return ASSUMED_STUDY_SOURCE_LANGUAGE
+}
+
 // The song-study pilot is English-source only, so a post with no reliably detected
 // source_language is assumed English for the same-language decision below. Without
 // this, an English song whose source_language is null/undetected takes the
@@ -399,6 +455,10 @@ function dueReviewServingEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_DUE_REVIEW_SERVING_ENABLED, false)
 }
 
+function studyStreakWritesEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_STREAK_WRITES_ENABLED, false)
+}
+
 function readReviewSessionId(value: unknown): string {
   return readString(value) ?? FIRST_LEARN_REVIEW_SESSION_ID
 }
@@ -416,6 +476,10 @@ function isDueReview(input: { dueAt: string; now: string }): boolean {
   const dueAtMs = Date.parse(input.dueAt)
   const nowMs = Date.parse(input.now)
   return Number.isFinite(dueAtMs) && Number.isFinite(nowMs) && dueAtMs <= nowMs
+}
+
+function studyTargetCountFromDueBefore(dueBefore: number): number {
+  return dueBefore > 0 ? Math.min(STREAK_MIN_STUDY_ATTEMPTS, dueBefore) : STREAK_MIN_STUDY_ATTEMPTS
 }
 
 async function getStudyPostById(client: ReadClient, postId: string): Promise<StudyPost | null> {
@@ -759,6 +823,19 @@ async function listDueReviewExercises(input: {
     study_pack_version: Number(row.study_pack_version ?? 1),
     translation_text: readString(row.translation_text),
   }))
+}
+
+async function getStudyStreakTargetCount(input: {
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  now: string
+  postId: string
+  targetLanguage: string
+  userId: string
+}): Promise<number> {
+  const dueRows = await listDueReviewExercises(input)
+  return studyTargetCountFromDueBefore(dueRows.length)
 }
 
 async function getNextDueAt(input: {
@@ -1955,6 +2032,88 @@ async function upsertReviewState(input: {
   return input.rating
 }
 
+export async function upsertStudyStreakProgress(input: {
+  client: ReadClient
+  communityId: string
+  isCorrect: boolean
+  now: string
+  postId: string
+  studyTargetCount: number
+  userId: string
+}): Promise<void> {
+  const today = input.now.slice(0, 10)
+  const isCorrect = input.isCorrect ? 1 : 0
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, CASE WHEN 1 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
+      ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
+        study_attempt_count = song_engagement_days.study_attempt_count + 1,
+        study_correct_count = song_engagement_days.study_correct_count + ?5,
+        qualified = CASE
+          WHEN song_engagement_days.study_attempt_count + 1 >= song_engagement_days.study_target_count THEN 1
+          WHEN song_engagement_days.karaoke_pass_count > 0 THEN 1
+          ELSE song_engagement_days.qualified
+        END,
+        updated_at = ?7
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.communityId,
+      today,
+      isCorrect,
+      input.studyTargetCount,
+      input.now,
+    ],
+  })
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        created_at, updated_at
+      )
+      SELECT d.user_id, d.post_id, d.community_id, 1, 1,
+             d.activity_date, d.activity_date, 1, ?4, ?4
+      FROM song_engagement_days d
+      WHERE d.user_id = ?1
+        AND d.post_id = ?2
+        AND d.activity_date = ?3
+        AND d.qualified = 1
+      ON CONFLICT(user_id, post_id) DO UPDATE SET
+        current_streak = CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date
+            THEN song_streaks.current_streak
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day')
+            THEN song_streaks.current_streak + 1
+          ELSE 1
+        END,
+        best_streak = MAX(song_streaks.best_streak, CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN song_streaks.current_streak
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day') THEN song_streaks.current_streak + 1
+          ELSE 1
+        END),
+        streak_started_date = CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN song_streaks.streak_started_date
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day') THEN song_streaks.streak_started_date
+          ELSE excluded.last_qualified_date
+        END,
+        total_qualified_days = song_streaks.total_qualified_days + CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN 0
+          ELSE 1
+        END,
+        last_qualified_date = MAX(song_streaks.last_qualified_date, excluded.last_qualified_date),
+        updated_at = ?4
+    `,
+    args: [input.userId, input.postId, today, input.now],
+  })
+}
+
 export async function submitPostStudyAttempt(input: {
   actor: ActorContext | AdminActorContext
   body: SongStudyAttemptRequest
@@ -2043,6 +2202,22 @@ export async function submitPostStudyAttempt(input: {
     if (!await canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post })) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
+    const streakWritesEnabled = studyStreakWritesEnabled(input.env)
+    const submittedTargetLanguage = resolveAttemptTargetLanguage(input.body.target_language, exercise.target_language)
+    const studyTargetCount = streakWritesEnabled
+      ? await getStudyStreakTargetCount({
+        client: db.client,
+        includeSayItBack: await hasActiveCommunityElevenLabsCredential({
+          env: input.env,
+          communityId: input.communityId,
+        }),
+        includeTranslation: !isSameLanguageStudyPair(post.source_language, submittedTargetLanguage),
+        now,
+        postId: input.postId,
+        targetLanguage: submittedTargetLanguage,
+        userId: input.actor.userId,
+      })
+      : STREAK_MIN_STUDY_ATTEMPTS
 
     let correct = false
     let selectedOptionId: string | null = null
@@ -2110,6 +2285,17 @@ export async function submitPostStudyAttempt(input: {
           now,
         ],
       })
+      if (streakWritesEnabled) {
+        await upsertStudyStreakProgress({
+          client: tx,
+          communityId: input.communityId,
+          isCorrect: outcome === "correct",
+          now,
+          postId: input.postId,
+          studyTargetCount,
+          userId: input.actor.userId,
+        })
+      }
       return reviewRating
     })
     return {
@@ -2122,6 +2308,185 @@ export async function submitPostStudyAttempt(input: {
       next_review_hint: fsrsRating,
       object: "song_study_attempt_result",
       outcome,
+    }
+  } finally {
+    await db.close()
+  }
+}
+
+type SongStreakRow = {
+  best_streak: unknown
+  current_streak: unknown
+  last_qualified_date: unknown
+  streak_started_date: unknown
+  total_qualified_days: unknown
+  user_id: unknown
+}
+
+type SongStreakDayRow = {
+  karaoke_pass_count?: unknown
+  qualified?: unknown
+  study_attempt_count?: unknown
+  study_target_count?: unknown
+}
+
+function utcDateFromIso(value: string): string {
+  return value.slice(0, 10)
+}
+
+function addUtcDays(date: string, days: number): string {
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  parsed.setUTCDate(parsed.getUTCDate() + days)
+  return parsed.toISOString().slice(0, 10)
+}
+
+function clampStreakLeaderboardLimit(value?: number | null): number {
+  if (value == null || !Number.isFinite(value)) return STREAK_LEADERBOARD_DEFAULT_LIMIT
+  return Math.min(STREAK_LEADERBOARD_MAX_LIMIT, Math.max(1, Math.trunc(value)))
+}
+
+function profileIdentity(userId: string, profile: Profile | null | undefined): SongStreakLeaderboardIdentity | null {
+  if (!profile) return null
+  return {
+    avatar_ref: profile.avatar_ref ?? null,
+    display_name: profile.display_name ?? null,
+    handle: profile.primary_public_handle?.label ?? profile.global_handle?.label ?? null,
+    user_id: userId,
+  }
+}
+
+async function resolveLeaderboardIdentities(
+  profileRepository: ProfileRepository,
+  userIds: string[],
+): Promise<Map<string, SongStreakLeaderboardIdentity>> {
+  const uniqueUserIds = Array.from(new Set(userIds.map((userId) => userId.trim()).filter(Boolean)))
+  const profiles = profileRepository.listProfilesByUserIds
+    ? await profileRepository.listProfilesByUserIds(uniqueUserIds)
+    : new Map(await Promise.all(uniqueUserIds.map(async (userId) => [userId, await profileRepository.getProfileByUserId(userId)] as const)))
+  const identities = new Map<string, SongStreakLeaderboardIdentity>()
+  for (const userId of uniqueUserIds) {
+    const identity = profileIdentity(userId, profiles.get(userId))
+    if (identity) {
+      identities.set(userId, identity)
+    }
+  }
+  return identities
+}
+
+function viewerStanding(input: {
+  day: SongStreakDayRow | null
+  row: SongStreakRow | null
+  today: string
+  yesterday: string
+}): SongStreakViewerStanding {
+  const lastQualifiedDate = readString(input.row?.last_qualified_date)
+  return {
+    alive: Boolean(lastQualifiedDate && lastQualifiedDate >= input.yesterday),
+    best_streak: Number(input.row?.best_streak ?? 0),
+    current_streak: Number(input.row?.current_streak ?? 0),
+    karaoke_passed_today: Number(input.day?.karaoke_pass_count ?? 0) > 0,
+    qualified_today: Number(input.day?.qualified ?? 0) === 1,
+    study_attempts_today: Number(input.day?.study_attempt_count ?? 0),
+    study_target_today: Number(input.day?.study_target_count ?? STREAK_MIN_STUDY_ATTEMPTS),
+    total_qualified_days: Number(input.row?.total_qualified_days ?? 0),
+  }
+}
+
+export async function getPostStreakLeaderboard(input: {
+  actor: ActorContext | AdminActorContext
+  communityId: string
+  communityRepository: CommunityDatabaseBindingRepository
+  env: Env
+  limit?: number | null
+  postId: string
+  profileRepository: ProfileRepository
+}): Promise<SongStreakLeaderboard> {
+  const limit = clampStreakLeaderboardLimit(input.limit)
+  const today = utcDateFromIso(nowIso())
+  const yesterday = addUtcDays(today, -1)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const post = await getStudyPostById(db.client, input.postId)
+    if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
+    await requireMemberAccess(db.client as Client, input.communityId, input.actor.userId)
+    if (post.status !== "published" && !await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
+      throw notFoundError("Post not found")
+    }
+
+    const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
+      db.client.execute({
+        sql: `
+          SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+          FROM song_streaks
+          WHERE post_id = ?1
+            AND last_qualified_date >= ?2
+          ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
+          LIMIT ?3
+        `,
+        args: [input.postId, yesterday, limit + STREAK_LEADERBOARD_OVERFETCH],
+      }),
+      executeFirst(db.client, {
+        sql: `
+          SELECT COUNT(*) AS active_count
+          FROM song_streaks
+          WHERE post_id = ?1
+            AND last_qualified_date >= ?2
+        `,
+        args: [input.postId, yesterday],
+      }) as Promise<Record<string, unknown> | null>,
+      executeFirst(db.client, {
+        sql: `
+          SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+          FROM song_streaks
+          WHERE user_id = ?1
+            AND post_id = ?2
+        `,
+        args: [input.actor.userId, input.postId],
+      }) as Promise<SongStreakRow | null>,
+      executeFirst(db.client, {
+        sql: `
+          SELECT qualified, study_attempt_count, study_target_count, karaoke_pass_count
+          FROM song_engagement_days
+          WHERE user_id = ?1
+            AND post_id = ?2
+            AND activity_date = ?3
+        `,
+        args: [input.actor.userId, input.postId, today],
+      }) as Promise<SongStreakDayRow | null>,
+    ])
+
+    const rows = boardResult.rows as SongStreakRow[]
+    const identities = await resolveLeaderboardIdentities(
+      input.profileRepository,
+      rows.map((row) => readString(row.user_id) ?? ""),
+    )
+    const entries: SongStreakLeaderboardEntry[] = []
+    for (const row of rows) {
+      const userId = readString(row.user_id)
+      if (!userId) continue
+      const identity = identities.get(userId)
+      if (!identity) continue
+      entries.push({
+        best_streak: Number(row.best_streak ?? 0),
+        current_streak: Number(row.current_streak ?? 0),
+        identity,
+        is_viewer: userId === input.actor.userId,
+        last_qualified_date: readString(row.last_qualified_date) ?? today,
+        rank: entries.length + 1,
+        streak_started_date: readString(row.streak_started_date) ?? today,
+        total_qualified_days: Number(row.total_qualified_days ?? 0),
+      })
+      if (entries.length >= limit) break
+    }
+
+    return {
+      community_id: publicCommunityId(input.communityId),
+      date: today,
+      entries,
+      object: "song_streak_leaderboard",
+      post_id: publicPostId(input.postId),
+      total_active_streaks: Number(totalActiveRow?.active_count ?? 0),
+      viewer: viewerStanding({ day: viewerDay, row: viewerRow, today, yesterday }),
     }
   } finally {
     await db.close()

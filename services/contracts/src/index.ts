@@ -2109,6 +2109,38 @@ export type SongStudyTranscriptionResponse = {
   duration_seconds?: number | null;
 };
 
+export type SongStreakLeaderboard = {
+  object: "song_streak_leaderboard";
+  post_id: string;
+  community_id: string;
+  date: string;
+  entries: Array<SongStreakLeaderboardEntry>;
+  viewer: SongStreakViewerStanding | null;
+  total_active_streaks: number;
+};
+
+export type SongStreakLeaderboardEntry = {
+  rank: number;
+  identity: SongStreakLeaderboardIdentity;
+  current_streak: number;
+  best_streak: number;
+  total_qualified_days: number;
+  streak_started_date: string;
+  last_qualified_date: string;
+  is_viewer: boolean;
+};
+
+export type SongStreakViewerStanding = {
+  alive: boolean;
+  current_streak: number;
+  best_streak: number;
+  total_qualified_days: number;
+  qualified_today: boolean;
+  study_attempts_today: number;
+  study_target_today: number;
+  karaoke_passed_today: boolean;
+};
+
 export type LocalizedPostResponse = {
   post: Post;
   community?: CommunityPreview | null;
@@ -3538,6 +3570,13 @@ type SongPreviewWindow = {
   duration_ms: number;
 };
 
+type SongStreakLeaderboardIdentity = {
+  user_id: string;
+  handle?: string | null;
+  display_name?: string | null;
+  avatar_ref?: string | null;
+};
+
 type SongStudySessionSummary = {
   due_count: number;
   served_count: number;
@@ -3767,6 +3806,7 @@ export const apiRoutes = {
   communityPostStudy: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study`,
   communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
   communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
+  communityPostStreaksLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/streaks/leaderboard`,
   communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
   job: (jobId: string) => `/jobs/${jobId}`,

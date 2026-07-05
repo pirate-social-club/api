@@ -9,7 +9,7 @@ import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
-import { getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
+import { getPostStreakLeaderboard, getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
 import type { Env } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -28,6 +28,49 @@ const repo: CommunityDatabaseBindingRepository = {
 
 const learnerActor: ActorContext = { authType: "user", userId: LEARNER_ID }
 const authorActor: ActorContext = { authType: "user", userId: AUTHOR_ID }
+const profileRepository = {
+  async getProfileByUserId(userId: string) {
+    return (await this.listProfilesByUserIds([userId])).get(userId) ?? null
+  },
+  async listProfilesByUserIds(userIds: string[]) {
+    return new Map(userIds.map((userId) => [userId, {
+      avatar_ref: userId === LEARNER_ID ? "ipfs://learner-avatar" : null,
+      display_name: userId === LEARNER_ID ? "Learner" : "Peer",
+      global_handle: { label: userId === LEARNER_ID ? "learner" : "peer" },
+      primary_public_handle: null,
+    } as never]))
+  },
+  async resolvePublicProfileByHandle() {
+    return null
+  },
+  async resolvePublicProfileByWalletAddress() {
+    return null
+  },
+  async updateXmtpInboxId() {
+    return null
+  },
+  async updateProfile() {
+    return null
+  },
+  async renameGlobalHandle() {
+    return null
+  },
+  async claimRedditGlobalHandle() {
+    return null
+  },
+  async quoteGlobalHandleUpgrade() {
+    return null
+  },
+  async claimPaidGlobalHandle() {
+    return null
+  },
+  async syncLinkedHandles() {
+    return null
+  },
+  async setPrimaryPublicHandle() {
+    return null
+  },
+}
 
 let rootDir: string | null = null
 let client: Client | null = null
@@ -147,6 +190,17 @@ async function applyStudyMigration(): Promise<void> {
   const attemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
   if (!attemptColumns.rows.some((row) => String(row.name) === "review_session_id")) {
     const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1118_song_study_review_sessions.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
+
+  const streakTables = await client.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'song_engagement_days'")
+  if (streakTables.rows.length <= 0) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1119_song_streaks.sql", import.meta.url))
     const raw = await readFile(path, "utf8")
     for (const statement of splitSqlStatements(raw)) {
       for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
@@ -653,6 +707,258 @@ describe("post study service", () => {
     expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
   })
 
+  test("does not write study streak rows while the streak write gate is off", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-gate-off",
+        selected_option_id: "opt_a",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const ledger = await client!.execute("SELECT COUNT(*) AS count FROM song_engagement_days")
+    const streaks = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
+    expect(Number(ledger.rows[0]?.count ?? 0)).toBe(0)
+    expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("streak ledger counts wrong MCQ attempts stored as revealed without correctness credit", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-wrong-mcq",
+        selected_option_id: "opt_b",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("revealed")
+    const ledger = await client!.execute({
+      sql: `
+        SELECT study_attempt_count, study_correct_count, study_target_count, qualified
+        FROM song_engagement_days
+        WHERE user_id = ?1 AND post_id = ?2
+      `,
+      args: [LEARNER_ID, POST_ID],
+    })
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 0,
+      study_attempt_count: 1,
+      study_correct_count: 0,
+      study_target_count: 10,
+    }])
+  })
+
+  test("streak writes are idempotent across equivalent attempt retries", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const body = {
+      attempt_number: 1,
+      exercise_id: "stu:stu_2:translation_choice:es",
+      idempotency_key: "study-streak-idempotent",
+      selected_option_id: "opt_a",
+      target_language: "es",
+      type: "translation_choice" as const,
+    }
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+  })
+
+  test("streak leaderboard excludes dead streaks and returns the viewer standing", async () => {
+    await seedSongPost()
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+    const stale = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        created_at, updated_at
+      )
+      VALUES
+        (?1, ?2, ?3, 2, 4, ?4, ?5, 5, ?6, ?6),
+        ('usr_peer', ?2, ?3, 7, 7, ?5, ?5, 7, ?6, ?6)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, yesterday, NOW])
+    await exec(`
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 3, 2, 5, 0, 0, ?5, ?5)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, today, NOW])
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+
+    expect(leaderboard.object).toBe("song_streak_leaderboard")
+    expect(leaderboard.date).toBe(today)
+    expect(leaderboard.total_active_streaks).toBe(1)
+    expect(leaderboard.entries.map((entry) => ({
+      current_streak: entry.current_streak,
+      handle: entry.identity.handle,
+      is_viewer: entry.is_viewer,
+      rank: entry.rank,
+    }))).toEqual([{
+      current_streak: 7,
+      handle: "peer",
+      is_viewer: false,
+      rank: 1,
+    }])
+    expect(leaderboard.viewer).toEqual({
+      alive: false,
+      best_streak: 4,
+      current_streak: 2,
+      karaoke_passed_today: false,
+      qualified_today: false,
+      study_attempts_today: 3,
+      study_target_today: 5,
+      total_qualified_days: 5,
+    })
+  })
+
+  test("streak materialization extends consecutive days, resets gaps, and ignores stale qualified dates", async () => {
+    await seedSongPost()
+
+    await upsertStudyStreakProgress({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      isCorrect: true,
+      now: "2026-07-01T12:00:00.000Z",
+      postId: POST_ID,
+      studyTargetCount: 1,
+      userId: LEARNER_ID,
+    })
+    await upsertStudyStreakProgress({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      isCorrect: true,
+      now: "2026-07-02T12:00:00.000Z",
+      postId: POST_ID,
+      studyTargetCount: 1,
+      userId: LEARNER_ID,
+    })
+
+    let streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      streak_started_date: row.streak_started_date,
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{
+      best_streak: 2,
+      current_streak: 2,
+      last_qualified_date: "2026-07-02",
+      streak_started_date: "2026-07-01",
+      total_qualified_days: 2,
+    }])
+
+    await upsertStudyStreakProgress({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      isCorrect: true,
+      now: "2026-07-01T18:00:00.000Z",
+      postId: POST_ID,
+      studyTargetCount: 1,
+      userId: LEARNER_ID,
+    })
+
+    streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      streak_started_date: row.streak_started_date,
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{
+      best_streak: 2,
+      current_streak: 2,
+      last_qualified_date: "2026-07-02",
+      streak_started_date: "2026-07-01",
+      total_qualified_days: 2,
+    }])
+
+    await upsertStudyStreakProgress({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      isCorrect: true,
+      now: "2026-07-04T12:00:00.000Z",
+      postId: POST_ID,
+      studyTargetCount: 1,
+      userId: LEARNER_ID,
+    })
+
+    streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      streak_started_date: row.streak_started_date,
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{
+      best_streak: 2,
+      current_streak: 1,
+      last_qualified_date: "2026-07-04",
+      streak_started_date: "2026-07-04",
+      total_qualified_days: 3,
+    }])
+  })
+
   test("omits already-attempted exercises from the study payload", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -901,6 +1207,120 @@ describe("post study service", () => {
         review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
       },
     ])
+  })
+
+  test("freezes the study streak target from serveable due reviews before FSRS advances", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-streak-prereq-say-1",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-prereq-choice",
+        selected_option_id: "opt_a",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    await exec(`
+      UPDATE song_study_review_state
+      SET due_at = CASE
+        WHEN line_id = 'line_001' AND exercise_type = 'say_it_back'
+          THEN '2026-06-28T08:00:00.000Z'
+        WHEN line_id = 'line_002' AND exercise_type = 'translation_choice'
+          THEN '2026-06-28T08:00:00.000Z'
+        ELSE '2100-01-01T00:00:00.000Z'
+      END
+      WHERE user_id = ?1
+        AND post_id = ?2
+    `, [LEARNER_ID, POST_ID])
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-streak-review-say-1",
+        review_session_id: "review:line_001:say_it_back:en:2026-06-28T08:00:00.000Z",
+        target_language: "es",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
+      }),
+      postId: POST_ID,
+    })
+
+    const afterFirst = await client!.execute("SELECT study_attempt_count, study_target_count, qualified FROM song_engagement_days")
+    expect(afterFirst.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{ qualified: 0, study_attempt_count: 1, study_target_count: 2 }])
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-review-choice-1",
+        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+        selected_option_id: "opt_a",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
+      }),
+      postId: POST_ID,
+    })
+
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 1,
+      study_attempt_count: 2,
+      study_correct_count: 2,
+      study_target_count: 2,
+    }])
+
+    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
   })
 
   test("rejects conflicting idempotency-key reuse", async () => {

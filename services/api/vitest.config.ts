@@ -30,6 +30,10 @@ export default defineWorkersConfig({
               useSQLite: true,
             },
           },
+          d1Databases: {
+            DB_CMTY_PILOT: "DB_CMTY_PILOT",
+            D1_POOL: "D1_POOL",
+          },
           bindings: {
             ENVIRONMENT: "test",
             // 48 chars — exceeds the 32-char minimum enforced by the signer.

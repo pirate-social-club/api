@@ -3822,6 +3822,54 @@ const spec = {
         "operationId": "post_communities_by_community_id_posts_by_post_id_study_transcriptions"
       }
     },
+    "/communities/{community_id}/posts/{post_id}/streaks/leaderboard": {
+      "get": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Fetch the song streak leaderboard",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStreakLeaderboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_posts_by_post_id_streaks_leaderboard"
+      }
+    },
     "/communities/{community_id}/comments/{comment_id}/reports": {
       "post": {
         "tags": [
@@ -13100,6 +13148,53 @@ const spec = {
         },
         "additionalProperties": false
       },
+      "SongStreakLeaderboard": {
+        "type": "object",
+        "required": [
+          "object",
+          "post_id",
+          "community_id",
+          "date",
+          "entries",
+          "viewer",
+          "total_active_streaks"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "song_streak_leaderboard"
+            ]
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongStreakLeaderboardEntry"
+            }
+          },
+          "viewer": {
+            "nullable": true,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SongStreakViewerStanding"
+              }
+            ]
+          },
+          "total_active_streaks": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
       "ModerationCaseListResponse": {
         "type": "object",
         "required": [
@@ -17823,6 +17918,86 @@ const spec = {
           "missing_transcription_provider"
         ]
       },
+      "SongStreakLeaderboardEntry": {
+        "type": "object",
+        "required": [
+          "rank",
+          "identity",
+          "current_streak",
+          "best_streak",
+          "total_qualified_days",
+          "streak_started_date",
+          "last_qualified_date",
+          "is_viewer"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/SongStreakLeaderboardIdentity"
+          },
+          "current_streak": {
+            "type": "integer"
+          },
+          "best_streak": {
+            "type": "integer"
+          },
+          "total_qualified_days": {
+            "type": "integer"
+          },
+          "streak_started_date": {
+            "type": "string"
+          },
+          "last_qualified_date": {
+            "type": "string"
+          },
+          "is_viewer": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStreakViewerStanding": {
+        "type": "object",
+        "required": [
+          "alive",
+          "current_streak",
+          "best_streak",
+          "total_qualified_days",
+          "qualified_today",
+          "study_attempts_today",
+          "study_target_today",
+          "karaoke_passed_today"
+        ],
+        "properties": {
+          "alive": {
+            "type": "boolean"
+          },
+          "current_streak": {
+            "type": "integer"
+          },
+          "best_streak": {
+            "type": "integer"
+          },
+          "total_qualified_days": {
+            "type": "integer"
+          },
+          "qualified_today": {
+            "type": "boolean"
+          },
+          "study_attempts_today": {
+            "type": "integer"
+          },
+          "study_target_today": {
+            "type": "integer"
+          },
+          "karaoke_passed_today": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "ModerationCaseListItem": {
         "allOf": [
           {
@@ -20667,6 +20842,30 @@ const spec = {
           "removed",
           "unavailable"
         ]
+      },
+      "SongStreakLeaderboardIdentity": {
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
       },
       "ModerationCasePostPreview": {
         "type": "object",
