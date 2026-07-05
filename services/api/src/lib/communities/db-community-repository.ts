@@ -19,6 +19,7 @@ import type {
   CommunityRepository,
   InitialCommunityDatabaseBinding,
 } from "./community-repository-types"
+import type { Post } from "../../types"
 import type { Env } from "../../env"
 
 export type {
@@ -196,7 +197,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     authorUserId: string | null
     identityMode: "public" | "anonymous"
     postType: "text" | "image" | "video" | "link" | "song" | "crosspost"
-    status: "draft" | "published" | "hidden" | "removed" | "deleted"
+    status: Post["status"]
     visibility: "public" | "members_only"
     sourceCreatedAt: string
     projectedPayloadJson: string

@@ -260,6 +260,7 @@ export async function createSongArtifactBundleDraft(input: {
   vocalAudio: SongArtifactBundle["vocal_audio"]
   lyricsSha256: string
   geniusAnnotationsUrl: string | null
+  previewStatus: SongArtifactBundle["preview_status"]
   createdAt: string
 }): Promise<SongArtifactBundle> {
   await ensureSongArtifactBundleTitleColumn(input.client)
@@ -280,8 +281,8 @@ export async function createSongArtifactBundleDraft(input: {
         ?11, ?12, 'pending',
         NULL, NULL, NULL, 'processing',
         NULL, NULL, NULL, 'processing', NULL,
-        NULL, NULL, ?13, 'completed',
-        NULL, ?14, ?14, ?15
+        NULL, NULL, ?13, ?14,
+        NULL, ?15, ?15, ?16
       )
     `,
     args: [
@@ -298,6 +299,7 @@ export async function createSongArtifactBundleDraft(input: {
       input.instrumentalAudio ? JSON.stringify(input.instrumentalAudio) : null,
       input.vocalAudio ? JSON.stringify(input.vocalAudio) : null,
       input.body.preview_window ? JSON.stringify(input.body.preview_window) : null,
+      input.previewStatus,
       input.createdAt,
       input.geniusAnnotationsUrl,
     ],

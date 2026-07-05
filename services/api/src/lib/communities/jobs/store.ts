@@ -19,6 +19,7 @@ export type CommunityJobType =
   | "song_preview_generate"
   | "song_study_generate"
   | "locked_asset_delivery_prepare"
+  | "post_publish_finalize"
   | "song_artifact_session_reaper"
   | "live_room_recording_ingest"
   | "live_room_viewer_sessions_prune"
@@ -182,9 +183,9 @@ export async function enqueueCommunityJob(input: {
   }
 
   const jobId = makeId("cjb")
-  await input.client.execute({
+  const insertResult = await input.client.execute({
     sql: `
-      INSERT INTO community_jobs (
+      INSERT OR IGNORE INTO community_jobs (
         job_id, community_id, job_type, subject_type, subject_id, status, payload_json,
         result_ref, error_code, attempt_count, available_at, created_at, updated_at
       ) VALUES (
@@ -203,6 +204,18 @@ export async function enqueueCommunityJob(input: {
       input.createdAt,
     ],
   })
+
+  if ((insertResult.rowsAffected ?? 0) === 0 && input.dedupe !== false) {
+    const existing = await findLatestCommunityJobBySubjectAndType({
+      client: input.client,
+      jobType: input.jobType,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+    })
+    if (existing && (existing.status === "queued" || existing.status === "running")) {
+      return existing
+    }
+  }
 
   // Deterministic return: the inserted row is fully known here, so construct it directly
   // instead of reading it back. A SELECT-after-INSERT would cross the routed write client's

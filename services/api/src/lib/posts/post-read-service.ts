@@ -1,5 +1,6 @@
 import {
   listPublishedLocalizedEventPosts,
+  listAuthorPendingLocalizedPosts,
   listPublishedLocalizedPosts,
   type PublishedEventPostStatus,
 } from "./community-post-feed"
@@ -12,6 +13,7 @@ import {
   isAssetBackedPostMissingAsset,
   isPubliclyReadablePost,
   requireMemberAccess,
+  shouldHidePostForMissingAsset,
 } from "./post-access"
 import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
 import {
@@ -119,14 +121,14 @@ export async function getPost(input: {
     if (!post) {
       throw notFoundError("Post not found")
     }
-    if (isAssetBackedPostMissingAsset(post)) {
-      throw notFoundError("Post not found")
-    }
     const threadSnapshot = await getLatestThreadSnapshotForRead(db.client, post.post_id)
     if (post.status === "deleted") {
       return buildDeletedPostStubResponse({ post, threadSnapshot, viewerUserId: input.userId })
     }
     if (post.status !== "published" && !canReadNonPublishedPost(post, membership, input.userId)) {
+      throw notFoundError("Post not found")
+    }
+    if (shouldHidePostForMissingAsset(post)) {
       throw notFoundError("Post not found")
     }
     const ageGateViewerState = await resolveAgeGateViewerState({
@@ -294,6 +296,69 @@ export async function listCommunityPosts(input: {
     return {
       items,
       next_cursor: formatFeedCursor(feed.nextCursor),
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listPendingCommunityPosts(input: {
+  env: Env
+  userId: string
+  communityId: string
+  locale?: string | null
+  limit?: string | null
+  communityRepository: PostReadCommunityRepository
+  userRepository: UserRepository
+  profileRepository?: ProfileRepository | null
+}): Promise<CommunityFeedResponse> {
+  const db = await openLiveCommunityDbForPostRead({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  try {
+    await requireMemberAccess(db.client, input.communityId, input.userId)
+    const feedItems = await listAuthorPendingLocalizedPosts({
+      client: db.client,
+      communityId: input.communityId,
+      authorUserId: input.userId,
+      limit: parseFeedLimit(input.limit),
+    })
+    const ageGateState = await resolveAgeGateViewerState({
+      userId: input.userId,
+      userRepository: input.userRepository,
+      postAgeGatePolicy: "18_plus",
+    })
+    const items = await buildLocalizedPostFeedResponses({
+      client: db.client,
+      songArtifactExecutor: getControlPlaneClient(input.env),
+      feedItems,
+      locale: input.locale,
+      viewerUserId: input.userId,
+      ageGateState,
+    })
+    const communityPreview = await getCommunityPreview({
+      env: input.env,
+      userId: input.userId,
+      communityId: input.communityId,
+      locale: input.locale ?? null,
+      communityRepository: input.communityRepository,
+    })
+    for (const item of items) {
+      item.community = communityPreview
+    }
+    await hydrateAndEnqueuePostReadResponses({
+      client: db.client,
+      communityId: input.communityId,
+      responses: items,
+      communityRepository: input.communityRepository,
+      profileRepository: input.profileRepository,
+    })
+
+    return {
+      items,
+      next_cursor: null,
     }
   } finally {
     db.close()

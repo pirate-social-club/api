@@ -120,6 +120,7 @@ export async function insertPost(input: {
   // Resolved by the caller BEFORE the write tx (a buffered D1 tx can't see schema
   // reads either) and threaded in.
   projectionSchema: PostProjectionSchema
+  idempotencyBodyHash?: string | null
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
   agentWriteAuthorization?: {
     agentId: string
@@ -265,6 +266,7 @@ export async function insertPost(input: {
   addValue("created_at", input.createdAt)
   addValue("updated_at", input.createdAt)
   addValue("idempotency_key", idempotencyKey)
+  addOptionalMigratedValue("idempotency_body_hash", input.idempotencyBodyHash ?? null, projectionSchema.hasAsyncPublishColumns)
   addValue("agent_handle_snapshot", input.agentWriteAuthorization?.agentHandleSnapshot ?? null)
 
   await input.client.execute({

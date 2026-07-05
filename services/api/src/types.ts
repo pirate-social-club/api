@@ -78,6 +78,7 @@ export type {
   NotificationSummary,
   NotificationTasksResponse,
   OnboardingStatus,
+  PostPublishFailureCode,
   Profile,
   PublicAgentResolution,
   RedditImportSummary,
@@ -194,6 +195,7 @@ import type {
   Community as ContractCommunity,
   CommunityPreview as ContractCommunityPreview,
   CommunityRoleSummary as ContractCommunityRoleSummary,
+  CreateCommunityListingRequest,
   LocalizedPostResponse as ContractLocalizedPostResponse,
   Post as ContractPost,
   CommunityMoneyPolicy,
@@ -229,6 +231,7 @@ type PostViewerGateState = NonNullable<ContractLocalizedPostResponse["viewer_gat
 type MediaDescriptor = NonNullable<ContractPost["media_refs"]>[number]
 type PostCreatorRelation = NonNullable<ContractPost["creator_relation"]>
 type PostEmbed = NonNullable<ContractPost["embeds"]>[number]
+type PostPublishFailureCodeValue = NonNullable<ContractPost["publish_failure_code"]>
 type PromotionDisclosure = NonNullable<ContractPost["promotion_disclosure"]>
 type ReplyQuotaByTrustTier = NonNullable<ContractCommunity["reply_quota_by_trust_tier"]>
 type RootPostQuotaByTrustTier = NonNullable<ContractCommunity["root_post_quota_by_trust_tier"]>
@@ -475,7 +478,7 @@ export type Post = {
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null
   label_id?: string | null
   post_type: "text" | "image" | "video" | "link" | "song" | "crosspost"
-  status: "draft" | "published" | "hidden" | "removed" | "deleted"
+  status: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted"
   comments_locked?: boolean
   comments_locked_at?: string | null
   comments_locked_by_user_id?: string | null
@@ -515,6 +518,10 @@ export type Post = {
   analysis_result_ref?: string | null
   content_safety_state: "pending" | "safe" | "sensitive" | "adult"
   age_gate_policy: "none" | "18_plus"
+  publish_failure_code?: PostPublishFailureCodeValue | null
+  publish_failure_message?: string | null
+  publish_failure_retryable?: boolean | null
+  idempotency_body_hash?: string | null
   asset_story?: {
     story_ip: string | null
     story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
@@ -575,6 +582,8 @@ type CreatePostRequestBase = {
   source_community?: string | null
   crosspost_source?: CrosspostSource | null
   event?: PostEvent | null
+  publish_mode?: "sync" | "async"
+  listing_draft?: CreateCommunityListingRequest | null
 }
 
 export type CreatePostRequest = CreatePostRequestBase & {

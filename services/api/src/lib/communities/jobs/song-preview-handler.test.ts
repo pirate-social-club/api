@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import type { Env } from "../../../env"
 import type { CommunityJobRow } from "./store"
-import { runSongPreviewGenerate, setSongPreviewFailureUpdaterForTests } from "./song-preview-handler"
+import {
+  runSongPreviewGenerate,
+  setCompletedPreviewPostSyncerForTests,
+  setSongPreviewFailureUpdaterForTests,
+} from "./song-preview-handler"
 
 const originalFetch = globalThis.fetch
 
@@ -34,6 +38,7 @@ function testJob(overrides: Partial<CommunityJobRow> = {}): CommunityJobRow {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  setCompletedPreviewPostSyncerForTests(null)
   setSongPreviewFailureUpdaterForTests(null)
 })
 
@@ -56,8 +61,17 @@ function capturePreviewFailureUpdates(): PreviewFailureUpdate[] {
   return updates
 }
 
+function captureCompletedPreviewPostSyncs(): string[] {
+  const syncedBundleIds: string[] = []
+  setCompletedPreviewPostSyncerForTests(async (_input, songArtifactBundleId) => {
+    syncedBundleIds.push(songArtifactBundleId)
+  })
+  return syncedBundleIds
+}
+
 describe("runSongPreviewGenerate", () => {
   test("forwards configured preview jobs to the song preview service", async () => {
+    const syncedBundleIds = captureCompletedPreviewPostSyncs()
     const requests: Array<{
       url: string
       authorization: string | null
@@ -88,6 +102,7 @@ describe("runSongPreviewGenerate", () => {
     })
 
     expect(result).toBe("https://gateway.example/ipfs/preview")
+    expect(syncedBundleIds).toEqual(["sab_payload"])
     expect(requests).toEqual([{
       url: "http://127.0.0.1:8795/preview",
       authorization: "Bearer shared-secret",
@@ -100,6 +115,7 @@ describe("runSongPreviewGenerate", () => {
   })
 
   test("falls back to subject id when the payload omits bundle id", async () => {
+    const syncedBundleIds = captureCompletedPreviewPostSyncs()
     let requestBody: unknown = null
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = _input instanceof Request ? _input : new Request(_input, init)
@@ -121,9 +137,11 @@ describe("runSongPreviewGenerate", () => {
       song_artifact_bundle: "sab_subject",
       primary_audio_content_hash: null,
     })
+    expect(syncedBundleIds).toEqual(["sab_subject"])
   })
 
   test("can use a Worker service binding instead of a public service URL", async () => {
+    const syncedBundleIds = captureCompletedPreviewPostSyncs()
     const requests: Array<{
       url: string
       authorization: string | null
@@ -150,6 +168,7 @@ describe("runSongPreviewGenerate", () => {
     })
 
     expect(result).toBe("service-binding-storage-ref")
+    expect(syncedBundleIds).toEqual(["sab_subject"])
     expect(requests).toEqual([{
       url: "https://song-preview-service.internal/preview",
       authorization: "Bearer shared-secret",
