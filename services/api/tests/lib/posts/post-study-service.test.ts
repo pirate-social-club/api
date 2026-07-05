@@ -9,7 +9,14 @@ import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
-import { getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio } from "../../../src/lib/posts/post-study-service"
+import {
+  countEligibleStudyExercisesForPosts,
+  decideStudyAccess,
+  getPostStudyPayload,
+  resolveStudyCapabilitiesForPosts,
+  submitPostStudyAttempt,
+  transcribePostStudyAudio,
+} from "../../../src/lib/posts/post-study-service"
 import type { Env } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -272,6 +279,63 @@ async function seedReadyPack(): Promise<void> {
   ])
 }
 
+async function seedInvalidSpanishLocalizationForFirstUnit(): Promise<void> {
+  await exec(`
+    INSERT INTO song_study_unit_localization (
+      id, unit_id, target_language, localization_version, status,
+      question, translation_text, options_json, correct_option_id,
+      explanation_text, max_attempts, generated_at, created_at, updated_at
+    )
+    VALUES (
+      'sul_1_es_missing_options', 'stu_1', 'es', 1, 'ready',
+      'Choose the best translation.',
+      'Me perdí en las olas de medianoche',
+      NULL,
+      'opt_a',
+      'Intentionally incomplete row: ready status without options must not count as an exercise.',
+      2, ?1, ?1, ?1
+    )
+  `, [NOW])
+}
+
+async function markSpanishTranslationPackUnavailable(): Promise<void> {
+  await exec(`
+    INSERT INTO song_study_unit_localization (
+      id, unit_id, target_language, localization_version, status,
+      question, translation_text, options_json, correct_option_id,
+      explanation_text, max_attempts, generated_at, created_at, updated_at
+    )
+    VALUES (
+      'sul_1_es_unavailable', 'stu_1', 'es', 5, 'unavailable',
+      NULL, NULL, NULL, NULL, NULL, 2, ?1, ?1, ?1
+    )
+    ON CONFLICT(unit_id, target_language) DO UPDATE SET
+      status = 'unavailable',
+      localization_version = 5,
+      question = NULL,
+      translation_text = NULL,
+      options_json = NULL,
+      correct_option_id = NULL,
+      explanation_text = NULL,
+      generated_at = ?1,
+      updated_at = ?1
+  `, [NOW])
+  await exec(`
+    UPDATE song_study_unit_localization
+    SET status = 'unavailable',
+        localization_version = 5,
+        question = NULL,
+        translation_text = NULL,
+        options_json = NULL,
+        correct_option_id = NULL,
+        explanation_text = NULL,
+        generated_at = ?1,
+        updated_at = ?1
+    WHERE unit_id = 'stu_2'
+      AND target_language = 'es'
+  `, [NOW])
+}
+
 async function seedActiveAssetEntitlement(userId: string, assetId = "ast_song"): Promise<void> {
   await exec(`
     INSERT INTO purchases (
@@ -380,6 +444,222 @@ afterEach(async () => {
 }, 120_000)
 
 describe("post study service", () => {
+  test("decideStudyAccess returns the first externally visible access state that applies", () => {
+    const enterable = {
+      studyEnabled: true,
+      isSong: true,
+      entitled: true,
+      hasUnits: true,
+      includeTranslation: true,
+      includeSayItBack: true,
+      canGenerateTranslations: true,
+      packUnavailable: false,
+      exerciseCount: 1,
+    }
+    const cases = [
+      {
+        name: "community study disabled",
+        input: { studyEnabled: false },
+        expected: "unavailable",
+      },
+      {
+        name: "post is not a song",
+        input: { isSong: false },
+        expected: "unavailable",
+      },
+      {
+        name: "viewer lacks locked-song entitlement",
+        input: { entitled: false },
+        expected: "locked",
+      },
+      {
+        name: "song has no study units",
+        input: { hasUnits: false },
+        expected: "unavailable",
+      },
+      {
+        name: "at least one hydrated exercise is enterable",
+        input: { exerciseCount: 1, packUnavailable: true },
+        expected: "ready",
+      },
+      {
+        name: "completed translation pack has no usable exercises",
+        input: { includeSayItBack: false, packUnavailable: true, exerciseCount: 0 },
+        expected: "unavailable",
+      },
+      {
+        name: "translation generation can still produce exercises",
+        input: { includeSayItBack: false, exerciseCount: 0 },
+        expected: "processing",
+      },
+      {
+        name: "no provider or generator can produce exercises",
+        input: { includeSayItBack: false, canGenerateTranslations: false, exerciseCount: 0 },
+        expected: "unavailable",
+      },
+      {
+        name: "same-language target has no translation fallback and no say-it-back provider",
+        input: { includeTranslation: false, includeSayItBack: false, exerciseCount: 0 },
+        expected: "unavailable",
+      },
+    ] as const
+
+    for (const testCase of cases) {
+      expect(decideStudyAccess({ ...enterable, ...testCase.input }), testCase.name).toBe(testCase.expected)
+    }
+  })
+
+  test("batched eligible exercise counts match hydrated exercises across readiness modes", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await seedInvalidSpanishLocalizationForFirstUnit()
+
+    const crossLanguagePayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const crossLanguageCounts = await countEligibleStudyExercisesForPosts({
+      client: client!,
+      includeSayItBack: true,
+      includeTranslationByPostId: new Map([[POST_ID, true]]),
+      postIds: [POST_ID],
+      targetLanguage: "es",
+    })
+    expect(crossLanguagePayload.access).toBe("ready")
+    expect(crossLanguagePayload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "say_it_back",
+      "translation_choice",
+    ])
+    expect(crossLanguageCounts.get(POST_ID)).toBe(crossLanguagePayload.exercises.length)
+    expect(crossLanguagePayload.exercise_count).toBe(crossLanguagePayload.exercises.length)
+
+    const sameLanguagePayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+    const sameLanguageCounts = await countEligibleStudyExercisesForPosts({
+      client: client!,
+      includeSayItBack: true,
+      includeTranslationByPostId: new Map([[POST_ID, false]]),
+      postIds: [POST_ID],
+      targetLanguage: "en",
+    })
+    expect(sameLanguagePayload.access).toBe("ready")
+    expect(sameLanguagePayload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "say_it_back",
+    ])
+    expect(sameLanguageCounts.get(POST_ID)).toBe(sameLanguagePayload.exercises.length)
+    expect(sameLanguagePayload.exercise_count).toBe(sameLanguagePayload.exercises.length)
+
+    await clearElevenLabsCredential()
+    const disabledSayItBackPayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const disabledSayItBackCounts = await countEligibleStudyExercisesForPosts({
+      client: client!,
+      includeSayItBack: false,
+      includeTranslationByPostId: new Map([[POST_ID, true]]),
+      postIds: [POST_ID],
+      targetLanguage: "es",
+    })
+    expect(disabledSayItBackPayload.access).toBe("ready")
+    expect(disabledSayItBackPayload.exercises.map((exercise) => exercise.type)).toEqual(["translation_choice"])
+    expect(disabledSayItBackCounts.get(POST_ID)).toBe(disabledSayItBackPayload.exercises.length)
+    expect(disabledSayItBackPayload.exercise_count).toBe(disabledSayItBackPayload.exercises.length)
+  })
+
+  test("say-it-back readiness makes an unavailable translation pack enterable", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await markSpanishTranslationPackUnavailable()
+
+    const capabilities = await resolveStudyCapabilitiesForPosts({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      env: env(),
+      posts: [{
+        post_id: POST_ID,
+        post_type: "song",
+        access_mode: "public",
+        author_user_id: AUTHOR_ID,
+        asset_id: "ast_song",
+        source_language: "en",
+        community_id: COMMUNITY_ID,
+      }],
+      targetLanguage: "es",
+      viewerUserId: LEARNER_ID,
+    })
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(capabilities.get(POST_ID)?.status).toBe(payload.access)
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "say_it_back",
+    ])
+    expect(capabilities.get(POST_ID)?.exercise_count).toBe(payload.exercises.length)
+  })
+
+  test("pack-unavailable songs without eligible exercises surface generation_failed", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+    await seedReadyPack()
+    await markSpanishTranslationPackUnavailable()
+
+    const capabilities = await resolveStudyCapabilitiesForPosts({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      env: env(),
+      posts: [{
+        post_id: POST_ID,
+        post_type: "song",
+        access_mode: "public",
+        author_user_id: AUTHOR_ID,
+        asset_id: "ast_song",
+        source_language: "en",
+        community_id: COMMUNITY_ID,
+      }],
+      targetLanguage: "es",
+      viewerUserId: LEARNER_ID,
+    })
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(capabilities.get(POST_ID)?.status).toBe("unavailable")
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
+    expect(payload.unavailable_reason).toBe("generation_failed")
+  })
+
   test("returns ready exercises without exposing the multiple-choice answer", async () => {
     await seedSongPost()
     await seedReadyPack()

@@ -10,11 +10,13 @@ import { badRequestError } from "../errors"
 import { getCommentById } from "../comments/community-comment-store"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { resolveStudyCapabilitiesForPosts } from "../posts/post-study-service"
 import { getPostReadMetrics } from "../posts/community-post-metrics-store"
 import { getPostById } from "../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../posts/post-access"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
+import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type {
   LocalizedPostResponse,
@@ -298,9 +300,22 @@ async function hydratePostRows(input: {
         locale: input.locale,
         communityRepository: input.repository,
       })
-      for (const row of rows) {
+      const readablePosts = rows.flatMap((row) => {
         const post = parseProjectedPost(row)
-        if (!post || post.identity_mode !== "public" || !isPubliclyReadablePost(post)) {
+        return post && post.identity_mode === "public" && isPubliclyReadablePost(post) ? [post] : []
+      })
+      const readablePostsById = new Map(readablePosts.map((post) => [post.post_id, post]))
+      const studyCapabilitiesByPostId = await resolveStudyCapabilitiesForPosts({
+        client: db.client,
+        communityId,
+        env: input.env,
+        posts: readablePosts,
+        targetLanguage: input.locale,
+        viewerUserId: input.viewerUserId,
+      })
+      for (const row of rows) {
+        const post = readablePostsById.get(row.source_post_id)
+        if (!post) {
           continue
         }
         const metrics = await getPostReadMetrics({
@@ -316,6 +331,7 @@ async function hydratePostRows(input: {
           threadSnapshot: null,
           ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
           viewerUserId: input.viewerUserId,
+          studyCapabilitiesByPostId,
         })
         response.community = preview
         items.push({
@@ -333,7 +349,8 @@ async function hydratePostRows(input: {
 }
 
 async function buildThreadRootPost(input: {
-  client: DbExecutor
+  client: Client
+  env: Env
   postId: string
   viewerUserId: string | null
   locale?: string | null
@@ -347,6 +364,14 @@ async function buildThreadRootPost(input: {
     postId: post.post_id,
     viewerUserId: input.viewerUserId,
   })
+  const studyCapabilitiesByPostId = await resolveStudyCapabilitiesForPosts({
+    client: input.client,
+    communityId: post.community_id,
+    env: input.env,
+    posts: [post],
+    targetLanguage: input.locale,
+    viewerUserId: input.viewerUserId,
+  })
   return await buildLocalizedPostResponse({
     executor: input.client,
     post,
@@ -355,6 +380,7 @@ async function buildThreadRootPost(input: {
     threadSnapshot: null,
     ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
     viewerUserId: input.viewerUserId,
+    studyCapabilitiesByPostId,
   })
 }
 
@@ -396,6 +422,7 @@ async function hydrateCommentRows(input: {
           ? threadRoots.get(row.thread_root_post_id) ?? null
           : await buildThreadRootPost({
               client: db.client,
+              env: input.env,
               postId: row.thread_root_post_id,
               viewerUserId: input.viewerUserId,
               locale: input.locale,

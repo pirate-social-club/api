@@ -7,6 +7,7 @@ import type { ProfileRepository } from "../auth/repositories"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { resolveStudyCapabilitiesForPosts } from "./post-study-service"
 import type { AgeGateViewerState } from "./age-gate-viewer-state"
 import { hydrateCrosspostSourcesForResponses } from "./crosspost-source-hydration"
 import {
@@ -17,21 +18,60 @@ import {
 import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydration"
 import { getPostReadMetrics } from "./community-post-metrics-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
+import type { Env } from "../../env"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
 
 type PostReadResponseCommunityRepository =
   & CommunityReadRepository
   & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId">
 
+async function resolveStudyCapabilitiesForLocalizedPosts(input: {
+  client: Client
+  env: Env
+  locale?: string | null
+  posts: readonly Post[]
+  viewerUserId: string | null | undefined
+}): Promise<Map<string, LocalizedPostResponse["study_capability"]>> {
+  const postsByCommunity = new Map<string, Post[]>()
+  for (const post of input.posts) {
+    if (post.post_type !== "song") continue
+    const posts = postsByCommunity.get(post.community_id) ?? []
+    posts.push(post)
+    postsByCommunity.set(post.community_id, posts)
+  }
+  const capabilities = new Map<string, LocalizedPostResponse["study_capability"]>()
+  for (const [communityId, posts] of postsByCommunity) {
+    const resolved = await resolveStudyCapabilitiesForPosts({
+      client: input.client,
+      communityId,
+      env: input.env,
+      posts,
+      targetLanguage: input.locale,
+      viewerUserId: input.viewerUserId,
+    })
+    for (const [postId, capability] of resolved) {
+      capabilities.set(postId, capability)
+    }
+  }
+  return capabilities
+}
+
 export async function buildLocalizedPostFeedResponses(input: {
   client: Client
+  env: Env
   songArtifactExecutor?: Client | null
   feedItems: readonly PublishedLocalizedPostFeedItem[]
   locale?: string | null
   viewerUserId: string | null
   ageGateState: AgeGateViewerState | null
 }): Promise<LocalizedPostResponse[]> {
-  const studyEnabledCache = new Map<string, Promise<boolean>>()
+  const studyCapabilitiesByPostId = await resolveStudyCapabilitiesForLocalizedPosts({
+    client: input.client,
+    env: input.env,
+    locale: input.locale,
+    posts: input.feedItems.map((item) => item.post),
+    viewerUserId: input.viewerUserId,
+  })
   return Promise.all(input.feedItems.map(async (item) => {
     const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? input.ageGateState : null
     const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, item.post.post_id)
@@ -49,7 +89,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       },
       threadSnapshot,
       ageGateViewerState,
-      studyEnabledCache,
+      studyCapabilitiesByPostId,
       viewerUserId: input.viewerUserId,
     })
   }))
@@ -57,6 +97,7 @@ export async function buildLocalizedPostFeedResponses(input: {
 
 export async function buildLocalizedPostReadResponse(input: {
   client: Client
+  env: Env
   songArtifactExecutor?: Client | null
   post: Post
   locale?: string | null
@@ -69,6 +110,13 @@ export async function buildLocalizedPostReadResponse(input: {
     postId: input.post.post_id,
     viewerUserId: input.viewerUserId,
   })
+  const studyCapabilitiesByPostId = await resolveStudyCapabilitiesForLocalizedPosts({
+    client: input.client,
+    env: input.env,
+    locale: input.locale,
+    posts: [input.post],
+    viewerUserId: input.viewerUserId,
+  })
   return buildLocalizedPostResponse({
     executor: input.client,
     songArtifactExecutor: input.songArtifactExecutor,
@@ -77,6 +125,7 @@ export async function buildLocalizedPostReadResponse(input: {
     metrics,
     threadSnapshot,
     ageGateViewerState: input.ageGateViewerState,
+    studyCapabilitiesByPostId,
     viewerUserId: input.viewerUserId,
   })
 }

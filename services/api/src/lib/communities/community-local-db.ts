@@ -130,17 +130,53 @@ function resolveCommunityTemplateMigrationsDir(): string {
   })
 }
 
+// This local bootstrap executes community-template migrations directly against
+// libsql. Strip SQL comments while splitting so semicolons inside migration
+// comments never become comment-only fragments that libsql rejects.
 function splitSqlStatements(sql: string): string[] {
   const statements: string[] = []
   let current = ""
   let inSingleQuote = false
+  let inDoubleQuote = false
+  let inLineComment = false
+  let inBlockComment = false
 
   for (let index = 0; index < sql.length; index += 1) {
     const char = sql[index]
     const next = sql[index + 1]
+
+    if (inLineComment) {
+      if (char === "\n" || char === "\r") {
+        inLineComment = false
+        current += char
+      }
+      continue
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false
+        current += " "
+        index += 1
+      }
+      continue
+    }
+
+    if (!inSingleQuote && !inDoubleQuote && char === "-" && next === "-") {
+      inLineComment = true
+      index += 1
+      continue
+    }
+
+    if (!inSingleQuote && !inDoubleQuote && char === "/" && next === "*") {
+      inBlockComment = true
+      index += 1
+      continue
+    }
+
     current += char
 
-    if (char === "'" && sql[index - 1] !== "\\") {
+    if (!inDoubleQuote && char === "'" && sql[index - 1] !== "\\") {
       if (inSingleQuote && next === "'") {
         current += next
         index += 1
@@ -150,7 +186,17 @@ function splitSqlStatements(sql: string): string[] {
       continue
     }
 
-    if (char === ";" && !inSingleQuote) {
+    if (!inSingleQuote && char === "\"") {
+      if (inDoubleQuote && next === "\"") {
+        current += next
+        index += 1
+        continue
+      }
+      inDoubleQuote = !inDoubleQuote
+      continue
+    }
+
+    if (char === ";" && !inSingleQuote && !inDoubleQuote) {
       const statement = current.trim()
       if (statement) {
         statements.push(statement)

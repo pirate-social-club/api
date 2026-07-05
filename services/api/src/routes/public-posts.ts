@@ -236,6 +236,7 @@ publicPosts.get("/:postId/thread", async (c) => {
   try {
     const locale = c.req.query("locale") ?? null
     const post = await getPublicPostFromCommunityDb({
+      env: c.env,
       client: db.client,
       songArtifactExecutor: getControlPlaneClient(c.env),
       communityId: projection.community_id,

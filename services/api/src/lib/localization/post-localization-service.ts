@@ -1,7 +1,5 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
-import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
-import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
@@ -9,7 +7,7 @@ import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentati
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
-type StudyEnabledCache = Map<string, Promise<boolean>>
+type StudyCapabilitiesByPostId = ReadonlyMap<string, LocalizedPostResponse["study_capability"]>
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
 
@@ -390,75 +388,6 @@ async function getAuthorCommunityRole(input: {
   return null
 }
 
-async function canStudyLockedSongPost(input: {
-  executor: DbExecutor
-  post: Post
-  viewerUserId: string | null | undefined
-}): Promise<boolean> {
-  if (input.post.author_user_id && input.viewerUserId === input.post.author_user_id) {
-    return true
-  }
-  if (!input.viewerUserId || !input.post.asset_id) {
-    return false
-  }
-  const entitlement = await getActiveEntitlementForBuyer(
-    input.executor,
-    input.post.community_id,
-    input.viewerUserId,
-    input.post.asset_id,
-    "asset_access",
-  )
-  return Boolean(entitlement)
-}
-
-async function buildStudyCapability(input: {
-  executor: DbExecutor
-  post: Post
-  studyEnabledCache?: StudyEnabledCache
-  viewerUserId: string | null | undefined
-}): Promise<LocalizedPostResponse["study_capability"]> {
-  if (input.post.post_type !== "song") {
-    return null
-  }
-
-  let studyEnabled = input.studyEnabledCache?.get(input.post.community_id)
-  if (!studyEnabled) {
-    studyEnabled = isCommunityStudyEnabled({
-      executor: input.executor,
-      communityId: input.post.community_id,
-    })
-    input.studyEnabledCache?.set(input.post.community_id, studyEnabled)
-  }
-  if (!await studyEnabled) {
-    return null
-  }
-
-  const sourceLyrics = String(input.post.lyrics ?? "").trim()
-  const base = {
-    source_language: stringValue(input.post.source_language),
-    target_language: null,
-  }
-
-  if (!sourceLyrics) {
-    return {
-      ...base,
-      status: "unavailable",
-    }
-  }
-
-  if ((input.post.access_mode ?? "public") === "locked") {
-    const entitled = await canStudyLockedSongPost(input)
-    return {
-      ...base,
-      status: entitled ? "ready" : "locked",
-    }
-  }
-
-  return {
-    ...base,
-    status: "ready",
-  }
-}
 
 type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {
   preview?: {
@@ -580,7 +509,7 @@ export async function buildLocalizedPostResponse(input: {
   metrics?: Partial<PostReadMetrics>
   threadSnapshot?: CommentThreadSnapshot | null
   ageGateViewerState?: "proof_required" | "verified_allowed" | null
-  studyEnabledCache?: StudyEnabledCache
+  studyCapabilitiesByPostId?: StudyCapabilitiesByPostId
   viewerUserId?: string | null
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
@@ -604,12 +533,7 @@ export async function buildLocalizedPostResponse(input: {
   const response: LocalizedPostResponse = {
     post,
     song_presentation: songPresentation,
-    study_capability: await buildStudyCapability({
-      executor: input.executor,
-      post: input.post,
-      studyEnabledCache: input.studyEnabledCache,
-      viewerUserId: input.viewerUserId,
-    }),
+    study_capability: input.studyCapabilitiesByPostId?.get(input.post.post_id) ?? null,
     author_community_role: await getAuthorCommunityRole({
       executor: input.executor,
       post: input.post,

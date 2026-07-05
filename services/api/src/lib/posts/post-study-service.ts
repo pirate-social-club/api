@@ -21,6 +21,7 @@ import { logPipelineError } from "../observability/pipeline-log"
 import { sameLanguageLocale } from "../localization/content-locale"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
+export type StudyCapabilityStatus = StudyAccess
 type ExerciseType = "say_it_back" | "translation_choice"
 type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
@@ -300,7 +301,7 @@ function parsePositiveInteger(value: string | null | undefined): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-function normalizeStudyTargetLanguage(value: unknown): string {
+export function normalizeStudyTargetLanguage(value: unknown): string {
   const raw = readString(value) ?? "en"
   const normalized = raw.replace(/_/gu, "-").toLowerCase()
   const primary = normalized.split("-")[0] ?? normalized
@@ -309,6 +310,14 @@ function normalizeStudyTargetLanguage(value: unknown): string {
     throw badRequestError("target_language is not supported")
   }
   return canonical
+}
+
+export function tryNormalizeStudyTargetLanguage(value: unknown): string | null {
+  try {
+    return normalizeStudyTargetLanguage(value)
+  } catch {
+    return null
+  }
 }
 
 // The song-study pilot is English-source only, so a post with no reliably detected
@@ -330,7 +339,7 @@ const ASSUMED_STUDY_SOURCE_LANGUAGE = "en"
 // is confidently WRONG (e.g. English lyrics mislabeled "tr") — that is a data-quality
 // problem the source_language must be corrected for; revisit the assumption when study
 // expands beyond English-source songs.
-function isSameLanguageStudyPair(sourceLanguage: string | null | undefined, targetLanguage: string): boolean {
+export function isSameLanguageStudyPair(sourceLanguage: string | null | undefined, targetLanguage: string): boolean {
   return sameLanguageLocale(readString(sourceLanguage) ?? ASSUMED_STUDY_SOURCE_LANGUAGE, targetLanguage)
 }
 
@@ -472,7 +481,8 @@ async function getLatestPack(input: {
              MIN(localization_version) AS min_localization_version,
              MAX(localization_version) AS max_localization_version,
              SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
-             SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing_count
+             SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing_count,
+             SUM(CASE WHEN status = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_count
       FROM song_study_unit_localization
       WHERE target_language = ?1
         AND unit_id IN (
@@ -487,10 +497,17 @@ async function getLatestPack(input: {
     return null
   }
   const processingCount = Number(localizationSummary?.processing_count ?? 0)
+  const readyCount = Number(localizationSummary?.ready_count ?? 0)
+  const unavailableCount = Number(localizationSummary?.unavailable_count ?? 0)
+  const status: StudyPack["status"] = processingCount > 0
+    ? "processing"
+    : readyCount <= 0 && unavailableCount > 0
+      ? "unavailable"
+      : "ready"
   return {
     generated_at: readString(localizationSummary?.generated_at),
     source_language: readString(unitSummary?.source_language),
-    status: processingCount > 0 ? "processing" : "ready",
+    status,
     study_pack_version: Math.max(
       Number(unitSummary?.unit_version ?? STUDY_UNIT_GENERATION_VERSION),
       Number(localizationSummary?.max_localization_version ?? STUDY_LOCALIZATION_GENERATION_VERSION),
@@ -555,6 +572,14 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
   }
 }
 
+const SAY_IT_BACK_ELIGIBILITY_SQL = "say_it_back_status = 'ready'"
+const TRANSLATION_CHOICE_ELIGIBILITY_SQL = `
+        l.status = 'ready'
+        AND l.translation_text IS NOT NULL
+        AND l.options_json IS NOT NULL
+        AND l.correct_option_id IS NOT NULL
+`
+
 async function listExercises(input: {
   client: ReadClient
   includeSayItBack: boolean
@@ -572,7 +597,7 @@ async function listExercises(input: {
              0 AS sort_order
       FROM song_study_unit
       WHERE post_id = ?1
-        AND say_it_back_status = 'ready'
+        AND ${SAY_IT_BACK_ELIGIBILITY_SQL}
         AND ?3 = 1
       UNION ALL
       SELECT ('stu:' || u.id || ':translation_choice:' || l.target_language) AS id,
@@ -586,10 +611,7 @@ async function listExercises(input: {
       WHERE u.post_id = ?1
         AND ?4 = 1
         AND l.target_language = ?2
-        AND l.status = 'ready'
-        AND l.translation_text IS NOT NULL
-        AND l.options_json IS NOT NULL
-        AND l.correct_option_id IS NOT NULL
+        AND ${TRANSLATION_CHOICE_ELIGIBILITY_SQL}
       ORDER BY line_index ASC, sort_order ASC, id ASC
     `,
     args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0, input.includeTranslation ? 1 : 0],
@@ -610,6 +632,349 @@ async function listExercises(input: {
     translation_text: readString(row.translation_text),
   }))
 }
+
+function placeholders(count: number, startIndex = 1): string {
+  return Array.from({ length: count }, (_, index) => `?${startIndex + index}`).join(", ")
+}
+
+export async function countEligibleStudyExercisesForPosts(input: {
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslationByPostId: ReadonlyMap<string, boolean>
+  postIds: readonly string[]
+  targetLanguage: string
+}): Promise<Map<string, number>> {
+  const postIds = [...new Set(input.postIds.filter((postId) => postId.trim()))]
+  const counts = new Map(postIds.map((postId) => [postId, 0]))
+  if (postIds.length === 0) return counts
+
+  const postPlaceholders = placeholders(postIds.length)
+  if (input.includeSayItBack) {
+    const rows = await input.client.execute({
+      sql: `
+        SELECT post_id, COUNT(*) AS exercise_count
+        FROM song_study_unit
+        WHERE post_id IN (${postPlaceholders})
+          AND ${SAY_IT_BACK_ELIGIBILITY_SQL}
+        GROUP BY post_id
+      `,
+      args: postIds,
+    })
+    for (const row of rows.rows) {
+      const postId = readString(row.post_id)
+      if (postId) counts.set(postId, Number(row.exercise_count ?? 0))
+    }
+  }
+
+  const translationPostIds = postIds.filter((postId) => input.includeTranslationByPostId.get(postId) === true)
+  if (translationPostIds.length > 0) {
+    const translationPlaceholders = placeholders(translationPostIds.length, 2)
+    const rows = await input.client.execute({
+      sql: `
+        SELECT u.post_id, COUNT(*) AS exercise_count
+        FROM song_study_unit u
+        JOIN song_study_unit_localization l ON l.unit_id = u.id
+        WHERE l.target_language = ?1
+          AND u.post_id IN (${translationPlaceholders})
+          AND ${TRANSLATION_CHOICE_ELIGIBILITY_SQL}
+        GROUP BY u.post_id
+      `,
+      args: [input.targetLanguage, ...translationPostIds],
+    })
+    for (const row of rows.rows) {
+      const postId = readString(row.post_id)
+      if (postId) {
+        counts.set(postId, (counts.get(postId) ?? 0) + Number(row.exercise_count ?? 0))
+      }
+    }
+  }
+
+  return counts
+}
+
+export type StudyCapabilityPost = {
+  post_id: string
+  post_type: string
+  access_mode?: "public" | "locked" | null
+  author_user_id?: string | null
+  asset_id?: string | null
+  source_language?: string | null
+  community_id: string
+}
+
+export type StudyCapabilitySummary = {
+  status: StudyCapabilityStatus
+  exercise_count?: number | null
+  source_language?: string | null
+  target_language?: string | null
+}
+
+type StudyUnitSummary = {
+  sourceLanguage: string | null
+  unitCount: number
+}
+
+type StudyLocalizationSummary = {
+  localizationCount: number
+  minLocalizationVersion: number
+  processingCount: number
+  readyCount: number
+  unavailableCount: number
+}
+
+async function listActiveStudyEntitlementAssetRefs(input: {
+  client: ReadClient
+  communityId: string
+  assetIds: readonly string[]
+  viewerUserId: string | null | undefined
+}): Promise<Set<string>> {
+  if (!input.viewerUserId || input.assetIds.length === 0) return new Set()
+  const assetIds = [...new Set(input.assetIds.filter((assetId) => assetId.trim()))]
+  if (assetIds.length === 0) return new Set()
+  const rows = await input.client.execute({
+    sql: `
+      SELECT target_ref
+      FROM purchase_entitlements
+      WHERE community_id = ?1
+        AND buyer_user_id = ?2
+        AND entitlement_kind = 'asset_access'
+        AND status = 'active'
+        AND target_ref IN (${placeholders(assetIds.length, 3)})
+    `,
+    args: [input.communityId, input.viewerUserId, ...assetIds],
+  })
+  return new Set(rows.rows.flatMap((row) => {
+    const targetRef = readString(row.target_ref)
+    return targetRef ? [targetRef] : []
+  }))
+}
+
+async function listStudyUnitSummariesForPosts(
+  client: ReadClient,
+  postIds: readonly string[],
+): Promise<Map<string, StudyUnitSummary>> {
+  const ids = [...new Set(postIds.filter((postId) => postId.trim()))]
+  if (ids.length === 0) return new Map()
+  const result = await client.execute({
+    sql: `
+      SELECT post_id,
+             COUNT(*) AS unit_count,
+             MAX(source_language) AS source_language
+      FROM song_study_unit
+      WHERE post_id IN (${placeholders(ids.length)})
+      GROUP BY post_id
+    `,
+    args: ids,
+  })
+  return new Map(result.rows.flatMap((row) => {
+    const postId = readString(row.post_id)
+    if (!postId) return []
+    return [[postId, {
+      sourceLanguage: readString(row.source_language),
+      unitCount: Number(row.unit_count ?? 0),
+    }]]
+  }))
+}
+
+async function listStudyLocalizationSummariesForPosts(input: {
+  client: ReadClient
+  postIds: readonly string[]
+  targetLanguage: string
+}): Promise<Map<string, StudyLocalizationSummary>> {
+  const ids = [...new Set(input.postIds.filter((postId) => postId.trim()))]
+  if (ids.length === 0) return new Map()
+  const result = await input.client.execute({
+    sql: `
+      SELECT u.post_id,
+             COUNT(l.unit_id) AS localization_count,
+             MIN(l.localization_version) AS min_localization_version,
+             SUM(CASE WHEN l.status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
+             SUM(CASE WHEN l.status = 'processing' THEN 1 ELSE 0 END) AS processing_count,
+             SUM(CASE WHEN l.status = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_count
+      FROM song_study_unit u
+      LEFT JOIN song_study_unit_localization l
+        ON l.unit_id = u.id
+       AND l.target_language = ?1
+      WHERE u.post_id IN (${placeholders(ids.length, 2)})
+      GROUP BY u.post_id
+    `,
+    args: [input.targetLanguage, ...ids],
+  })
+  return new Map(result.rows.flatMap((row) => {
+    const postId = readString(row.post_id)
+    if (!postId) return []
+    return [[postId, {
+      localizationCount: Number(row.localization_count ?? 0),
+      minLocalizationVersion: Number(row.min_localization_version ?? 0),
+      processingCount: Number(row.processing_count ?? 0),
+      readyCount: Number(row.ready_count ?? 0),
+      unavailableCount: Number(row.unavailable_count ?? 0),
+    }]]
+  }))
+}
+
+export function decideStudyAccess(input: {
+  studyEnabled: boolean
+  isSong: boolean
+  entitled: boolean
+  hasUnits: boolean
+  includeTranslation: boolean
+  includeSayItBack: boolean
+  canGenerateTranslations: boolean
+  packUnavailable: boolean
+  exerciseCount: number
+}): StudyCapabilityStatus {
+  if (!input.studyEnabled || !input.isSong) return "unavailable"
+  if (!input.entitled) return "locked"
+  if (!input.hasUnits) return "unavailable"
+  if (input.exerciseCount > 0) return "ready"
+  if (input.includeTranslation && input.packUnavailable) return "unavailable"
+  if (!input.includeSayItBack && input.includeTranslation && input.canGenerateTranslations) {
+    return "processing"
+  }
+  return "unavailable"
+}
+
+export async function resolveStudyCapabilitiesForPosts(input: {
+  client: ReadClient
+  communityId: string
+  env: Env
+  posts: readonly StudyCapabilityPost[]
+  targetLanguage?: unknown
+  viewerUserId: string | null | undefined
+}): Promise<Map<string, StudyCapabilitySummary>> {
+  const capabilities = new Map<string, StudyCapabilitySummary>()
+  const songPosts = input.posts.filter((post) => post.post_type === "song")
+  if (songPosts.length === 0) return capabilities
+
+  const targetLanguage = tryNormalizeStudyTargetLanguage(input.targetLanguage)
+  if (!targetLanguage) {
+    for (const post of songPosts) {
+      capabilities.set(post.post_id, {
+        status: "unavailable",
+        source_language: readString(post.source_language),
+        target_language: null,
+      })
+    }
+    return capabilities
+  }
+
+  const studyEnabled = await isCommunityStudyEnabled({
+    executor: input.client,
+    communityId: input.communityId,
+  })
+  if (!studyEnabled) return capabilities
+
+  const lockedAssetIds = songPosts.flatMap((post) =>
+    post.access_mode === "locked" && post.asset_id && post.author_user_id !== input.viewerUserId
+      ? [post.asset_id]
+      : [])
+  const entitledAssetRefs = await listActiveStudyEntitlementAssetRefs({
+    client: input.client,
+    communityId: input.communityId,
+    assetIds: lockedAssetIds,
+    viewerUserId: input.viewerUserId,
+  })
+
+  const entitledPosts: StudyCapabilityPost[] = []
+  for (const post of songPosts) {
+    const base = {
+      source_language: readString(post.source_language),
+      target_language: targetLanguage,
+    }
+    const entitled = post.access_mode !== "locked"
+      || Boolean(post.author_user_id && post.author_user_id === input.viewerUserId)
+      || Boolean(post.asset_id && entitledAssetRefs.has(post.asset_id))
+    if (!entitled) {
+      capabilities.set(post.post_id, {
+        ...base,
+        status: "locked",
+      })
+      continue
+    }
+    entitledPosts.push(post)
+  }
+  if (entitledPosts.length === 0) return capabilities
+
+  const postIds = entitledPosts.map((post) => post.post_id)
+  const unitSummaries = await listStudyUnitSummariesForPosts(input.client, postIds)
+  const postsWithUnits: StudyCapabilityPost[] = []
+  for (const post of entitledPosts) {
+    const unitSummary = unitSummaries.get(post.post_id)
+    if (!unitSummary || unitSummary.unitCount <= 0) {
+      capabilities.set(post.post_id, {
+        status: "unavailable",
+        source_language: readString(post.source_language),
+        target_language: targetLanguage,
+      })
+      continue
+    }
+    postsWithUnits.push(post)
+  }
+  if (postsWithUnits.length === 0) return capabilities
+
+  const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })
+  const includeTranslationByPostId = new Map(postsWithUnits.map((post) => [
+    post.post_id,
+    !isSameLanguageStudyPair(post.source_language, targetLanguage),
+  ]))
+  const postsWithUnitIds = postsWithUnits.map((post) => post.post_id)
+  const [localizationSummaries, exerciseCounts] = await Promise.all([
+    listStudyLocalizationSummariesForPosts({
+      client: input.client,
+      postIds: postsWithUnitIds,
+      targetLanguage,
+    }),
+    countEligibleStudyExercisesForPosts({
+      client: input.client,
+      includeSayItBack,
+      includeTranslationByPostId,
+      postIds: postsWithUnitIds,
+      targetLanguage,
+    }),
+  ])
+  const canGenerateTranslations = canGenerateStudyTranslations(input.env)
+
+  for (const post of postsWithUnits) {
+    const unitSummary = unitSummaries.get(post.post_id)
+    const localizationSummary = localizationSummaries.get(post.post_id)
+    const includeTranslation = includeTranslationByPostId.get(post.post_id) === true
+    const localizationComplete = Boolean(
+      unitSummary
+      && localizationSummary
+      && localizationSummary.localizationCount >= unitSummary.unitCount
+      && localizationSummary.minLocalizationVersion >= STUDY_LOCALIZATION_GENERATION_VERSION,
+    )
+    const packUnavailable = localizationComplete
+      && (localizationSummary?.readyCount ?? 0) <= 0
+      && (localizationSummary?.processingCount ?? 0) <= 0
+      && (localizationSummary?.unavailableCount ?? 0) > 0
+    const exerciseCount = exerciseCounts.get(post.post_id) ?? 0
+    const status = decideStudyAccess({
+      studyEnabled: true,
+      isSong: true,
+      entitled: true,
+      hasUnits: true,
+      includeTranslation,
+      includeSayItBack,
+      canGenerateTranslations,
+      packUnavailable,
+      exerciseCount,
+    })
+    capabilities.set(post.post_id, {
+      status,
+      source_language: unitSummary?.sourceLanguage ?? readString(post.source_language),
+      target_language: targetLanguage,
+      ...(status === "ready" ? { exercise_count: exerciseCount } : {}),
+    })
+  }
+
+  return capabilities
+}
+
 
 function studyLineId(index: number): string {
   return `line_${String(index + 1).padStart(3, "0")}`
@@ -1038,7 +1403,7 @@ async function enqueueStudyGenerationIfNeeded(input: {
     postId: input.postId,
     targetLanguage: input.targetLanguage,
   })
-  if (pack?.status === "ready") return
+  if (pack?.status === "ready" || pack?.status === "unavailable") return
   if (await hasCompleteReadyStudyLocalizations({
     client: input.client,
     postId: input.postId,
@@ -1144,18 +1509,45 @@ export async function getPostStudyPayload(input: {
     })
 
     const pack = await getLatestPack({ client: db.client, postId: input.postId, targetLanguage })
-    if (includeTranslation && pack?.status === "unavailable") {
-      return {
-        ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
-        source_language: pack.source_language ?? post.source_language,
-        unavailable_reason: pack.unavailable_reason ?? "generation_failed",
-      }
-    }
 
     const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
       env: input.env,
       communityId: input.communityId,
     })
+    const exerciseCounts = await countEligibleStudyExercisesForPosts({
+      client: db.client,
+      includeSayItBack,
+      includeTranslationByPostId: new Map([[input.postId, includeTranslation]]),
+      postIds: [input.postId],
+      targetLanguage,
+    })
+    const exerciseCount = exerciseCounts.get(input.postId) ?? 0
+    const capabilityStatus = decideStudyAccess({
+      studyEnabled: true,
+      isSong: true,
+      entitled: true,
+      hasUnits: true,
+      includeTranslation,
+      includeSayItBack,
+      canGenerateTranslations: canGenerateStudyTranslations(input.env),
+      packUnavailable: pack?.status === "unavailable",
+      exerciseCount,
+    })
+    if (capabilityStatus === "processing") {
+      return {
+        ...basePayload({ access: "processing", post, targetLanguage }),
+        source_language: pack?.source_language ?? post.source_language,
+      }
+    }
+    if (capabilityStatus !== "ready") {
+      return {
+        ...basePayload({ access: "unavailable", post, targetLanguage }),
+        source_language: pack?.source_language ?? post.source_language,
+        unavailable_reason: includeTranslation && pack?.status === "unavailable"
+          ? pack.unavailable_reason ?? "generation_failed"
+          : includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
+      }
+    }
     const exercises = (await listExercises({
       client: db.client,
       includeSayItBack,
@@ -1164,19 +1556,12 @@ export async function getPostStudyPayload(input: {
       targetLanguage,
     })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
-      // Only report "processing" (translations still generating) when translations are
-      // actually expected. For a same-language pair nothing will ever generate, so an
-      // empty pack means say-it-back is the only possible type and its provider is missing.
-      if (!includeSayItBack && includeTranslation && canGenerateStudyTranslations(input.env)) {
-        return {
-          ...basePayload({ access: "processing", post, targetLanguage }),
-          source_language: pack?.source_language ?? post.source_language,
-        }
-      }
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
         source_language: pack?.source_language ?? post.source_language,
-        unavailable_reason: includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
+        unavailable_reason: includeTranslation && pack?.status === "unavailable"
+          ? pack.unavailable_reason ?? "generation_failed"
+          : includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
       }
     }
     return {
