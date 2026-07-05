@@ -128,6 +128,10 @@ type StudyAttemptRow = {
   type: ExerciseType
 }
 
+type StudyAttemptSchemaCapabilities = {
+  reviewSessionId: boolean
+}
+
 type StudyReviewStateRow = {
   difficulty: number
   due_at: string
@@ -216,6 +220,32 @@ export type SongStudyAttemptResult = {
   next_review_hint?: FsrsRating
   object: "song_study_attempt_result"
   outcome: AttemptOutcome
+}
+
+export type SongStudyAttemptTiming = {
+  access_read_batch_ms?: number
+  attempt_review_sessions_enabled?: boolean
+  close_client_ms?: number
+  community_id: string
+  exercise_id: string
+  exercise_type?: ExerciseType
+  open_client_ms?: number
+  outcome: string
+  parallel_read_batch_ms?: number
+  post_id: string
+  review_session_id: string
+  streak_deferred: boolean
+  streak_inline_ms?: number
+  streak_writes_enabled: boolean
+  total_ms: number
+  wait_until_available: boolean
+  write_tx_ms?: number
+}
+
+const SONG_STUDY_ATTEMPT_TIMING = Symbol("songStudyAttemptTiming")
+
+export function getSongStudyAttemptTiming(result: SongStudyAttemptResult): SongStudyAttemptTiming | undefined {
+  return (result as SongStudyAttemptResult & { [SONG_STUDY_ATTEMPT_TIMING]?: SongStudyAttemptTiming })[SONG_STUDY_ATTEMPT_TIMING]
 }
 
 export type SongStudyTranscriptionResponse = {
@@ -459,6 +489,14 @@ function studyStreakWritesEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_STREAK_WRITES_ENABLED, false)
 }
 
+function studyAttemptTimingLogsEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_ATTEMPT_TIMING_LOGS, false)
+}
+
+function elapsedMs(start: number): number {
+  return Math.round((performance.now() - start) * 10) / 10
+}
+
 function readReviewSessionId(value: unknown): string {
   return readString(value) ?? FIRST_LEARN_REVIEW_SESSION_ID
 }
@@ -517,6 +555,12 @@ async function canReadPostForStudy(input: {
   client: ReadClient
   post: StudyPost
 }): Promise<boolean> {
+  if (isPubliclyReadablePost({
+    status: input.post.status as "draft" | "published" | "hidden" | "removed" | "deleted",
+    visibility: input.post.visibility as "public" | "members_only",
+  })) {
+    return true
+  }
   try {
     const membership = await requireMemberAccess(input.client as Client, input.post.community_id, input.actor.userId)
     return input.post.status === "published"
@@ -826,6 +870,7 @@ async function listDueReviewExercises(input: {
 }
 
 async function getStudyStreakTargetCount(input: {
+  additionalDueCount?: number
   client: ReadClient
   includeSayItBack: boolean
   includeTranslation: boolean
@@ -835,7 +880,7 @@ async function getStudyStreakTargetCount(input: {
   userId: string
 }): Promise<number> {
   const dueRows = await listDueReviewExercises(input)
-  return studyTargetCountFromDueBefore(dueRows.length)
+  return studyTargetCountFromDueBefore(dueRows.length + (input.additionalDueCount ?? 0))
 }
 
 async function getNextDueAt(input: {
@@ -1812,11 +1857,24 @@ function resultFromAttempt(row: StudyAttemptRow, exercise: { correct_option_id: 
   }
 }
 
-async function getAttemptByIdempotencyKey(client: ReadClient, userId: string, idempotencyKey: string): Promise<StudyAttemptRow | null> {
+async function getStudyAttemptSchemaCapabilities(client: ReadClient): Promise<StudyAttemptSchemaCapabilities> {
+  const result = await client.execute("PRAGMA table_info(song_study_attempt)")
+  return {
+    reviewSessionId: result.rows.some((row) => readString(row.name) === "review_session_id"),
+  }
+}
+
+async function getAttemptByIdempotencyKey(
+  client: ReadClient,
+  userId: string,
+  idempotencyKey: string,
+  schema: StudyAttemptSchemaCapabilities,
+): Promise<StudyAttemptRow | null> {
   const row = await executeFirst(client, {
     sql: `
       SELECT exercise_id, exercise_type, attempt_number,
-             review_session_id, selected_option_id, transcript, outcome, feedback_json, fsrs_rating
+             ${schema.reviewSessionId ? "review_session_id" : `'${FIRST_LEARN_REVIEW_SESSION_ID}' AS review_session_id`},
+             selected_option_id, transcript, outcome, feedback_json, fsrs_rating
       FROM song_study_attempt
       WHERE user_id = ?1
         AND idempotency_key = ?2
@@ -1865,18 +1923,30 @@ async function hasAttemptNumber(
   exerciseId: string,
   reviewSessionId: string,
   attemptNumber: number,
+  schema: StudyAttemptSchemaCapabilities,
 ): Promise<boolean> {
   const row = await executeFirst(client, {
-    sql: `
-      SELECT id
-      FROM song_study_attempt
-      WHERE user_id = ?1
-        AND exercise_id = ?2
-        AND review_session_id = ?3
-        AND attempt_number = ?4
-      LIMIT 1
-    `,
-    args: [userId, exerciseId, reviewSessionId, attemptNumber],
+    sql: schema.reviewSessionId
+      ? `
+        SELECT id
+        FROM song_study_attempt
+        WHERE user_id = ?1
+          AND exercise_id = ?2
+          AND review_session_id = ?3
+          AND attempt_number = ?4
+        LIMIT 1
+      `
+      : `
+        SELECT id
+        FROM song_study_attempt
+        WHERE user_id = ?1
+          AND exercise_id = ?2
+          AND attempt_number = ?3
+        LIMIT 1
+      `,
+    args: schema.reviewSessionId
+      ? [userId, exerciseId, reviewSessionId, attemptNumber]
+      : [userId, exerciseId, attemptNumber],
   })
   return Boolean(row)
 }
@@ -2032,7 +2102,7 @@ async function upsertReviewState(input: {
   return input.rating
 }
 
-export async function upsertStudyStreakProgress(input: {
+export async function upsertStudyEngagementDay(input: {
   client: ReadClient
   communityId: string
   isCorrect: boolean
@@ -2071,6 +2141,15 @@ export async function upsertStudyStreakProgress(input: {
       input.now,
     ],
   })
+}
+
+export async function materializeStudyStreak(input: {
+  client: ReadClient
+  now: string
+  postId: string
+  userId: string
+}): Promise<void> {
+  const today = input.now.slice(0, 10)
   await input.client.execute({
     sql: `
       INSERT INTO song_streaks (
@@ -2114,6 +2193,72 @@ export async function upsertStudyStreakProgress(input: {
   })
 }
 
+export async function upsertStudyStreakProgress(input: {
+  client: ReadClient
+  communityId: string
+  isCorrect: boolean
+  now: string
+  postId: string
+  studyTargetCount: number
+  userId: string
+}): Promise<void> {
+  await upsertStudyEngagementDay(input)
+  await materializeStudyStreak(input)
+}
+
+async function resolveStudyStreakTargetCount(input: {
+  client: ReadClient
+  communityId: string
+  countDueReviews: boolean
+  env: Env
+  now: string
+  postId: string
+  sourceLanguage: string | null
+  targetLanguage: string
+  userId: string
+}): Promise<number> {
+  if (!input.countDueReviews) {
+    return STREAK_MIN_STUDY_ATTEMPTS
+  }
+  const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })
+  const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
+  return getStudyStreakTargetCount({
+    client: input.client,
+    includeSayItBack,
+    includeTranslation,
+    now: input.now,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+    userId: input.userId,
+  })
+}
+
+async function recordStudyStreakMaterialization(input: {
+  communityId: string
+  communityRepository: CommunityDatabaseBindingRepository
+  env: Env
+  now: string
+  postId: string
+  userId: string
+}): Promise<void> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await withTransaction(db.client, "write", async (tx) => {
+      await materializeStudyStreak({
+        client: tx,
+        now: input.now,
+        postId: input.postId,
+        userId: input.userId,
+      })
+    })
+  } finally {
+    await db.close()
+  }
+}
+
 export async function submitPostStudyAttempt(input: {
   actor: ActorContext | AdminActorContext
   body: SongStudyAttemptRequest
@@ -2121,6 +2266,7 @@ export async function submitPostStudyAttempt(input: {
   communityRepository: CommunityDatabaseBindingRepository
   env: Env
   postId: string
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<SongStudyAttemptResult> {
   const idempotencyKey = readRequiredString(input.body.idempotency_key, "idempotency_key")
   const exerciseId = readRequiredString(input.body.exercise_id, "exercise_id")
@@ -2131,13 +2277,34 @@ export async function submitPostStudyAttempt(input: {
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
   const reviewSessionId = readReviewSessionId(input.body.review_session_id)
 
+  const timingEnabled = studyAttemptTimingLogsEnabled(input.env)
+  const timingStartedAt = performance.now()
+  let openClientMs: number | undefined
+  let parallelReadBatchMs: number | undefined
+  let accessReadBatchMs: number | undefined
+  let writeTxMs: number | undefined
+  let streakInlineMs: number | undefined
+  let closeClientMs: number | undefined
+  let timingOutcome = "error"
+  let timingExerciseType: ExerciseType | undefined
+  let timingStreakDeferred = false
+  let timingStreakWritesEnabled = false
+  let timingAttemptReviewSessionsEnabled: boolean | undefined
+  let resultForTiming: SongStudyAttemptResult | undefined
+  const openClientStartedAt = performance.now()
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  openClientMs = elapsedMs(openClientStartedAt)
   try {
-    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
+    const [communityStudyEnabled, attemptSchema] = await Promise.all([
+      isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId }),
+      getStudyAttemptSchemaCapabilities(db.client),
+    ])
+    timingAttemptReviewSessionsEnabled = attemptSchema.reviewSessionId
+    if (!communityStudyEnabled) {
       throw new HttpError(403, "forbidden", "Study is disabled for this community")
     }
 
-    const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
+    const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey, attemptSchema)
     const existingExercise = existing ? await getExerciseForAttempt(db.client, existing.exercise_id) : null
     if (existing && existingExercise) {
       assertEquivalentIdempotentRetry({
@@ -2147,7 +2314,10 @@ export async function submitPostStudyAttempt(input: {
         exerciseId,
         type,
       })
-      return resultFromAttempt(existing, existingExercise)
+      timingOutcome = "idempotent_retry"
+      timingExerciseType = existingExercise.exercise_type
+      resultForTiming = resultFromAttempt(existing, existingExercise)
+      return resultForTiming
     }
 
     const exercise = await getExerciseForAttempt(db.client, exerciseId)
@@ -2157,6 +2327,7 @@ export async function submitPostStudyAttempt(input: {
     if (exercise.exercise_type !== type) {
       throw badRequestError("type does not match exercise")
     }
+    timingExerciseType = exercise.exercise_type
     // Refuse to grade same-language translation_choice attempts (e.g. from a client that
     // still holds an exercise id generated before this exercise type was suppressed).
     // Mirror the read-path exclusion so it reads as "not offered", not a server error.
@@ -2165,13 +2336,19 @@ export async function submitPostStudyAttempt(input: {
       throw notFoundError("Study exercise not found")
     }
     const now = nowIso()
-    const existingReviewState = await getReviewState({
-      client: db.client,
-      exercise,
-      userId: input.actor.userId,
-    })
+    const parallelReadBatchStartedAt = performance.now()
+    const [existingReviewState, attemptNumberSpent, post] = await Promise.all([
+      getReviewState({
+        client: db.client,
+        exercise,
+        userId: input.actor.userId,
+      }),
+      hasAttemptNumber(db.client, input.actor.userId, exerciseId, reviewSessionId, attemptNumber, attemptSchema),
+      getStudyPostById(db.client, input.postId),
+    ])
+    parallelReadBatchMs = elapsedMs(parallelReadBatchStartedAt)
     if (reviewSessionId !== FIRST_LEARN_REVIEW_SESSION_ID) {
-      if (!dueReviewServingEnabled(input.env)) {
+      if (!attemptSchema.reviewSessionId || !dueReviewServingEnabled(input.env)) {
         throw badRequestError("review_session_id is not enabled")
       }
       if (!existingReviewState) {
@@ -2190,34 +2367,26 @@ export async function submitPostStudyAttempt(input: {
     if (attemptNumber > exercise.max_attempts) {
       throw badRequestError("attempt_number exceeds max_attempts")
     }
-    if (await hasAttemptNumber(db.client, input.actor.userId, exerciseId, reviewSessionId, attemptNumber)) {
+    if (attemptNumberSpent) {
       throw conflictError("attempt_number has already been recorded for this exercise")
     }
 
-    const post = await getStudyPostById(db.client, input.postId)
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
-    if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
+    const accessReadBatchStartedAt = performance.now()
+    const [canReadPost, canStudy] = await Promise.all([
+      canReadPostForStudy({ actor: input.actor, client: db.client, post }),
+      canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post }),
+    ])
+    accessReadBatchMs = elapsedMs(accessReadBatchStartedAt)
+    if (!canReadPost) {
       throw notFoundError("Post not found")
     }
-    if (!await canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post })) {
+    if (!canStudy) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
     const streakWritesEnabled = studyStreakWritesEnabled(input.env)
+    timingStreakWritesEnabled = streakWritesEnabled
     const submittedTargetLanguage = resolveAttemptTargetLanguage(input.body.target_language, exercise.target_language)
-    const studyTargetCount = streakWritesEnabled
-      ? await getStudyStreakTargetCount({
-        client: db.client,
-        includeSayItBack: await hasActiveCommunityElevenLabsCredential({
-          env: input.env,
-          communityId: input.communityId,
-        }),
-        includeTranslation: !isSameLanguageStudyPair(post.source_language, submittedTargetLanguage),
-        now,
-        postId: input.postId,
-        targetLanguage: submittedTargetLanguage,
-        userId: input.actor.userId,
-      })
-      : STREAK_MIN_STUDY_ATTEMPTS
 
     let correct = false
     let selectedOptionId: string | null = null
@@ -2247,6 +2416,21 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
+    const isDueReviewAttempt = Boolean(existingReviewState && isDueReview({ dueAt: existingReviewState.due_at, now }))
+    const studyStreakTargetCount = streakWritesEnabled
+      ? await resolveStudyStreakTargetCount({
+        client: db.client,
+        communityId: input.communityId,
+        countDueReviews: isDueReviewAttempt,
+        env: input.env,
+        now,
+        postId: input.postId,
+        sourceLanguage: post.source_language,
+        targetLanguage: submittedTargetLanguage,
+        userId: input.actor.userId,
+      })
+      : null
+    const writeTxStartedAt = performance.now()
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
       const reviewRating = await upsertReviewState({
         client: tx,
@@ -2256,49 +2440,106 @@ export async function submitPostStudyAttempt(input: {
         rating,
         userId: input.actor.userId,
       })
-      await tx.execute({
-        sql: `
-          INSERT INTO song_study_attempt (
-            id, user_id, post_id, exercise_id, review_session_id, line_id, exercise_type,
-            target_language, study_pack_version, attempt_number, idempotency_key,
-            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
-          )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-        `,
-        args: [
-          makeId("sta"),
-          input.actor.userId,
-          input.postId,
-          exercise.id,
-          reviewSessionId,
-          exercise.line_id,
-          exercise.exercise_type,
-          exercise.review_language,
-          exercise.study_pack_version,
-          attemptNumber,
-          idempotencyKey,
-          selectedOptionId,
-          transcript,
-          outcome,
-          feedback ? JSON.stringify(feedback) : null,
-          reviewRating,
-          now,
-        ],
-      })
-      if (streakWritesEnabled) {
-        await upsertStudyStreakProgress({
+      if (attemptSchema.reviewSessionId) {
+        await tx.execute({
+          sql: `
+            INSERT INTO song_study_attempt (
+              id, user_id, post_id, exercise_id, review_session_id, line_id, exercise_type,
+              target_language, study_pack_version, attempt_number, idempotency_key,
+              selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+          `,
+          args: [
+            makeId("sta"),
+            input.actor.userId,
+            input.postId,
+            exercise.id,
+            reviewSessionId,
+            exercise.line_id,
+            exercise.exercise_type,
+            exercise.review_language,
+            exercise.study_pack_version,
+            attemptNumber,
+            idempotencyKey,
+            selectedOptionId,
+            transcript,
+            outcome,
+            feedback ? JSON.stringify(feedback) : null,
+            reviewRating,
+            now,
+          ],
+        })
+      } else {
+        await tx.execute({
+          sql: `
+            INSERT INTO song_study_attempt (
+              id, user_id, post_id, exercise_id, line_id, exercise_type,
+              target_language, study_pack_version, attempt_number, idempotency_key,
+              selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          `,
+          args: [
+            makeId("sta"),
+            input.actor.userId,
+            input.postId,
+            exercise.id,
+            exercise.line_id,
+            exercise.exercise_type,
+            exercise.review_language,
+            exercise.study_pack_version,
+            attemptNumber,
+            idempotencyKey,
+            selectedOptionId,
+            transcript,
+            outcome,
+            feedback ? JSON.stringify(feedback) : null,
+            reviewRating,
+            now,
+          ],
+        })
+      }
+      if (streakWritesEnabled && studyStreakTargetCount != null) {
+        await upsertStudyEngagementDay({
           client: tx,
           communityId: input.communityId,
           isCorrect: outcome === "correct",
           now,
           postId: input.postId,
-          studyTargetCount,
+          studyTargetCount: studyStreakTargetCount,
           userId: input.actor.userId,
         })
       }
       return reviewRating
     })
-    return {
+    writeTxMs = elapsedMs(writeTxStartedAt)
+    if (streakWritesEnabled) {
+      const recordStreak = () => recordStudyStreakMaterialization({
+        communityId: input.communityId,
+        communityRepository: input.communityRepository,
+        env: input.env,
+        now,
+        postId: input.postId,
+        userId: input.actor.userId,
+      })
+      if (input.waitUntil) {
+        timingStreakDeferred = true
+        input.waitUntil(recordStreak().catch((error) => {
+          console.error("[song-study] streak progress update failed", {
+            error,
+            post_id: input.postId,
+            user_id: input.actor.userId,
+          })
+        }))
+      } else {
+        const streakInlineStartedAt = performance.now()
+        await recordStreak()
+        streakInlineMs = elapsedMs(streakInlineStartedAt)
+      }
+    }
+    timingOutcome = outcome
+    resultForTiming = {
       attempts_remaining: attemptsRemaining,
       ...(type === "translation_choice" && (outcome === "correct" || outcome === "revealed") && exercise.correct_option_id
         ? { correct_option_id: exercise.correct_option_id }
@@ -2309,8 +2550,39 @@ export async function submitPostStudyAttempt(input: {
       object: "song_study_attempt_result",
       outcome,
     }
+    return resultForTiming
   } finally {
+    const closeClientStartedAt = performance.now()
     await db.close()
+    closeClientMs = elapsedMs(closeClientStartedAt)
+    if (timingEnabled) {
+      const timing: SongStudyAttemptTiming = {
+        access_read_batch_ms: accessReadBatchMs,
+        attempt_review_sessions_enabled: timingAttemptReviewSessionsEnabled,
+        close_client_ms: closeClientMs,
+        community_id: input.communityId,
+        exercise_id: exerciseId,
+        exercise_type: timingExerciseType,
+        open_client_ms: openClientMs,
+        outcome: timingOutcome,
+        parallel_read_batch_ms: parallelReadBatchMs,
+        post_id: input.postId,
+        review_session_id: reviewSessionId,
+        streak_deferred: timingStreakDeferred,
+        streak_inline_ms: streakInlineMs,
+        streak_writes_enabled: timingStreakWritesEnabled,
+        total_ms: elapsedMs(timingStartedAt),
+        wait_until_available: Boolean(input.waitUntil),
+        write_tx_ms: writeTxMs,
+      }
+      if (resultForTiming) {
+        Object.defineProperty(resultForTiming, SONG_STUDY_ATTEMPT_TIMING, {
+          enumerable: false,
+          value: timing,
+        })
+      }
+      console.info("[song-study] attempt timing", JSON.stringify(timing))
+    }
   }
 }
 

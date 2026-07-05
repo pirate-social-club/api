@@ -211,6 +211,53 @@ async function applyStudyMigration(): Promise<void> {
 
 }
 
+async function restoreLegacyStudyAttemptTable(): Promise<void> {
+  await exec("PRAGMA foreign_keys = OFF")
+  await exec("DROP TABLE song_study_attempt")
+  await exec(`
+    CREATE TABLE song_study_attempt (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      exercise_id TEXT NOT NULL,
+      line_id TEXT NOT NULL,
+      exercise_type TEXT NOT NULL CHECK (
+        exercise_type IN ('say_it_back', 'translation_choice')
+      ),
+      target_language TEXT NOT NULL,
+      study_pack_version INTEGER NOT NULL,
+      attempt_number INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      selected_option_id TEXT,
+      transcript TEXT,
+      outcome TEXT NOT NULL CHECK (
+        outcome IN ('correct', 'incorrect', 'revealed')
+      ),
+      feedback_json TEXT,
+      fsrs_rating TEXT CHECK (
+        fsrs_rating IS NULL OR fsrs_rating IN ('again', 'hard', 'good', 'easy')
+      ),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
+      CHECK (attempt_number > 0),
+      UNIQUE (user_id, exercise_id, attempt_number),
+      UNIQUE (user_id, idempotency_key)
+    )
+  `)
+  await exec(`
+    CREATE INDEX idx_song_study_attempt_review_unit
+      ON song_study_attempt(
+        user_id,
+        post_id,
+        line_id,
+        exercise_type,
+        target_language,
+        created_at
+      )
+  `)
+  await exec("PRAGMA foreign_keys = ON")
+}
+
 async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {
   await exec(`
     INSERT INTO communities (
@@ -707,6 +754,130 @@ describe("post study service", () => {
     expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
   })
 
+  test("allows public study attempts without probing community membership", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await exec("DELETE FROM community_memberships WHERE user_id = ?1", [LEARNER_ID])
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    expect(payload.access).toBe("ready")
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-public-no-membership",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    expect(result.outcome).toBe("correct")
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
+  })
+
+  test("records first-learn attempts on legacy attempt tables without review_session_id", async () => {
+    await restoreLegacyStudyAttemptTable()
+    await seedSongPost()
+    await seedReadyPack()
+
+    const columns = await client!.execute("PRAGMA table_info(song_study_attempt)")
+    expect(columns.rows.some((row) => String(row.name) === "review_session_id")).toBe(false)
+
+    const body = {
+      attempt_number: 1,
+      exercise_id: "stu:stu_2:translation_choice:es",
+      idempotency_key: "study-attempt-legacy-schema",
+      selected_option_id: "opt_a",
+      target_language: "es",
+      type: "translation_choice" as const,
+    }
+    const first = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+    const retry = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+
+    expect(first).toEqual({
+      attempts_remaining: 1,
+      correct_option_id: "opt_a",
+      exercise_id: "stu:stu_2:translation_choice:es",
+      next_review_hint: "good",
+      object: "song_study_attempt_result",
+      outcome: "correct",
+    })
+    expect(retry).toEqual(first)
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
+    expect(ledger.rows.map((row) => ({
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+  })
+
+  test("rejects due-review attempts on legacy attempt tables without writing", async () => {
+    await restoreLegacyStudyAttemptTable()
+    await seedSongPost()
+    await seedReadyPack()
+    await exec(`
+      INSERT INTO song_study_review_state (
+        user_id, post_id, line_id, exercise_type, target_language,
+        state, stability, difficulty, due_at, last_reviewed_at,
+        reps, lapses, fsrs_params_version, updated_at
+      )
+      VALUES (
+        ?1, ?2, 'line_002', 'translation_choice', 'es',
+        'review', 1, 5, '2026-06-28T08:00:00.000Z', ?3,
+        1, 0, 1, ?3
+      )
+    `, [LEARNER_ID, POST_ID, NOW])
+
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-attempt-legacy-due-review",
+        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
+      postId: POST_ID,
+    })).rejects.toThrow(/review_session_id is not enabled/)
+
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
+  })
+
   test("does not write study streak rows while the streak write gate is off", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -809,6 +980,101 @@ describe("post study service", () => {
       study_attempt_count: Number(row.study_attempt_count),
       study_correct_count: Number(row.study_correct_count),
     }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+  })
+
+  test("defers study streak progress through waitUntil when available", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const waitUntilPromises: Array<Promise<void>> = []
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-wait-until",
+        selected_option_id: "opt_a",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil: (promise) => waitUntilPromises.push(promise),
+    })
+
+    expect(result.outcome).toBe("correct")
+    expect(waitUntilPromises).toHaveLength(1)
+
+    const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
+    expect(ledgerBeforeWaitUntil.rows.map((row) => ({
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+
+    await Promise.all(waitUntilPromises)
+
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+  })
+
+  test("records engagement progress inline for multiple waitUntil-deferred attempts", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const waitUntilPromises: Array<Promise<void>> = []
+    const waitUntil = (promise: Promise<void>) => waitUntilPromises.push(promise)
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-streak-inline-engagement-say",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-inline-engagement-choice",
+        selected_option_id: "opt_a",
+        target_language: "es",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
+
+    expect(waitUntilPromises).toHaveLength(2)
+    const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledgerBeforeWaitUntil.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 0,
+      study_attempt_count: 2,
+      study_correct_count: 2,
+      study_target_count: 10,
+    }])
+
+    await Promise.all(waitUntilPromises)
   })
 
   test("streak leaderboard excludes dead streaks and returns the viewer standing", async () => {

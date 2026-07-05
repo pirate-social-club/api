@@ -171,6 +171,106 @@ describe("community study routes", () => {
     expect(body.exercises?.every((exercise) => exercise.type === "say_it_back")).toBe(true)
   }, 120_000)
 
+  test("POST /communities/:communityId/posts/:postId/study/attempts exposes debug timing as headers only", async () => {
+    const ctx = await createRouteTestContext({ SONG_STUDY_ATTEMPT_TIMING_LOGS: "true" })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "study-route-attempt-timing")
+    const communityId = "cmt_study_route_attempt_timing"
+    await seedStudySong({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO users (
+          user_id, verification_state, capability_provider,
+          verification_capabilities_json, verified_at,
+          created_at, updated_at
+        )
+        VALUES (
+          'route_author', 'verified', 'self', '["unique_human"]',
+          '2026-06-29T08:00:00.000Z',
+          '2026-06-29T08:00:00.000Z',
+          '2026-06-29T08:00:00.000Z'
+        )
+        ON CONFLICT (user_id) DO NOTHING
+      `,
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, description,
+          membership_mode, status, provisioning_state, transfer_state,
+          route_slug, created_at, updated_at
+        )
+        VALUES (
+          ?1, 'route_author', 'Study Route Club', NULL,
+          'open', 'active', 'active', 'none',
+          NULL, '2026-06-29T08:00:00.000Z', '2026-06-29T08:00:00.000Z'
+        )
+      `,
+      args: [communityId],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO community_assistant_credentials (
+          community_assistant_credential_id, community_id, provider, encrypted_secret,
+          key_last4, encryption_key_version, status, created_at, revoked_at,
+          rotated_from, actor_user_id
+        )
+        VALUES (
+          'cac_study_route_timing_elevenlabs', ?1, 'elevenlabs', 'test-encrypted-key',
+          'labs', 1, 'active', '2026-06-29T08:00:00.000Z', NULL, NULL,
+          'route_author'
+        )
+      `,
+      args: [communityId],
+    })
+
+    const studyResponse = await app.request(
+      `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study?target_language=es`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    const studyBody = await json(studyResponse) as {
+      exercises?: Array<{ id: string; reference_text?: string; type?: string }>
+    }
+    const exercise = studyBody.exercises?.find((item) => item.type === "say_it_back")
+    expect(exercise).toBeTruthy()
+
+    const response = await app.request(
+      `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/attempts`,
+      {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+        body: JSON.stringify({
+          attempt_number: 1,
+          exercise_id: exercise!.id,
+          idempotency_key: "study-route-attempt-timing",
+          transcript: exercise!.reference_text,
+          type: "say_it_back",
+        }),
+      },
+      ctx.env,
+    )
+
+    expect(response.status).toBe(200)
+    const timingHeader = response.headers.get("x-song-study-attempt-timing")
+    expect(timingHeader).toBeTruthy()
+    const timing = JSON.parse(timingHeader ?? "{}") as { total_ms?: number; write_tx_ms?: number }
+    expect(typeof timing.total_ms).toBe("number")
+    expect(typeof timing.write_tx_ms).toBe("number")
+    expect(response.headers.get("server-timing")).toContain("song-study-attempt")
+
+    const body = await json(response) as Record<string, unknown>
+    expect(body.object).toBe("song_study_attempt_result")
+    expect(body["x-song-study-attempt-timing"]).toBeUndefined()
+    expect(body["timing"]).toBeUndefined()
+  }, 120_000)
+
   test("GET /communities/:communityId/posts/:postId/streaks/leaderboard returns active entries and viewer standing", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

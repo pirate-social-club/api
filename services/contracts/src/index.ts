@@ -2130,6 +2130,12 @@ export type SongStreakLeaderboardEntry = {
   is_viewer: boolean;
 };
 
+export type SongStreakSummary = {
+  entries: Array<SongStreakLeaderboardEntry>;
+  viewer: SongStreakViewerStanding | null;
+  total_active_streaks: number;
+};
+
 export type SongStreakViewerStanding = {
   alive: boolean;
   current_streak: number;
@@ -2151,6 +2157,7 @@ export type LocalizedPostResponse = {
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
   study_capability?: SongStudyCapability | null;
+  streak_summary?: SongStreakSummary | null;
   asset_story?: PostAssetStorySummary | null;
   derivative_sources?: Array<PostDerivativeSource> | null;
   upvote_count: number;
