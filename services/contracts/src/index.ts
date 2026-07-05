@@ -2000,6 +2000,7 @@ export type SongStudyPayload = {
   target_language?: string | null;
   exercise_count: number;
   exercises: Array<SongStudyExercise>;
+  session?: SongStudySessionSummary;
   study_pack_version?: number;
   generated_at?: number;
   locked_reason?: SongStudyLockedReason;
@@ -2054,6 +2055,7 @@ export type SongStudyExercise = ({
   line_index: number;
   prompt_text: string;
   reference_text: string;
+  review_session_id?: string;
   translation_text?: string | null;
   max_attempts: number;
 } | {
@@ -2068,6 +2070,7 @@ export type SongStudyExercise = ({
     text: string;
   }>;
   max_attempts: number;
+  review_session_id?: string;
 });
 
 export type SongStudyAttemptRequest = {
@@ -2075,6 +2078,8 @@ export type SongStudyAttemptRequest = {
   exercise_id: string;
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
+  review_session_id?: string;
+  target_language?: string;
   selected_option_id?: string;
   transcript?: string;
 };
@@ -3531,6 +3536,13 @@ type SongKaraokeLine = {
 type SongPreviewWindow = {
   start_ms: number;
   duration_ms: number;
+};
+
+type SongStudySessionSummary = {
+  due_count: number;
+  served_count: number;
+  total_units: number;
+  next_due_at?: number;
 };
 
 type SongVideoArtifactDescriptor = {
