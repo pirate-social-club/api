@@ -641,6 +641,103 @@ describe("post study service", () => {
     expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
   })
 
+  test("omits already-attempted exercises from the study payload", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-attempt-filter-choice",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(2)
+    expect(payload.exercises.map((exercise) => exercise.id)).toEqual([
+      "stu:stu_1:say_it_back:en",
+      "stu:stu_2:say_it_back:en",
+    ])
+  })
+
+  test("returns a ready empty pack after the learner has attempted every exercise", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-complete-say-1",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-attempt-complete-say-2",
+        transcript: "Hold me close until the morning",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-attempt-complete-choice",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
+  })
+
   test("rejects conflicting idempotency-key reuse", async () => {
     await seedSongPost()
     await seedReadyPack()

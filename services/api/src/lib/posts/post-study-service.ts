@@ -561,6 +561,7 @@ async function listExercises(input: {
   includeTranslation: boolean
   postId: string
   targetLanguage: string
+  userId?: string | null
 }): Promise<StudyExerciseRow[]> {
   const result = await input.client.execute({
     sql: `
@@ -574,6 +575,16 @@ async function listExercises(input: {
       WHERE post_id = ?1
         AND say_it_back_status = 'ready'
         AND ?3 = 1
+        AND (
+          ?5 IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM song_study_attempt a
+            WHERE a.user_id = ?5
+              AND a.exercise_id = ('stu:' || song_study_unit.id || ':say_it_back:' || COALESCE(song_study_unit.source_language, 'source'))
+            LIMIT 1
+          )
+        )
       UNION ALL
       SELECT ('stu:' || u.id || ':translation_choice:' || l.target_language) AS id,
              u.line_id, u.line_index, 'translation_choice' AS exercise_type,
@@ -590,9 +601,19 @@ async function listExercises(input: {
         AND l.translation_text IS NOT NULL
         AND l.options_json IS NOT NULL
         AND l.correct_option_id IS NOT NULL
+        AND (
+          ?5 IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM song_study_attempt a
+            WHERE a.user_id = ?5
+              AND a.exercise_id = ('stu:' || u.id || ':translation_choice:' || l.target_language)
+            LIMIT 1
+          )
+        )
       ORDER BY line_index ASC, sort_order ASC, id ASC
     `,
-    args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0, input.includeTranslation ? 1 : 0],
+    args: [input.postId, input.targetLanguage, input.includeSayItBack ? 1 : 0, input.includeTranslation ? 1 : 0, input.userId ?? null],
   })
   return result.rows.map((row) => ({
     correct_option_id: readString(row.correct_option_id),
@@ -1156,14 +1177,30 @@ export async function getPostStudyPayload(input: {
       env: input.env,
       communityId: input.communityId,
     })
+    const canonicalExerciseRows = await listExercises({
+      client: db.client,
+      includeSayItBack,
+      includeTranslation,
+      postId: input.postId,
+      targetLanguage,
+    })
     const exercises = (await listExercises({
       client: db.client,
       includeSayItBack,
       includeTranslation,
       postId: input.postId,
       targetLanguage,
+      userId: input.actor.userId,
     })).map((row) => toExercise(row, input.actor.userId))
     if (exercises.length === 0) {
+      if (canonicalExerciseRows.length > 0) {
+        return {
+          ...basePayload({ access: "ready", post, targetLanguage }),
+          generated_at: toUnixSeconds(pack?.generated_at ?? null),
+          source_language: pack?.source_language ?? post.source_language,
+          study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
+        }
+      }
       // Only report "processing" (translations still generating) when translations are
       // actually expected. For a same-language pair nothing will ever generate, so an
       // empty pack means say-it-back is the only possible type and its provider is missing.
