@@ -136,6 +136,7 @@ export async function getPost(input: {
     })
     const response = await buildLocalizedPostReadResponse({
       client: db.client,
+      env: input.env,
       songArtifactExecutor: getControlPlaneClient(input.env),
       post,
       locale: input.locale ?? undefined,
@@ -178,6 +179,7 @@ export async function getPublicPost(input: {
   try {
     return await getPublicPostFromCommunityDb({
       client: db.client,
+      env: input.env,
       songArtifactExecutor: getControlPlaneClient(input.env),
       communityId: db.communityId,
       communityRepository: input.communityRepository,
@@ -191,6 +193,7 @@ export async function getPublicPost(input: {
 }
 
 export async function getPublicPostFromCommunityDb(input: {
+  env: Env
   client: Client
   songArtifactExecutor?: Client | null
   communityId: string
@@ -211,6 +214,7 @@ export async function getPublicPostFromCommunityDb(input: {
   const ageGateViewerState = post.age_gate_policy === "18_plus" ? "proof_required" as const : null
   const response = await buildLocalizedPostReadResponse({
     client: input.client,
+    env: input.env,
     songArtifactExecutor: input.songArtifactExecutor,
     post,
     locale: input.locale ?? undefined,
@@ -267,6 +271,7 @@ export async function listCommunityPosts(input: {
     })
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      env: input.env,
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems: feed.items,
       locale: input.locale,
@@ -343,6 +348,7 @@ export async function listCommunityEvents(input: {
     })
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      env: input.env,
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems,
       locale: input.locale,
@@ -398,6 +404,7 @@ export async function listPublicCommunityPosts(input: {
 
     const items = await buildLocalizedPostFeedResponses({
       client: db.client,
+      env: input.env,
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems: feed.items,
       locale: input.locale,

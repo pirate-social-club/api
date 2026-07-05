@@ -5,6 +5,7 @@ import type { DbExecutor } from "../db-helpers"
 import type { PublishedLocalizedPostFeedItem } from "../posts/community-post-feed"
 import type { Client } from "../sql-client"
 import type { Post } from "../../types"
+import type { Env } from "../../env"
 
 function emptyExecutor(): DbExecutor {
   return {
@@ -14,64 +15,8 @@ function emptyExecutor(): DbExecutor {
   } as DbExecutor
 }
 
-function studyEnabledExecutor(input: {
-  entitlementRows?: Record<string, unknown>[]
-  onEntitlementQuery?: () => void
-} = {}): DbExecutor {
-  return {
-    async execute(query) {
-      const sql = typeof query === "string" ? query : query.sql
-      if (String(sql).includes("PRAGMA table_info(communities)")) {
-        return { rows: [{ name: "study_enabled" }] }
-      }
-      if (String(sql).includes("FROM communities")) {
-        return { rows: [{ study_enabled: 1 }] }
-      }
-      if (String(sql).includes("FROM purchase_entitlements")) {
-        input.onEntitlementQuery?.()
-        return {
-          rows: input.entitlementRows ?? [{
-            purchase_entitlement_id: "pe_study",
-            purchase_id: "pur_study",
-            community_id: "cmt_music",
-            buyer_kind: "user",
-            buyer_user_id: "usr_fan",
-            buyer_wallet_address: null,
-            buyer_wallet_address_normalized: null,
-            buyer_chain_ref: null,
-            entitlement_kind: "asset_access",
-            target_ref: "ast_song",
-            status: "active",
-            granted_at: "2026-06-03T00:00:00.000Z",
-            revoked_at: null,
-            created_at: "2026-06-03T00:00:00.000Z",
-            updated_at: "2026-06-03T00:00:00.000Z",
-          }],
-        }
-      }
-      return { rows: [] }
-    },
-  } as DbExecutor
-}
-
-function studyDisabledExecutor(input: {
-  onEntitlementQuery?: () => void
-} = {}): DbExecutor {
-  return {
-    async execute(query) {
-      const sql = typeof query === "string" ? query : query.sql
-      if (String(sql).includes("PRAGMA table_info(communities)")) {
-        return { rows: [{ name: "study_enabled" }] }
-      }
-      if (String(sql).includes("FROM communities")) {
-        return { rows: [{ study_enabled: 0 }] }
-      }
-      if (String(sql).includes("FROM purchase_entitlements")) {
-        input.onEntitlementQuery?.()
-      }
-      return { rows: [] }
-    },
-  } as DbExecutor
+function minimalEnv(): Env {
+  return {} as Env
 }
 
 function studyPolicyCountingExecutor(input: {
@@ -311,9 +256,37 @@ describe("buildLocalizedPostResponse", () => {
     })
   })
 
-  test("adds a ready study capability for public songs with lyrics", async () => {
+  test("serializes a supplied study capability instead of deriving readiness from lyrics", async () => {
+    const post = {
+      ...makeSongPost(),
+      lyrics: "Line one\nLine two",
+      source_language: "en",
+    }
     const response = await buildLocalizedPostResponse({
-      executor: studyEnabledExecutor(),
+      executor: emptyExecutor(),
+      post,
+      studyCapabilitiesByPostId: new Map([[
+        post.post_id,
+        {
+          status: "ready",
+          exercise_count: 3,
+          source_language: "en",
+          target_language: "es",
+        },
+      ]]),
+    })
+
+    expect(response.study_capability).toEqual({
+      status: "ready",
+      exercise_count: 3,
+      source_language: "en",
+      target_language: "es",
+    })
+  })
+
+  test("returns null study capability without a supplied capability map", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: emptyExecutor(),
       post: {
         ...makeSongPost(),
         lyrics: "Line one\nLine two",
@@ -321,11 +294,7 @@ describe("buildLocalizedPostResponse", () => {
       },
     })
 
-    expect(response.study_capability).toEqual({
-      status: "ready",
-      source_language: "en",
-      target_language: null,
-    })
+    expect(response.study_capability).toBeNull()
   })
 
   test("feed study capability skips study policy queries for non-song posts", async () => {
@@ -333,6 +302,7 @@ describe("buildLocalizedPostResponse", () => {
 
     const responses = await buildLocalizedPostFeedResponses({
       client: counted.executor as Client,
+      env: minimalEnv(),
       feedItems: [
         makeFeedItem(makeTextPost("pst_text_1")),
         makeFeedItem(makeTextPost("pst_text_2")),
@@ -345,11 +315,12 @@ describe("buildLocalizedPostResponse", () => {
     expect(counted.studyPolicyQueryCount()).toBe(0)
   })
 
-  test("feed study capability reuses the community study flag lookup across songs", async () => {
+  test("feed study capability uses batched readiness results instead of lyrics-only readiness", async () => {
     const counted = studyPolicyCountingExecutor()
 
     const responses = await buildLocalizedPostFeedResponses({
       client: counted.executor as Client,
+      env: minimalEnv(),
       feedItems: [
         makeFeedItem({
           ...makeSongPost(),
@@ -368,70 +339,18 @@ describe("buildLocalizedPostResponse", () => {
       ageGateState: null,
     })
 
-    expect(responses.map((response) => response.study_capability?.status)).toEqual(["ready", "ready"])
+    expect(responses.map((response) => response.study_capability)).toEqual([
+      {
+        status: "unavailable",
+        source_language: "en",
+        target_language: "en",
+      },
+      {
+        status: "unavailable",
+        source_language: "en",
+        target_language: "en",
+      },
+    ])
     expect(counted.studyPolicyQueryCount()).toBe(2)
-  })
-
-  test("adds a locked study capability for locked songs without entitlement", async () => {
-    const response = await buildLocalizedPostResponse({
-      executor: studyEnabledExecutor({ entitlementRows: [] }),
-      post: {
-        ...makeSongPost(),
-        access_mode: "locked",
-        asset_id: "ast_song",
-        lyrics: "Line one",
-      },
-      viewerUserId: "usr_fan",
-    })
-
-    expect(response.study_capability?.status).toBe("locked")
-  })
-
-  test("adds a ready study capability for locked songs with entitlement", async () => {
-    const response = await buildLocalizedPostResponse({
-      executor: studyEnabledExecutor(),
-      post: {
-        ...makeSongPost(),
-        access_mode: "locked",
-        asset_id: "ast_song",
-        lyrics: "Line one",
-      },
-      viewerUserId: "usr_fan",
-    })
-
-    expect(response.study_capability?.status).toBe("ready")
-  })
-
-  test("omits study capability when community study is disabled before entitlement lookup", async () => {
-    let entitlementQueries = 0
-    const response = await buildLocalizedPostResponse({
-      executor: studyDisabledExecutor({
-        onEntitlementQuery() {
-          entitlementQueries += 1
-        },
-      }),
-      post: {
-        ...makeSongPost(),
-        access_mode: "locked",
-        asset_id: "ast_song",
-        lyrics: "Line one",
-      },
-      viewerUserId: "usr_fan",
-    })
-
-    expect(response.study_capability).toBeNull()
-    expect(entitlementQueries).toBe(0)
-  })
-
-  test("omits study capability when the study_enabled column is absent", async () => {
-    const response = await buildLocalizedPostResponse({
-      executor: emptyExecutor(),
-      post: {
-        ...makeSongPost(),
-        lyrics: "Line one",
-      },
-    })
-
-    expect(response.study_capability).toBeNull()
   })
 })

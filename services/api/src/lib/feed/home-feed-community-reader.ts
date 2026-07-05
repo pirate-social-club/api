@@ -11,6 +11,7 @@ import {
 } from "../communities/membership/membership-state-store"
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { resolveStudyCapabilitiesForPosts } from "../posts/post-study-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { hydrateAuthorPublicHandlesForResponses } from "../posts/post-read-response"
@@ -413,6 +414,17 @@ export async function readHomeFeedCommunityItems(input: {
       userId: input.userId,
     })
     const votesMs = elapsedMs(votesStartedAt)
+    const studyCapabilitiesByPostId = await resolveStudyCapabilitiesForPosts({
+      client: db.client,
+      communityId: input.communityId,
+      env: input.env,
+      posts: publishedRows.flatMap((row) => {
+        const post = postsById.get(row.source_post_id)
+        return post ? [post] : []
+      }),
+      targetLanguage: input.locale,
+      viewerUserId: input.userId,
+    })
     const postReadJobs: HomeFeedPostReadJob[] = []
     let localizeMs = 0
     for (const row of input.rows) {
@@ -441,6 +453,7 @@ export async function readHomeFeedCommunityItems(input: {
         },
         ageGateViewerState: post.age_gate_policy === "18_plus" ? input.ageGateState ?? "proof_required" : null,
         viewerUserId: input.userId,
+        studyCapabilitiesByPostId,
       })
       localizeMs += elapsedMs(localizeStartedAt)
       postReadJobs.push({ post, response })
