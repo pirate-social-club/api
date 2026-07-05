@@ -9,14 +9,19 @@ const ASSET_ID = "asset_async_song"
 
 type State = {
   assetCalls: number
+  bundle: SongArtifactBundle
   consumed: number
+  listingDraft: Record<string, unknown> | null
   markedFailed: Array<{ failureCode: string; retryable: boolean }>
   markedPublished: number
   post: Post
+  primaryUploadAvailable: boolean
   projectionPayloads: string[]
   projectionStatuses: string[]
   requestStatuses: string[]
   throwAssetError: boolean
+  throwCatalogError: boolean
+  throwListingError: boolean
 }
 
 function basePost(overrides: Partial<Post> = {}): Post {
@@ -53,7 +58,7 @@ function basePost(overrides: Partial<Post> = {}): Post {
   } as Post
 }
 
-function readyBundle(): SongArtifactBundle {
+function readyBundle(overrides: Partial<SongArtifactBundle> = {}): SongArtifactBundle {
   return {
     id: "sab_bundle_1",
     lyrics: "lyrics",
@@ -72,19 +77,25 @@ function readyBundle(): SongArtifactBundle {
       storage_ref: "r2://song.wav",
     },
     status: "ready",
+    ...overrides,
   } as SongArtifactBundle
 }
 
 const state: State = {
   assetCalls: 0,
+  bundle: readyBundle(),
   consumed: 0,
+  listingDraft: null,
   markedFailed: [],
   markedPublished: 0,
   post: basePost(),
+  primaryUploadAvailable: true,
   projectionPayloads: [],
   projectionStatuses: [],
   requestStatuses: [],
   throwAssetError: false,
+  throwCatalogError: false,
+  throwListingError: false,
 }
 
 const client = {
@@ -132,7 +143,7 @@ mock.module("../../posts/community-post-mutation-store", () => ({
 
 mock.module("../../posts/community-post-publish-request-store", () => ({
   getPostPublishRequest: mock(async () => ({
-    listing_draft_json: null,
+    listing_draft_json: state.listingDraft ? JSON.stringify(state.listingDraft) : null,
     publish_options_json: "{}",
   })),
   markPostPublishRequestStatus: mock(async (input: { status: string }) => {
@@ -153,17 +164,25 @@ mock.module("../../song-artifacts/song-artifact-analysis", () => ({
 mock.module("../../song-artifacts/song-artifact-post-resolution-service", () => ({
   consumeSongPostBundle: mock(async () => {
     state.consumed += 1
+    if (state.throwCatalogError) {
+      throw new Error("catalog sync unavailable")
+    }
   }),
 }))
 
 mock.module("../../song-artifacts/song-artifact-repository", () => ({
   finalizeSongArtifactBundle: mock(async () => readyBundle()),
-  findUploadedSongArtifactByStorageRef: mock(async () => ({ id: "sau_1" })),
-  getSongArtifactBundle: mock(async () => readyBundle()),
+  findUploadedSongArtifactByStorageRef: mock(async () => state.primaryUploadAvailable ? { id: "sau_1" } : null),
+  getSongArtifactBundle: mock(async () => state.bundle),
 }))
 
 mock.module("../commerce/listing-service", () => ({
-  createCommunityListingInTransaction: mock(async () => ({})),
+  createCommunityListingInTransaction: mock(async () => {
+    if (state.throwListingError) {
+      throw new Error("listing failed")
+    }
+    return {}
+  }),
 }))
 
 mock.module("../commerce/shared", () => ({
@@ -221,15 +240,34 @@ function handlerInput() {
 
 beforeEach(() => {
   state.assetCalls = 0
+  state.bundle = readyBundle()
   state.consumed = 0
+  state.listingDraft = null
   state.markedFailed = []
   state.markedPublished = 0
   state.post = basePost()
+  state.primaryUploadAvailable = true
   state.projectionPayloads = []
   state.projectionStatuses = []
   state.requestStatuses = []
   state.throwAssetError = false
+  state.throwCatalogError = false
+  state.throwListingError = false
 })
+
+async function expectFinalizeFailure(expected: {
+  assetCalls?: number
+  code: string
+  consumed?: number
+  retryable: boolean
+}) {
+  await expect(runPostPublishFinalize(handlerInput())).resolves.toBe(`failed:post_publish_finalize:${POST_ID}`)
+  expect(state.markedFailed).toEqual([{ failureCode: expected.code, retryable: expected.retryable }])
+  expect(state.markedPublished).toBe(0)
+  expect(state.assetCalls).toBe(expected.assetCalls ?? 0)
+  expect(state.consumed).toBe(expected.consumed ?? 0)
+  expect(state.projectionStatuses).toEqual(["failed"])
+}
 
 describe("runPostPublishFinalize integration", () => {
   test("publishes a processing song post after asset finalize succeeds", async () => {
@@ -262,5 +300,69 @@ describe("runPostPublishFinalize integration", () => {
       { failureCode: "story_royalty_registration_failed", retryable: true },
     ])
     expect(state.projectionStatuses).toEqual(["failed", "failed"])
+  })
+
+  test("fails terminal request-time text moderation before asset creation", async () => {
+    state.post = basePost({ analysis_state: "review_required" })
+
+    await expectFinalizeFailure({
+      code: "text_moderation_blocked",
+      retryable: false,
+    })
+  })
+
+  test.each([
+    ["blocked bundle analysis", "blocked", "song_analysis_blocked"],
+    ["review-required bundle analysis", "review_required", "song_analysis_review_required"],
+    ["required derivative reference", "allow_with_required_reference", "song_rights_reference_required"],
+  ] as const)("%s fails terminally before asset creation", async (_label, analysisState, failureCode) => {
+    state.bundle = readyBundle({
+      moderation_result: {
+        age_gate_policy: "none",
+        analysis_state: analysisState,
+        content_safety_state: "safe",
+      },
+    })
+
+    await expectFinalizeFailure({
+      code: failureCode,
+      retryable: false,
+    })
+  })
+
+  test("fails retryably when deferred analysis cannot find the uploaded primary audio", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.primaryUploadAvailable = false
+
+    await expectFinalizeFailure({
+      code: "provider_unavailable",
+      retryable: true,
+    })
+  })
+
+  test("fails terminally when server-side listing creation fails after asset creation", async () => {
+    state.listingDraft = {
+      price_cents: 499,
+      regional_pricing_enabled: false,
+      status: "active",
+    }
+    state.throwListingError = true
+
+    await expectFinalizeFailure({
+      assetCalls: 1,
+      code: "listing_creation_failed",
+      retryable: false,
+    })
+  })
+
+  test("fails retryably when catalog sync fails after asset creation", async () => {
+    state.throwCatalogError = true
+
+    await expectFinalizeFailure({
+      assetCalls: 1,
+      code: "catalog_sync_failed",
+      consumed: 1,
+      retryable: true,
+    })
   })
 })
