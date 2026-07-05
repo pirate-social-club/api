@@ -1,0 +1,258 @@
+import { makeId, nowIso } from "../helpers"
+import type { Client } from "../sql-client"
+
+// v1 policy for the video attribution guardrail: analysis never auto-hides or
+// blocks a post. Every run records a media_analysis_results row; outcomes that
+// need a human open a rights_review_cases row for moderators. Enforcement
+// stays with the existing moderation tools.
+
+export type VideoRightsOutcome =
+  | "allow"
+  | "allow_with_required_reference"
+  | "review_required"
+  | "blocked"
+
+export type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
+
+export type VideoRightsAcrCustomMatch = {
+  song_artifact_bundle_id: string | null
+  raw: Record<string, unknown>
+}
+
+export type VideoRightsAcrEvaluation = {
+  providerError: string | null
+  missingConfiguration: boolean
+  musicMatches: Array<Record<string, unknown>>
+  customMatches: VideoRightsAcrCustomMatch[]
+  providerResult: Record<string, unknown> | null
+}
+
+export type VideoRightsDeclaredReferences = {
+  // Local assets resolved from upstream_asset_refs on the community shard.
+  declaredBundleIds: string[]
+  declaredAssetIds: string[]
+  // story:ip:... refs (or local assets without a bundle) that cannot be mapped
+  // to an ACR custom-bucket entry; they still count as a declaration.
+  unresolvedRefs: string[]
+}
+
+export type VideoRightsDecision = {
+  outcome: VideoRightsOutcome
+  policyReasonCode: string
+  policyReason: string
+  caseTrigger: VideoRightsCaseTrigger | null
+}
+
+export function computeVideoRightsOutcome(input: {
+  declared: VideoRightsDeclaredReferences
+  acr: VideoRightsAcrEvaluation
+  audioTrackPresent: boolean
+  analysisSkippedReason?: string | null
+}): VideoRightsDecision {
+  if (input.analysisSkippedReason) {
+    return {
+      outcome: "allow",
+      policyReasonCode: `analysis_skipped_${input.analysisSkippedReason}`,
+      policyReason: `Soundtrack analysis skipped (${input.analysisSkippedReason}); declaration-only attribution applies.`,
+      caseTrigger: null,
+    }
+  }
+  if (!input.audioTrackPresent) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "no_audio_track",
+      policyReason: "Video has no audio track to identify.",
+      caseTrigger: null,
+    }
+  }
+  if (input.acr.missingConfiguration) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "acr_not_configured",
+      policyReason: "ACRCloud identification is not configured; declaration-only attribution applies.",
+      caseTrigger: null,
+    }
+  }
+  if (input.acr.providerError) {
+    // The job retries transient provider failures before this is persisted;
+    // reaching here means attempts are exhausted, so surface for review.
+    return {
+      outcome: "review_required",
+      policyReasonCode: "acr_provider_failed",
+      policyReason: `ACRCloud identification failed after retries: ${input.acr.providerError}`,
+      caseTrigger: "acrcloud_match",
+    }
+  }
+
+  const declaredBundleIds = new Set(input.declared.declaredBundleIds)
+  const matchedBundleIds = input.acr.customMatches
+    .map((match) => match.song_artifact_bundle_id)
+    .filter((id): id is string => Boolean(id))
+  const undeclaredMatches = matchedBundleIds.filter((id) => !declaredBundleIds.has(id))
+  const declarationExists = declaredBundleIds.size > 0 || input.declared.unresolvedRefs.length > 0
+  const hasCustomMatch = input.acr.customMatches.length > 0
+  const hasMusicMatch = input.acr.musicMatches.length > 0
+
+  if (hasCustomMatch && matchedBundleIds.length > 0 && undeclaredMatches.length === 0 && declaredBundleIds.size > 0) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "declared_reference_verified",
+      policyReason: "Soundtrack matches the declared source song(s) in the catalog.",
+      caseTrigger: null,
+    }
+  }
+  if (hasCustomMatch && undeclaredMatches.length > 0 && declarationExists) {
+    return {
+      outcome: "review_required",
+      policyReasonCode: "declared_reference_mismatch",
+      policyReason: "Soundtrack matches catalog song(s) the poster did not declare.",
+      caseTrigger: "declared_reference_mismatch",
+    }
+  }
+  if (hasCustomMatch && matchedBundleIds.length === 0) {
+    // Matches exist but none carried a bundle id we can compare (stale bucket
+    // metadata). A human should look rather than guessing either way.
+    return {
+      outcome: "review_required",
+      policyReasonCode: "unmappable_catalog_match",
+      policyReason: "Soundtrack matched the catalog bucket but the match could not be mapped to a song.",
+      caseTrigger: "acrcloud_match",
+    }
+  }
+  if (hasCustomMatch && !declarationExists) {
+    return {
+      outcome: "allow_with_required_reference",
+      policyReasonCode: "undeclared_catalog_match",
+      policyReason: "Soundtrack matches a published catalog song but the post declares no source.",
+      caseTrigger: "acrcloud_match",
+    }
+  }
+  if (hasMusicMatch) {
+    return {
+      outcome: "review_required",
+      policyReasonCode: "commercial_catalog_match",
+      policyReason: "Soundtrack matches a commercial recording outside the platform catalog.",
+      caseTrigger: "acrcloud_match",
+    }
+  }
+  if (declarationExists) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "declared_reference_unmatched",
+      policyReason: "No fingerprint match; the poster's declared source stands (covers and re-recordings do not fingerprint-match).",
+      caseTrigger: null,
+    }
+  }
+  return {
+    outcome: "allow",
+    policyReasonCode: "no_match",
+    policyReason: "No fingerprint match and no declared source.",
+    caseTrigger: null,
+  }
+}
+
+export type PersistVideoRightsAnalysisInput = {
+  client: Pick<Client, "execute">
+  communityId: string
+  postId: string
+  assetId: string | null
+  decision: VideoRightsDecision
+  acr: VideoRightsAcrEvaluation
+  declared: VideoRightsDeclaredReferences
+  sampleWindow: { start_ms: number; duration_ms: number } | null
+  createdAt?: string
+}
+
+export async function persistVideoRightsAnalysis(
+  input: PersistVideoRightsAnalysisInput,
+): Promise<{ mediaAnalysisResultId: string; rightsReviewCaseId: string | null }> {
+  const createdAt = input.createdAt ?? nowIso()
+  const mediaAnalysisResultId = makeId("mar")
+
+  await input.client.execute({
+    sql: `
+      INSERT INTO media_analysis_results (
+        media_analysis_result_id, community_id, source_post_id, source_asset_id,
+        outcome, content_safety_state, age_gate_policy,
+        trigger_sources_json, acrcloud_music_match_json, acrcloud_custom_match_json,
+        acrcloud_error_code, acrcloud_error_message, acrcloud_checked_at,
+        safety_signals_json, authenticity_signals_json,
+        policy_reason_code, policy_reason, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?18)
+    `,
+    args: [
+      mediaAnalysisResultId,
+      input.communityId,
+      input.postId,
+      input.assetId,
+      input.decision.outcome,
+      // Video-audio safety classification is a separate punch-list item; the
+      // schema requires a value, so record that safety was not evaluated here.
+      "pending",
+      "none",
+      JSON.stringify({ source: "video_media_analysis", sample_window: input.sampleWindow }),
+      input.acr.musicMatches.length ? JSON.stringify(input.acr.musicMatches) : null,
+      input.acr.customMatches.length ? JSON.stringify(input.acr.customMatches.map((match) => match.raw)) : null,
+      input.acr.missingConfiguration ? "missing_configuration" : input.acr.providerError ? "provider_failed" : null,
+      input.acr.providerError,
+      createdAt,
+      null,
+      JSON.stringify({
+        declared_bundle_ids: input.declared.declaredBundleIds,
+        declared_asset_ids: input.declared.declaredAssetIds,
+        declared_unresolved_refs: input.declared.unresolvedRefs,
+      }),
+      input.decision.policyReasonCode,
+      input.decision.policyReason,
+      createdAt,
+    ],
+  })
+
+  if (input.assetId) {
+    for (const upstreamAssetId of input.declared.declaredAssetIds) {
+      await input.client.execute({
+        sql: `
+          INSERT INTO asset_derivative_links (
+            asset_derivative_link_id, asset_id, upstream_asset_id, relationship_type, created_at
+          )
+          SELECT ?1, ?2, ?3, 'references_song', ?4
+          WHERE NOT EXISTS (
+            SELECT 1 FROM asset_derivative_links
+            WHERE asset_id = ?2 AND upstream_asset_id = ?3 AND relationship_type = 'references_song'
+          )
+        `,
+        args: [makeId("adl"), input.assetId, upstreamAssetId, createdAt],
+      })
+    }
+  }
+
+  let rightsReviewCaseId: string | null = null
+  if (input.decision.caseTrigger) {
+    rightsReviewCaseId = makeId("rrc")
+    // The partial unique index (subject, trigger, open statuses) makes retries
+    // and re-analysis idempotent: an already-open case absorbs the conflict.
+    const result = await input.client.execute({
+      sql: `
+        INSERT INTO rights_review_cases (
+          rights_review_case_id, subject_type, subject_id, community_id,
+          status, trigger_source, analysis_result_ref, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7, ?7)
+        ON CONFLICT DO NOTHING
+      `,
+      args: [
+        rightsReviewCaseId,
+        input.assetId ? "asset" : "post",
+        input.assetId ?? input.postId,
+        input.communityId,
+        input.decision.caseTrigger,
+        mediaAnalysisResultId,
+        createdAt,
+      ],
+    })
+    if (!result.rowsAffected) {
+      rightsReviewCaseId = null
+    }
+  }
+
+  return { mediaAnalysisResultId, rightsReviewCaseId }
+}

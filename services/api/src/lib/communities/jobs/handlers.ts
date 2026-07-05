@@ -26,6 +26,7 @@ import { runLockedAssetDeliveryPrepare } from "./locked-asset-delivery-handler"
 import { runSongArtifactSessionReaper } from "./song-artifact-session-reaper-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
 import { runSongStudyGenerate } from "../../posts/post-study-service"
+import { runVideoMediaAnalysis } from "./video-media-analysis-handler"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
 export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -65,6 +66,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runLiveRoomRecordingIngest(input)
     case "live_room_viewer_sessions_prune":
       return runLiveRoomViewerSessionsPrune(input)
+    case "video_media_analysis":
+      return runVideoMediaAnalysis(input)
     default:
       throw internalError(`Unsupported community job type: ${input.job.job_type}`)
   }
