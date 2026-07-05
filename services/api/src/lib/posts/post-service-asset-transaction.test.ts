@@ -13,10 +13,12 @@ import * as realCommunityDbFactory from "../communities/community-db-factory"
 import * as realCommunityCreateRepository from "../communities/create/repository"
 import * as realCommunityCreateShared from "../communities/create/shared"
 import * as realPostCreatePreparation from "./post-create-preparation"
+import * as realSongArtifactPostResolution from "../song-artifacts/song-artifact-post-resolution-service"
 const realCommunityDbFactorySnapshot = { ...realCommunityDbFactory }
 const realCommunityCreateRepositorySnapshot = { ...realCommunityCreateRepository }
 const realCommunityCreateSharedSnapshot = { ...realCommunityCreateShared }
 const realPostCreatePreparationSnapshot = { ...realPostCreatePreparation }
+const realSongArtifactPostResolutionSnapshot = { ...realSongArtifactPostResolution }
 
 type TestClient = ReturnType<typeof createClient>
 
@@ -26,9 +28,11 @@ const communityDbFactoryModule = "../communities/community-db-factory"
 const communityDbFactoryUrl = new URL("../communities/community-db-factory.ts", import.meta.url)
 const communityDbFactoryPath = communityDbFactoryUrl.pathname
 const communityCreateRepositoryModule = "../communities/create/repository"
-const communityCreateRepositoryPath = new URL("../communities/create/repository.ts", import.meta.url).pathname
+const communityCreateRepositoryUrl = new URL("../communities/create/repository.ts", import.meta.url)
+const communityCreateRepositoryPath = communityCreateRepositoryUrl.pathname
 const communityCreateSharedModule = "../communities/create/shared"
-const communityCreateSharedPath = new URL("../communities/create/shared.ts", import.meta.url).pathname
+const communityCreateSharedUrl = new URL("../communities/create/shared.ts", import.meta.url)
+const communityCreateSharedPath = communityCreateSharedUrl.pathname
 const postCreatePreparationModule = "./post-create-preparation"
 const postCreatePreparationUrl = new URL("./post-create-preparation.ts", import.meta.url)
 const postCreatePreparationPath = postCreatePreparationUrl.pathname
@@ -66,6 +70,31 @@ function wrapClient(client: TestClient): TestClient {
   } as TestClient
 }
 
+// bun >=1.3 evaluates a mock.module factory ONCE at registration time — when
+// activeClient is still null — so a factory-level `activeClient == null ?
+// real : fake` branch permanently bakes in the real module. The branch must
+// happen inside each exported function (call time). Delegating to the real
+// snapshot whenever no activeClient is configured also keeps these sticky,
+// process-global mocks harmless to later test files in the same run.
+function switchByActiveClient<T extends Record<string, unknown>>(real: T, fake: Record<string, unknown>): () => T {
+  const merged: Record<string, unknown> = { ...real }
+  for (const [key, fakeValue] of Object.entries(fake)) {
+    if (typeof fakeValue !== "function") {
+      merged[key] = fakeValue
+      continue
+    }
+    const realValue = (real as Record<string, unknown>)[key]
+    merged[key] = (...args: unknown[]) => {
+      if (activeClient == null && typeof realValue === "function") {
+        return (realValue as (...a: unknown[]) => unknown)(...args)
+      }
+      return (fakeValue as (...a: unknown[]) => unknown)(...args)
+    }
+  }
+  const moduleExports = merged as T
+  return () => moduleExports
+}
+
 const communityDbFactoryMock = () => ({
   ...realCommunityDbFactorySnapshot,
   openCommunityDb: async (...args: Parameters<typeof realCommunityDbFactory.openCommunityDb>) => {
@@ -86,7 +115,7 @@ mock.module(communityDbFactoryModule, communityDbFactoryMock)
 mock.module(communityDbFactoryPath, communityDbFactoryMock)
 mock.module(communityDbFactoryUrl.href, communityDbFactoryMock)
 
-const communityCreateRepositoryMock = () => activeClient == null ? realCommunityCreateRepositorySnapshot : ({
+const fakeCommunityCreateRepository = {
   assertPublicV0GateConfiguration: () => {},
   assertUpdateCommunityGatesRequest: () => {},
   assertUpdateCommunityLabelPolicyRequest: () => {},
@@ -143,15 +172,24 @@ const communityCreateRepositoryMock = () => activeClient == null ? realCommunity
   selectEndaomentOrganizationMatch: () => null,
   resolveCommunityDbRoot: () => "/tmp",
   resolveProvisioningRetryAction: async () => ({ action: "return_existing" }),
-})
-const communityCreateSharedMock = () => activeClient == null ? realCommunityCreateSharedSnapshot : communityCreateRepositoryMock()
+}
+const communityCreateRepositoryMock = switchByActiveClient(
+  realCommunityCreateRepositorySnapshot,
+  fakeCommunityCreateRepository,
+)
+const communityCreateSharedMock = switchByActiveClient(
+  realCommunityCreateSharedSnapshot,
+  fakeCommunityCreateRepository,
+)
 
 mock.module(communityCreateRepositoryModule, communityCreateRepositoryMock)
 mock.module(communityCreateRepositoryPath, communityCreateRepositoryMock)
+mock.module(communityCreateRepositoryUrl.href, communityCreateRepositoryMock)
 mock.module(communityCreateSharedModule, communityCreateSharedMock)
 mock.module(communityCreateSharedPath, communityCreateSharedMock)
+mock.module(communityCreateSharedUrl.href, communityCreateSharedMock)
 
-const postCreatePreparationMock = () => activeClient == null ? realPostCreatePreparationSnapshot : ({
+const postCreatePreparationMock = switchByActiveClient(realPostCreatePreparationSnapshot, {
   preparePostCreate: async (input: { body: Record<string, unknown> }) => {
     const analysisOverride = {
       analysis_state: "allow",
@@ -236,7 +274,7 @@ mock.module(postCreatePreparationModule, postCreatePreparationMock)
 mock.module(postCreatePreparationPath, postCreatePreparationMock)
 mock.module(postCreatePreparationUrl.href, postCreatePreparationMock)
 
-const songArtifactPostResolutionMock = () => ({
+const songArtifactPostResolutionMock = switchByActiveClient(realSongArtifactPostResolutionSnapshot, {
   consumeSongPostBundle: async () => {},
   resolveSongPostBundle: async () => ({
     analysisState: "allow",
@@ -378,17 +416,7 @@ async function createPostTables(client: TestClient): Promise<void> {
 }
 
 describe("createPost", () => {
-  // TODO: these two tests pass under `bun test src tests/lib` (test:unit) but
-  // fail under the full `bun test` suite (CI "Run API tests") because bun's
-  // mock.module does not reliably intercept post-create-preparation /
-  // song-artifact-post-resolution-service when another test file imports
-  // post-service first, so the real preparePostCreate runs and hits
-  // getControlPlaneClient without a CONTROL_PLANE_DATABASE_URL. This is a
-  // pre-existing test-harness issue on this integration branch, not a D1
-  // routing regression. Skipped to unblock #52/#53 CI; revisit by either
-  // seeding control-plane bundle/upload fixtures or partitioning CI into
-  // test:unit + test:routes (which avoids the cross-file mock contamination).
-  test.skip("creates video assets after the post transaction commits", async () => {
+  test("creates video assets after the post transaction commits", async () => {
     const client = createTestClient("video")
     clients.push(client)
     activeClient = client
@@ -473,6 +501,7 @@ describe("createPost", () => {
         async getCommunityById() {
           return {
             community_id: "cmt_test",
+            display_name: "Test Community",
             status: "active",
             provisioning_state: "active",
           }
@@ -495,7 +524,7 @@ describe("createPost", () => {
     expect(projectionCalls).toHaveLength(1)
   })
 
-  test.skip("creates song assets after the post transaction commits", async () => {
+  test("creates song assets after the post transaction commits", async () => {
     const client = createTestClient("song")
     clients.push(client)
     activeClient = client
@@ -536,6 +565,7 @@ describe("createPost", () => {
         async getCommunityById() {
           return {
             community_id: "cmt_test",
+            display_name: "Test Community",
             status: "active",
             provisioning_state: "active",
           }
