@@ -2,7 +2,7 @@ import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst } from "../db-helpers"
-import { makeId, nowIso } from "../helpers"
+import { envFlag, makeId, nowIso } from "../helpers"
 import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { enqueueCommunityJob } from "../communities/jobs/store"
@@ -33,6 +33,7 @@ const STUDY_LOCALIZATION_GENERATION_VERSION = 5
 const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
+const FIRST_LEARN_REVIEW_SESSION_ID = "learn"
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
   "ar",
   "de",
@@ -121,6 +122,7 @@ type StudyAttemptRow = {
 
 type StudyReviewStateRow = {
   difficulty: number
+  due_at: string
   lapses: number
   reps: number
   stability: number
@@ -157,6 +159,13 @@ export type SongStudyExercise =
       type: "translation_choice"
     }
 
+export type SongStudySessionSummary = {
+  due_count: number
+  next_due_at?: number
+  served_count: number
+  total_units: number
+}
+
 export type SongStudyPayload = {
   access: StudyAccess
   artist_name?: string | null
@@ -168,6 +177,7 @@ export type SongStudyPayload = {
   locked_reason?: "purchase_required" | "membership_required" | "age_required"
   object: "song_study_payload"
   post_id: string
+  session?: SongStudySessionSummary
   source_language?: string | null
   study_pack_version?: number
   target_language?: string | null
@@ -382,6 +392,29 @@ function toUnixSeconds(value: string | null): number | undefined {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined
 }
 
+function dueReviewServingEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_DUE_REVIEW_SERVING_ENABLED, false)
+}
+
+function readReviewSessionId(value: unknown): string {
+  return readString(value) ?? FIRST_LEARN_REVIEW_SESSION_ID
+}
+
+function reviewSessionIdFor(input: {
+  dueAt: string
+  exerciseType: ExerciseType
+  lineId: string
+  targetLanguage: string
+}): string {
+  return `review:${input.lineId}:${input.exerciseType}:${input.targetLanguage}:${input.dueAt}`
+}
+
+function isDueReview(input: { dueAt: string; now: string }): boolean {
+  const dueAtMs = Date.parse(input.dueAt)
+  const nowMs = Date.parse(input.now)
+  return Number.isFinite(dueAtMs) && Number.isFinite(nowMs) && dueAtMs <= nowMs
+}
+
 async function getStudyPostById(client: ReadClient, postId: string): Promise<StudyPost | null> {
   const row = await executeFirst(client, {
     sql: `
@@ -540,6 +573,7 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
       options: orderOptionsForLearner(parseOptions(row.options_json), `${learnerSeed}:${row.id}`),
       prompt_text: row.prompt_text,
       question: row.question || "Choose the best translation.",
+      ...(row.review_session_id ? { review_session_id: row.review_session_id } : {}),
       type: "translation_choice",
     }
   }
@@ -550,6 +584,7 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
     max_attempts: row.max_attempts,
     prompt_text: row.prompt_text,
     reference_text: row.reference_text || row.prompt_text,
+    ...(row.review_session_id ? { review_session_id: row.review_session_id } : {}),
     translation_text: row.translation_text,
     type: "say_it_back",
   }
@@ -569,7 +604,9 @@ async function listExercises(input: {
              line_id, line_index, 'say_it_back' AS exercise_type, prompt_text,
              NULL AS question, reference_text, NULL AS translation_text,
              NULL AS options_json, NULL AS correct_option_id, max_attempts,
-             COALESCE(source_language, 'source') AS review_language, unit_version AS study_pack_version,
+             NULL AS review_session_id,
+             COALESCE(source_language, 'source') AS review_language,
+             unit_version AS study_pack_version,
              0 AS sort_order
       FROM song_study_unit
       WHERE post_id = ?1
@@ -590,7 +627,9 @@ async function listExercises(input: {
              u.line_id, u.line_index, 'translation_choice' AS exercise_type,
              u.prompt_text, l.question, NULL AS reference_text, l.translation_text,
              l.options_json, l.correct_option_id, l.max_attempts,
-             l.target_language AS review_language, l.localization_version AS study_pack_version,
+             NULL AS review_session_id,
+             l.target_language AS review_language,
+             l.localization_version AS study_pack_version,
              1 AS sort_order
       FROM song_study_unit u
       JOIN song_study_unit_localization l ON l.unit_id = u.id
@@ -626,10 +665,154 @@ async function listExercises(input: {
     prompt_text: readString(row.prompt_text) ?? "",
     question: readString(row.question),
     reference_text: readString(row.reference_text),
+    review_session_id: readString(row.review_session_id),
     review_language: readString(row.review_language) ?? input.targetLanguage,
     study_pack_version: Number(row.study_pack_version ?? 1),
     translation_text: readString(row.translation_text),
   }))
+}
+
+async function listDueReviewExercises(input: {
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  now: string
+  postId: string
+  targetLanguage: string
+  userId: string
+}): Promise<StudyExerciseRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT ('stu:' || u.id || ':say_it_back:' || COALESCE(u.source_language, 'source')) AS id,
+             u.line_id, u.line_index, 'say_it_back' AS exercise_type, u.prompt_text,
+             NULL AS question, u.reference_text, NULL AS translation_text,
+             NULL AS options_json, NULL AS correct_option_id, u.max_attempts,
+             ('review:' || s.line_id || ':say_it_back:' || s.target_language || ':' || s.due_at) AS review_session_id,
+             COALESCE(u.source_language, 'source') AS review_language,
+             u.unit_version AS study_pack_version,
+             s.due_at,
+             0 AS sort_order
+      FROM song_study_review_state s
+      JOIN song_study_unit u
+        ON u.post_id = s.post_id
+       AND u.line_id = s.line_id
+      WHERE s.user_id = ?1
+        AND s.post_id = ?2
+        AND s.exercise_type = 'say_it_back'
+        AND s.due_at <= ?4
+        AND u.say_it_back_status = 'ready'
+        AND ?5 = 1
+      UNION ALL
+      SELECT ('stu:' || u.id || ':translation_choice:' || l.target_language) AS id,
+             u.line_id, u.line_index, 'translation_choice' AS exercise_type,
+             u.prompt_text, l.question, NULL AS reference_text, l.translation_text,
+             l.options_json, l.correct_option_id, l.max_attempts,
+             ('review:' || s.line_id || ':translation_choice:' || s.target_language || ':' || s.due_at) AS review_session_id,
+             l.target_language AS review_language,
+             l.localization_version AS study_pack_version,
+             s.due_at,
+             1 AS sort_order
+      FROM song_study_review_state s
+      JOIN song_study_unit u
+        ON u.post_id = s.post_id
+       AND u.line_id = s.line_id
+      JOIN song_study_unit_localization l
+        ON l.unit_id = u.id
+       AND l.target_language = s.target_language
+      WHERE s.user_id = ?1
+        AND s.post_id = ?2
+        AND s.exercise_type = 'translation_choice'
+        AND s.target_language = ?3
+        AND s.due_at <= ?4
+        AND ?6 = 1
+        AND l.status = 'ready'
+        AND l.translation_text IS NOT NULL
+        AND l.options_json IS NOT NULL
+        AND l.correct_option_id IS NOT NULL
+      ORDER BY due_at ASC, line_index ASC, sort_order ASC, id ASC
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.targetLanguage,
+      input.now,
+      input.includeSayItBack ? 1 : 0,
+      input.includeTranslation ? 1 : 0,
+    ],
+  })
+  return result.rows.map((row) => ({
+    correct_option_id: readString(row.correct_option_id),
+    exercise_type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
+    id: readString(row.id) ?? "",
+    line_id: readString(row.line_id) ?? "",
+    line_index: Number(row.line_index ?? 0),
+    max_attempts: Number(row.max_attempts ?? 1),
+    options_json: readString(row.options_json),
+    prompt_text: readString(row.prompt_text) ?? "",
+    question: readString(row.question),
+    reference_text: readString(row.reference_text),
+    review_session_id: readString(row.review_session_id),
+    review_language: readString(row.review_language) ?? input.targetLanguage,
+    study_pack_version: Number(row.study_pack_version ?? 1),
+    translation_text: readString(row.translation_text),
+  }))
+}
+
+async function getNextDueAt(input: {
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  now: string
+  postId: string
+  targetLanguage: string
+  userId: string
+}): Promise<string | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT MIN(due_at) AS next_due_at
+      FROM (
+        SELECT s.due_at
+        FROM song_study_review_state s
+        JOIN song_study_unit u
+          ON u.post_id = s.post_id
+         AND u.line_id = s.line_id
+        WHERE s.user_id = ?1
+          AND s.post_id = ?2
+          AND s.exercise_type = 'say_it_back'
+          AND s.due_at > ?4
+          AND u.say_it_back_status = 'ready'
+          AND ?5 = 1
+        UNION ALL
+        SELECT s.due_at
+        FROM song_study_review_state s
+        JOIN song_study_unit u
+          ON u.post_id = s.post_id
+         AND u.line_id = s.line_id
+        JOIN song_study_unit_localization l
+          ON l.unit_id = u.id
+         AND l.target_language = s.target_language
+        WHERE s.user_id = ?1
+          AND s.post_id = ?2
+          AND s.exercise_type = 'translation_choice'
+          AND s.target_language = ?3
+          AND s.due_at > ?4
+          AND ?6 = 1
+          AND l.status = 'ready'
+          AND l.translation_text IS NOT NULL
+          AND l.options_json IS NOT NULL
+          AND l.correct_option_id IS NOT NULL
+      )
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.targetLanguage,
+      input.now,
+      input.includeSayItBack ? 1 : 0,
+      input.includeTranslation ? 1 : 0,
+    ],
+  }) as Record<string, unknown> | null
+  return readString(row?.next_due_at)
 }
 
 function studyLineId(index: number): string {
@@ -1177,6 +1360,8 @@ export async function getPostStudyPayload(input: {
       env: input.env,
       communityId: input.communityId,
     })
+    const now = nowIso()
+    const reServeDueReviews = dueReviewServingEnabled(input.env)
     const canonicalExerciseRows = await listExercises({
       client: db.client,
       includeSayItBack,
@@ -1184,19 +1369,49 @@ export async function getPostStudyPayload(input: {
       postId: input.postId,
       targetLanguage,
     })
-    const exercises = (await listExercises({
+    const dueReviewRows = await listDueReviewExercises({
+      client: db.client,
+      includeSayItBack,
+      includeTranslation,
+      now,
+      postId: input.postId,
+      targetLanguage,
+      userId: input.actor.userId,
+    })
+    const firstLearnRows = await listExercises({
       client: db.client,
       includeSayItBack,
       includeTranslation,
       postId: input.postId,
       targetLanguage,
       userId: input.actor.userId,
-    })).map((row) => toExercise(row, input.actor.userId))
+    })
+    const offeredRows = reServeDueReviews ? [...dueReviewRows, ...firstLearnRows] : firstLearnRows
+    const exercises = offeredRows.map((row) => toExercise(row, input.actor.userId))
+    const nextDueAt = exercises.length === 0 && firstLearnRows.length === 0 && dueReviewRows.length === 0
+      ? await getNextDueAt({
+        client: db.client,
+        includeSayItBack,
+        includeTranslation,
+        now,
+        postId: input.postId,
+        targetLanguage,
+        userId: input.actor.userId,
+      })
+      : null
+    const nextDueAtSeconds = toUnixSeconds(nextDueAt)
+    const session: SongStudySessionSummary = {
+      due_count: offeredRows.length,
+      served_count: exercises.length,
+      total_units: canonicalExerciseRows.length,
+      ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),
+    }
     if (exercises.length === 0) {
       if (canonicalExerciseRows.length > 0) {
         return {
           ...basePayload({ access: "ready", post, targetLanguage }),
           generated_at: toUnixSeconds(pack?.generated_at ?? null),
+          session,
           source_language: pack?.source_language ?? post.source_language,
           study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
         }
@@ -1221,6 +1436,7 @@ export async function getPostStudyPayload(input: {
       exercise_count: exercises.length,
       exercises,
       generated_at: toUnixSeconds(pack?.generated_at ?? null),
+      session,
       source_language: pack?.source_language ?? post.source_language,
       study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
     }
@@ -1519,8 +1735,8 @@ function resultFromAttempt(row: StudyAttemptRow, exercise: { correct_option_id: 
 async function getAttemptByIdempotencyKey(client: ReadClient, userId: string, idempotencyKey: string): Promise<StudyAttemptRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT exercise_id, exercise_type, attempt_number, selected_option_id,
-             transcript, outcome, feedback_json, fsrs_rating
+      SELECT exercise_id, exercise_type, attempt_number,
+             review_session_id, selected_option_id, transcript, outcome, feedback_json, fsrs_rating
       FROM song_study_attempt
       WHERE user_id = ?1
         AND idempotency_key = ?2
@@ -1535,6 +1751,7 @@ async function getAttemptByIdempotencyKey(client: ReadClient, userId: string, id
         feedback_json: readString(row.feedback_json),
         fsrs_rating: readString(row.fsrs_rating) as FsrsRating | null,
         outcome: (readString(row.outcome) ?? "incorrect") as AttemptOutcome,
+        review_session_id: readString(row.review_session_id) ?? FIRST_LEARN_REVIEW_SESSION_ID,
         selected_option_id: readString(row.selected_option_id),
         transcript: readString(row.transcript),
         type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
@@ -1554,6 +1771,7 @@ function assertEquivalentIdempotentRetry(input: {
   const same = input.existing.exercise_id === input.exerciseId
     && input.existing.type === input.type
     && input.existing.attempt_number === input.attemptNumber
+    && input.existing.review_session_id === readReviewSessionId(input.body.review_session_id)
     && input.existing.selected_option_id === selectedOptionId
     && input.existing.transcript === transcript
   if (!same) {
@@ -1561,17 +1779,24 @@ function assertEquivalentIdempotentRetry(input: {
   }
 }
 
-async function hasAttemptNumber(client: ReadClient, userId: string, exerciseId: string, attemptNumber: number): Promise<boolean> {
+async function hasAttemptNumber(
+  client: ReadClient,
+  userId: string,
+  exerciseId: string,
+  reviewSessionId: string,
+  attemptNumber: number,
+): Promise<boolean> {
   const row = await executeFirst(client, {
     sql: `
       SELECT id
       FROM song_study_attempt
       WHERE user_id = ?1
         AND exercise_id = ?2
-        AND attempt_number = ?3
+        AND review_session_id = ?3
+        AND attempt_number = ?4
       LIMIT 1
     `,
-    args: [userId, exerciseId, attemptNumber],
+    args: [userId, exerciseId, reviewSessionId, attemptNumber],
   })
   return Boolean(row)
 }
@@ -1583,7 +1808,7 @@ async function getReviewState(input: {
 }): Promise<StudyReviewStateRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
-      SELECT state, stability, difficulty, reps, lapses
+      SELECT state, stability, difficulty, due_at, reps, lapses
       FROM song_study_review_state
       WHERE user_id = ?1
         AND post_id = ?2
@@ -1603,6 +1828,7 @@ async function getReviewState(input: {
   return row
     ? {
         difficulty: Number(row.difficulty ?? 5),
+        due_at: readString(row.due_at) ?? "",
         lapses: Number(row.lapses ?? 0),
         reps: Number(row.reps ?? 0),
         stability: Number(row.stability ?? 1),
@@ -1741,6 +1967,7 @@ export async function submitPostStudyAttempt(input: {
     throw badRequestError("type must be say_it_back or translation_choice")
   }
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
+  const reviewSessionId = readReviewSessionId(input.body.review_session_id)
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
@@ -1775,10 +2002,33 @@ export async function submitPostStudyAttempt(input: {
       && isSameLanguageStudyPair(exercise.source_language, exercise.target_language)) {
       throw notFoundError("Study exercise not found")
     }
+    const now = nowIso()
+    const existingReviewState = await getReviewState({
+      client: db.client,
+      exercise,
+      userId: input.actor.userId,
+    })
+    if (reviewSessionId !== FIRST_LEARN_REVIEW_SESSION_ID) {
+      if (!dueReviewServingEnabled(input.env)) {
+        throw badRequestError("review_session_id is not enabled")
+      }
+      if (!existingReviewState) {
+        throw badRequestError("review_session_id does not match a due review")
+      }
+      const expectedReviewSessionId = reviewSessionIdFor({
+        dueAt: existingReviewState.due_at,
+        exerciseType: exercise.exercise_type,
+        lineId: exercise.line_id,
+        targetLanguage: exercise.review_language,
+      })
+      if (reviewSessionId !== expectedReviewSessionId || !isDueReview({ dueAt: existingReviewState.due_at, now })) {
+        throw badRequestError("review_session_id does not match a due review")
+      }
+    }
     if (attemptNumber > exercise.max_attempts) {
       throw badRequestError("attempt_number exceeds max_attempts")
     }
-    if (await hasAttemptNumber(db.client, input.actor.userId, exerciseId, attemptNumber)) {
+    if (await hasAttemptNumber(db.client, input.actor.userId, exerciseId, reviewSessionId, attemptNumber)) {
       throw conflictError("attempt_number has already been recorded for this exercise")
     }
 
@@ -1819,12 +2069,6 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
-    const now = nowIso()
-    const existingReviewState = await getReviewState({
-      client: db.client,
-      exercise,
-      userId: input.actor.userId,
-    })
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
       const reviewRating = await upsertReviewState({
         client: tx,
@@ -1837,17 +2081,18 @@ export async function submitPostStudyAttempt(input: {
       await tx.execute({
         sql: `
           INSERT INTO song_study_attempt (
-            id, user_id, post_id, exercise_id, line_id, exercise_type,
+            id, user_id, post_id, exercise_id, review_session_id, line_id, exercise_type,
             target_language, study_pack_version, attempt_number, idempotency_key,
             selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
         `,
         args: [
           makeId("sta"),
           input.actor.userId,
           input.postId,
           exercise.id,
+          reviewSessionId,
           exercise.line_id,
           exercise.exercise_type,
           exercise.review_language,
