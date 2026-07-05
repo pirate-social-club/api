@@ -213,10 +213,6 @@ mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
 
-mock.module("./store", () => ({
-  enqueueCommunityJob: mock(async () => ({})),
-}))
-
 const { runPostPublishFinalize } = await import("./post-publish-finalize-handler")
 
 function handlerInput() {
