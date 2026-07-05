@@ -216,6 +216,12 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
   return input.assetKind !== "song_audio" || input.hasSongBundle
 }
 
+function hasCompleteStoryRoyaltyRegistration(asset: AssetRow): boolean {
+  return asset.story_royalty_registration_status === "registered"
+    && Boolean(asset.story_ip_id?.trim())
+    && Boolean(asset.story_license_terms_id?.trim())
+}
+
 export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | "STORY_LOCKED_DELIVERY_ASYNC">): boolean {
   return envFlag(env.STORY_LOCKED_DELIVERY_ASYNC, !isLocalEnvironment(env.ENVIRONMENT))
 }
@@ -362,6 +368,40 @@ export async function createAssetForPost(input: {
   }
   const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (existing) {
+    const existingRequiresStoryRoyaltyRegistration = shouldAttemptStoryRoyaltyRegistration({
+      assetKind: existing.asset_kind,
+      rightsBasis: existing.rights_basis,
+      hasSongBundle: Boolean(existing.song_artifact_bundle_id),
+    })
+    if (
+      input.requireStoryRoyaltyRegistration
+      && existingRequiresStoryRoyaltyRegistration
+      && !hasCompleteStoryRoyaltyRegistration(existing)
+    ) {
+      const storyErrorClass = classifyStoryRegistrationFailure(existing.story_error)
+      console.error("[commerce] existing asset is missing required Story registration", {
+        community_id: input.communityId,
+        post_id: input.post.post_id,
+        asset_id: existing.asset_id,
+        asset_kind: existing.asset_kind,
+        rights_basis: existing.rights_basis,
+        story_error_class: storyErrorClass,
+        story_error: sanitizeStoryRegistrationFailure(existing.story_error),
+      })
+      throw providerUnavailable(
+        storyRegistrationFailureMessage(existing.story_error),
+        {
+          reason: "story_royalty_registration_failed",
+          community_id: input.communityId,
+          post_id: input.post.post_id,
+          asset_id: existing.asset_id,
+          asset_kind: existing.asset_kind,
+          rights_basis: existing.rights_basis,
+          story_error_class: storyErrorClass,
+        },
+        isStoryRegistrationFailureRetryable(storyErrorClass),
+      )
+    }
     if (input.royaltyAllocations && input.royaltyAllocations.length > 0) {
       await assertExistingAssetAllocationMatches({
         client: input.client,

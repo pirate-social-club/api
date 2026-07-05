@@ -27,6 +27,8 @@ import {
   createAssetForPost,
   createSongAssetForPost,
 } from "../communities/commerce/service"
+import { createCommunityListingInTransaction } from "../communities/commerce/listing-service"
+import { getListingRowByAssetId } from "../communities/commerce/shared"
 import {
   requireMemberAccess,
 } from "./post-access"
@@ -523,6 +525,25 @@ export async function createPost(input: {
     try {
       for (const runPostCommitAssetTask of postCommitAssetTasks) {
         await runPostCommitAssetTask()
+      }
+      if (input.body.listing_draft && post.asset_id?.trim()) {
+        const existingListing = await getListingRowByAssetId(db.client, input.communityId, post.asset_id)
+        if (!existingListing) {
+          await createCommunityListingInTransaction({
+            env: input.env,
+            userId: input.userId,
+            communityId: input.communityId,
+            body: {
+              ...input.body.listing_draft,
+              asset: `asset_${post.asset_id}`,
+              live_room: null,
+              replay_asset: null,
+            },
+            communityRepository: input.communityRepository as unknown as Parameters<typeof createCommunityListingInTransaction>[0]["communityRepository"],
+            userRepository: input.userRepository,
+            client: db.client,
+          })
+        }
       }
     } catch (error) {
       try {

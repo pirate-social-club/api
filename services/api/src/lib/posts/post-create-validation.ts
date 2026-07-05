@@ -189,9 +189,6 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     throw badRequestError("crosspost_source must not be provided in the post body")
   }
   validatePostEvent(body)
-  if (body.listing_draft && body.publish_mode !== "async") {
-    throw badRequestError("listing_draft requires publish_mode async")
-  }
   if (body.publish_mode === "async" && body.post_type !== "song") {
     throw badRequestError("publish_mode async is only supported for song posts")
   }
