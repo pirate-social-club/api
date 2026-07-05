@@ -155,7 +155,10 @@ export async function handleSongPreviewContainerRequest(
     return proxyToSongPreviewContainer(new Request(new URL("/health", request.url), request), env);
   }
 
-  if (url.pathname === "/preview") {
+  if (url.pathname === "/preview" || url.pathname === "/extract-audio-sample") {
+    const routeEvent = url.pathname === "/preview"
+      ? "song_preview.container.preview"
+      : "song_preview.container.extract_audio_sample";
     if (request.method !== "POST") {
       return jsonResponse({ code: "method_not_allowed", message: "Method not allowed" }, 405);
     }
@@ -163,7 +166,7 @@ export async function handleSongPreviewContainerRequest(
     const startedAt = Date.now();
     const authError = requireSongPreviewAuth(request, env);
     if (authError) {
-      logWrapperWarning("song_preview.container.preview.rejected", {
+      logWrapperWarning(`${routeEvent}.rejected`, {
         reason: authError.status === 401 ? "unauthorized" : "not_configured",
         latency_ms: Date.now() - startedAt,
       });
@@ -172,7 +175,7 @@ export async function handleSongPreviewContainerRequest(
 
     const bodySizeError = rejectOversizedBody(request, env);
     if (bodySizeError) {
-      logWrapperWarning("song_preview.container.preview.rejected", {
+      logWrapperWarning(`${routeEvent}.rejected`, {
         reason: "payload_too_large",
         content_length: Number(request.headers.get("content-length") ?? "0"),
         latency_ms: Date.now() - startedAt,
@@ -180,7 +183,7 @@ export async function handleSongPreviewContainerRequest(
       return bodySizeError;
     }
 
-    logWrapperEvent("song_preview.container.preview.forwarded", {
+    logWrapperEvent(`${routeEvent}.forwarded`, {
       environment: env.ENVIRONMENT ?? "development",
       container_instances: containerInstanceCount(env),
       content_length: Number(request.headers.get("content-length") ?? "0") || null,

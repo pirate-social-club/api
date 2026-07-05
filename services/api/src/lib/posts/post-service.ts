@@ -33,6 +33,7 @@ import {
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
 import { enqueueCommunityJob } from "../communities/jobs/store"
+import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { eligibilityFailed, internalError } from "../errors"
@@ -352,6 +353,30 @@ export async function createPost(input: {
         })
       }
       throw error
+    }
+
+    if (post.post_type === "video" && resolvedVideoAsset) {
+      // Soundtrack rights analysis is advisory (never blocks or deletes the
+      // post), so an enqueue failure must not fail the publish.
+      try {
+        await enqueueVideoMediaAnalysisIfEnabled({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          postId: post.post_id,
+          storageObjectKey: resolvedVideoAsset.upload.storage_object_key,
+          mimeType: resolvedVideoAsset.upload.mime_type,
+          durationMs: (input.body as Extract<CreatePostRequest, { post_type: "video" }>)
+            .media_refs?.[0]?.duration_ms ?? null,
+          createdAt,
+        })
+      } catch (error) {
+        console.error("[posts] video media analysis enqueue failed", {
+          community_id: input.communityId,
+          post_id: post.post_id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
     }
 
     await input.communityRepository.recordCommunityPostProjection({

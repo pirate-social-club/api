@@ -22,6 +22,7 @@ export type CommunityJobType =
   | "song_artifact_session_reaper"
   | "live_room_recording_ingest"
   | "live_room_viewer_sessions_prune"
+  | "video_media_analysis"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 
 export type CommunityJobRow = {
