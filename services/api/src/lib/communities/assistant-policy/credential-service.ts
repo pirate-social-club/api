@@ -4,7 +4,10 @@ import { executeFirst } from "../../db-helpers"
 import { makeId, nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, rowValue, stringOrNull } from "../../sql-row"
+import type { ReadClient } from "../../sql-client"
 import { withTransaction } from "../../transactions"
+import { openCommunityWriteClient } from "../community-read-access"
+import { parseCommunitySettingsJson } from "../create/validation"
 import { resolveCredentialWrapKey, resolveCredentialWrapKeyVersion } from "../../crypto/credential-wrap-key"
 import type {
   AssistantElevenLabsKeyStatus,
@@ -30,6 +33,8 @@ export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 const OPENROUTER_PROVIDER = "openrouter" as const
 const ELEVENLABS_PROVIDER = "elevenlabs" as const
 const ACTIVE_CREDENTIAL_CACHE_TTL_MS = 60_000
+const ASSISTANT_CREDENTIAL_CAPABILITIES_SETTINGS_KEY = "assistant_credential_capabilities"
+const LOCAL_STUDY_CAPABILITY_TTL_MS = 24 * 60 * 60 * 1000
 
 type ActiveCredentialCacheSource = "hit" | "miss"
 
@@ -38,12 +43,22 @@ export type ActiveCredentialPresence = {
   cache: ActiveCredentialCacheSource
 }
 
+export type CommunityElevenLabsStudyCapability = {
+  active: boolean
+  source: "local" | "control_plane_hit" | "control_plane_miss"
+}
+
 type ActiveCredentialCacheEntry = {
   active: boolean
   expiresAt: number
 }
 
 const activeCredentialPresenceCache = new Map<string, ActiveCredentialCacheEntry>()
+
+type StoredElevenLabsCapability = {
+  active: boolean
+  stale: boolean
+}
 
 export type CommunityAssistantCredentialResponse =
   | {
@@ -168,6 +183,96 @@ function credentialResponse(
       keyStatus,
       elevenLabsKeyStatus: keyStatus,
     }
+}
+
+function readStoredElevenLabsCapability(settings: Record<string, unknown>): StoredElevenLabsCapability | null {
+  const rawCapabilities = settings[ASSISTANT_CREDENTIAL_CAPABILITIES_SETTINGS_KEY]
+  if (!rawCapabilities || typeof rawCapabilities !== "object" || Array.isArray(rawCapabilities)) {
+    return null
+  }
+  const capabilities = rawCapabilities as Record<string, unknown>
+  const value = capabilities.elevenlabs_active
+  if (typeof value !== "boolean") {
+    return null
+  }
+  const updatedAtMs = typeof capabilities.updated_at === "string" ? Date.parse(capabilities.updated_at) : NaN
+  return {
+    active: value,
+    stale: !Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > LOCAL_STUDY_CAPABILITY_TTL_MS,
+  }
+}
+
+async function readLocalElevenLabsStudyCapability(input: {
+  client: ReadClient
+  communityId: string
+}): Promise<StoredElevenLabsCapability | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT settings_json
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [input.communityId],
+  })
+  return readStoredElevenLabsCapability(parseCommunitySettingsJson(rowValue(row, "settings_json")))
+}
+
+async function writeLocalElevenLabsStudyCapability(input: {
+  client: ReadClient
+  communityId: string
+  active: boolean
+}): Promise<void> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT settings_json
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [input.communityId],
+  })
+  const settings = parseCommunitySettingsJson(rowValue(row, "settings_json"))
+  const existingCapabilities = settings[ASSISTANT_CREDENTIAL_CAPABILITIES_SETTINGS_KEY]
+  const capabilities = existingCapabilities && typeof existingCapabilities === "object" && !Array.isArray(existingCapabilities)
+    ? existingCapabilities as Record<string, unknown>
+    : {}
+  await input.client.execute({
+    sql: `
+      UPDATE communities
+      SET settings_json = ?2
+      WHERE community_id = ?1
+    `,
+    args: [
+      input.communityId,
+      JSON.stringify({
+        ...settings,
+        [ASSISTANT_CREDENTIAL_CAPABILITIES_SETTINGS_KEY]: {
+          ...capabilities,
+          elevenlabs_active: input.active,
+          updated_at: nowIso(),
+        },
+      }),
+    ],
+  })
+}
+
+async function syncLocalElevenLabsStudyCapability(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  active: boolean
+}): Promise<void> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await writeLocalElevenLabsStudyCapability({
+      client: db.client,
+      communityId: input.communityId,
+      active: input.active,
+    })
+  } finally {
+    db.close()
+  }
 }
 
 function activeCredentialCacheKey(input: {
@@ -392,6 +497,14 @@ export async function saveCommunityAssistantCredential(input: {
 
   })
   clearActiveCredentialPresenceCache({ env: input.env, communityId: input.communityId, provider })
+  if (provider === ELEVENLABS_PROVIDER) {
+    await syncLocalElevenLabsStudyCapability({
+      env: input.env,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      active: true,
+    })
+  }
 
   console.info("[community-assistant-credential] save:success", {
     communityId: input.communityId,
@@ -476,6 +589,28 @@ export async function getActiveCommunityElevenLabsCredentialPresence(input: {
   })
 }
 
+export async function getCommunityElevenLabsStudyCapability(input: {
+  client: ReadClient
+  env: Env
+  communityId: string
+}): Promise<CommunityElevenLabsStudyCapability> {
+  const local = await readLocalElevenLabsStudyCapability(input)
+  if (local && !local.stale) {
+    return { active: local.active, source: "local" }
+  }
+
+  const controlPlane = await getActiveCommunityElevenLabsCredentialPresence(input)
+  await writeLocalElevenLabsStudyCapability({
+    client: input.client,
+    communityId: input.communityId,
+    active: controlPlane.active,
+  })
+  return {
+    active: controlPlane.active,
+    source: controlPlane.cache === "hit" ? "control_plane_hit" : "control_plane_miss",
+  }
+}
+
 export async function revokeCommunityAssistantCredential(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
@@ -509,6 +644,14 @@ export async function revokeCommunityAssistantCredential(input: {
     args: [input.communityId, provider, nowIso()],
   })
   clearActiveCredentialPresenceCache({ env: input.env, communityId: input.communityId, provider })
+  if (provider === ELEVENLABS_PROVIDER) {
+    await syncLocalElevenLabsStudyCapability({
+      env: input.env,
+      communityRepository: input.communityRepository,
+      communityId: input.communityId,
+      active: false,
+    })
+  }
 
   console.info("[community-assistant-credential] revoke:success", {
     communityId: input.communityId,

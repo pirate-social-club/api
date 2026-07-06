@@ -95,6 +95,20 @@ async function saveOpenRouterKey(input: {
   )
 }
 
+async function saveElevenLabsKey(input: {
+  env: Env
+  communityId: string
+  accessToken: string
+  apiKey?: string
+}): Promise<Response> {
+  return requestJson(
+    `http://pirate.test/communities/${input.communityId}/assistant-credential/elevenlabs`,
+    { api_key: input.apiKey ?? "elevenlabs-test-route-key-1234" },
+    input.env,
+    input.accessToken,
+  )
+}
+
 async function revokeOpenRouterKey(input: {
   env: Env
   communityId: string
@@ -102,6 +116,19 @@ async function revokeOpenRouterKey(input: {
 }): Promise<Response> {
   return requestJson(
     `http://pirate.test/communities/${input.communityId}/assistant-credential/revoke`,
+    {},
+    input.env,
+    input.accessToken,
+  )
+}
+
+async function revokeElevenLabsKey(input: {
+  env: Env
+  communityId: string
+  accessToken: string
+}): Promise<Response> {
+  return requestJson(
+    `http://pirate.test/communities/${input.communityId}/assistant-credential/elevenlabs/revoke`,
     {},
     input.env,
     input.accessToken,
@@ -184,6 +211,31 @@ async function listCredentialRows(input: {
     args: [input.communityId],
   })
   return result.rows
+}
+
+async function readElevenLabsLocalCapability(input: {
+  communityDbRoot: string
+  communityId: string
+}): Promise<boolean | null> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: "SELECT settings_json FROM communities WHERE community_id = ?1 LIMIT 1",
+      args: [input.communityId],
+    })
+    const raw = result.rows[0]?.settings_json
+    const settings = typeof raw === "string" && raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {}
+    const capabilities = settings.assistant_credential_capabilities
+    if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) {
+      return null
+    }
+    const value = (capabilities as Record<string, unknown>).elevenlabs_active
+    return typeof value === "boolean" ? value : null
+  } finally {
+    client.close()
+  }
 }
 
 describe("community assistant routes", () => {
@@ -381,6 +433,43 @@ describe("community assistant routes", () => {
     expect(body.openRouterKeyStatus).toEqual({ kind: "missing" })
     const rows = await listCredentialRows({ client: ctx.client, communityId })
     expect(rows.every((row) => row.status !== "active")).toBe(true)
+  })
+
+  test("owners save and revoke ElevenLabs credentials sync the local study capability", async () => {
+    const ctx = await createAssistantRouteContext()
+    const owner = await exchangeJwt(ctx.env, "assistant-elevenlabs-capability-owner")
+    const communityId = await createTestCommunity({
+      env: ctx.env,
+      accessToken: owner.accessToken,
+      subject: "ElevenLabs Capability",
+    })
+
+    expect(await readElevenLabsLocalCapability({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })).toBeNull()
+
+    const saveResponse = await saveElevenLabsKey({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+    expect(saveResponse.status).toBe(200)
+    expect(await readElevenLabsLocalCapability({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })).toBe(true)
+
+    const revokeResponse = await revokeElevenLabsKey({
+      env: ctx.env,
+      communityId,
+      accessToken: owner.accessToken,
+    })
+    expect(revokeResponse.status).toBe(200)
+    expect(await readElevenLabsLocalCapability({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+    })).toBe(false)
   })
 
   test("assistant policy responses never return the saved API key", async () => {
