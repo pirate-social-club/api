@@ -44,6 +44,7 @@
     "mint:dev-jwt": "bun run scripts/mint-dev-jwt.ts",
     "e2e:story-video-royalty-cycle": "bun run scripts/e2e-story-video-royalty-cycle.ts",
     "smoke:story-remix-cycle": "bun run scripts/smoke-story-remix-cycle.ts",
+    "smoke:story-royalty-allocation": "bun run scripts/smoke-story-remix-cycle.ts --royalty-allocation",
     "live-room:e2e:local": "bun run scripts/live-room-local-e2e.ts",
     "live-room:smoke:paid-staging": "bun run scripts/live-room-paid-staging-smoke.ts",
     "seed:local-smoke": "bun run scripts/seed-community-lifecycle.ts --mode local-smoke --manifest scripts/seed-manifests/local-smoke.json",
