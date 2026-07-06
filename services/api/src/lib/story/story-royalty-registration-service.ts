@@ -16,6 +16,8 @@ import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
 import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-tx"
+import { loadStoryRoyaltySharesForAsset } from "../communities/commerce/royalty-allocations"
+import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-allocations"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -34,11 +36,12 @@ export type StoryRoyaltyRegistrationResult = {
   storyRevenueToken: string
   storyRoyaltyRegistrationStatus: "registered"
   storyDerivativeRegisteredAt: string | null
+  royaltyDistributionTxHash: string | null
 }
 
 type StoryRoyaltyRegistrationTestResult =
-  & Omit<StoryRoyaltyRegistrationResult, "ipRoyaltyVault">
-  & { ipRoyaltyVault?: string | null }
+  & Omit<StoryRoyaltyRegistrationResult, "ipRoyaltyVault" | "royaltyDistributionTxHash">
+  & { ipRoyaltyVault?: string | null; royaltyDistributionTxHash?: string | null }
 
 type ResolvedDerivativeParent = {
   ipId: `0x${string}`
@@ -61,6 +64,10 @@ type StoryIpAssetClient = {
       parentIpIds: `0x${string}`[]
       licenseTermsIds: bigint[]
     }
+    royaltyShares?: Array<{
+      recipient: `0x${string}`
+      percentage: number
+    }>
     ipMetadata: {
       ipMetadataURI: string
       ipMetadataHash: `0x${string}`
@@ -70,6 +77,8 @@ type StoryIpAssetClient = {
   }) => Promise<{
     ipId?: `0x${string}`
     tokenId?: bigint | number | string
+    distributeRoyaltyTokensTxHash?: `0x${string}` | string
+    ipRoyaltyVault?: `0x${string}` | string
   }>
   registerIpAsset: (request: {
     nft: {
@@ -82,6 +91,10 @@ type StoryIpAssetClient = {
       terms: ReturnType<typeof resolvePilTermsForLicense>
       maxLicenseTokens?: bigint
     }>
+    royaltyShares?: Array<{
+      recipient: `0x${string}`
+      percentage: number
+    }>
     ipMetadata: {
       ipMetadataURI: string
       ipMetadataHash: `0x${string}`
@@ -92,6 +105,8 @@ type StoryIpAssetClient = {
     ipId?: `0x${string}`
     tokenId?: bigint | number | string
     licenseTermsIds?: Array<bigint | number | string>
+    distributeRoyaltyTokensTxHash?: `0x${string}` | string
+    ipRoyaltyVault?: `0x${string}` | string
   }>
 }
 
@@ -129,6 +144,7 @@ let testRoyaltyRegistrar: ((input: {
   assetKind: StoryRoyaltyAssetKind
   bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
+  royaltyShares?: StoryRoyaltyShareRow[] | null
 }) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null = null
 
 let testStoryRoyaltySdkClientFactory: ((input: {
@@ -151,6 +167,7 @@ export function setStoryRoyaltyRegistrarForTests(
     assetKind: StoryRoyaltyAssetKind
     bundle: SongArtifactBundle | null
     primaryContentHash: `0x${string}`
+    royaltyShares?: StoryRoyaltyShareRow[] | null
   }) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null,
 ): void {
   testRoyaltyRegistrar = registrar
@@ -702,10 +719,17 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   assetKind: StoryRoyaltyAssetKind
   bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
+  royaltyShares?: StoryRoyaltyShareRow[] | null
 }): Promise<StoryRoyaltyRegistrationResult | null> {
   if (testRoyaltyRegistrar) {
     const result = await testRoyaltyRegistrar(input)
-    return result ? { ...result, ipRoyaltyVault: result.ipRoyaltyVault ?? null } : null
+    return result
+      ? {
+          ...result,
+          ipRoyaltyVault: result.ipRoyaltyVault ?? null,
+          royaltyDistributionTxHash: result.royaltyDistributionTxHash ?? null,
+        }
+      : null
   }
 
   const rightsBasis = normalizeStoryRoyaltyRightsBasis(input.rightsBasis)
@@ -763,6 +787,17 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
+  const allocationRows = input.royaltyShares ?? await loadStoryRoyaltySharesForAsset({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.assetId,
+    })
+  const royaltyShares = allocationRows.length > 0
+    ? allocationRows.map((allocation) => ({
+        recipient: allocation.walletAddressNormalized,
+        percentage: allocation.percentage,
+      }))
+    : undefined
   const resolveVault = async (ipId: `0x${string}`): Promise<string | null> => {
     try {
       const vault = await storyClient.royalty?.getRoyaltyVaultAddress(ipId)
@@ -791,6 +826,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
           parentIpIds: derivativeParents!.map((parent) => parent.ipId),
           licenseTermsIds: derivativeParents!.map((parent) => parent.licenseTermsId),
         },
+        royaltyShares,
         ipMetadata: {
           ipMetadataURI: metadata.ipMetadataUri,
           ipMetadataHash: metadata.ipMetadataHash,
@@ -800,7 +836,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       }),
     )
     const derivativeIpId = derivativeResponse.ipId!
-    const ipRoyaltyVault = await resolveVault(derivativeIpId)
+    const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
 
     return {
       storyIpId: derivativeIpId,
@@ -814,6 +850,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       storyRevenueToken: WIP_TOKEN_ADDRESS,
       storyRoyaltyRegistrationStatus: "registered",
       storyDerivativeRegisteredAt: nowIso(),
+      royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || "").trim() || null,
     }
   }
 
@@ -838,6 +875,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
           maxLicenseTokens,
         },
       ],
+      royaltyShares,
       ipMetadata: {
         ipMetadataURI: metadata.ipMetadataUri,
         ipMetadataHash: metadata.ipMetadataHash,
@@ -851,7 +889,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     storyIpId: originalResponse.ipId!,
     storyIpNftContract: spgNftContract,
     storyIpNftTokenId: originalResponse.tokenId!.toString(),
-    ipRoyaltyVault: await resolveVault(originalResponse.ipId!),
+    ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
     storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
     storyLicenseTemplate: null,
     storyRoyaltyPolicy: royaltyPolicy,
@@ -859,5 +897,6 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     storyRevenueToken: WIP_TOKEN_ADDRESS,
     storyRoyaltyRegistrationStatus: "registered",
     storyDerivativeRegisteredAt: null,
+    royaltyDistributionTxHash: String(originalResponse.distributeRoyaltyTokensTxHash || "").trim() || null,
   }
 }

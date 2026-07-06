@@ -3,9 +3,11 @@ import type { RoyaltyAllocationRequest } from "../../../types"
 import {
   ROYALTY_ALLOCATION_VERSION,
   assertExistingAssetAllocationMatches,
+  buildStoryRoyaltySharesFromAllocationRows,
   buildAllocationInsertStatements,
   buildAllocationRows,
   fingerprintForRequest,
+  markStoryRoyaltyAllocationRegistrationPendingVerification,
   persistAssetWithAllocations,
   resolveAllocationChainId,
   resolveCreatorWalletSnapshot,
@@ -290,7 +292,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
   let effectiveCommercialRevSharePct = asset.commercial_rev_share_pct
 
   try {
-    const reusableOriginalRegistration = asset.rights_basis === "original"
+    const reusableOriginalRegistration = asset.rights_basis === "original" && asset.royalty_allocation_status === "none"
       ? await findReusableRegisteredOriginalStoryAssetByContent({
           client: input.client,
           communityId: input.communityId,
@@ -370,6 +372,14 @@ async function retryExistingStoryRoyaltyRegistration(input: {
           effectiveLicensePreset = null
           effectiveCommercialRevSharePct = null
         }
+        await markStoryRoyaltyAllocationRegistrationPendingVerification({
+          client: input.client,
+          communityId: input.communityId,
+          assetId: asset.asset_id,
+          ipRoyaltyVault,
+          distributionTxHash: royaltyRegistration.royaltyDistributionTxHash,
+          registeredAt: nowIso(),
+        })
       } else {
         const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
           ? "story_royalty_registration_unavailable"
@@ -740,6 +750,35 @@ export async function createAssetForPost(input: {
   const resolvedPrimaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
   let effectiveLicensePreset = input.licensePreset ?? null
   let effectiveCommercialRevSharePct = input.commercialRevSharePct ?? null
+  const requestedAllocations = input.royaltyAllocations ?? []
+  let royaltyAllocationStatus: "none" | "draft" | "verification_pending" = "none"
+  let royaltyAllocationFingerprint: string | null = null
+  let allocationStatements: InStatement[] = []
+  let storyRoyaltySharesForRegistration: ReturnType<typeof buildStoryRoyaltySharesFromAllocationRows> | null = null
+  let storyRoyaltyAllocationDistributionTxHash: string | null = null
+  if (requestedAllocations.length > 0) {
+    const allocationChainId = resolveAllocationChainId(input.env)
+    const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
+    const creator = await resolveCreatorWalletSnapshot({
+      userRepository: input.userRepository,
+      userId: input.post.author_user_id ?? "",
+    })
+    const allocationRows = buildAllocationRows({
+      assetId: input.post.asset_id,
+      communityId: input.communityId,
+      creatorUserId: input.post.author_user_id ?? "",
+      allocations: requestedAllocations,
+      fingerprint,
+      creator,
+      chainId: allocationChainId,
+      now: createdAt,
+      newId: () => `rya_${crypto.randomUUID()}`,
+    })
+    storyRoyaltySharesForRegistration = buildStoryRoyaltySharesFromAllocationRows(allocationRows)
+    allocationStatements = buildAllocationInsertStatements(allocationRows)
+    royaltyAllocationStatus = "draft"
+    royaltyAllocationFingerprint = fingerprint
+  }
   const lockedDeliveryAsync = (input.post.access_mode ?? "public") === "locked"
     && shouldPrepareLockedDeliveryAsync(input.env)
 
@@ -806,7 +845,9 @@ export async function createAssetForPost(input: {
   if (!lockedDeliveryAsync) {
     try {
       const shouldRunRoyaltyRegistration = shouldRegisterRoyalty && storyRoyaltyRegistrationStatus !== "registered"
-      const reusableOriginalRegistration = shouldRunRoyaltyRegistration && (input.post.rights_basis ?? "none") === "original"
+      const reusableOriginalRegistration = shouldRunRoyaltyRegistration
+        && requestedAllocations.length === 0
+        && (input.post.rights_basis ?? "none") === "original"
         ? await findReusableRegisteredOriginalStoryAssetByContent({
             client: input.client,
             communityId: input.communityId,
@@ -866,6 +907,7 @@ export async function createAssetForPost(input: {
             assetKind: input.assetKind,
             bundle: input.bundle ?? null,
             primaryContentHash: resolvedPrimaryContentHash,
+            royaltyShares: storyRoyaltySharesForRegistration,
           })
         : null
       if (royaltyRegistration) {
@@ -889,6 +931,10 @@ export async function createAssetForPost(input: {
         if ((input.post.rights_basis ?? "none") === "derivative" && !royaltyRegistration.storyLicenseTermsId) {
           effectiveLicensePreset = null
           effectiveCommercialRevSharePct = null
+        }
+        if (storyRoyaltySharesForRegistration && storyRoyaltySharesForRegistration.length > 0) {
+          storyRoyaltyAllocationDistributionTxHash = royaltyRegistration.royaltyDistributionTxHash
+          royaltyAllocationStatus = "verification_pending"
         }
       } else if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "pending") {
         const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
@@ -937,32 +983,6 @@ export async function createAssetForPost(input: {
       },
       isStoryRegistrationFailureRetryable(storyErrorClass),
     )
-  }
-
-  const requestedAllocations = input.royaltyAllocations ?? []
-  let royaltyAllocationStatus: "none" | "draft" = "none"
-  let royaltyAllocationFingerprint: string | null = null
-  let allocationStatements: InStatement[] = []
-  if (requestedAllocations.length > 0) {
-    const allocationChainId = resolveAllocationChainId(input.env)
-    const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
-    const creator = await resolveCreatorWalletSnapshot({
-      userRepository: input.userRepository,
-      userId: input.post.author_user_id ?? "",
-    })
-    allocationStatements = buildAllocationInsertStatements(buildAllocationRows({
-      assetId: input.post.asset_id,
-      communityId: input.communityId,
-      creatorUserId: input.post.author_user_id ?? "",
-      allocations: requestedAllocations,
-      fingerprint,
-      creator,
-      chainId: allocationChainId,
-      now: createdAt,
-      newId: () => `rya_${crypto.randomUUID()}`,
-    }))
-    royaltyAllocationStatus = "draft"
-    royaltyAllocationFingerprint = fingerprint
   }
 
   const assetInsert: InStatement = {
@@ -1039,7 +1059,7 @@ export async function createAssetForPost(input: {
       royaltyAllocationStatus,
       ROYALTY_ALLOCATION_VERSION,
       royaltyAllocationFingerprint,
-      royaltyAllocationStatus === "draft" ? 0 : 1,
+      royaltyAllocationStatus === "none" ? 1 : 0,
     ],
   }
   if (allocationStatements.length > 0) {
@@ -1050,6 +1070,16 @@ export async function createAssetForPost(input: {
     })
   } else {
     await input.client.execute(assetInsert)
+  }
+  if (royaltyAllocationStatus === "verification_pending") {
+    await markStoryRoyaltyAllocationRegistrationPendingVerification({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.post.asset_id,
+      ipRoyaltyVault,
+      distributionTxHash: storyRoyaltyAllocationDistributionTxHash,
+      registeredAt: nowIso(),
+    })
   }
   const projectionCandidate = {
     assetKind: input.assetKind,
@@ -1303,8 +1333,10 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   })
   try {
     const shouldRunRoyaltyRegistration = shouldRegisterRoyalty && storyRoyaltyRegistrationStatus !== "registered"
-    const reusableOriginalRegistration = shouldRunRoyaltyRegistration && asset.rights_basis === "original"
-      ? await findReusableRegisteredOriginalStoryAssetByContent({
+      const reusableOriginalRegistration = shouldRunRoyaltyRegistration
+        && asset.rights_basis === "original"
+        && asset.royalty_allocation_status === "none"
+        ? await findReusableRegisteredOriginalStoryAssetByContent({
           client: input.client,
           communityId: input.communityId,
           creatorUserId: asset.creator_user_id,
@@ -1380,6 +1412,14 @@ export async function prepareRequestedLockedAssetDelivery(input: {
         effectiveLicensePreset = null
         effectiveCommercialRevSharePct = null
       }
+      await markStoryRoyaltyAllocationRegistrationPendingVerification({
+        client: input.client,
+        communityId: input.communityId,
+        assetId: asset.asset_id,
+        ipRoyaltyVault,
+        distributionTxHash: royaltyRegistration.royaltyDistributionTxHash,
+        registeredAt: nowIso(),
+      })
     } else if (shouldRegisterRoyalty && storyRoyaltyRegistrationStatus === "pending") {
       const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
         ? "story_royalty_registration_unavailable"

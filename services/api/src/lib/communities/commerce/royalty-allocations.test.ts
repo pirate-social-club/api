@@ -9,6 +9,8 @@ import {
   buildAllocationRows,
   computeAllocationFingerprint,
   fingerprintForRequest,
+  loadStoryRoyaltySharesForAsset,
+  markStoryRoyaltyAllocationRegistrationPendingVerification,
   persistAssetWithAllocations,
   resolveAllocationChainId,
 } from "./royalty-allocations"
@@ -66,6 +68,9 @@ async function createTables(client: LibsqlClient): Promise<void> {
       royalty_allocation_projection_synced INTEGER NOT NULL DEFAULT 1,
       story_ip_id TEXT,
       ip_royalty_vault TEXT,
+      royalty_allocation_effect_key TEXT,
+      royalty_allocation_tx_hash TEXT,
+      royalty_allocation_registered_at TEXT,
       updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
     )
   `)
@@ -81,11 +86,14 @@ async function createTables(client: LibsqlClient): Promise<void> {
       wallet_address_display TEXT NOT NULL,
       chain_id INTEGER NOT NULL,
       share_bps INTEGER NOT NULL CHECK (share_bps > 0 AND share_bps <= 10000),
+      expected_rt_units TEXT,
       distribution_status TEXT NOT NULL DEFAULT 'pending',
+      verified_rt_units TEXT,
       failure_reason TEXT,
       position INTEGER NOT NULL CHECK (position >= 0),
       allocation_fingerprint TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      registered_at TEXT
     )
   `)
   await client.execute(`CREATE UNIQUE INDEX idx_alloc_asset_wallet ON initial_royalty_allocations(asset_id, wallet_address_normalized)`)
@@ -298,6 +306,104 @@ describe("assertExistingAssetAllocationMatches (idempotent retry)", () => {
       client: appClient(client),
       communityId: "com_1", assetId: "ast_mismatch", requestedFingerprint: different,
     })).rejects.toThrow(/do not match/)
+  })
+})
+
+describe("Story royalty token share registration", () => {
+  const snapshot = { walletAddressNormalized: CREATOR, walletAttachmentId: "wa_1" }
+
+  async function insertAllocationAsset(client: LibsqlClient, assetId: string, allocations = split()): Promise<void> {
+    const fingerprint = await fingerprintForRequest(allocations, AENEID)
+    await persistAssetWithAllocations({
+      client: appClient(client),
+      assetInsert: assetInsertFor(assetId, fingerprint),
+      allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+        assetId,
+        communityId: "com_1",
+        creatorUserId: "usr_author",
+        allocations,
+        fingerprint,
+        creator: snapshot,
+        chainId: AENEID,
+        now: "2026-01-01T00:00:00Z",
+        newId: () => crypto.randomUUID(),
+      })),
+    })
+  }
+
+  test("loads persisted bps as Story whole-percent royalty shares", async () => {
+    const client = freshDb()
+    await createTables(client)
+    await insertAllocationAsset(client, "ast_story_shares")
+
+    const shares = await loadStoryRoyaltySharesForAsset({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_story_shares",
+    })
+
+    expect(shares).toEqual([
+      { walletAddressNormalized: CREATOR, shareBps: 9000, percentage: 90 },
+      { walletAddressNormalized: COLLAB, shareBps: 1000, percentage: 10 },
+    ])
+  })
+
+  test("rejects sub-percent shares because Story royaltyShares are whole percentages", async () => {
+    const client = freshDb()
+    await createTables(client)
+    await insertAllocationAsset(client, "ast_fractional", [
+      { recipient_kind: "creator", wallet_address: CREATOR, share_bps: 6667 },
+      { recipient_kind: "collaborator", wallet_address: COLLAB, share_bps: 3333 },
+    ])
+
+    await expect(loadStoryRoyaltySharesForAsset({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_fractional",
+    })).rejects.toThrow(/whole-percent/)
+  })
+
+  test("records Story distribution tx and leaves allocations pending verification", async () => {
+    const client = freshDb()
+    await createTables(client)
+    await insertAllocationAsset(client, "ast_registered")
+
+    await markStoryRoyaltyAllocationRegistrationPendingVerification({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_registered",
+      ipRoyaltyVault: "0xcccccccccccccccccccccccccccccccccccccccc",
+      distributionTxHash: "0xtx",
+      registeredAt: "2026-01-02T00:00:00Z",
+    })
+
+    const asset = await client.execute({
+      sql: `
+        SELECT royalty_allocation_status, royalty_allocation_tx_hash, ip_royalty_vault,
+               royalty_allocation_projection_synced
+        FROM assets
+        WHERE asset_id = ?1
+      `,
+      args: ["ast_registered"],
+    })
+    expect(asset.rows[0]).toMatchObject({
+      royalty_allocation_status: "verification_pending",
+      royalty_allocation_tx_hash: "0xtx",
+      ip_royalty_vault: "0xcccccccccccccccccccccccccccccccccccccccc",
+      royalty_allocation_projection_synced: 0,
+    })
+    const rows = await client.execute({
+      sql: `
+        SELECT distribution_status, registered_at
+        FROM initial_royalty_allocations
+        WHERE asset_id = ?1
+        ORDER BY position ASC
+      `,
+      args: ["ast_registered"],
+    })
+    expect(rows.rows).toHaveLength(2)
+    expect(rows.rows.every((row) => row.distribution_status === "pending")).toBe(true)
+    expect(rows.rows.every((row) => row.registered_at === "2026-01-02T00:00:00Z")).toBe(true)
   })
 })
 
