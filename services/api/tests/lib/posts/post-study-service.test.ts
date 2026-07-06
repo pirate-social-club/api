@@ -17,6 +17,7 @@ import { withMockedFetch } from "../../helpers"
 
 const COMMUNITY_ID = "cmt_study"
 const POST_ID = "pst_song"
+const SECOND_POST_ID = "pst_song_two"
 const AUTHOR_ID = "usr_author"
 const LEARNER_ID = "usr_learner"
 const NOW = "2026-06-29T08:00:00.000Z"
@@ -255,6 +256,21 @@ async function seedSongPost(accessMode: "public" | "locked" = "public"): Promise
             'original', 'allow', 'safe', 'none', ?4, ?4, ?5, 'ast_song',
             'public', 'Midnight Waves', 'ipfs://cover')
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW, accessMode])
+}
+
+async function seedSecondSongPost(): Promise<void> {
+  await exec(`
+    INSERT INTO posts (
+      post_id, community_id, author_user_id, identity_mode, post_type,
+      status, song_mode, title, lyrics, source_language, rights_basis,
+      analysis_state, content_safety_state, age_gate_policy, created_at,
+      updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+    )
+    VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+            'Morning Static', 'Static on the morning radio', 'en',
+            'original', 'allow', 'safe', 'none', ?4, ?4, 'public', 'ast_song_two',
+            'public', 'Morning Static', 'ipfs://cover-two')
+  `, [SECOND_POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
 }
 
 async function setStudyEnabled(enabled: boolean): Promise<void> {
@@ -959,6 +975,7 @@ describe("post study service", () => {
 
   test("streak leaderboard excludes dead streaks and returns the viewer standing", async () => {
     await seedSongPost()
+    await seedSecondSongPost()
     const today = new Date().toISOString().slice(0, 10)
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
     const stale = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)
@@ -970,8 +987,9 @@ describe("post study service", () => {
       )
       VALUES
         (?1, ?2, ?3, 2, 4, ?4, ?5, 5, ?6, ?6),
-        ('usr_peer', ?2, ?3, 7, 7, ?5, ?5, 7, ?6, ?6)
-    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, yesterday, NOW])
+        ('usr_peer', ?2, ?3, 7, 7, ?5, ?5, 7, ?6, ?6),
+        (?1, ?7, ?3, 3, 3, ?5, ?5, 3, ?6, ?6)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, yesterday, NOW, SECOND_POST_ID])
     await exec(`
       INSERT INTO song_engagement_days (
         user_id, post_id, community_id, activity_date,
@@ -980,6 +998,14 @@ describe("post study service", () => {
       )
       VALUES (?1, ?2, ?3, ?4, 3, 2, 5, 0, 0, ?5, ?5)
     `, [LEARNER_ID, POST_ID, COMMUNITY_ID, today, NOW])
+    await exec(`
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 5, 4, 5, 0, 1, ?5, ?5)
+    `, [LEARNER_ID, SECOND_POST_ID, COMMUNITY_ID, today, NOW])
 
     const leaderboard = await getPostStreakLeaderboard({
       actor: learnerActor,
@@ -1027,21 +1053,37 @@ describe("post study service", () => {
       total_active_streaks: 1,
       viewer: leaderboard.viewer,
     })
+    const secondSummary = await getPostStreakSummary({
+      client: client!,
+      postId: SECOND_POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+    })
 
     const response = {
       post: {
+        community_id: COMMUNITY_ID,
         post_id: POST_ID,
+        post_type: "song",
+        status: "published",
+      },
+    } as LocalizedPostResponse
+    const secondResponse = {
+      post: {
+        community_id: COMMUNITY_ID,
+        post_id: SECOND_POST_ID,
         post_type: "song",
         status: "published",
       },
     } as LocalizedPostResponse
     await hydrateSongStreakSummariesForResponses({
       client: client!,
-      responses: [response],
+      responses: [response, secondResponse],
       profileRepository: profileRepository as never,
       viewerUserId: LEARNER_ID,
     })
     expect(response.streak_summary).toEqual(summary)
+    expect(secondResponse.streak_summary).toEqual(secondSummary)
   })
 
   test("streak materialization extends consecutive days, resets gaps, and ignores stale qualified dates", async () => {

@@ -21,6 +21,7 @@ import { publicCommunityId, publicPostId } from "../public-ids"
 import { withTransaction } from "../transactions"
 import { logPipelineError } from "../observability/pipeline-log"
 import { sameLanguageLocale } from "../localization/content-locale"
+import { rowValue } from "../sql-row"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
@@ -2436,6 +2437,7 @@ type SongStreakRow = {
 
 type SongStreakDayRow = {
   karaoke_pass_count?: unknown
+  post_id?: unknown
   qualified?: unknown
   study_attempt_count?: unknown
   study_target_count?: unknown
@@ -2449,6 +2451,10 @@ function addUtcDays(date: string, days: number): string {
   const parsed = new Date(`${date}T00:00:00.000Z`)
   parsed.setUTCDate(parsed.getUTCDate() + days)
   return parsed.toISOString().slice(0, 10)
+}
+
+function placeholders(count: number, startIndex = 1): string {
+  return Array.from({ length: count }, (_, index) => `?${startIndex + index}`).join(", ")
 }
 
 function clampStreakLeaderboardLimit(value?: number | null): number {
@@ -2586,6 +2592,150 @@ async function readSongStreakSummary(input: {
       viewer: viewerStanding({ day: viewerDay, row: viewerRow, today, yesterday }),
     },
   }
+}
+
+export async function listPostStreakSummaries(input: {
+  client: Client
+  limit?: number | null
+  postIds: string[]
+  profileRepository: ProfileRepository
+  userId: string
+}): Promise<Map<string, SongStreakSummary>> {
+  const postIds = Array.from(new Set(input.postIds.map((postId) => postId.trim()).filter(Boolean)))
+  if (postIds.length === 0) return new Map()
+
+  const limit = clampStreakLeaderboardLimit(input.limit ?? 3)
+  const today = utcDateFromIso(nowIso())
+  const yesterday = addUtcDays(today, -1)
+  const postIdPlaceholders = placeholders(postIds.length)
+  const activeDateIndex = postIds.length + 1
+  const rowLimitIndex = postIds.length + 2
+
+  const [boardResult, totalActiveResult, viewerResult, viewerDayResult] = await Promise.all([
+    input.client.execute({
+      sql: `
+        SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
+               total_qualified_days, last_qualified_date, board_rank
+        FROM (
+          SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
+                 total_qualified_days, last_qualified_date,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY post_id
+                   ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
+                 ) AS board_rank
+          FROM song_streaks
+          WHERE post_id IN (${postIdPlaceholders})
+            AND last_qualified_date >= ?${activeDateIndex}
+        )
+        WHERE board_rank <= ?${rowLimitIndex}
+        ORDER BY post_id ASC, board_rank ASC
+      `,
+      args: [...postIds, yesterday, limit + STREAK_LEADERBOARD_OVERFETCH],
+    }),
+    input.client.execute({
+      sql: `
+        SELECT post_id, COUNT(*) AS active_count
+        FROM song_streaks
+        WHERE post_id IN (${postIdPlaceholders})
+          AND last_qualified_date >= ?${activeDateIndex}
+        GROUP BY post_id
+      `,
+      args: [...postIds, yesterday],
+    }),
+    input.client.execute({
+      sql: `
+        SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
+               total_qualified_days, last_qualified_date
+        FROM song_streaks
+        WHERE user_id = ?1
+          AND post_id IN (${placeholders(postIds.length, 2)})
+      `,
+      args: [input.userId, ...postIds],
+    }),
+    input.client.execute({
+      sql: `
+        SELECT post_id, qualified, study_attempt_count, study_target_count, karaoke_pass_count
+        FROM song_engagement_days
+        WHERE user_id = ?1
+          AND post_id IN (${placeholders(postIds.length, 2)})
+          AND activity_date = ?${postIds.length + 2}
+      `,
+      args: [input.userId, ...postIds, today],
+    }),
+  ])
+
+  const boardRowsByPostId = new Map<string, SongStreakRow[]>()
+  for (const row of boardResult.rows as SongStreakRow[]) {
+    const postId = readString(rowValue(row, "post_id"))
+    if (!postId) continue
+    const rows = boardRowsByPostId.get(postId) ?? []
+    rows.push(row)
+    boardRowsByPostId.set(postId, rows)
+  }
+
+  const totalActiveByPostId = new Map<string, number>()
+  for (const row of totalActiveResult.rows ?? []) {
+    const postId = readString(rowValue(row, "post_id"))
+    if (!postId) continue
+    totalActiveByPostId.set(postId, Number(rowValue(row, "active_count") ?? 0))
+  }
+
+  const viewerRowsByPostId = new Map<string, SongStreakRow>()
+  for (const row of viewerResult.rows as SongStreakRow[]) {
+    const postId = readString(rowValue(row, "post_id"))
+    if (!postId) continue
+    viewerRowsByPostId.set(postId, row)
+  }
+
+  const viewerDaysByPostId = new Map<string, SongStreakDayRow>()
+  for (const row of viewerDayResult.rows as SongStreakDayRow[]) {
+    const postId = readString(rowValue(row, "post_id"))
+    if (!postId) continue
+    viewerDaysByPostId.set(postId, row)
+  }
+
+  const identityUserIds = Array.from(new Set(
+    [...boardRowsByPostId.values()]
+      .flat()
+      .map((row) => readString(row.user_id) ?? "")
+      .filter(Boolean),
+  ))
+  const identities = await resolveLeaderboardIdentities(input.profileRepository, identityUserIds)
+
+  const summaries = new Map<string, SongStreakSummary>()
+  for (const postId of postIds) {
+    const entries: SongStreakLeaderboardEntry[] = []
+    for (const row of boardRowsByPostId.get(postId) ?? []) {
+      const userId = readString(row.user_id)
+      if (!userId) continue
+      const identity = identities.get(userId)
+      if (!identity) continue
+      entries.push({
+        best_streak: Number(row.best_streak ?? 0),
+        current_streak: Number(row.current_streak ?? 0),
+        identity,
+        is_viewer: userId === input.userId,
+        last_qualified_date: readString(row.last_qualified_date) ?? today,
+        rank: entries.length + 1,
+        streak_started_date: readString(row.streak_started_date) ?? today,
+        total_qualified_days: Number(row.total_qualified_days ?? 0),
+      })
+      if (entries.length >= limit) break
+    }
+
+    summaries.set(postId, {
+      entries,
+      total_active_streaks: totalActiveByPostId.get(postId) ?? 0,
+      viewer: viewerStanding({
+        day: viewerDaysByPostId.get(postId) ?? null,
+        row: viewerRowsByPostId.get(postId) ?? null,
+        today,
+        yesterday,
+      }),
+    })
+  }
+
+  return summaries
 }
 
 function isMissingStreakTableError(error: unknown): boolean {
