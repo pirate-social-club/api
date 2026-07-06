@@ -99,6 +99,11 @@ type CourtyardInventoryCacheEntry = {
   expiresAtMs: number
 }
 
+type CourtyardWalletInventoryGroupCacheEntry = {
+  result: { groups: CourtyardWalletInventoryGroup[]; unavailable: boolean }
+  expiresAtMs: number
+}
+
 let erc721InventoryMatcherForTests: ((input: {
   env: Env
   walletAddresses: string[]
@@ -106,7 +111,9 @@ let erc721InventoryMatcherForTests: ((input: {
 }) => Promise<{ matchedQuantity: number; unavailable?: boolean }>) | null = null
 
 const courtyardInventoryMatchCache = new Map<string, CourtyardInventoryCacheEntry>()
+const courtyardWalletInventoryGroupCache = new Map<string, CourtyardWalletInventoryGroupCacheEntry>()
 const DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS = 60_000
+const DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS = 30_000
 const DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS = 8_000
 const MAX_COURTYARD_INVENTORY_CACHE_ENTRIES = 1_000
 
@@ -122,6 +129,7 @@ export function setErc721InventoryMatcherForTests(
 
 export function clearErc721InventoryMatchCacheForTests(): void {
   courtyardInventoryMatchCache.clear()
+  courtyardWalletInventoryGroupCache.clear()
 }
 
 export function normalizeInventoryText(value: unknown): string | null {
@@ -439,6 +447,15 @@ export async function listCourtyardWalletInventoryGroups(input: {
     return { groups: [], unavailable: false }
   }
 
+  const cacheKey = JSON.stringify(walletAddresses.sort())
+  const cached = courtyardWalletInventoryGroupCache.get(cacheKey)
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return {
+      groups: cached.result.groups.map((group) => ({ ...group })),
+      unavailable: cached.result.unavailable,
+    }
+  }
+
   const groups = new Map<string, CourtyardWalletInventoryGroup>()
   const seenTokenKeys = new Set<string>()
   const pageLimit = 100
@@ -479,10 +496,21 @@ export async function listCourtyardWalletInventoryGroups(input: {
     return { groups: [], unavailable: true }
   }
 
-  return {
+  const result = {
     groups: Array.from(groups.values()).sort((a, b) => a.display_label.localeCompare(b.display_label)),
     unavailable: false,
   }
+  if (courtyardWalletInventoryGroupCache.size >= MAX_COURTYARD_INVENTORY_CACHE_ENTRIES) {
+    courtyardWalletInventoryGroupCache.clear()
+  }
+  courtyardWalletInventoryGroupCache.set(cacheKey, {
+    result: {
+      groups: result.groups.map((group) => ({ ...group })),
+      unavailable: result.unavailable,
+    },
+    expiresAtMs: Date.now() + DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS,
+  })
+  return result
 }
 
 function resolveCourtyardOwnershipFetchTimeoutMs(env: Env): number {

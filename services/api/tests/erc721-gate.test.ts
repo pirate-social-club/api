@@ -547,6 +547,42 @@ describe("erc721 gate evaluation", () => {
     })
   })
 
+  test("caches successful Courtyard wallet inventory groups briefly", async () => {
+    let fetchCount = 0
+    await withMockedFetch(() => async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({
+        total: 1,
+        assets: [{
+          chain: "polygon",
+          collection: "Watches",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Rolex Submariner",
+          token_id: "rolex-cache",
+          attributes: [
+            { name: "Brand", value: "Rolex" },
+            { name: "Model", value: "Submariner" },
+          ],
+        }],
+      })) as Response
+    }, async () => {
+      const first = await listCourtyardWalletInventoryGroups({
+        env: {},
+        walletAttachments,
+      })
+      const second = await listCourtyardWalletInventoryGroups({
+        env: {},
+        walletAttachments,
+      })
+
+      expect(first).toEqual(second)
+      expect(first.unavailable).toBe(false)
+      expect(first.groups).toHaveLength(1)
+    })
+    expect(fetchCount).toBe(2)
+  })
+
   test("bounds the Courtyard inventory match cache", async () => {
     let matcherCalls = 0
     setErc721InventoryMatcherForTests(async () => {

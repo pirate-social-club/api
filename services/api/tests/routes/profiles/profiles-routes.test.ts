@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import { resetCourtyardInventoryRateLimitForTests } from "../../../src/routes/profiles"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import {
   resolvePirateCheckoutOperatorAddress,
@@ -15,6 +16,7 @@ let cleanup: (() => Promise<void>) | null = null
 
 beforeEach(() => {
   resetRuntimeCaches()
+  resetCourtyardInventoryRateLimitForTests()
   setRedditVerificationCheckerForTests(null)
   setRedditSnapshotImporterForTests(null)
 })
@@ -264,6 +266,41 @@ describe("profile routes", () => {
           count: 1,
         }],
       })
+    })
+  })
+
+  test("profiles/me/courtyard-inventory rate limits repeated requests", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(
+      ctx.env,
+      "profile-courtyard-inventory-rate-limit-user",
+      "0x3333333333333333333333333333333333333333",
+    )
+
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 0,
+      assets: [],
+    })) as Response, async () => {
+      for (let index = 0; index < 30; index += 1) {
+        const response = await app.request("http://pirate.test/profiles/me/courtyard-inventory", {
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+          },
+        }, ctx.env)
+        expect(response.status).toBe(200)
+      }
+
+      const limited = await app.request("http://pirate.test/profiles/me/courtyard-inventory", {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      }, ctx.env)
+      expect(limited.status).toBe(429)
+      const body = await json(limited) as { code: string; message: string }
+      expect(body.code).toBe("rate_limited")
+      expect(body.message).toBe("Too many Courtyard inventory requests. Try again shortly.")
     })
   })
 
