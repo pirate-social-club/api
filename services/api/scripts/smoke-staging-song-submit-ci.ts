@@ -16,7 +16,10 @@
  *   PIRATE_SMOKE_SUBJECT             (optional)  JWT subject / test user id
  */
 
-import { SignJWT } from "jose"
+import {
+  createSmokeCommunity,
+  mintSmokeAccessToken,
+} from "./staging-smoke-support"
 
 type Json = Record<string, unknown>
 
@@ -70,24 +73,7 @@ async function requestJson(input: { method?: string; url: string; token?: string
 }
 
 async function mintAccessToken(): Promise<string> {
-  const secret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET
-  if (!secret) fail("AUTH_UPSTREAM_JWT_SHARED_SECRET is not configured")
-  const isStaging = new URL(apiBase).hostname.includes("staging")
-  const issuer = process.env.AUTH_UPSTREAM_JWT_ISSUER || (isStaging ? "pirate-staging-upstream" : "pirate-production-upstream")
-  const audience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE || (isStaging ? "pirate-api-staging" : "api-core")
-  const jwt = await new SignJWT({})
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setIssuer(issuer)
-    .setAudience(audience)
-    .setSubject(subject)
-    .setIssuedAt()
-    .setExpirationTime("15m")
-    .sign(new TextEncoder().encode(secret!))
-  const exchanged = await requestJson({
-    url: `${apiBase}/auth/session/exchange`,
-    body: { proof: { type: "jwt_based_auth", jwt } },
-  })
-  return asString(exchanged.access_token, "session_exchange.access_token")
+  return await mintSmokeAccessToken({ apiBase, subject, prefix: "song-smoke" })
 }
 
 console.log("[song-smoke] target", { apiBase, subject })
@@ -95,23 +81,15 @@ console.log("[song-smoke] target", { apiBase, subject })
 const token = await mintAccessToken()
 console.log("[song-smoke] authenticated")
 
-const created = await requestJson({
-  url: `${apiBase}/communities`,
+const created = await createSmokeCommunity({
+  apiBase,
   token,
-  okStatuses: [200, 201, 202],
-  body: {
-    display_name: `Song Submit CI Smoke ${suffix}`,
-    description: "Ephemeral staging smoke community for the song-submit path.",
-    governance_mode: "centralized",
-    membership_mode: "request",
-    default_age_gate_policy: "none",
-    allow_anonymous_identity: false,
-    handle_policy: { policy_template: "standard" },
-  },
+  displayName: `Song Submit CI Smoke ${suffix}`,
+  description: "Ephemeral staging smoke community for the song-submit path.",
+  prefix: "song-smoke",
 })
-const community = asObject(created.community, "create.community")
-const publicCommunityId = asString(community.id, "community.id")
-const communityId = publicCommunityId.replace(/^com_/, "")
+const publicCommunityId = created.publicCommunityId
+const communityId = created.communityId
 console.log("[song-smoke] community created", { communityId })
 
 const audioBytes = new TextEncoder().encode(`pirate song submit ci smoke ${new Date().toISOString()}\n`)
