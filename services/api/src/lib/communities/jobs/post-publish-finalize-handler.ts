@@ -2,6 +2,7 @@ import { getUserRepository } from "../../auth/repositories"
 import { openCommunityWriteClient } from "../community-read-access"
 import { nowIso } from "../../helpers"
 import { HttpError, internalError, notFoundError } from "../../errors"
+import type { DbExecutor } from "../../db-helpers"
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import { getListingRowByAssetId } from "../commerce/shared"
 import { createSongAssetForPost } from "../commerce/service"
@@ -16,7 +17,9 @@ import {
   getPostPublishRequest,
   markPostPublishRequestStatus,
 } from "../../posts/community-post-publish-request-store"
+import { logPipelineError, logPipelineInfo } from "../../observability/pipeline-log"
 import { getControlPlaneClient } from "../../runtime-deps"
+import { requiredString } from "../../sql-row"
 import { analyzeSongBundle } from "../../song-artifacts/song-artifact-analysis"
 import { consumeSongPostBundle } from "../../song-artifacts/song-artifact-post-resolution-service"
 import {
@@ -26,7 +29,7 @@ import {
 } from "../../song-artifacts/song-artifact-repository"
 import type { CreatePostRequest, Post, RoyaltyAllocationRequest, SongArtifactBundle } from "../../../types"
 import type { CommunityJobHandlerInput } from "./handler-types"
-import type { CommunityJobRepository } from "./runner-types"
+import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
 
@@ -37,6 +40,12 @@ type PostPublishFinalizePayload = {
 function failedResult(postId: string): string {
   return `failed:post_publish_finalize:${postId}`
 }
+
+function skippedResult(postId: string): string {
+  return `skipped:post_publish_finalize:${postId}`
+}
+
+export const POST_PUBLISH_FINALIZE_STUCK_AGE_MS = 15 * 60 * 1000
 
 type PublishOptions = {
   commercial_rev_share_pct?: number | null
@@ -190,13 +199,14 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
   return postStatus === "processing"
 }
 
-async function markFailed(input: {
+export async function markPostPublishFinalizeFailed(input: {
   client: Parameters<typeof markPostPublishFailed>[0]["executor"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
   communityId: string
   postId: string
   failureCode: NonNullable<Post["publish_failure_code"]>
   failureMessage: string
+  onlyIfProcessing?: boolean
   retryable: boolean
   now: string
 }): Promise<string> {
@@ -205,9 +215,18 @@ async function markFailed(input: {
     postId: input.postId,
     failureCode: input.failureCode,
     failureMessage: input.failureMessage,
+    onlyIfStatus: input.onlyIfProcessing ? "processing" : null,
     retryable: input.retryable,
     now: input.now,
   })
+  if (input.onlyIfProcessing && post.status !== "failed") {
+    logPipelineInfo("[community-job] skipped stale post publish finalize failure because post state changed", {
+      community_id: input.communityId,
+      post_id: input.postId,
+      status: post.status,
+    })
+    return skippedResult(input.postId)
+  }
   await markPostPublishRequestStatus({
     client: input.client,
     communityId: input.communityId,
@@ -228,6 +247,141 @@ async function markFailed(input: {
     updatedAt: input.now,
   })
   return failedResult(input.postId)
+}
+
+export async function findStuckPostPublishFinalizePostIds(input: {
+  client: DbExecutor
+  cutoffUpdatedAt: string
+  limit: number
+}): Promise<{ postIds: string[]; hasMore: boolean }> {
+  const limit = Math.max(1, Math.trunc(input.limit))
+  const result = await input.client.execute({
+    sql: `
+      SELECT post_id
+      FROM posts
+      WHERE status = 'processing'
+        AND updated_at <= ?1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM community_jobs
+          WHERE community_jobs.job_type = 'post_publish_finalize'
+            AND community_jobs.subject_type = 'post'
+            AND community_jobs.subject_id = posts.post_id
+            AND (
+              community_jobs.status IN ('queued', 'running')
+              OR (
+                community_jobs.status = 'failed'
+                AND community_jobs.attempt_count < ?2
+              )
+            )
+        )
+      ORDER BY updated_at ASC, post_id ASC
+      LIMIT ?3
+    `,
+    args: [input.cutoffUpdatedAt, COMMUNITY_JOB_MAX_ATTEMPTS, limit + 1],
+  })
+  const rows = result.rows.slice(0, limit)
+  return {
+    postIds: rows.map((row) => requiredString(row, "post_id")),
+    hasMore: result.rows.length > limit,
+  }
+}
+
+type PostPublishFinalizeReconcileCommunitySummary = {
+  community_id: string
+  failed_posts: number
+  has_more: boolean
+}
+
+type PostPublishFinalizeReconcileCommunityFailureSummary = {
+  community_id: string
+  error: string
+}
+
+type PostPublishFinalizeReconcileSummary = {
+  checked_communities: number
+  failed_posts: number
+  communities: PostPublishFinalizeReconcileCommunitySummary[]
+  failed_communities: PostPublishFinalizeReconcileCommunityFailureSummary[]
+}
+
+export async function reconcileStuckPostPublishFinalizeJobs(input: {
+  env: CommunityJobHandlerInput["env"]
+  communityRepository: CommunityJobRepository
+  communityIds?: string[] | null
+  maxCommunities?: number
+  maxPostsPerCommunity?: number
+  now?: string
+}): Promise<PostPublishFinalizeReconcileSummary> {
+  const communityIds = (input.communityIds?.length
+    ? input.communityIds
+    : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
+    .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
+  const maxPostsPerCommunity = Math.max(1, Math.trunc(input.maxPostsPerCommunity ?? 25))
+  const now = input.now ?? nowIso()
+  const cutoffUpdatedAt = new Date(Date.parse(now) - POST_PUBLISH_FINALIZE_STUCK_AGE_MS).toISOString()
+  const communities: PostPublishFinalizeReconcileCommunitySummary[] = []
+  const failedCommunities: PostPublishFinalizeReconcileCommunityFailureSummary[] = []
+
+  for (const communityId of communityIds) {
+    let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
+    try {
+      db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      const stuck = await findStuckPostPublishFinalizePostIds({
+        client: db.client,
+        cutoffUpdatedAt,
+        limit: maxPostsPerCommunity,
+      })
+      let failedPosts = 0
+      for (const postId of stuck.postIds) {
+        const result = await markPostPublishFinalizeFailed({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId,
+          postId,
+          failureCode: "internal_error",
+          failureMessage: "Publishing did not finish. Try again.",
+          onlyIfProcessing: true,
+          retryable: true,
+          now,
+        })
+        if (result.startsWith("failed:")) {
+          failedPosts += 1
+        }
+      }
+      if (failedPosts > 0 || stuck.hasMore) {
+        communities.push({
+          community_id: communityId,
+          failed_posts: failedPosts,
+          has_more: stuck.hasMore,
+        })
+      }
+      if (stuck.hasMore) {
+        logPipelineInfo("[community-job] post publish finalize reconciler left posts for next pass", {
+          community_id: communityId,
+          processed_posts: failedPosts,
+          max_posts_per_community: maxPostsPerCommunity,
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failedCommunities.push({ community_id: communityId, error: message })
+      logPipelineError("[community-job] failed to reconcile stuck post publish finalize jobs for community", {
+        community_id: communityId,
+        error: message,
+      })
+      continue
+    } finally {
+      await db?.close()
+    }
+  }
+
+  return {
+    checked_communities: communityIds.length,
+    failed_posts: communities.reduce((sum, community) => sum + community.failed_posts, 0),
+    communities,
+    failed_communities: failedCommunities,
+  }
 }
 
 async function enqueueLockedAssetDeliveryIfRequested(input: {
@@ -326,7 +480,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
     const listingDraft = parseListingDraft(publishRequest?.listing_draft_json ?? null)
 
     if (post.post_type !== "song" || !post.song_artifact_bundle_id) {
-      return await markFailed({
+      return await markPostPublishFinalizeFailed({
         client: db.client,
         communityRepository: input.communityRepository,
         communityId: input.job.community_id,
@@ -353,7 +507,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           artifactKind: "primary_audio",
         })
         if (!primaryAudioUpload) {
-          return await markFailed({
+          return await markPostPublishFinalizeFailed({
             client: db.client,
             communityRepository: input.communityRepository,
             communityId: input.job.community_id,
@@ -399,7 +553,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           message: "Song analysis failed",
           retryable: true,
         })
-        return await markFailed({
+        return await markPostPublishFinalizeFailed({
           client: db.client,
           communityRepository: input.communityRepository,
           communityId: input.job.community_id,
@@ -423,7 +577,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
       analysisState: post.analysis_state,
     })
     if (postModerationFailure) {
-      return await markFailed({
+      return await markPostPublishFinalizeFailed({
         client: db.client,
         communityRepository: input.communityRepository,
         communityId: input.job.community_id,
@@ -441,7 +595,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
       upstreamAssetRefs: post.upstream_asset_refs,
     })
     if (analysisFailure) {
-      return await markFailed({
+      return await markPostPublishFinalizeFailed({
         client: db.client,
         communityRepository: input.communityRepository,
         communityId: input.job.community_id,
@@ -503,7 +657,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
         message: "Story royalty registration failed",
         retryable: true,
       })
-      return await markFailed({
+      return await markPostPublishFinalizeFailed({
         client: db.client,
         communityRepository: input.communityRepository,
         communityId: input.job.community_id,
@@ -539,7 +693,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
             message: "Listing creation failed",
             retryable: false,
           })
-          return await markFailed({
+          return await markPostPublishFinalizeFailed({
             client: db.client,
             communityRepository: input.communityRepository,
             communityId: input.job.community_id,
@@ -565,7 +719,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
         message: "Catalog sync failed",
         retryable: true,
       })
-      return await markFailed({
+      return await markPostPublishFinalizeFailed({
         client: db.client,
         communityRepository: input.communityRepository,
         communityId: input.job.community_id,

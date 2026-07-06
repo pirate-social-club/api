@@ -52,6 +52,7 @@ import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabl
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
+import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
@@ -540,6 +541,24 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         reconciledUploadSessions,
         {
           urgency: reconciledUploadSessions.enqueued_jobs > 5 ? "high" : "low",
+        },
+      )
+    }
+    const reconciledPostPublishFinalize = await reconcileStuckPostPublishFinalizeJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxPostsPerCommunity: 25,
+    })
+    if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
+      console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
+      captureScheduledWarning(
+        env,
+        "Post publish finalize reconciliation marked stuck posts failed",
+        "community_jobs_post_publish_finalize_reconciliation",
+        reconciledPostPublishFinalize,
+        {
+          urgency: reconciledPostPublishFinalize.failed_posts > 5 ? "high" : "low",
         },
       )
     }
