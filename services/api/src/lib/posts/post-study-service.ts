@@ -199,6 +199,7 @@ export type SongStudyAttemptRequest = {
   exercise_id?: unknown
   idempotency_key?: unknown
   selected_option_id?: unknown
+  target_language?: unknown
   transcript?: unknown
   type?: unknown
 }
@@ -498,6 +499,10 @@ function isDueReview(input: { dueAt: string; now: string }): boolean {
 
 function studyTargetCountFromDueBefore(dueBefore: number): number {
   return dueBefore > 0 ? Math.min(STREAK_MIN_STUDY_ATTEMPTS, dueBefore) : STREAK_MIN_STUDY_ATTEMPTS
+}
+
+function studyTargetCountFromServeableExerciseCount(exerciseCount: number): number {
+  return Math.max(1, Math.min(STREAK_MIN_STUDY_ATTEMPTS, exerciseCount))
 }
 
 async function getStudyPostById(client: ReadClient, postId: string): Promise<StudyPost | null> {
@@ -2015,12 +2020,12 @@ export async function upsertStudyEngagementDay(input: {
         study_attempt_count, study_correct_count, study_target_count,
         karaoke_pass_count, qualified, created_at, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, CASE WHEN 1 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
+      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, CASE WHEN ?5 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
       ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
         study_attempt_count = song_engagement_days.study_attempt_count + 1,
         study_correct_count = song_engagement_days.study_correct_count + ?5,
         qualified = CASE
-          WHEN song_engagement_days.study_attempt_count + 1 >= song_engagement_days.study_target_count THEN 1
+          WHEN song_engagement_days.study_correct_count + ?5 >= song_engagement_days.study_target_count THEN 1
           WHEN song_engagement_days.karaoke_pass_count > 0 THEN 1
           ELSE song_engagement_days.qualified
         END,
@@ -2120,12 +2125,6 @@ async function resolveStudyStreakTargetCount(input: {
   totalMs: number
 }> {
   const startedAt = performance.now()
-  if (!input.countDueReviews) {
-    return {
-      count: STREAK_MIN_STUDY_ATTEMPTS,
-      totalMs: elapsedMs(startedAt),
-    }
-  }
   const credentialProbeStartedAt = performance.now()
   const capability = await getCommunityElevenLabsStudyCapability({
     client: input.client,
@@ -2135,6 +2134,29 @@ async function resolveStudyStreakTargetCount(input: {
   const credentialProbeMs = elapsedMs(credentialProbeStartedAt)
   const includeSayItBack = capability.active
   const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
+  if (!input.countDueReviews) {
+    const exerciseCountStartedAt = performance.now()
+    const exerciseCount = (await listExercises({
+      client: input.client,
+      dueReviewServing: false,
+      includeSayItBack,
+      includeTranslation,
+      now: input.now,
+      postId: input.postId,
+      targetLanguage: input.targetLanguage,
+      userId: null,
+    })).length
+    const dueReviewCountMs = elapsedMs(exerciseCountStartedAt)
+    return {
+      // Freeze the day's Study target on first write. If async generation has only
+      // produced a smaller ready set, that smaller pack is the bar for this pilot day.
+      count: studyTargetCountFromServeableExerciseCount(exerciseCount),
+      credentialSource: capability.source,
+      credentialProbeMs,
+      dueReviewCountMs,
+      totalMs: elapsedMs(startedAt),
+    }
+  }
   const dueReviewCountStartedAt = performance.now()
   const dueBefore = await countDueReviewExercises({
     client: input.client,
@@ -2291,6 +2313,9 @@ export async function submitPostStudyAttempt(input: {
     }
     const streakWritesEnabled = studyStreakWritesEnabled(input.env)
     timingStreakWritesEnabled = streakWritesEnabled
+    const streakTargetLanguage = readString(input.body.target_language)
+      ? normalizeStudyTargetLanguage(input.body.target_language)
+      : exercise.target_language
 
     let correct = false
     let selectedOptionId: string | null = null
@@ -2331,7 +2356,7 @@ export async function submitPostStudyAttempt(input: {
         now,
         postId: input.postId,
         sourceLanguage: post.source_language,
-        targetLanguage: exercise.target_language,
+        targetLanguage: streakTargetLanguage,
         userId: input.actor.userId,
       })
       : null

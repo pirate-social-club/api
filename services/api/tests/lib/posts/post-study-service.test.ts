@@ -884,8 +884,79 @@ describe("post study service", () => {
       qualified: 0,
       study_attempt_count: 1,
       study_correct_count: 0,
-      study_target_count: 10,
+      study_target_count: 3,
     }])
+  })
+
+  test("does not qualify a short-pack streak from wrong attempts alone", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const waitUntilPromises: Array<Promise<void>> = []
+    const waitUntil = (promise: Promise<void>) => waitUntilPromises.push(promise)
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-streak-wrong-say",
+        target_language: "es",
+        transcript: "totally different words",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-streak-wrong-choice",
+        selected_option_id: "opt_b",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 2,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-streak-wrong-say-second",
+        target_language: "es",
+        transcript: "still entirely wrong",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
+
+    await Promise.all(waitUntilPromises)
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 0,
+      study_attempt_count: 3,
+      study_correct_count: 0,
+      study_target_count: 3,
+    }])
+    const streaks = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
+    expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
   })
 
   test("streak writes are idempotent across equivalent attempt retries", async () => {
@@ -984,6 +1055,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-streak-inline-engagement-say",
+        target_language: "es",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },
@@ -1008,8 +1080,24 @@ describe("post study service", () => {
       postId: POST_ID,
       waitUntil,
     })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-streak-inline-engagement-say-second",
+        target_language: "es",
+        transcript: "Hold me close until the morning",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      postId: POST_ID,
+      waitUntil,
+    })
 
-    expect(waitUntilPromises).toHaveLength(2)
+    expect(waitUntilPromises).toHaveLength(3)
     const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
     expect(ledgerBeforeWaitUntil.rows.map((row) => ({
       qualified: Number(row.qualified),
@@ -1017,13 +1105,19 @@ describe("post study service", () => {
       study_correct_count: Number(row.study_correct_count),
       study_target_count: Number(row.study_target_count),
     }))).toEqual([{
-      qualified: 0,
-      study_attempt_count: 2,
-      study_correct_count: 2,
-      study_target_count: 10,
+      qualified: 1,
+      study_attempt_count: 3,
+      study_correct_count: 3,
+      study_target_count: 3,
     }])
 
     await Promise.all(waitUntilPromises)
+    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
   })
 
   test("streak leaderboard excludes dead streaks and returns the viewer standing", async () => {
