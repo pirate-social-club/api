@@ -165,6 +165,30 @@ export type PublicProfileResolution = {
   }>;
 };
 
+export type CourtyardWalletInventoryResponse = {
+  groups: Array<CourtyardWalletInventoryGroup>;
+  unavailable: boolean;
+};
+
+export type CourtyardWalletInventoryGroup = {
+  category: "trading_card" | "watch";
+  chain_namespace: "eip155:1" | "eip155:137";
+  contract_address: string;
+  franchise?: string;
+  subject?: string;
+  brand?: string;
+  model?: string;
+  reference?: string;
+  set?: string;
+  year?: string;
+  grader?: string;
+  grade?: string;
+  condition?: string;
+  display_label: string;
+  display_detail: string;
+  count: number;
+};
+
 export type ProfileActivityPostPage = {
   kind: "post";
   post: LocalizedPostResponse;
@@ -2132,7 +2156,6 @@ export type SongStudyExercise = ({
   line_index: number;
   prompt_text: string;
   reference_text: string;
-  review_session_id?: string;
   translation_text?: string | null;
   max_attempts: number;
 } | {
@@ -2147,7 +2170,6 @@ export type SongStudyExercise = ({
     text: string;
   }>;
   max_attempts: number;
-  review_session_id?: string;
 });
 
 export type SongStudyAttemptRequest = {
@@ -2155,8 +2177,6 @@ export type SongStudyAttemptRequest = {
   exercise_id: string;
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
-  review_session_id?: string;
-  target_language?: string;
   selected_option_id?: string;
   transcript?: string;
 };
@@ -3795,6 +3815,7 @@ export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
+  profilesMeCourtyardInventory: "/profiles/me/courtyard-inventory",
   walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",

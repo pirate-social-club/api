@@ -37,6 +37,8 @@ import {
   type CreateCommunityRequestBody,
   resolveCreateCommunityAuth,
 } from "../create/validation"
+import { assertGatePolicyContractsValid } from "../membership/gate-policy-contract-validation"
+import type { GatePolicy } from "../membership/gate-types"
 import { HttpError } from "../../errors"
 
 type CommunityProvisioningServiceRepository =
@@ -438,6 +440,10 @@ export async function createCommunity(input: {
   communityRepository: CommunityProvisioningServiceRepository
 }): Promise<CommunityCreateAcceptedResponse> {
   const auth = await resolveCreateCommunityAuth(input)
+  await assertGatePolicyContractsValid({
+    env: input.env,
+    policy: input.body.gate_policy as GatePolicy | null | undefined,
+  })
 
   if (!auth.namespaceVerificationId) {
     return createNamespacelessCommunity({

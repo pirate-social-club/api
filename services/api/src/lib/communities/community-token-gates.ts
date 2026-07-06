@@ -5,18 +5,30 @@ import type { WalletAttachmentSummary } from "../../types"
 
 const ERC721_COLLECTION_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
+  "function supportsInterface(bytes4 interfaceId) view returns (bool)",
 ] as const
+const ERC721_INTERFACE_ID = "0x80ac58cd"
 
 let erc721OwnershipCheckerForTests: ((input: {
   contractAddress: string
   env: Env
   walletAddress: string
 }) => Promise<boolean>) | null = null
+let erc721ContractSupportCheckerForTests: ((input: {
+  contractAddress: string
+  env: Env
+}) => Promise<boolean>) | null = null
 
 export function setErc721OwnershipCheckerForTests(
   checker: ((input: { contractAddress: string; env: Env; walletAddress: string }) => Promise<boolean>) | null,
 ): void {
   erc721OwnershipCheckerForTests = checker
+}
+
+export function setErc721ContractSupportCheckerForTests(
+  checker: ((input: { contractAddress: string; env: Env }) => Promise<boolean>) | null,
+): void {
+  erc721ContractSupportCheckerForTests = checker
 }
 
 export function hasEthereumRpcConfig(env: Env): boolean {
@@ -127,4 +139,39 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
   }
 
   return { owns: false, unavailable }
+}
+
+export async function evaluateErc721ContractSupport(input: {
+  contractAddress: string
+  env: Env
+}): Promise<{ supported: boolean; unavailable: boolean }> {
+  const normalizedContractAddress = normalizeEthereumAddress(input.contractAddress)
+  if (!normalizedContractAddress) {
+    return { supported: false, unavailable: false }
+  }
+
+  if (erc721ContractSupportCheckerForTests) {
+    return {
+      supported: await erc721ContractSupportCheckerForTests({
+        contractAddress: normalizedContractAddress,
+        env: input.env,
+      }),
+      unavailable: false,
+    }
+  }
+
+  const provider = getEthereumProvider(input.env)
+  if (!provider) {
+    return { supported: false, unavailable: true }
+  }
+
+  try {
+    const contract = new Contract(normalizedContractAddress, ERC721_COLLECTION_ABI, provider)
+    return {
+      supported: Boolean(await contract.supportsInterface(ERC721_INTERFACE_ID)),
+      unavailable: false,
+    }
+  } catch {
+    return { supported: false, unavailable: true }
+  }
 }

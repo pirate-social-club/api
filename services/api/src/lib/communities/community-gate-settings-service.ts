@@ -18,6 +18,7 @@ import {
   type CommunityMutationActor,
   type UpdateCommunityGatesRequestBody,
 } from "./create/shared"
+import { assertGatePolicyContractsValid } from "./membership/gate-policy-contract-validation"
 import type {
   Community,
   Env,
@@ -213,6 +214,10 @@ export async function updateCommunityGates(input: {
 
   assertPublicV0GateConfiguration(input.body, {
     ageOver18Verified: user.verification_capabilities.age_over_18.state === "verified",
+  })
+  await assertGatePolicyContractsValid({
+    env: input.env,
+    policy: input.body.gate_policy,
   })
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)

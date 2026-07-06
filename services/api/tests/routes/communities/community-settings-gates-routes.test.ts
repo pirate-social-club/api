@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { setErc721ContractSupportCheckerForTests } from "../../../src/lib/communities/community-token-gates"
 import {
   completeAgeOver18Verification,
   completeUniqueHumanVerification,
@@ -24,6 +25,20 @@ function genderGatePolicy(marker: "F" | "M"): Record<string, unknown> {
   }
 }
 
+function erc721GatePolicy(contractAddress = "0x1111111111111111111111111111111111111111"): Record<string, unknown> {
+  return {
+    version: 1,
+    expression: {
+      op: "gate",
+      gate: {
+        type: "erc721_holding",
+        chain_namespace: "eip155:1",
+        contract_address: contractAddress,
+      },
+    },
+  }
+}
+
 function createdCommunityId(body: { community: { id?: string; community_id?: string } }): string {
   return body.community.community_id ?? body.community.id?.replace(/^com_/, "") ?? ""
 }
@@ -33,6 +48,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  setErc721ContractSupportCheckerForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -365,6 +381,55 @@ describe("community settings gates routes", () => {
       ctx.env,
     ))
     expect(malformedAtom.status).toBe(403)
+  })
+
+  test("community gates update rejects ERC-721 contracts that fail ERC-165 validation", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    setErc721ContractSupportCheckerForTests(async () => false)
+
+    const session = await exchangeJwt(ctx.env, "community-gates-erc165-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "ERC165 Gates Club",
+      default_age_gate_policy: "none",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: {
+        id?: string
+        community_id?: string
+      }
+    }
+    const communityId = createdCommunityId(communityCreateBody)
+
+    const gatesUpdate = await Promise.resolve(app.request(
+      `http://pirate.test/communities/${communityId}/gates`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify({
+          membership_mode: "gated",
+          default_age_gate_policy: "none",
+          allow_anonymous_identity: false,
+          gate_policy: erc721GatePolicy(),
+        }),
+      },
+      ctx.env,
+    ))
+
+    expect(gatesUpdate.status).toBe(403)
+    const body = await json(gatesUpdate) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("erc721_holding gate contract must support ERC-721")
   })
 
   test("community gates update rejects duplicate same-type identity gates", async () => {

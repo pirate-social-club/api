@@ -5,9 +5,10 @@ import {
   resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../../../src/lib/communities/commerce/checkout-config"
+import { COURTYARD_REGISTRIES } from "../../../src/lib/communities/courtyard-registry-config"
 import { setRedditSnapshotImporterForTests, setRedditVerificationCheckerForTests } from "../../../src/lib/onboarding/reddit-bootstrap"
 import type { Env } from "../../../src/types"
-import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { createRouteTestContext, json, resetRuntimeCaches, withMockedFetch } from "../../helpers"
 import { exchangeJwt, exchangeJwtWithWallet, requestJson } from "./profiles-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -199,6 +200,71 @@ describe("profile routes", () => {
     expect(publicProfile.status).toBe(200)
     const publicBody = await json(publicProfile) as { nationality_badge_country: string | null }
     expect(publicBody.nationality_badge_country).toBe("US")
+  })
+
+  test("profiles/me/courtyard-inventory returns creator wallet inventory groups", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(
+      ctx.env,
+      "profile-courtyard-inventory-user",
+      "0x3333333333333333333333333333333333333333",
+    )
+    const polygonRegistry = COURTYARD_REGISTRIES.find((registry) => registry.chainNamespace === "eip155:137")
+    expect(polygonRegistry).toBeDefined()
+
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Watches",
+        contract: polygonRegistry?.contractAddress,
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Rolex Submariner No Date",
+        token_id: "rolex-1",
+        attributes: [
+          { name: "Brand", value: "Rolex" },
+          { name: "Model", value: "Submariner" },
+          { name: "Reference", value: "124060" },
+        ],
+      }],
+    })) as Response, async () => {
+      const response = await app.request("http://pirate.test/profiles/me/courtyard-inventory", {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      }, ctx.env)
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        unavailable: boolean
+        groups: Array<{
+          category: string
+          chain_namespace: string
+          contract_address: string
+          brand?: string
+          model?: string
+          reference?: string
+          display_label: string
+          display_detail: string
+          count: number
+        }>
+      }
+      expect(body).toEqual({
+        unavailable: false,
+        groups: [{
+          category: "watch",
+          chain_namespace: "eip155:137",
+          contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          brand: "rolex",
+          model: "submariner",
+          reference: "124060",
+          display_label: "Rolex Submariner 124060",
+          display_detail: "1 in wallet",
+          count: 1,
+        }],
+      })
+    })
   })
 
   test("public profile by user id works without auth", async () => {
