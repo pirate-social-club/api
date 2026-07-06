@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { captureException, withSentry } from "@sentry/cloudflare"
+import { WorkerEntrypoint } from "cloudflare:workers"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -12,7 +13,6 @@ import comments from "./routes/comments"
 import communities from "./routes/communities"
 import discovery from "./routes/discovery"
 import karaokeSessions from "./routes/karaoke-sessions"
-import feed from "./routes/feed"
 import geo from "./routes/geo"
 import jobs from "./routes/jobs"
 import mcp from "./routes/mcp"
@@ -21,12 +21,9 @@ import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
-import publicComments from "./routes/public-comments"
 import publicAgents from "./routes/public-agents"
-import publicCommunities from "./routes/public-communities"
 import publicNames from "./routes/public-names"
 import publicNamespaces from "./routes/public-namespaces"
-import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
@@ -72,6 +69,7 @@ import {
   publicReadCacheRefreshRequests,
   type PublicReadCacheFillResult,
 } from "./lib/public-read-cache-state"
+import publicReadApp from "./routes/public-read-app"
 
 export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
@@ -88,6 +86,16 @@ declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
+
+type PublicReadEntrypoint = {
+  fetch(request: Request): Promise<Response>
+}
+
+type PublicReadExecutionContext = ExecutionContext & {
+  exports?: {
+    CachedPublicReads?: PublicReadEntrypoint
+  }
+}
 
 type BuildVersionMetadata = {
   git_ref: string | null
@@ -216,7 +224,7 @@ app.route("/admin/debug", debugPipeline)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
-app.route("/feed", feed)
+app.route("/", publicReadApp)
 app.route("/geo", geo)
 app.route("/jobs", jobs)
 app.route("/karaoke/sessions", karaokeSessions)
@@ -225,12 +233,9 @@ app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/posts", posts)
-app.route("/public-comments", publicComments)
 app.route("/public-agents", publicAgents)
-app.route("/public-communities", publicCommunities)
 app.route("/public-names", publicNames)
 app.route("/public-namespaces", publicNamespaces)
-app.route("/public-posts", publicPosts)
 app.route("/public-profiles", publicProfiles)
 app.route("/profile-media", profileMedia)
 app.route("/users", users)
@@ -346,7 +351,7 @@ async function fillPublicReadCache(
   cache: Cache,
   cacheKey: Request,
 ): Promise<PublicReadCacheFillResult> {
-  const response = await app.fetch(req, env, ctx)
+  const response = await fetchPublicRead(req, env, ctx)
   const cacheable = isPublicReadCacheResponse(response)
   const body = await response.arrayBuffer()
   const result: PublicReadCacheFillResult = {
@@ -422,13 +427,33 @@ async function refreshPublicReadCacheOnce(
   cacheKey: Request,
 ): Promise<void> {
   try {
-    const response = await app.fetch(req, env, ctx)
+    const response = await fetchPublicRead(req, env, ctx)
     if (isPublicReadCacheResponse(response)) {
       await cache.put(cacheKey, buildPublicReadWorkerCacheResponse(stripCorsHeaders(response.clone())))
     }
   } catch (error) {
     console.error("[public-read-cache] stale refresh failed", error)
   }
+}
+
+async function fetchPublicRead(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const forwarded = buildPublicReadEntrypointRequest(req)
+  const publicReadContext = ctx as PublicReadExecutionContext
+  const exportedEntrypoint = publicReadContext.exports?.CachedPublicReads
+  if (exportedEntrypoint) {
+    return exportedEntrypoint.fetch(forwarded)
+  }
+  return publicReadApp.fetch(forwarded, env, ctx)
+}
+
+function buildPublicReadEntrypointRequest(req: Request): Request {
+  const headers = new Headers(req.headers)
+  headers.delete("Authorization")
+  headers.delete("Origin")
+  return new Request(req.url, {
+    headers,
+    method: "GET",
+  })
 }
 
 function withPublicReadCacheHeaders(response: Response, input: {
@@ -811,6 +836,12 @@ const handler: ExportedHandler<Env> = {
       }),
     )
   },
+}
+
+export class CachedPublicReads extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    return publicReadApp.fetch(request, this.env, this.ctx)
+  }
 }
 
 export { app }

@@ -4,6 +4,10 @@ import {
   buildMaterializedPublicHomeFeedTarget,
   parseMaterializedPublicHomeFeedBody,
 } from "../../src/lib/feed/materialized-public-feed"
+import {
+  PUBLIC_READ_CACHE_CONTROL,
+  PUBLIC_READ_CDN_CACHE_CONTROL,
+} from "../../src/routes/cache-headers"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import {
   completeUniqueHumanVerification,
@@ -727,6 +731,62 @@ describe("feed routes", () => {
     expect(staleExecution.waitUntilPromises.length).toBeGreaterThanOrEqual(1)
     await Promise.all(staleExecution.waitUntilPromises)
     expect(cachedResponse.headers.get("x-pirate-cache-created-at")).not.toBeNull()
+  })
+
+  test("public read cache wrapper normalizes requests before the inner entrypoint boundary", async () => {
+    let cachedResponse: Response | undefined
+    let storedResponse: Response | undefined
+    const forwardedRequests: Request[] = []
+    setTestCaches({
+      match: async () => cachedResponse?.clone(),
+      put: async (_request, response) => {
+        storedResponse = response
+        cachedResponse = response.clone()
+      },
+    })
+
+    const execution = createExecutionContext()
+    const ctxWithExports = Object.assign(execution.ctx, {
+      exports: {
+        CachedPublicReads: {
+          fetch: async (request: Request) => {
+            forwardedRequests.push(request.clone() as Request)
+            return new Response(JSON.stringify({
+              items: [],
+              next_cursor: null,
+              top_communities: [],
+            }), {
+              headers: {
+                "cache-control": PUBLIC_READ_CACHE_CONTROL,
+                "cdn-cache-control": PUBLIC_READ_CDN_CACHE_CONTROL,
+                "content-type": "application/json",
+              },
+            })
+          },
+        },
+      },
+    }) as ExecutionContext
+
+    const response = await fetchHandler(
+      new Request("http://pirate.test/feed/home/public?sort=best&locale=en", {
+        headers: {
+          Authorization: "Bearer should-not-cross",
+          Origin: "https://app.pirate.test",
+        },
+      }),
+      {
+        CORS_ALLOWED_ORIGINS: "https://app.pirate.test",
+      } as Parameters<NonNullable<typeof handler.fetch>>[1],
+      ctxWithExports,
+    )
+
+    expect(response.headers.get("x-pirate-cache")).toBe("miss")
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://app.pirate.test")
+    expect(forwardedRequests).toHaveLength(1)
+    expect(forwardedRequests[0]?.headers.get("authorization")).toBeNull()
+    expect(forwardedRequests[0]?.headers.get("origin")).toBeNull()
+    expect(storedResponse?.headers.get("access-control-allow-origin")).toBeNull()
+    await Promise.all(execution.waitUntilPromises)
   })
 
   test("public read cache wrapper dedupes concurrent misses and stale refreshes", async () => {
