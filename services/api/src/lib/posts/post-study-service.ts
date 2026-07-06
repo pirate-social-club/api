@@ -268,6 +268,12 @@ export type SongStreakLeaderboard = {
   viewer: SongStreakViewerStanding | null
 }
 
+export type SongStreakSummary = {
+  entries: SongStreakLeaderboardEntry[]
+  total_active_streaks: number
+  viewer: SongStreakViewerStanding | null
+}
+
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
@@ -2392,6 +2398,126 @@ function viewerStanding(input: {
   }
 }
 
+async function readSongStreakSummary(input: {
+  client: Client
+  limit: number
+  postId: string
+  profileRepository: ProfileRepository
+  userId: string
+}): Promise<{ date: string; summary: SongStreakSummary }> {
+  const today = utcDateFromIso(nowIso())
+  const yesterday = addUtcDays(today, -1)
+  const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
+    input.client.execute({
+      sql: `
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        FROM song_streaks
+        WHERE post_id = ?1
+          AND last_qualified_date >= ?2
+        ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
+        LIMIT ?3
+      `,
+      args: [input.postId, yesterday, input.limit + STREAK_LEADERBOARD_OVERFETCH],
+    }),
+    executeFirst(input.client, {
+      sql: `
+        SELECT COUNT(*) AS active_count
+        FROM song_streaks
+        WHERE post_id = ?1
+          AND last_qualified_date >= ?2
+      `,
+      args: [input.postId, yesterday],
+    }) as Promise<Record<string, unknown> | null>,
+    executeFirst(input.client, {
+      sql: `
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        FROM song_streaks
+        WHERE user_id = ?1
+          AND post_id = ?2
+      `,
+      args: [input.userId, input.postId],
+    }) as Promise<SongStreakRow | null>,
+    executeFirst(input.client, {
+      sql: `
+        SELECT qualified, study_attempt_count, study_target_count, karaoke_pass_count
+        FROM song_engagement_days
+        WHERE user_id = ?1
+          AND post_id = ?2
+          AND activity_date = ?3
+      `,
+      args: [input.userId, input.postId, today],
+    }) as Promise<SongStreakDayRow | null>,
+  ])
+
+  const rows = boardResult.rows as SongStreakRow[]
+  const identities = await resolveLeaderboardIdentities(
+    input.profileRepository,
+    rows.map((row) => readString(row.user_id) ?? ""),
+  )
+  const entries: SongStreakLeaderboardEntry[] = []
+  for (const row of rows) {
+    const userId = readString(row.user_id)
+    if (!userId) continue
+    const identity = identities.get(userId)
+    if (!identity) continue
+    entries.push({
+      best_streak: Number(row.best_streak ?? 0),
+      current_streak: Number(row.current_streak ?? 0),
+      identity,
+      is_viewer: userId === input.userId,
+      last_qualified_date: readString(row.last_qualified_date) ?? today,
+      rank: entries.length + 1,
+      streak_started_date: readString(row.streak_started_date) ?? today,
+      total_qualified_days: Number(row.total_qualified_days ?? 0),
+    })
+    if (entries.length >= input.limit) break
+  }
+
+  return {
+    date: today,
+    summary: {
+      entries,
+      total_active_streaks: Number(totalActiveRow?.active_count ?? 0),
+      viewer: viewerStanding({ day: viewerDay, row: viewerRow, today, yesterday }),
+    },
+  }
+}
+
+function isMissingStreakTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)
+}
+
+export async function getPostStreakSummary(input: {
+  client: Client
+  postId: string
+  profileRepository: ProfileRepository
+  userId: string | null
+}): Promise<SongStreakSummary | null> {
+  if (!input.userId) return null
+  const post = await getStudyPostById(input.client, input.postId)
+  if (!post || post.post_type !== "song" || post.status !== "published") return null
+  try {
+    await requireMemberAccess(input.client, post.community_id, input.userId)
+  } catch (error) {
+    if (isMissingStreakTableError(error)) return null
+    if (error instanceof HttpError && error.status === 404) return null
+    throw error
+  }
+  try {
+    return (await readSongStreakSummary({
+      client: input.client,
+      limit: 3,
+      postId: input.postId,
+      profileRepository: input.profileRepository,
+      userId: input.userId,
+    })).summary
+  } catch (error) {
+    if (isMissingStreakTableError(error)) return null
+    throw error
+  }
+}
+
 export async function getPostStreakLeaderboard(input: {
   actor: ActorContext | AdminActorContext
   communityId: string
@@ -2402,8 +2528,6 @@ export async function getPostStreakLeaderboard(input: {
   profileRepository: ProfileRepository
 }): Promise<SongStreakLeaderboard> {
   const limit = clampStreakLeaderboardLimit(input.limit)
-  const today = utcDateFromIso(nowIso())
-  const yesterday = addUtcDays(today, -1)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
     const post = await getStudyPostById(db.client, input.postId)
@@ -2413,80 +2537,22 @@ export async function getPostStreakLeaderboard(input: {
       throw notFoundError("Post not found")
     }
 
-    const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
-      db.client.execute({
-        sql: `
-          SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
-          FROM song_streaks
-          WHERE post_id = ?1
-            AND last_qualified_date >= ?2
-          ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
-          LIMIT ?3
-        `,
-        args: [input.postId, yesterday, limit + STREAK_LEADERBOARD_OVERFETCH],
-      }),
-      executeFirst(db.client, {
-        sql: `
-          SELECT COUNT(*) AS active_count
-          FROM song_streaks
-          WHERE post_id = ?1
-            AND last_qualified_date >= ?2
-        `,
-        args: [input.postId, yesterday],
-      }) as Promise<Record<string, unknown> | null>,
-      executeFirst(db.client, {
-        sql: `
-          SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
-          FROM song_streaks
-          WHERE user_id = ?1
-            AND post_id = ?2
-        `,
-        args: [input.actor.userId, input.postId],
-      }) as Promise<SongStreakRow | null>,
-      executeFirst(db.client, {
-        sql: `
-          SELECT qualified, study_attempt_count, study_target_count, karaoke_pass_count
-          FROM song_engagement_days
-          WHERE user_id = ?1
-            AND post_id = ?2
-            AND activity_date = ?3
-        `,
-        args: [input.actor.userId, input.postId, today],
-      }) as Promise<SongStreakDayRow | null>,
-    ])
-
-    const rows = boardResult.rows as SongStreakRow[]
-    const identities = await resolveLeaderboardIdentities(
-      input.profileRepository,
-      rows.map((row) => readString(row.user_id) ?? ""),
-    )
-    const entries: SongStreakLeaderboardEntry[] = []
-    for (const row of rows) {
-      const userId = readString(row.user_id)
-      if (!userId) continue
-      const identity = identities.get(userId)
-      if (!identity) continue
-      entries.push({
-        best_streak: Number(row.best_streak ?? 0),
-        current_streak: Number(row.current_streak ?? 0),
-        identity,
-        is_viewer: userId === input.actor.userId,
-        last_qualified_date: readString(row.last_qualified_date) ?? today,
-        rank: entries.length + 1,
-        streak_started_date: readString(row.streak_started_date) ?? today,
-        total_qualified_days: Number(row.total_qualified_days ?? 0),
-      })
-      if (entries.length >= limit) break
-    }
+    const { date, summary } = await readSongStreakSummary({
+      client: db.client as Client,
+      limit,
+      postId: input.postId,
+      profileRepository: input.profileRepository,
+      userId: input.actor.userId,
+    })
 
     return {
       community_id: publicCommunityId(input.communityId),
-      date: today,
-      entries,
+      date,
+      entries: summary.entries,
       object: "song_streak_leaderboard",
       post_id: publicPostId(input.postId),
-      total_active_streaks: Number(totalActiveRow?.active_count ?? 0),
-      viewer: viewerStanding({ day: viewerDay, row: viewerRow, today, yesterday }),
+      total_active_streaks: summary.total_active_streaks,
+      viewer: summary.viewer,
     }
   } finally {
     await db.close()

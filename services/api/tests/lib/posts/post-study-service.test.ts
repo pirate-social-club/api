@@ -9,8 +9,9 @@ import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
-import { getPostStreakLeaderboard, getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
-import type { Env } from "../../../src/types"
+import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
+import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
+import type { Env, LocalizedPostResponse } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
 
@@ -869,6 +870,33 @@ describe("post study service", () => {
       study_target_today: 5,
       total_qualified_days: 5,
     })
+
+    const summary = await getPostStreakSummary({
+      client: client!,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+    })
+    expect(summary).toEqual({
+      entries: leaderboard.entries,
+      total_active_streaks: 1,
+      viewer: leaderboard.viewer,
+    })
+
+    const response = {
+      post: {
+        post_id: POST_ID,
+        post_type: "song",
+        status: "published",
+      },
+    } as LocalizedPostResponse
+    await hydrateSongStreakSummariesForResponses({
+      client: client!,
+      responses: [response],
+      profileRepository: profileRepository as never,
+      viewerUserId: LEARNER_ID,
+    })
+    expect(response.streak_summary).toEqual(summary)
   })
 
   test("streak materialization extends consecutive days, resets gaps, and ignores stale qualified dates", async () => {

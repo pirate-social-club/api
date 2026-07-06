@@ -14513,6 +14513,10 @@ const spec = {
             "$ref": "#/components/schemas/SongStudyCapability",
             "nullable": true
           },
+          "streak_summary": {
+            "$ref": "#/components/schemas/SongStreakSummary",
+            "nullable": true
+          },
           "asset_story": {
             "$ref": "#/components/schemas/PostAssetStorySummary",
             "nullable": true
@@ -18531,6 +18535,35 @@ const spec = {
             "nullable": true
           }
         }
+      },
+      "SongStreakSummary": {
+        "type": "object",
+        "required": [
+          "entries",
+          "viewer",
+          "total_active_streaks"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/SongStreakLeaderboardEntry"
+            }
+          },
+          "viewer": {
+            "nullable": true,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SongStreakViewerStanding"
+              }
+            ]
+          },
+          "total_active_streaks": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
       },
       "PostAssetStorySummary": {
         "type": "object",

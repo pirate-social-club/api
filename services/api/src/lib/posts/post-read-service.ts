@@ -155,6 +155,7 @@ export async function getPost(input: {
       responses: [response],
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
+      viewerUserId: input.userId,
     })
     return response
   } finally {
@@ -223,6 +224,7 @@ export async function getPublicPostFromCommunityDb(input: {
     responses: [response],
     communityRepository: input.communityRepository,
     profileRepository: input.profileRepository,
+    viewerUserId: null,
   })
   return response
 }
@@ -289,6 +291,7 @@ export async function listCommunityPosts(input: {
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
+      viewerUserId: input.userId,
     })
 
     return {
@@ -355,6 +358,7 @@ export async function listCommunityEvents(input: {
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
+      viewerUserId: input.userId,
     })
 
     return {
@@ -410,6 +414,7 @@ export async function listPublicCommunityPosts(input: {
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
+      viewerUserId: null,
     })
 
     return {
