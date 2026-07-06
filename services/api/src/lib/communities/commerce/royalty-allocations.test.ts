@@ -12,6 +12,10 @@ import {
   persistAssetWithAllocations,
   resolveAllocationChainId,
 } from "./royalty-allocations"
+import {
+  loadStoryRoyaltyAllocationProjectionRows,
+  syncStoryRoyaltyAllocationProjectionForAsset,
+} from "./royalty-allocation-projection"
 import type { Client, InStatement } from "../../sql-client"
 import type { RoyaltyAllocationRequest } from "../../../types"
 
@@ -58,7 +62,11 @@ async function createTables(client: LibsqlClient): Promise<void> {
       community_id TEXT NOT NULL,
       royalty_allocation_status TEXT NOT NULL DEFAULT 'none',
       royalty_allocation_version INTEGER NOT NULL DEFAULT 1,
-      royalty_allocation_fingerprint TEXT
+      royalty_allocation_fingerprint TEXT,
+      royalty_allocation_projection_synced INTEGER NOT NULL DEFAULT 1,
+      story_ip_id TEXT,
+      ip_royalty_vault TEXT,
+      updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
     )
   `)
   await client.execute(`
@@ -73,6 +81,8 @@ async function createTables(client: LibsqlClient): Promise<void> {
       wallet_address_display TEXT NOT NULL,
       chain_id INTEGER NOT NULL,
       share_bps INTEGER NOT NULL CHECK (share_bps > 0 AND share_bps <= 10000),
+      distribution_status TEXT NOT NULL DEFAULT 'pending',
+      failure_reason TEXT,
       position INTEGER NOT NULL CHECK (position >= 0),
       allocation_fingerprint TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -83,8 +93,42 @@ async function createTables(client: LibsqlClient): Promise<void> {
   await client.execute(`CREATE UNIQUE INDEX idx_alloc_position ON initial_royalty_allocations(asset_id, position)`)
 }
 
+async function createProjectionTable(client: LibsqlClient): Promise<void> {
+  await client.execute(`
+    CREATE TABLE story_royalty_allocation_projections (
+      projection_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      story_ip_id TEXT NOT NULL,
+      ip_royalty_vault TEXT,
+      recipient_kind TEXT NOT NULL CHECK (recipient_kind IN ('creator', 'collaborator')),
+      recipient_user_id TEXT,
+      wallet_attachment_id TEXT,
+      wallet_address_normalized TEXT NOT NULL,
+      chain_id INTEGER NOT NULL,
+      initial_share_bps INTEGER NOT NULL CHECK (initial_share_bps > 0 AND initial_share_bps <= 10000),
+      allocation_fingerprint TEXT NOT NULL,
+      distribution_status TEXT NOT NULL CHECK (distribution_status IN ('pending', 'verified', 'failed')),
+      allocation_status TEXT NOT NULL,
+      failure_reason TEXT,
+      source_updated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
+    CREATE UNIQUE INDEX idx_projection_unique
+    ON story_royalty_allocation_projections(community_id, asset_id, wallet_address_normalized)
+  `)
+}
+
 const assetInsertFor = (assetId: string, fingerprint: string): InStatement => ({
-  sql: `INSERT INTO assets (asset_id, community_id, royalty_allocation_status, royalty_allocation_version, royalty_allocation_fingerprint) VALUES (?1, ?2, 'draft', ?3, ?4)`,
+  sql: `
+    INSERT INTO assets (
+      asset_id, community_id, royalty_allocation_status, royalty_allocation_version,
+      royalty_allocation_fingerprint, royalty_allocation_projection_synced
+    ) VALUES (?1, ?2, 'draft', ?3, ?4, 0)
+  `,
   args: [assetId, "com_1", ROYALTY_ALLOCATION_VERSION, fingerprint],
 })
 
@@ -254,5 +298,153 @@ describe("assertExistingAssetAllocationMatches (idempotent retry)", () => {
       client: appClient(client),
       communityId: "com_1", assetId: "ast_mismatch", requestedFingerprint: different,
     })).rejects.toThrow(/do not match/)
+  })
+})
+
+describe("loadStoryRoyaltyAllocationProjectionRows", () => {
+  const snapshot = { walletAddressNormalized: CREATOR, walletAttachmentId: "wa_1" }
+
+  test("loads projectable allocation rows only after Story IP registration", async () => {
+    const client = freshDb()
+    await createTables(client)
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+    await persistAssetWithAllocations({
+      client: appClient(client),
+      assetInsert: assetInsertFor("ast_projected", fingerprint),
+      allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+        assetId: "ast_projected",
+        communityId: "com_1",
+        creatorUserId: "usr_author",
+        allocations: split(),
+        fingerprint,
+        creator: snapshot,
+        chainId: AENEID,
+        now: "2026-01-01T00:00:00Z",
+        newId: () => crypto.randomUUID(),
+      })),
+    })
+    await client.execute({
+      sql: `
+        UPDATE assets
+        SET story_ip_id = ?1,
+            ip_royalty_vault = ?2,
+            updated_at = ?3
+        WHERE asset_id = ?4
+      `,
+      args: ["0xip", "0xvault", "2026-01-02T00:00:00Z", "ast_projected"],
+    })
+
+    const rows = await loadStoryRoyaltyAllocationProjectionRows({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_projected",
+    })
+
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({
+      communityId: "com_1",
+      assetId: "ast_projected",
+      storyIpId: "0xip",
+      ipRoyaltyVault: "0xvault",
+      recipientKind: "creator",
+      recipientUserId: "usr_author",
+      walletAttachmentId: "wa_1",
+      walletAddressNormalized: CREATOR,
+      chainId: AENEID,
+      initialShareBps: 9000,
+      allocationFingerprint: fingerprint,
+      distributionStatus: "pending",
+      allocationStatus: "draft",
+      sourceUpdatedAt: "2026-01-02T00:00:00Z",
+    })
+  })
+
+  test("does not project draft allocations before Story IP registration", async () => {
+    const client = freshDb()
+    await createTables(client)
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+    await persistAssetWithAllocations({
+      client: appClient(client),
+      assetInsert: assetInsertFor("ast_no_ip", fingerprint),
+      allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+        assetId: "ast_no_ip",
+        communityId: "com_1",
+        creatorUserId: "usr_author",
+        allocations: split(),
+        fingerprint,
+        creator: snapshot,
+        chainId: AENEID,
+        now: "2026-01-01T00:00:00Z",
+        newId: () => crypto.randomUUID(),
+      })),
+    })
+
+    await expect(loadStoryRoyaltyAllocationProjectionRows({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_no_ip",
+    })).resolves.toEqual([])
+  })
+
+  test("syncs rows to the control plane and marks the asset projection-synced", async () => {
+    const communityClient = freshDb()
+    const controlPlaneClient = freshDb()
+    await createTables(communityClient)
+    await createProjectionTable(controlPlaneClient)
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+    await persistAssetWithAllocations({
+      client: appClient(communityClient),
+      assetInsert: assetInsertFor("ast_sync", fingerprint),
+      allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+        assetId: "ast_sync",
+        communityId: "com_1",
+        creatorUserId: "usr_author",
+        allocations: split(),
+        fingerprint,
+        creator: snapshot,
+        chainId: AENEID,
+        now: "2026-01-01T00:00:00Z",
+        newId: () => crypto.randomUUID(),
+      })),
+    })
+    await communityClient.execute({
+      sql: `
+        UPDATE assets
+        SET story_ip_id = ?1,
+            updated_at = ?2
+        WHERE asset_id = ?3
+      `,
+      args: ["0xip", "2026-01-02T00:00:00Z", "ast_sync"],
+    })
+
+    await expect(syncStoryRoyaltyAllocationProjectionForAsset({
+      env: {} as never,
+      client: appClient(communityClient),
+      controlPlaneClient: appClient(controlPlaneClient),
+      communityId: "com_1",
+      assetId: "ast_sync",
+    })).resolves.toEqual({ projectedRows: 2 })
+
+    const projected = await controlPlaneClient.execute({
+      sql: `
+        SELECT recipient_kind, wallet_address_normalized, initial_share_bps, allocation_status
+        FROM story_royalty_allocation_projections
+        WHERE community_id = ?1 AND asset_id = ?2
+        ORDER BY initial_share_bps DESC
+      `,
+      args: ["com_1", "ast_sync"],
+    })
+    expect(projected.rows).toHaveLength(2)
+    expect(projected.rows[0]).toMatchObject({
+      recipient_kind: "creator",
+      wallet_address_normalized: CREATOR,
+      initial_share_bps: 9000,
+      allocation_status: "draft",
+    })
+    const asset = await communityClient.execute({
+      sql: `SELECT royalty_allocation_projection_synced FROM assets WHERE asset_id = ?1`,
+      args: ["ast_sync"],
+    })
+    expect(Number(asset.rows[0].royalty_allocation_projection_synced)).toBe(1)
   })
 })

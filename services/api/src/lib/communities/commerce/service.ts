@@ -65,6 +65,7 @@ import {
   listStoryRegisteredAssetProjectionRows,
   upsertStoryRegisteredAssetProjection,
 } from "./derivative-source-projection"
+import { syncStoryRoyaltyAllocationProjectionForAsset } from "./royalty-allocation-projection"
 import type {
   Asset,
   AssetAccessResponse,
@@ -92,6 +93,35 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
     return null
   }
   return `story:ip:${storyIpId}#licenseTermsId=${storyLicenseTermsId}`
+}
+
+async function syncStoryRoyaltyAllocationProjectionSafely(input: {
+  env: Env
+  client: Pick<Client, "execute">
+  communityId: string
+  postId: string
+  assetId: string
+  sourceUpdatedAt?: string | null
+}): Promise<void> {
+  try {
+    const result = await syncStoryRoyaltyAllocationProjectionForAsset(input)
+    if (result.projectedRows > 0) {
+      logPipelineInfo("[commerce] Story royalty allocation projection synced", {
+        community_id: input.communityId,
+        post_id: input.postId,
+        asset_id: input.assetId,
+        projected_rows: result.projectedRows,
+      })
+    }
+  } catch (error) {
+    logPipelineInfo("[commerce] Story royalty allocation projection sync failed", {
+      level: "warn",
+      community_id: input.communityId,
+      post_id: input.postId,
+      asset_id: input.assetId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 async function resolveLockedSongPreviewState(input: {
@@ -940,7 +970,8 @@ export async function createAssetForPost(input: {
         locked_delivery_error, created_at, updated_at, story_publish_tx_ref, story_asset_version_id,
         story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
         story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json,
-        royalty_allocation_status, royalty_allocation_version, royalty_allocation_fingerprint
+        royalty_allocation_status, royalty_allocation_version, royalty_allocation_fingerprint,
+        royalty_allocation_projection_synced
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7,
         ?8, ?9, ?10, ?11,
@@ -951,7 +982,7 @@ export async function createAssetForPost(input: {
         ?30, ?31, ?32, ?32, ?33,
         ?34, ?35, ?36, ?37, ?38,
         ?39, ?40, ?41,
-        ?42, ?43, ?44
+        ?42, ?43, ?44, ?45
       )
     `,
     args: [
@@ -999,6 +1030,7 @@ export async function createAssetForPost(input: {
       royaltyAllocationStatus,
       ROYALTY_ALLOCATION_VERSION,
       royaltyAllocationFingerprint,
+      royaltyAllocationStatus === "draft" ? 0 : 1,
     ],
   }
   if (allocationStatements.length > 0) {
@@ -1047,6 +1079,16 @@ export async function createAssetForPost(input: {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+    await syncStoryRoyaltyAllocationProjectionSafely({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      postId: input.post.post_id,
+      assetId: input.post.asset_id,
+      sourceUpdatedAt: input.post.updated_at ?? createdAt,
+    })
   }
   const asset = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (!asset) {
@@ -1490,6 +1532,16 @@ export async function prepareRequestedLockedAssetDelivery(input: {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+    await syncStoryRoyaltyAllocationProjectionSafely({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      postId: post.post_id,
+      assetId: asset.asset_id,
+      sourceUpdatedAt: post.updated_at ?? updatedAt,
+    })
   }
 
   const updated = await getAssetRow(input.client, input.communityId, asset.asset_id)
