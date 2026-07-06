@@ -10,6 +10,7 @@ import {
   runShardBind,
   runShardGetPoolRow,
   runShardLoadSnapshot,
+  runShardPoolStats,
   runShardRead,
   runShardRelease,
   runShardReset,
@@ -831,7 +832,7 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
 
 const ADMIN_TOKEN = "s3cret-admin-token"
 
-/** Minimal pool D1 fake for the admin RPCs (full-row SELECT + the release UPDATE). */
+/** Minimal pool D1 fake for the admin RPCs (full-row SELECT + stats aggregate + release UPDATE). */
 function adminPoolFake(rows: FakePoolRow[]) {
   function stmt(sql: string) {
     const s: any = {
@@ -841,6 +842,22 @@ function adminPoolFake(rows: FakePoolRow[]) {
         return s
       },
       async first() {
+        if (/COUNT\(\*\)\s+AS\s+total/i.test(sql)) {
+          const threshold = s._args[0] as string | undefined
+          let allocated = 0
+          let free = 0
+          let quarantined = 0
+          for (const row of rows) {
+            if (row.community_id !== null) {
+              allocated += 1
+            } else if (row.released_at !== null && threshold && row.released_at >= threshold) {
+              quarantined += 1
+            } else {
+              free += 1
+            }
+          }
+          return { total: rows.length, allocated, free, quarantined }
+        }
         const binding = s._args[0] as string
         return rows.find((r) => r.binding_name === binding) ?? null
       },
@@ -1038,5 +1055,60 @@ describe("communityD1Release (step 5)", () => {
     const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
     const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", now: "t9" })
     expect(r).toEqual({ ok: true, value: { released: false } })
+  })
+})
+
+describe("communityD1PoolStats", () => {
+  test("reports allocated, free, and quarantined pool capacity", async () => {
+    const now = Date.now()
+    const rows: FakePoolRow[] = [
+      {
+        binding_name: "DB_CMTY_ALLOCATED",
+        community_id: "cmt_1",
+        allocated_at: "t0",
+        last_loaded_at: "t1",
+        last_error: null,
+        released_at: null,
+        version: 1,
+      },
+      {
+        binding_name: "DB_CMTY_FREE",
+        community_id: null,
+        allocated_at: null,
+        last_loaded_at: null,
+        last_error: null,
+        released_at: null,
+        version: 1,
+      },
+      {
+        binding_name: "DB_CMTY_RELEASED_READY",
+        community_id: null,
+        allocated_at: null,
+        last_loaded_at: null,
+        last_error: null,
+        released_at: new Date(now - QUARANTINE_WINDOW_MS - 1_000).toISOString(),
+        version: 1,
+      },
+      {
+        binding_name: "DB_CMTY_QUARANTINED",
+        community_id: null,
+        allocated_at: null,
+        last_loaded_at: null,
+        last_error: null,
+        released_at: new Date(now).toISOString(),
+        version: 1,
+      },
+    ]
+    const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
+    const r = await runShardPoolStats(env, { adminToken: ADMIN_TOKEN })
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        total: 4,
+        allocated: 1,
+        free: 2,
+        quarantined: 1,
+      },
+    })
   })
 })

@@ -180,10 +180,22 @@ export type ShardAdminReleaseResponse = {
   released: boolean
 }
 
+export type ShardAdminPoolStatsRequest = {
+  adminToken: string
+}
+
+export type ShardAdminPoolStatsResponse = {
+  total: number
+  allocated: number
+  free: number
+  quarantined: number
+}
+
 export interface ShardAdminRpc {
   communityD1GetPoolRow(input: ShardAdminGetPoolRowRequest): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
   communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>>
   communityD1Release(input: ShardAdminReleaseRequest): Promise<ShardResult<ShardAdminReleaseResponse>>
+  communityD1PoolStats(input: ShardAdminPoolStatsRequest): Promise<ShardResult<ShardAdminPoolStatsResponse>>
 }
 
 /**
