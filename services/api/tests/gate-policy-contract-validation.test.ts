@@ -56,7 +56,7 @@ describe("gate policy contract validation", () => {
       policy: erc721Policy,
     })).rejects.toMatchObject({
       code: "eligibility_failed",
-      message: "erc721_holding contract could not be validated. Check RPC availability and confirm the contract supports ERC-165/ERC-721.",
+      message: "erc721_holding contract validation is temporarily unavailable. Check RPC availability and try again.",
       status: 403,
     } satisfies Partial<HttpError>)
   })
