@@ -210,53 +210,16 @@ async function applyStudyMigration(): Promise<void> {
     }
   }
 
-}
-
-async function restoreLegacyStudyAttemptTable(): Promise<void> {
-  await exec("PRAGMA foreign_keys = OFF")
-  await exec("DROP TABLE song_study_attempt")
-  await exec(`
-    CREATE TABLE song_study_attempt (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      post_id TEXT NOT NULL,
-      exercise_id TEXT NOT NULL,
-      line_id TEXT NOT NULL,
-      exercise_type TEXT NOT NULL CHECK (
-        exercise_type IN ('say_it_back', 'translation_choice')
-      ),
-      target_language TEXT NOT NULL,
-      study_pack_version INTEGER NOT NULL,
-      attempt_number INTEGER NOT NULL,
-      idempotency_key TEXT NOT NULL,
-      selected_option_id TEXT,
-      transcript TEXT,
-      outcome TEXT NOT NULL CHECK (
-        outcome IN ('correct', 'incorrect', 'revealed')
-      ),
-      feedback_json TEXT,
-      fsrs_rating TEXT CHECK (
-        fsrs_rating IS NULL OR fsrs_rating IN ('again', 'hard', 'good', 'easy')
-      ),
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (post_id) REFERENCES posts(post_id) ON DELETE CASCADE,
-      CHECK (attempt_number > 0),
-      UNIQUE (user_id, exercise_id, attempt_number),
-      UNIQUE (user_id, idempotency_key)
-    )
-  `)
-  await exec(`
-    CREATE INDEX idx_song_study_attempt_review_unit
-      ON song_study_attempt(
-        user_id,
-        post_id,
-        line_id,
-        exercise_type,
-        target_language,
-        created_at
-      )
-  `)
-  await exec("PRAGMA foreign_keys = ON")
+  const finalAttemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
+  if (finalAttemptColumns.rows.some((row) => String(row.name) === "review_session_id")) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1121_song_study_attempt_identity.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
 }
 
 async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {
@@ -790,95 +753,6 @@ describe("post study service", () => {
     expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
   })
 
-  test("records first-learn attempts on legacy attempt tables without review_session_id", async () => {
-    await restoreLegacyStudyAttemptTable()
-    await seedSongPost()
-    await seedReadyPack()
-
-    const columns = await client!.execute("PRAGMA table_info(song_study_attempt)")
-    expect(columns.rows.some((row) => String(row.name) === "review_session_id")).toBe(false)
-
-    const body = {
-      attempt_number: 1,
-      exercise_id: "stu:stu_2:translation_choice:es",
-      idempotency_key: "study-attempt-legacy-schema",
-      selected_option_id: "opt_a",
-      target_language: "es",
-      type: "translation_choice" as const,
-    }
-    const first = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body,
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
-      postId: POST_ID,
-    })
-    const retry = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body,
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
-      postId: POST_ID,
-    })
-
-    expect(first).toEqual({
-      attempts_remaining: 1,
-      correct_option_id: "opt_a",
-      exercise_id: "stu:stu_2:translation_choice:es",
-      next_review_hint: "good",
-      object: "song_study_attempt_result",
-      outcome: "correct",
-    })
-    expect(retry).toEqual(first)
-
-    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
-    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
-    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
-    expect(ledger.rows.map((row) => ({
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
-  })
-
-  test("rejects due-review attempts on legacy attempt tables without writing", async () => {
-    await restoreLegacyStudyAttemptTable()
-    await seedSongPost()
-    await seedReadyPack()
-    await exec(`
-      INSERT INTO song_study_review_state (
-        user_id, post_id, line_id, exercise_type, target_language,
-        state, stability, difficulty, due_at, last_reviewed_at,
-        reps, lapses, fsrs_params_version, updated_at
-      )
-      VALUES (
-        ?1, ?2, 'line_002', 'translation_choice', 'es',
-        'review', 1, 5, '2026-06-28T08:00:00.000Z', ?3,
-        1, 0, 1, ?3
-      )
-    `, [LEARNER_ID, POST_ID, NOW])
-
-    await expect(submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-attempt-legacy-due-review",
-        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
-        selected_option_id: "opt_a",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
-      postId: POST_ID,
-    })).rejects.toThrow(/review_session_id is not enabled/)
-
-    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
-    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
-  })
-
   test("does not write study streak rows while the streak write gate is off", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -890,7 +764,6 @@ describe("post study service", () => {
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-gate-off",
         selected_option_id: "opt_a",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
@@ -916,7 +789,6 @@ describe("post study service", () => {
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-wrong-mcq",
         selected_option_id: "opt_b",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
@@ -956,7 +828,6 @@ describe("post study service", () => {
       exercise_id: "stu:stu_2:translation_choice:es",
       idempotency_key: "study-streak-idempotent",
       selected_option_id: "opt_a",
-      target_language: "es",
       type: "translation_choice" as const,
     }
     await submitPostStudyAttempt({
@@ -987,6 +858,10 @@ describe("post study service", () => {
     await seedSongPost()
     await seedReadyPack()
     const waitUntilPromises: Array<Promise<void>> = []
+    let releaseDeferredStreak: (() => void) | undefined
+    const deferredStreakGate = new Promise<void>((resolve) => {
+      releaseDeferredStreak = resolve
+    })
 
     const result = await submitPostStudyAttempt({
       actor: learnerActor,
@@ -995,13 +870,15 @@ describe("post study service", () => {
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-wait-until",
         selected_option_id: "opt_a",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
       env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
       postId: POST_ID,
+      testHooks: {
+        beforeDeferredStreakMaterialization: () => deferredStreakGate,
+      },
       waitUntil: (promise) => waitUntilPromises.push(promise),
     })
 
@@ -1013,7 +890,10 @@ describe("post study service", () => {
       study_attempt_count: Number(row.study_attempt_count),
       study_correct_count: Number(row.study_correct_count),
     }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+    const streakBeforeWaitUntil = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
+    expect(Number(streakBeforeWaitUntil.rows[0]?.count ?? 0)).toBe(0)
 
+    releaseDeferredStreak?.()
     await Promise.all(waitUntilPromises)
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
@@ -1051,7 +931,6 @@ describe("post study service", () => {
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-inline-engagement-choice",
         selected_option_id: "opt_a",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
@@ -1436,6 +1315,7 @@ describe("post study service", () => {
     expect(hiddenPayload.exercises).toEqual([])
     expect(hiddenPayload.session).toEqual({
       due_count: 0,
+      next_due_at: 4102444800,
       served_count: 0,
       total_units: 3,
     })
@@ -1452,14 +1332,27 @@ describe("post study service", () => {
     expect(duePayload.access).toBe("ready")
     expect(duePayload.exercise_count).toBe(1)
     expect(duePayload.exercises.map((exercise) => exercise.id)).toEqual(["stu:stu_2:translation_choice:es"])
-    expect(duePayload.exercises[0]).toMatchObject({
-      review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
-    })
+    expect(duePayload.exercises[0]).not.toHaveProperty("correct_option_id")
     expect(duePayload.session).toEqual({
       due_count: 1,
       served_count: 1,
       total_units: 3,
     })
+
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-review-choice-hidden",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })).rejects.toThrow(/Study exercise not found/)
 
     const reviewAttempt = await submitPostStudyAttempt({
       actor: learnerActor,
@@ -1467,7 +1360,6 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-review-choice-due",
-        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
         selected_option_id: "opt_a",
         type: "translation_choice",
       },
@@ -1480,25 +1372,25 @@ describe("post study service", () => {
 
     const attempts = await client!.execute({
       sql: `
-        SELECT attempt_number, review_session_id
+        SELECT attempt_number, idempotency_key
         FROM song_study_attempt
         WHERE user_id = ?1
           AND exercise_id = 'stu:stu_2:translation_choice:es'
-        ORDER BY created_at ASC, review_session_id ASC
+        ORDER BY created_at ASC, idempotency_key ASC
       `,
       args: [LEARNER_ID],
     })
     expect(attempts.rows.map((row) => ({
       attempt_number: Number(row.attempt_number),
-      review_session_id: String(row.review_session_id),
+      idempotency_key: String(row.idempotency_key),
     }))).toEqual([
       {
         attempt_number: 1,
-        review_session_id: "learn",
+        idempotency_key: "study-review-prereq-choice-learn",
       },
       {
         attempt_number: 1,
-        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+        idempotency_key: "study-review-choice-due",
       },
     ])
   })
@@ -1528,7 +1420,6 @@ describe("post study service", () => {
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-prereq-choice",
         selected_option_id: "opt_a",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
@@ -1555,8 +1446,6 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-streak-review-say-1",
-        review_session_id: "review:line_001:say_it_back:en:2026-06-28T08:00:00.000Z",
-        target_language: "es",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },
@@ -1582,9 +1471,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-review-choice-1",
-        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
         selected_option_id: "opt_a",
-        target_language: "es",
         type: "translation_choice",
       },
       communityId: COMMUNITY_ID,
@@ -3018,12 +2905,15 @@ describe("post study unit punctuation canonicalization", () => {
     `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, lyrics, NOW])
   }
 
-  async function getExercisePromptTexts(targetLanguage = "es"): Promise<string[]> {
+  async function getExercisePromptTexts(
+    targetLanguage = "es",
+    envOverrides: Partial<Env> = {},
+  ): Promise<string[]> {
     const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env(),
+      env: env(envOverrides),
       postId: POST_ID,
       targetLanguage,
     })
@@ -3039,7 +2929,9 @@ describe("post study unit punctuation canonicalization", () => {
       "Do not go!",
     )
 
-    const prompts = await getExercisePromptTexts()
+    const prompts = await getExercisePromptTexts("es", {
+      SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+    })
 
     expect(prompts).toEqual([
       "Blues have overtaken me",
@@ -3075,7 +2967,9 @@ describe("post study unit punctuation canonicalization", () => {
               4.2, 5.0, ?3, ?3, 3, 1, 1, ?3)
     `, [LEARNER_ID, POST_ID, NOW])
 
-    const prompts = await getExercisePromptTexts()
+    const prompts = await getExercisePromptTexts("es", {
+      SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+    })
     expect(prompts).toEqual(["Blues have overtaken me"])
 
     const unit = await client!.execute(
