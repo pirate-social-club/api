@@ -11,7 +11,11 @@ function parseFreeAlertThreshold(value: string | undefined): number {
 }
 
 export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
-  if (!env.COMMUNITY_D1_SHARD || !env.SHARD_ADMIN_TOKEN) return
+  if (!env.COMMUNITY_D1_SHARD) return
+  if (!env.SHARD_ADMIN_TOKEN) {
+    console.warn("[scheduled] pool watchdog misconfigured: shard bound, no admin token")
+    return
+  }
 
   const threshold = parseFreeAlertThreshold(env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
   const result = await env.COMMUNITY_D1_SHARD.communityD1PoolStats({ adminToken: env.SHARD_ADMIN_TOKEN })
