@@ -46,6 +46,25 @@ export type Erc721InventoryAsset = {
   condition: string | null
 }
 
+export type CourtyardWalletInventoryGroup = {
+  category: Erc721InventoryAssetCategory
+  chain_namespace: "eip155:1" | "eip155:137"
+  contract_address: string
+  franchise?: string
+  subject?: string
+  brand?: string
+  model?: string
+  reference?: string
+  set?: string
+  year?: string
+  grader?: string
+  grade?: string
+  condition?: string
+  display_label: string
+  display_detail: string
+  count: number
+}
+
 type CourtyardAsset = {
   attributes?: RawInventoryAttribute[]
   chain?: string
@@ -80,6 +99,11 @@ type CourtyardInventoryCacheEntry = {
   expiresAtMs: number
 }
 
+type CourtyardWalletInventoryGroupCacheEntry = {
+  result: { groups: CourtyardWalletInventoryGroup[]; unavailable: boolean }
+  expiresAtMs: number
+}
+
 let erc721InventoryMatcherForTests: ((input: {
   env: Env
   walletAddresses: string[]
@@ -87,7 +111,10 @@ let erc721InventoryMatcherForTests: ((input: {
 }) => Promise<{ matchedQuantity: number; unavailable?: boolean }>) | null = null
 
 const courtyardInventoryMatchCache = new Map<string, CourtyardInventoryCacheEntry>()
+const courtyardWalletInventoryGroupCache = new Map<string, CourtyardWalletInventoryGroupCacheEntry>()
 const DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS = 60_000
+const DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS = 30_000
+const DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS = 8_000
 const MAX_COURTYARD_INVENTORY_CACHE_ENTRIES = 1_000
 
 export function setErc721InventoryMatcherForTests(
@@ -102,6 +129,7 @@ export function setErc721InventoryMatcherForTests(
 
 export function clearErc721InventoryMatchCacheForTests(): void {
   courtyardInventoryMatchCache.clear()
+  courtyardWalletInventoryGroupCache.clear()
 }
 
 export function normalizeInventoryText(value: unknown): string | null {
@@ -347,6 +375,156 @@ function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721Inventory
   return true
 }
 
+function toTitleWords(value: string): string {
+  return value.split(/\s+/u)
+    .filter(Boolean)
+    .map((word) => word.length <= 3 && /^[a-z0-9]+$/u.test(word)
+      ? word.toUpperCase()
+      : `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ")
+}
+
+function groupFromAsset(asset: Erc721InventoryAsset): Omit<CourtyardWalletInventoryGroup, "count" | "display_detail"> | null {
+  if (asset.category !== "trading_card" && asset.category !== "watch") {
+    return null
+  }
+  if (!isAllowedCourtyardRegistry({ chainNamespace: asset.chainNamespace, contractAddress: asset.contractAddress })) {
+    return null
+  }
+  if (asset.chainNamespace !== "eip155:1" && asset.chainNamespace !== "eip155:137") {
+    return null
+  }
+
+  const base = {
+    category: asset.category,
+    chain_namespace: asset.chainNamespace,
+    contract_address: normalizeEthereumAddress(asset.contractAddress) ?? asset.contractAddress,
+  } as const
+  if (asset.category === "trading_card") {
+    const group = {
+      ...base,
+      ...(asset.franchise ? { franchise: asset.franchise } : {}),
+      ...(asset.subject ? { subject: asset.subject } : {}),
+      ...(asset.set ? { set: asset.set } : {}),
+      ...(asset.year ? { year: asset.year } : {}),
+      ...(asset.grader ? { grader: asset.grader } : {}),
+      ...(asset.grade ? { grade: asset.grade } : {}),
+    }
+    const labelValues = [group.franchise, group.subject, group.set].filter((value): value is string => !!value)
+    if (labelValues.length === 0) return null
+    return {
+      ...group,
+      display_label: labelValues.map(toTitleWords).join(" "),
+    }
+  }
+
+  const group = {
+    ...base,
+    ...(asset.brand ? { brand: asset.brand } : {}),
+    ...(asset.model ? { model: asset.model } : {}),
+    ...(asset.reference ? { reference: asset.reference } : {}),
+    ...(asset.condition ? { condition: asset.condition } : {}),
+  }
+  const labelValues = [group.brand, group.model, group.reference].filter((value): value is string => !!value)
+  if (labelValues.length === 0) return null
+  return {
+    ...group,
+    display_label: labelValues.map(toTitleWords).join(" "),
+  }
+}
+
+export async function listCourtyardWalletInventoryGroups(input: {
+  env: Env
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<{ groups: CourtyardWalletInventoryGroup[]; unavailable: boolean }> {
+  const walletAddresses = Array.from(new Set(
+    input.walletAttachments
+      .filter((wallet) => wallet.chain_namespace === "eip155:1" || wallet.chain_namespace === "eip155:137")
+      .map((wallet) => normalizeEthereumAddress(wallet.wallet_address))
+      .filter((wallet): wallet is string => !!wallet),
+  ))
+  if (walletAddresses.length === 0) {
+    return { groups: [], unavailable: false }
+  }
+
+  const cacheKey = JSON.stringify(walletAddresses.sort())
+  const cached = courtyardWalletInventoryGroupCache.get(cacheKey)
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return {
+      groups: cached.result.groups.map((group) => ({ ...group })),
+      unavailable: cached.result.unavailable,
+    }
+  }
+
+  const groups = new Map<string, CourtyardWalletInventoryGroup>()
+  const seenTokenKeys = new Set<string>()
+  const pageLimit = 100
+
+  try {
+    for (const walletAddress of walletAddresses) {
+      let offset = 0
+      while (true) {
+        const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit: pageLimit })
+        for (const rawAsset of page.assets) {
+          const asset = normalizeCourtyardAsset(rawAsset)
+          if (!asset) continue
+          const tokenKey = `${asset.chainNamespace}:${asset.contractAddress}:${asset.tokenId}`
+          if (seenTokenKeys.has(tokenKey)) continue
+          seenTokenKeys.add(tokenKey)
+          const group = groupFromAsset(asset)
+          if (!group) continue
+          const groupKey = JSON.stringify(group)
+          const current = groups.get(groupKey)
+          groups.set(groupKey, {
+            ...group,
+            count: (current?.count ?? 0) + 1,
+            display_detail: `${(current?.count ?? 0) + 1} in wallet`,
+          })
+        }
+        offset += page.assets.length
+        if (page.assets.length === 0 || offset >= page.total) {
+          break
+        }
+      }
+    }
+  } catch (error) {
+    logCourtyardInventoryProviderError({
+      error,
+      walletCount: walletAddresses.length,
+      contractAddress: "inventory-list",
+    })
+    return { groups: [], unavailable: true }
+  }
+
+  const result = {
+    groups: Array.from(groups.values()).sort((a, b) => a.display_label.localeCompare(b.display_label)),
+    unavailable: false,
+  }
+  if (courtyardWalletInventoryGroupCache.size >= MAX_COURTYARD_INVENTORY_CACHE_ENTRIES) {
+    courtyardWalletInventoryGroupCache.clear()
+  }
+  courtyardWalletInventoryGroupCache.set(cacheKey, {
+    result: {
+      groups: result.groups.map((group) => ({ ...group })),
+      unavailable: result.unavailable,
+    },
+    expiresAtMs: Date.now() + DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS,
+  })
+  return result
+}
+
+function resolveCourtyardOwnershipFetchTimeoutMs(env: Env): number {
+  const raw = String(env.COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS || "").trim()
+  if (!raw) {
+    return DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS
+  }
+  const parsed = Number(raw)
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 30_000) {
+    return parsed
+  }
+  return DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS
+}
+
 async function fetchCourtyardOwnershipPage(input: {
   env: Env
   owner: string
@@ -360,9 +538,18 @@ async function fetchCourtyardOwnershipPage(input: {
   url.searchParams.set("offset", String(input.offset))
   url.searchParams.set("limit", String(input.limit))
 
-  const response = await fetch(url, {
-    headers: { "user-agent": "Pirate community token gate" },
-  })
+  const timeoutMs = resolveCourtyardOwnershipFetchTimeoutMs(input.env)
+  const abortController = new AbortController()
+  const timeoutId = setTimeout(() => abortController.abort(new Error("Courtyard ownership lookup timed out")), timeoutMs)
+  let response: Response
+  try {
+    response = await fetch(url, {
+      headers: { "user-agent": "Pirate community token gate" },
+      signal: abortController.signal,
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
   if (!response.ok) {
     throw new Error(`Courtyard ownership lookup failed with ${response.status}`)
   }

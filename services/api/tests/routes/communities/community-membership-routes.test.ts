@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
+import { setErc721ContractSupportCheckerForTests } from "../../../src/lib/communities/community-token-gates"
 import { setVeryProviderForTests } from "../../../src/lib/verification/very-provider"
 import type { VeryProvider } from "../../../src/lib/verification/very-provider"
 import {
@@ -31,6 +32,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  setErc721ContractSupportCheckerForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -395,6 +397,28 @@ describe("community membership routes", () => {
     const body = await json(communityCreate) as { code: string; message: string }
     expect(body.code).toBe("eligibility_failed")
     expect(body.message).toBe("Membership gate policy requires gated membership")
+  })
+
+  test("community create rejects ERC-721 contracts that fail ERC-165 validation", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    setErc721ContractSupportCheckerForTests(async () => false)
+
+    const creator = await exchangeJwt(ctx.env, "community-erc165-create")
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "Unsupported NFT Club",
+      membership_mode: "gated",
+      gate_policy: gatePolicy({
+        type: "erc721_holding",
+        chain_namespace: "eip155:1",
+        contract_address: "0x1111111111111111111111111111111111111111",
+      }),
+    }, ctx.env, creator.accessToken)
+
+    expect(response.status).toBe(403)
+    const body = await json(response) as { code: string; message: string }
+    expect(body.code).toBe("eligibility_failed")
+    expect(body.message).toBe("erc721_holding gate contract must support ERC-721")
   })
 
   test("community join accepts a passport wallet score that passes the platform threshold", async () => {

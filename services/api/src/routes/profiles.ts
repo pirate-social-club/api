@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import type { Context } from "hono"
-import { authError, badRequestError, paymentRequired, notFoundError } from "../lib/errors"
+import { authError, badRequestError, paymentRequired, notFoundError, rateLimited } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import {
   authenticateAdminUserOrAgentDelegated,
@@ -15,6 +15,7 @@ import { requireTrimmedStringOrNull } from "./route-helpers"
 import { writeAuditEventForEnv } from "../lib/audit"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { listCourtyardWalletInventoryGroups } from "../lib/communities/community-token-inventory-gates"
 import {
   getProfileActivity,
   parseProfileActivityLimit,
@@ -28,6 +29,28 @@ import {
 import { serializeProfileActivityResponse } from "../serializers/profile-activity"
 
 const profiles = new Hono<AuthenticatedEnv>()
+const COURTYARD_INVENTORY_RATE_LIMIT_WINDOW_MS = 60_000
+const COURTYARD_INVENTORY_RATE_LIMIT_MAX = 30
+const courtyardInventoryRateLimitByUser = new Map<string, { count: number; resetAtMs: number }>()
+
+export function resetCourtyardInventoryRateLimitForTests(): void {
+  courtyardInventoryRateLimitByUser.clear()
+}
+
+function enforceCourtyardInventoryRateLimit(userId: string, nowMs = Date.now()): void {
+  const current = courtyardInventoryRateLimitByUser.get(userId)
+  if (!current || current.resetAtMs <= nowMs) {
+    courtyardInventoryRateLimitByUser.set(userId, {
+      count: 1,
+      resetAtMs: nowMs + COURTYARD_INVENTORY_RATE_LIMIT_WINDOW_MS,
+    })
+    return
+  }
+  if (current.count >= COURTYARD_INVENTORY_RATE_LIMIT_MAX) {
+    throw rateLimited("Too many Courtyard inventory requests. Try again shortly.")
+  }
+  current.count += 1
+}
 
 function normalizeSubmittedGlobalHandleQuoteId(value: string): string {
   const trimmed = value.trim()
@@ -190,6 +213,17 @@ profiles.get("/me", async (c) => {
     throw authError("Authentication failed")
   }
   return c.json(serializeProfile(profile), 200)
+})
+
+profiles.get("/me/courtyard-inventory", async (c) => {
+  const actor = c.get("actor")
+  enforceCourtyardInventoryRateLimit(actor.userId)
+  const walletAttachments = await getUserRepository(c.env).getWalletAttachmentsByUserId(actor.userId)
+  const result = await listCourtyardWalletInventoryGroups({
+    env: c.env,
+    walletAttachments,
+  })
+  return c.json(result, 200)
 })
 
 profiles.get("/me/activity", async (c) => {

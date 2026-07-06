@@ -165,6 +165,30 @@ export type PublicProfileResolution = {
   }>;
 };
 
+export type CourtyardWalletInventoryResponse = {
+  groups: Array<CourtyardWalletInventoryGroup>;
+  unavailable: boolean;
+};
+
+export type CourtyardWalletInventoryGroup = {
+  category: "trading_card" | "watch";
+  chain_namespace: "eip155:1" | "eip155:137";
+  contract_address: string;
+  franchise?: string;
+  subject?: string;
+  brand?: string;
+  model?: string;
+  reference?: string;
+  set?: string;
+  year?: string;
+  grader?: string;
+  grade?: string;
+  condition?: string;
+  display_label: string;
+  display_detail: string;
+  count: number;
+};
+
 export type ProfileActivityPostPage = {
   kind: "post";
   post: LocalizedPostResponse;
@@ -3791,6 +3815,7 @@ export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
+  profilesMeCourtyardInventory: "/profiles/me/courtyard-inventory",
   walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",

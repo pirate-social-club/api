@@ -4,6 +4,7 @@ import { setErc721OwnershipCheckerForTests } from "../src/lib/communities/commun
 import {
   clearErc721InventoryMatchCacheForTests,
   evaluateErc721InventoryMatch,
+  listCourtyardWalletInventoryGroups,
   normalizeInventoryMetadata,
   setErc721InventoryMatcherForTests,
 } from "../src/lib/communities/community-token-inventory-gates"
@@ -305,6 +306,48 @@ describe("erc721 gate evaluation", () => {
     })
   })
 
+  test("fails closed when the Courtyard ownership fetch times out", async () => {
+    const warnCalls: unknown[][] = []
+    let fetchSawAbortSignal = false
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args)
+    }
+
+    await withMockedFetch(() => async (_requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const signal = init?.signal
+      fetchSawAbortSignal = signal != null
+      return await new Promise<Response>((_resolve, reject) => {
+        const fallbackTimeout = setTimeout(() => reject(new Error("fetch did not abort")), 200)
+        signal?.addEventListener("abort", () => {
+          clearTimeout(fallbackTimeout)
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"))
+        }, { once: true })
+      })
+    }, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: {
+          COURTYARD_INVENTORY_CACHE_TTL_MS: "0",
+          COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS: "1",
+        },
+        rules: [makeCourtyardInventoryRule()],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(false)
+      expect(result.mismatchReasons).toContain("token_inventory_unavailable")
+    })
+
+    expect(fetchSawAbortSignal).toBe(true)
+    expect(warnCalls.length).toBe(1)
+    expect(String(warnCalls[0]?.[0])).toContain("courtyard-inventory-gate")
+    expect(warnCalls[0]?.[1]).toMatchObject({
+      error_message: "Courtyard ownership lookup timed out",
+      wallet_count: 1,
+      contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+    })
+  })
+
   test("normalizes TCG metadata without relying on the collection name containing card", async () => {
     await withMockedFetch(() => async () => new Response(JSON.stringify({
       total: 1,
@@ -447,6 +490,97 @@ describe("erc721 gate evaluation", () => {
       expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
     })
     expect(fetchCount).toBe(1)
+  })
+
+  test("groups Courtyard wallet inventory into authorable gate facets", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 2,
+      assets: [
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "charizard-1",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+            { name: "Set", value: "Champion's Path" },
+            { name: "Grader", value: "PSA" },
+          ],
+        },
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "charizard-2",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+            { name: "Set", value: "Champion's Path" },
+            { name: "Grader", value: "PSA" },
+          ],
+        },
+      ],
+    })) as Response, async () => {
+      const result = await listCourtyardWalletInventoryGroups({
+        env: {},
+        walletAttachments,
+      })
+
+      expect(result.unavailable).toBe(false)
+      expect(result.groups).toEqual([{
+        category: "trading_card",
+        chain_namespace: "eip155:137",
+        contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        franchise: "pokemon",
+        subject: "charizard v",
+        set: "champion's path",
+        grader: "psa",
+        display_label: "Pokemon Charizard V Champion's Path",
+        display_detail: "2 in wallet",
+        count: 2,
+      }])
+    })
+  })
+
+  test("caches successful Courtyard wallet inventory groups briefly", async () => {
+    let fetchCount = 0
+    await withMockedFetch(() => async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({
+        total: 1,
+        assets: [{
+          chain: "polygon",
+          collection: "Watches",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Rolex Submariner",
+          token_id: "rolex-cache",
+          attributes: [
+            { name: "Brand", value: "Rolex" },
+            { name: "Model", value: "Submariner" },
+          ],
+        }],
+      })) as Response
+    }, async () => {
+      const first = await listCourtyardWalletInventoryGroups({
+        env: {},
+        walletAttachments,
+      })
+      const second = await listCourtyardWalletInventoryGroups({
+        env: {},
+        walletAttachments,
+      })
+
+      expect(first).toEqual(second)
+      expect(first.unavailable).toBe(false)
+      expect(first.groups).toHaveLength(1)
+    })
+    expect(fetchCount).toBe(2)
   })
 
   test("bounds the Courtyard inventory match cache", async () => {
