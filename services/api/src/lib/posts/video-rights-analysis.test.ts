@@ -4,10 +4,11 @@ import { createClient } from "@libsql/client"
 import {
   computeVideoRightsOutcome,
   persistVideoRightsAnalysis,
+  type VideoAudioSafetyEvaluation,
   type VideoRightsAcrEvaluation,
   type VideoRightsDeclaredReferences,
 } from "./video-rights-analysis"
-import { chooseVideoSampleWindow } from "../communities/jobs/video-media-analysis-handler"
+import { chooseVideoSampleWindow, mergeVideoAudioSafetyWithPost } from "../communities/jobs/video-media-analysis-handler"
 
 function acr(overrides: Partial<VideoRightsAcrEvaluation> = {}): VideoRightsAcrEvaluation {
   return {
@@ -25,6 +26,19 @@ function declared(overrides: Partial<VideoRightsDeclaredReferences> = {}): Video
     declaredBundleIds: [],
     declaredAssetIds: [],
     unresolvedRefs: [],
+    ...overrides,
+  }
+}
+
+function audioSafety(overrides: Partial<VideoAudioSafetyEvaluation> = {}): VideoAudioSafetyEvaluation {
+  return {
+    contentSafetyState: "safe",
+    ageGatePolicy: "none",
+    transcript: "clean transcript",
+    transcriptProviderResult: { provider: "elevenlabs" },
+    moderationStatus: "completed",
+    moderationError: null,
+    moderationResult: { provider: "video_audio_safety" },
     ...overrides,
   }
 }
@@ -169,6 +183,45 @@ describe("chooseVideoSampleWindow", () => {
 
   test("long videos cap the start offset and window length", () => {
     expect(chooseVideoSampleWindow(20 * 60_000)).toEqual({ start_ms: 45_000, duration_ms: 60_000 })
+  })
+})
+
+describe("mergeVideoAudioSafetyWithPost", () => {
+  test("raises content safety and age gate when transcript classification is stricter", () => {
+    expect(mergeVideoAudioSafetyWithPost({
+      postContentSafetyState: "safe",
+      postAgeGatePolicy: "none",
+      audioSafety: audioSafety({
+        contentSafetyState: "adult",
+        ageGatePolicy: "18_plus",
+      }),
+    })).toEqual({
+      content_safety_state: "adult",
+      age_gate_policy: "18_plus",
+    })
+  })
+
+  test("does not downgrade an existing stricter post state", () => {
+    expect(mergeVideoAudioSafetyWithPost({
+      postContentSafetyState: "adult",
+      postAgeGatePolicy: "18_plus",
+      audioSafety: audioSafety({
+        contentSafetyState: "safe",
+        ageGatePolicy: "none",
+      }),
+    })).toBeNull()
+  })
+
+  test("ignores skipped or failed audio safety attempts", () => {
+    expect(mergeVideoAudioSafetyWithPost({
+      postContentSafetyState: "safe",
+      postAgeGatePolicy: "none",
+      audioSafety: audioSafety({
+        contentSafetyState: "pending",
+        moderationStatus: "skipped",
+        moderationError: "missing_elevenlabs_configuration",
+      }),
+    })).toBeNull()
   })
 })
 
@@ -398,5 +451,50 @@ describe("persistVideoRightsAnalysis", () => {
     expect(analysisRows.rows).toHaveLength(1)
     expect(analysisRows.rows[0]?.policy_reason_code).toBe("no_match")
     expect(analysisRows.rows[0]?.acrcloud_checked_at).toBe("2026-07-06T14:31:00.000Z")
+  })
+
+  test("persists video audio safety classification signals", async () => {
+    const client = await createTestClient()
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr(),
+      audioTrackPresent: true,
+    })
+    await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_audio_safety",
+      assetId: null,
+      decision,
+      acr: acr({ providerResult: { status: { code: 1001 } } }),
+      declared: declared(),
+      audioSafety: audioSafety({
+        contentSafetyState: "adult",
+        ageGatePolicy: "18_plus",
+        transcript: "explicit transcript",
+        transcriptProviderResult: { provider: "elevenlabs", model: "scribe_v2" },
+        moderationResult: {
+          provider: "video_audio_safety",
+          text_age_gate: {
+            age_gate_policy: "18_plus",
+            content_safety_state: "adult",
+          },
+        },
+      }),
+      sampleWindow: { start_ms: 15_000, duration_ms: 60_000 },
+    })
+
+    const analysisRows = await client.execute("SELECT content_safety_state, age_gate_policy, safety_signals_json FROM media_analysis_results")
+    expect(analysisRows.rows).toHaveLength(1)
+    expect(analysisRows.rows[0]?.content_safety_state).toBe("adult")
+    expect(analysisRows.rows[0]?.age_gate_policy).toBe("18_plus")
+    const safetySignals = JSON.parse(String(analysisRows.rows[0]?.safety_signals_json)) as {
+      transcript: string
+      content_safety_state: string
+      age_gate_policy: string
+    }
+    expect(safetySignals.transcript).toBe("explicit transcript")
+    expect(safetySignals.content_safety_state).toBe("adult")
+    expect(safetySignals.age_gate_policy).toBe("18_plus")
   })
 })

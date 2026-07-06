@@ -3,7 +3,7 @@ import { trimEnv } from "../env-strings"
 import type { Post, SongArtifactUpload } from "../../types"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
-type LyricsModerationOutcome = {
+export type LyricsModerationOutcome = {
   analysisState: Post["analysis_state"]
   contentSafetyState: Post["content_safety_state"]
   ageGatePolicy: Post["age_gate_policy"]
@@ -262,7 +262,7 @@ async function classifyLyricsAgeGate(input: {
   }
 }
 
-async function evaluateLyricsModeration(input: {
+export async function evaluateLyricsModeration(input: {
   env: Env
   lyrics: string
 }): Promise<LyricsModerationOutcome> {
