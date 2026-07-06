@@ -1,8 +1,11 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { decodePublicPostId } from "../lib/public-ids"
 import {
+  getPostStreakLeaderboard,
   getPostStudyPayload,
+  getSongStudyAttemptTiming,
   submitPostStudyAttempt,
   transcribePostStudyAudio,
   type SongStudyAttemptRequest,
@@ -12,6 +15,24 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+
+function parseLeaderboardLimit(value: string | undefined): number | undefined {
+  if (value == null || value.trim() === "") return undefined
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw badRequestError("limit must be an integer between 1 and 100")
+  }
+  return limit
+}
+
+function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/posts/:postId/study", async (c) => {
@@ -29,6 +50,22 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
     return c.json(payload, 200)
   })
 
+  communities.get("/:communityId/posts/:postId/streaks/leaderboard", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const limit = parseLeaderboardLimit(new URL(c.req.url).searchParams.get("limit") ?? undefined)
+    const payload = await getPostStreakLeaderboard({
+      actor,
+      communityId,
+      communityRepository,
+      env: c.env,
+      limit,
+      postId,
+      profileRepository,
+    })
+    return c.json(payload, 200)
+  })
+
   communities.post("/:communityId/posts/:postId/study/attempts", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const postId = decodePublicPostId(c.req.param("postId"))
@@ -40,7 +77,13 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       communityRepository,
       env: c.env,
       postId,
+      waitUntil: getWaitUntil(c),
     })
+    const timing = getSongStudyAttemptTiming(result)
+    if (timing) {
+      c.header("x-song-study-attempt-timing", JSON.stringify(timing))
+      c.header("server-timing", `song-study-attempt;dur=${timing.total_ms}`)
+    }
     return c.json(result, 200)
   })
 

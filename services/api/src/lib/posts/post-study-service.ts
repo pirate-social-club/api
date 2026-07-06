@@ -1,5 +1,7 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
+import type { Profile } from "../../types"
+import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
@@ -34,6 +36,10 @@ const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
 const FIRST_LEARN_REVIEW_SESSION_ID = "learn"
+const STREAK_MIN_STUDY_ATTEMPTS = 10
+const STREAK_LEADERBOARD_DEFAULT_LIMIT = 50
+const STREAK_LEADERBOARD_MAX_LIMIT = 100
+const STREAK_LEADERBOARD_OVERFETCH = 25
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
   "ar",
   "de",
@@ -122,6 +128,10 @@ type StudyAttemptRow = {
   type: ExerciseType
 }
 
+type StudyAttemptSchemaCapabilities = {
+  reviewSessionId: boolean
+}
+
 type StudyReviewStateRow = {
   difficulty: number
   due_at: string
@@ -193,6 +203,7 @@ export type SongStudyAttemptRequest = {
   idempotency_key?: unknown
   review_session_id?: unknown
   selected_option_id?: unknown
+  target_language?: unknown
   transcript?: unknown
   type?: unknown
 }
@@ -211,6 +222,32 @@ export type SongStudyAttemptResult = {
   outcome: AttemptOutcome
 }
 
+export type SongStudyAttemptTiming = {
+  access_read_batch_ms?: number
+  attempt_review_sessions_enabled?: boolean
+  close_client_ms?: number
+  community_id: string
+  exercise_id: string
+  exercise_type?: ExerciseType
+  open_client_ms?: number
+  outcome: string
+  parallel_read_batch_ms?: number
+  post_id: string
+  review_session_id: string
+  streak_deferred: boolean
+  streak_inline_ms?: number
+  streak_writes_enabled: boolean
+  total_ms: number
+  wait_until_available: boolean
+  write_tx_ms?: number
+}
+
+const SONG_STUDY_ATTEMPT_TIMING = Symbol("songStudyAttemptTiming")
+
+export function getSongStudyAttemptTiming(result: SongStudyAttemptResult): SongStudyAttemptTiming | undefined {
+  return (result as SongStudyAttemptResult & { [SONG_STUDY_ATTEMPT_TIMING]?: SongStudyAttemptTiming })[SONG_STUDY_ATTEMPT_TIMING]
+}
+
 export type SongStudyTranscriptionResponse = {
   confidence: number | null
   duration_seconds: number | null
@@ -220,6 +257,51 @@ export type SongStudyTranscriptionResponse = {
   object: "song_study_transcription"
   provider: "elevenlabs"
   text: string
+}
+
+export type SongStreakLeaderboardIdentity = {
+  avatar_ref?: string | null
+  display_name?: string | null
+  handle?: string | null
+  user_id: string
+}
+
+export type SongStreakLeaderboardEntry = {
+  best_streak: number
+  current_streak: number
+  identity: SongStreakLeaderboardIdentity
+  is_viewer: boolean
+  last_qualified_date: string
+  rank: number
+  streak_started_date: string
+  total_qualified_days: number
+}
+
+export type SongStreakViewerStanding = {
+  alive: boolean
+  best_streak: number
+  current_streak: number
+  karaoke_passed_today: boolean
+  qualified_today: boolean
+  study_attempts_today: number
+  study_target_today: number
+  total_qualified_days: number
+}
+
+export type SongStreakLeaderboard = {
+  community_id: string
+  date: string
+  entries: SongStreakLeaderboardEntry[]
+  object: "song_streak_leaderboard"
+  post_id: string
+  total_active_streaks: number
+  viewer: SongStreakViewerStanding | null
+}
+
+export type SongStreakSummary = {
+  entries: SongStreakLeaderboardEntry[]
+  total_active_streaks: number
+  viewer: SongStreakViewerStanding | null
 }
 
 function readString(value: unknown): string | null {
@@ -324,6 +406,16 @@ function normalizeStudyTargetLanguage(value: unknown): string {
   return canonical
 }
 
+function resolveAttemptTargetLanguage(value: unknown, fallback: string | null | undefined): string {
+  const submitted = readString(value)
+  if (submitted) return normalizeStudyTargetLanguage(submitted)
+  const normalizedFallback = readString(fallback)
+  if (normalizedFallback && normalizedFallback !== "source") {
+    return normalizeStudyTargetLanguage(normalizedFallback)
+  }
+  return ASSUMED_STUDY_SOURCE_LANGUAGE
+}
+
 // The song-study pilot is English-source only, so a post with no reliably detected
 // source_language is assumed English for the same-language decision below. Without
 // this, an English song whose source_language is null/undetected takes the
@@ -399,6 +491,18 @@ function dueReviewServingEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_DUE_REVIEW_SERVING_ENABLED, false)
 }
 
+function studyStreakWritesEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_STREAK_WRITES_ENABLED, false)
+}
+
+function studyAttemptTimingLogsEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_ATTEMPT_TIMING_LOGS, false)
+}
+
+function elapsedMs(start: number): number {
+  return Math.round((performance.now() - start) * 10) / 10
+}
+
 function readReviewSessionId(value: unknown): string {
   return readString(value) ?? FIRST_LEARN_REVIEW_SESSION_ID
 }
@@ -416,6 +520,10 @@ function isDueReview(input: { dueAt: string; now: string }): boolean {
   const dueAtMs = Date.parse(input.dueAt)
   const nowMs = Date.parse(input.now)
   return Number.isFinite(dueAtMs) && Number.isFinite(nowMs) && dueAtMs <= nowMs
+}
+
+function studyTargetCountFromDueBefore(dueBefore: number): number {
+  return dueBefore > 0 ? Math.min(STREAK_MIN_STUDY_ATTEMPTS, dueBefore) : STREAK_MIN_STUDY_ATTEMPTS
 }
 
 async function getStudyPostById(client: ReadClient, postId: string): Promise<StudyPost | null> {
@@ -453,6 +561,12 @@ async function canReadPostForStudy(input: {
   client: ReadClient
   post: StudyPost
 }): Promise<boolean> {
+  if (isPubliclyReadablePost({
+    status: input.post.status as "draft" | "published" | "hidden" | "removed" | "deleted",
+    visibility: input.post.visibility as "public" | "members_only",
+  })) {
+    return true
+  }
   try {
     const membership = await requireMemberAccess(input.client as Client, input.post.community_id, input.actor.userId)
     return input.post.status === "published"
@@ -759,6 +873,20 @@ async function listDueReviewExercises(input: {
     study_pack_version: Number(row.study_pack_version ?? 1),
     translation_text: readString(row.translation_text),
   }))
+}
+
+async function getStudyStreakTargetCount(input: {
+  additionalDueCount?: number
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  now: string
+  postId: string
+  targetLanguage: string
+  userId: string
+}): Promise<number> {
+  const dueRows = await listDueReviewExercises(input)
+  return studyTargetCountFromDueBefore(dueRows.length + (input.additionalDueCount ?? 0))
 }
 
 async function getNextDueAt(input: {
@@ -1735,11 +1863,24 @@ function resultFromAttempt(row: StudyAttemptRow, exercise: { correct_option_id: 
   }
 }
 
-async function getAttemptByIdempotencyKey(client: ReadClient, userId: string, idempotencyKey: string): Promise<StudyAttemptRow | null> {
+async function getStudyAttemptSchemaCapabilities(client: ReadClient): Promise<StudyAttemptSchemaCapabilities> {
+  const result = await client.execute("PRAGMA table_info(song_study_attempt)")
+  return {
+    reviewSessionId: result.rows.some((row) => readString(row.name) === "review_session_id"),
+  }
+}
+
+async function getAttemptByIdempotencyKey(
+  client: ReadClient,
+  userId: string,
+  idempotencyKey: string,
+  schema: StudyAttemptSchemaCapabilities,
+): Promise<StudyAttemptRow | null> {
   const row = await executeFirst(client, {
     sql: `
       SELECT exercise_id, exercise_type, attempt_number,
-             review_session_id, selected_option_id, transcript, outcome, feedback_json, fsrs_rating
+             ${schema.reviewSessionId ? "review_session_id" : `'${FIRST_LEARN_REVIEW_SESSION_ID}' AS review_session_id`},
+             selected_option_id, transcript, outcome, feedback_json, fsrs_rating
       FROM song_study_attempt
       WHERE user_id = ?1
         AND idempotency_key = ?2
@@ -1788,18 +1929,30 @@ async function hasAttemptNumber(
   exerciseId: string,
   reviewSessionId: string,
   attemptNumber: number,
+  schema: StudyAttemptSchemaCapabilities,
 ): Promise<boolean> {
   const row = await executeFirst(client, {
-    sql: `
-      SELECT id
-      FROM song_study_attempt
-      WHERE user_id = ?1
-        AND exercise_id = ?2
-        AND review_session_id = ?3
-        AND attempt_number = ?4
-      LIMIT 1
-    `,
-    args: [userId, exerciseId, reviewSessionId, attemptNumber],
+    sql: schema.reviewSessionId
+      ? `
+        SELECT id
+        FROM song_study_attempt
+        WHERE user_id = ?1
+          AND exercise_id = ?2
+          AND review_session_id = ?3
+          AND attempt_number = ?4
+        LIMIT 1
+      `
+      : `
+        SELECT id
+        FROM song_study_attempt
+        WHERE user_id = ?1
+          AND exercise_id = ?2
+          AND attempt_number = ?3
+        LIMIT 1
+      `,
+    args: schema.reviewSessionId
+      ? [userId, exerciseId, reviewSessionId, attemptNumber]
+      : [userId, exerciseId, attemptNumber],
   })
   return Boolean(row)
 }
@@ -1955,6 +2108,163 @@ async function upsertReviewState(input: {
   return input.rating
 }
 
+export async function upsertStudyEngagementDay(input: {
+  client: ReadClient
+  communityId: string
+  isCorrect: boolean
+  now: string
+  postId: string
+  studyTargetCount: number
+  userId: string
+}): Promise<void> {
+  const today = input.now.slice(0, 10)
+  const isCorrect = input.isCorrect ? 1 : 0
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, CASE WHEN 1 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
+      ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
+        study_attempt_count = song_engagement_days.study_attempt_count + 1,
+        study_correct_count = song_engagement_days.study_correct_count + ?5,
+        qualified = CASE
+          WHEN song_engagement_days.study_attempt_count + 1 >= song_engagement_days.study_target_count THEN 1
+          WHEN song_engagement_days.karaoke_pass_count > 0 THEN 1
+          ELSE song_engagement_days.qualified
+        END,
+        updated_at = ?7
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.communityId,
+      today,
+      isCorrect,
+      input.studyTargetCount,
+      input.now,
+    ],
+  })
+}
+
+export async function materializeStudyStreak(input: {
+  client: ReadClient
+  now: string
+  postId: string
+  userId: string
+}): Promise<void> {
+  const today = input.now.slice(0, 10)
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        created_at, updated_at
+      )
+      SELECT d.user_id, d.post_id, d.community_id, 1, 1,
+             d.activity_date, d.activity_date, 1, ?4, ?4
+      FROM song_engagement_days d
+      WHERE d.user_id = ?1
+        AND d.post_id = ?2
+        AND d.activity_date = ?3
+        AND d.qualified = 1
+      ON CONFLICT(user_id, post_id) DO UPDATE SET
+        current_streak = CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date
+            THEN song_streaks.current_streak
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day')
+            THEN song_streaks.current_streak + 1
+          ELSE 1
+        END,
+        best_streak = MAX(song_streaks.best_streak, CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN song_streaks.current_streak
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day') THEN song_streaks.current_streak + 1
+          ELSE 1
+        END),
+        streak_started_date = CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN song_streaks.streak_started_date
+          WHEN song_streaks.last_qualified_date = date(excluded.last_qualified_date, '-1 day') THEN song_streaks.streak_started_date
+          ELSE excluded.last_qualified_date
+        END,
+        total_qualified_days = song_streaks.total_qualified_days + CASE
+          WHEN excluded.last_qualified_date <= song_streaks.last_qualified_date THEN 0
+          ELSE 1
+        END,
+        last_qualified_date = MAX(song_streaks.last_qualified_date, excluded.last_qualified_date),
+        updated_at = ?4
+    `,
+    args: [input.userId, input.postId, today, input.now],
+  })
+}
+
+export async function upsertStudyStreakProgress(input: {
+  client: ReadClient
+  communityId: string
+  isCorrect: boolean
+  now: string
+  postId: string
+  studyTargetCount: number
+  userId: string
+}): Promise<void> {
+  await upsertStudyEngagementDay(input)
+  await materializeStudyStreak(input)
+}
+
+async function resolveStudyStreakTargetCount(input: {
+  client: ReadClient
+  communityId: string
+  countDueReviews: boolean
+  env: Env
+  now: string
+  postId: string
+  sourceLanguage: string | null
+  targetLanguage: string
+  userId: string
+}): Promise<number> {
+  if (!input.countDueReviews) {
+    return STREAK_MIN_STUDY_ATTEMPTS
+  }
+  const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })
+  const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
+  return getStudyStreakTargetCount({
+    client: input.client,
+    includeSayItBack,
+    includeTranslation,
+    now: input.now,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+    userId: input.userId,
+  })
+}
+
+async function recordStudyStreakMaterialization(input: {
+  communityId: string
+  communityRepository: CommunityDatabaseBindingRepository
+  env: Env
+  now: string
+  postId: string
+  userId: string
+}): Promise<void> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await withTransaction(db.client, "write", async (tx) => {
+      await materializeStudyStreak({
+        client: tx,
+        now: input.now,
+        postId: input.postId,
+        userId: input.userId,
+      })
+    })
+  } finally {
+    await db.close()
+  }
+}
+
 export async function submitPostStudyAttempt(input: {
   actor: ActorContext | AdminActorContext
   body: SongStudyAttemptRequest
@@ -1962,6 +2272,7 @@ export async function submitPostStudyAttempt(input: {
   communityRepository: CommunityDatabaseBindingRepository
   env: Env
   postId: string
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<SongStudyAttemptResult> {
   const idempotencyKey = readRequiredString(input.body.idempotency_key, "idempotency_key")
   const exerciseId = readRequiredString(input.body.exercise_id, "exercise_id")
@@ -1972,13 +2283,34 @@ export async function submitPostStudyAttempt(input: {
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
   const reviewSessionId = readReviewSessionId(input.body.review_session_id)
 
+  const timingEnabled = studyAttemptTimingLogsEnabled(input.env)
+  const timingStartedAt = performance.now()
+  let openClientMs: number | undefined
+  let parallelReadBatchMs: number | undefined
+  let accessReadBatchMs: number | undefined
+  let writeTxMs: number | undefined
+  let streakInlineMs: number | undefined
+  let closeClientMs: number | undefined
+  let timingOutcome = "error"
+  let timingExerciseType: ExerciseType | undefined
+  let timingStreakDeferred = false
+  let timingStreakWritesEnabled = false
+  let timingAttemptReviewSessionsEnabled: boolean | undefined
+  let resultForTiming: SongStudyAttemptResult | undefined
+  const openClientStartedAt = performance.now()
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  openClientMs = elapsedMs(openClientStartedAt)
   try {
-    if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
+    const [communityStudyEnabled, attemptSchema] = await Promise.all([
+      isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId }),
+      getStudyAttemptSchemaCapabilities(db.client),
+    ])
+    timingAttemptReviewSessionsEnabled = attemptSchema.reviewSessionId
+    if (!communityStudyEnabled) {
       throw new HttpError(403, "forbidden", "Study is disabled for this community")
     }
 
-    const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
+    const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey, attemptSchema)
     const existingExercise = existing ? await getExerciseForAttempt(db.client, existing.exercise_id) : null
     if (existing && existingExercise) {
       assertEquivalentIdempotentRetry({
@@ -1988,7 +2320,10 @@ export async function submitPostStudyAttempt(input: {
         exerciseId,
         type,
       })
-      return resultFromAttempt(existing, existingExercise)
+      timingOutcome = "idempotent_retry"
+      timingExerciseType = existingExercise.exercise_type
+      resultForTiming = resultFromAttempt(existing, existingExercise)
+      return resultForTiming
     }
 
     const exercise = await getExerciseForAttempt(db.client, exerciseId)
@@ -1998,6 +2333,7 @@ export async function submitPostStudyAttempt(input: {
     if (exercise.exercise_type !== type) {
       throw badRequestError("type does not match exercise")
     }
+    timingExerciseType = exercise.exercise_type
     // Refuse to grade same-language translation_choice attempts (e.g. from a client that
     // still holds an exercise id generated before this exercise type was suppressed).
     // Mirror the read-path exclusion so it reads as "not offered", not a server error.
@@ -2006,13 +2342,19 @@ export async function submitPostStudyAttempt(input: {
       throw notFoundError("Study exercise not found")
     }
     const now = nowIso()
-    const existingReviewState = await getReviewState({
-      client: db.client,
-      exercise,
-      userId: input.actor.userId,
-    })
+    const parallelReadBatchStartedAt = performance.now()
+    const [existingReviewState, attemptNumberSpent, post] = await Promise.all([
+      getReviewState({
+        client: db.client,
+        exercise,
+        userId: input.actor.userId,
+      }),
+      hasAttemptNumber(db.client, input.actor.userId, exerciseId, reviewSessionId, attemptNumber, attemptSchema),
+      getStudyPostById(db.client, input.postId),
+    ])
+    parallelReadBatchMs = elapsedMs(parallelReadBatchStartedAt)
     if (reviewSessionId !== FIRST_LEARN_REVIEW_SESSION_ID) {
-      if (!dueReviewServingEnabled(input.env)) {
+      if (!attemptSchema.reviewSessionId || !dueReviewServingEnabled(input.env)) {
         throw badRequestError("review_session_id is not enabled")
       }
       if (!existingReviewState) {
@@ -2031,18 +2373,26 @@ export async function submitPostStudyAttempt(input: {
     if (attemptNumber > exercise.max_attempts) {
       throw badRequestError("attempt_number exceeds max_attempts")
     }
-    if (await hasAttemptNumber(db.client, input.actor.userId, exerciseId, reviewSessionId, attemptNumber)) {
+    if (attemptNumberSpent) {
       throw conflictError("attempt_number has already been recorded for this exercise")
     }
 
-    const post = await getStudyPostById(db.client, input.postId)
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
-    if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
+    const accessReadBatchStartedAt = performance.now()
+    const [canReadPost, canStudy] = await Promise.all([
+      canReadPostForStudy({ actor: input.actor, client: db.client, post }),
+      canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post }),
+    ])
+    accessReadBatchMs = elapsedMs(accessReadBatchStartedAt)
+    if (!canReadPost) {
       throw notFoundError("Post not found")
     }
-    if (!await canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post })) {
+    if (!canStudy) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
+    const streakWritesEnabled = studyStreakWritesEnabled(input.env)
+    timingStreakWritesEnabled = streakWritesEnabled
+    const submittedTargetLanguage = resolveAttemptTargetLanguage(input.body.target_language, exercise.target_language)
 
     let correct = false
     let selectedOptionId: string | null = null
@@ -2072,6 +2422,21 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
+    const isDueReviewAttempt = Boolean(existingReviewState && isDueReview({ dueAt: existingReviewState.due_at, now }))
+    const studyStreakTargetCount = streakWritesEnabled
+      ? await resolveStudyStreakTargetCount({
+        client: db.client,
+        communityId: input.communityId,
+        countDueReviews: isDueReviewAttempt,
+        env: input.env,
+        now,
+        postId: input.postId,
+        sourceLanguage: post.source_language,
+        targetLanguage: submittedTargetLanguage,
+        userId: input.actor.userId,
+      })
+      : null
+    const writeTxStartedAt = performance.now()
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
       const reviewRating = await upsertReviewState({
         client: tx,
@@ -2081,38 +2446,106 @@ export async function submitPostStudyAttempt(input: {
         rating,
         userId: input.actor.userId,
       })
-      await tx.execute({
-        sql: `
-          INSERT INTO song_study_attempt (
-            id, user_id, post_id, exercise_id, review_session_id, line_id, exercise_type,
-            target_language, study_pack_version, attempt_number, idempotency_key,
-            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
-          )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-        `,
-        args: [
-          makeId("sta"),
-          input.actor.userId,
-          input.postId,
-          exercise.id,
-          reviewSessionId,
-          exercise.line_id,
-          exercise.exercise_type,
-          exercise.review_language,
-          exercise.study_pack_version,
-          attemptNumber,
-          idempotencyKey,
-          selectedOptionId,
-          transcript,
-          outcome,
-          feedback ? JSON.stringify(feedback) : null,
-          reviewRating,
+      if (attemptSchema.reviewSessionId) {
+        await tx.execute({
+          sql: `
+            INSERT INTO song_study_attempt (
+              id, user_id, post_id, exercise_id, review_session_id, line_id, exercise_type,
+              target_language, study_pack_version, attempt_number, idempotency_key,
+              selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+          `,
+          args: [
+            makeId("sta"),
+            input.actor.userId,
+            input.postId,
+            exercise.id,
+            reviewSessionId,
+            exercise.line_id,
+            exercise.exercise_type,
+            exercise.review_language,
+            exercise.study_pack_version,
+            attemptNumber,
+            idempotencyKey,
+            selectedOptionId,
+            transcript,
+            outcome,
+            feedback ? JSON.stringify(feedback) : null,
+            reviewRating,
+            now,
+          ],
+        })
+      } else {
+        await tx.execute({
+          sql: `
+            INSERT INTO song_study_attempt (
+              id, user_id, post_id, exercise_id, line_id, exercise_type,
+              target_language, study_pack_version, attempt_number, idempotency_key,
+              selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          `,
+          args: [
+            makeId("sta"),
+            input.actor.userId,
+            input.postId,
+            exercise.id,
+            exercise.line_id,
+            exercise.exercise_type,
+            exercise.review_language,
+            exercise.study_pack_version,
+            attemptNumber,
+            idempotencyKey,
+            selectedOptionId,
+            transcript,
+            outcome,
+            feedback ? JSON.stringify(feedback) : null,
+            reviewRating,
+            now,
+          ],
+        })
+      }
+      if (streakWritesEnabled && studyStreakTargetCount != null) {
+        await upsertStudyEngagementDay({
+          client: tx,
+          communityId: input.communityId,
+          isCorrect: outcome === "correct",
           now,
-        ],
-      })
+          postId: input.postId,
+          studyTargetCount: studyStreakTargetCount,
+          userId: input.actor.userId,
+        })
+      }
       return reviewRating
     })
-    return {
+    writeTxMs = elapsedMs(writeTxStartedAt)
+    if (streakWritesEnabled) {
+      const recordStreak = () => recordStudyStreakMaterialization({
+        communityId: input.communityId,
+        communityRepository: input.communityRepository,
+        env: input.env,
+        now,
+        postId: input.postId,
+        userId: input.actor.userId,
+      })
+      if (input.waitUntil) {
+        timingStreakDeferred = true
+        input.waitUntil(recordStreak().catch((error) => {
+          console.error("[song-study] streak progress update failed", {
+            error,
+            post_id: input.postId,
+            user_id: input.actor.userId,
+          })
+        }))
+      } else {
+        const streakInlineStartedAt = performance.now()
+        await recordStreak()
+        streakInlineMs = elapsedMs(streakInlineStartedAt)
+      }
+    }
+    timingOutcome = outcome
+    resultForTiming = {
       attempts_remaining: attemptsRemaining,
       ...(type === "translation_choice" && (outcome === "correct" || outcome === "revealed") && exercise.correct_option_id
         ? { correct_option_id: exercise.correct_option_id }
@@ -2122,6 +2555,276 @@ export async function submitPostStudyAttempt(input: {
       next_review_hint: fsrsRating,
       object: "song_study_attempt_result",
       outcome,
+    }
+    return resultForTiming
+  } finally {
+    const closeClientStartedAt = performance.now()
+    await db.close()
+    closeClientMs = elapsedMs(closeClientStartedAt)
+    if (timingEnabled) {
+      const timing: SongStudyAttemptTiming = {
+        access_read_batch_ms: accessReadBatchMs,
+        attempt_review_sessions_enabled: timingAttemptReviewSessionsEnabled,
+        close_client_ms: closeClientMs,
+        community_id: input.communityId,
+        exercise_id: exerciseId,
+        exercise_type: timingExerciseType,
+        open_client_ms: openClientMs,
+        outcome: timingOutcome,
+        parallel_read_batch_ms: parallelReadBatchMs,
+        post_id: input.postId,
+        review_session_id: reviewSessionId,
+        streak_deferred: timingStreakDeferred,
+        streak_inline_ms: streakInlineMs,
+        streak_writes_enabled: timingStreakWritesEnabled,
+        total_ms: elapsedMs(timingStartedAt),
+        wait_until_available: Boolean(input.waitUntil),
+        write_tx_ms: writeTxMs,
+      }
+      if (resultForTiming) {
+        Object.defineProperty(resultForTiming, SONG_STUDY_ATTEMPT_TIMING, {
+          enumerable: false,
+          value: timing,
+        })
+      }
+      console.info("[song-study] attempt timing", JSON.stringify(timing))
+    }
+  }
+}
+
+type SongStreakRow = {
+  best_streak: unknown
+  current_streak: unknown
+  last_qualified_date: unknown
+  streak_started_date: unknown
+  total_qualified_days: unknown
+  user_id: unknown
+}
+
+type SongStreakDayRow = {
+  karaoke_pass_count?: unknown
+  qualified?: unknown
+  study_attempt_count?: unknown
+  study_target_count?: unknown
+}
+
+function utcDateFromIso(value: string): string {
+  return value.slice(0, 10)
+}
+
+function addUtcDays(date: string, days: number): string {
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  parsed.setUTCDate(parsed.getUTCDate() + days)
+  return parsed.toISOString().slice(0, 10)
+}
+
+function clampStreakLeaderboardLimit(value?: number | null): number {
+  if (value == null || !Number.isFinite(value)) return STREAK_LEADERBOARD_DEFAULT_LIMIT
+  return Math.min(STREAK_LEADERBOARD_MAX_LIMIT, Math.max(1, Math.trunc(value)))
+}
+
+function profileIdentity(userId: string, profile: Profile | null | undefined): SongStreakLeaderboardIdentity | null {
+  if (!profile) return null
+  return {
+    avatar_ref: profile.avatar_ref ?? null,
+    display_name: profile.display_name ?? null,
+    handle: profile.primary_public_handle?.label ?? profile.global_handle?.label ?? null,
+    user_id: userId,
+  }
+}
+
+async function resolveLeaderboardIdentities(
+  profileRepository: ProfileRepository,
+  userIds: string[],
+): Promise<Map<string, SongStreakLeaderboardIdentity>> {
+  const uniqueUserIds = Array.from(new Set(userIds.map((userId) => userId.trim()).filter(Boolean)))
+  const profiles = profileRepository.listProfilesByUserIds
+    ? await profileRepository.listProfilesByUserIds(uniqueUserIds)
+    : new Map(await Promise.all(uniqueUserIds.map(async (userId) => [userId, await profileRepository.getProfileByUserId(userId)] as const)))
+  const identities = new Map<string, SongStreakLeaderboardIdentity>()
+  for (const userId of uniqueUserIds) {
+    const identity = profileIdentity(userId, profiles.get(userId))
+    if (identity) {
+      identities.set(userId, identity)
+    }
+  }
+  return identities
+}
+
+function viewerStanding(input: {
+  day: SongStreakDayRow | null
+  row: SongStreakRow | null
+  today: string
+  yesterday: string
+}): SongStreakViewerStanding {
+  const lastQualifiedDate = readString(input.row?.last_qualified_date)
+  return {
+    alive: Boolean(lastQualifiedDate && lastQualifiedDate >= input.yesterday),
+    best_streak: Number(input.row?.best_streak ?? 0),
+    current_streak: Number(input.row?.current_streak ?? 0),
+    karaoke_passed_today: Number(input.day?.karaoke_pass_count ?? 0) > 0,
+    qualified_today: Number(input.day?.qualified ?? 0) === 1,
+    study_attempts_today: Number(input.day?.study_attempt_count ?? 0),
+    study_target_today: Number(input.day?.study_target_count ?? STREAK_MIN_STUDY_ATTEMPTS),
+    total_qualified_days: Number(input.row?.total_qualified_days ?? 0),
+  }
+}
+
+async function readSongStreakSummary(input: {
+  client: Client
+  limit: number
+  postId: string
+  profileRepository: ProfileRepository
+  userId: string
+}): Promise<{ date: string; summary: SongStreakSummary }> {
+  const today = utcDateFromIso(nowIso())
+  const yesterday = addUtcDays(today, -1)
+  const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
+    input.client.execute({
+      sql: `
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        FROM song_streaks
+        WHERE post_id = ?1
+          AND last_qualified_date >= ?2
+        ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
+        LIMIT ?3
+      `,
+      args: [input.postId, yesterday, input.limit + STREAK_LEADERBOARD_OVERFETCH],
+    }),
+    executeFirst(input.client, {
+      sql: `
+        SELECT COUNT(*) AS active_count
+        FROM song_streaks
+        WHERE post_id = ?1
+          AND last_qualified_date >= ?2
+      `,
+      args: [input.postId, yesterday],
+    }) as Promise<Record<string, unknown> | null>,
+    executeFirst(input.client, {
+      sql: `
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        FROM song_streaks
+        WHERE user_id = ?1
+          AND post_id = ?2
+      `,
+      args: [input.userId, input.postId],
+    }) as Promise<SongStreakRow | null>,
+    executeFirst(input.client, {
+      sql: `
+        SELECT qualified, study_attempt_count, study_target_count, karaoke_pass_count
+        FROM song_engagement_days
+        WHERE user_id = ?1
+          AND post_id = ?2
+          AND activity_date = ?3
+      `,
+      args: [input.userId, input.postId, today],
+    }) as Promise<SongStreakDayRow | null>,
+  ])
+
+  const rows = boardResult.rows as SongStreakRow[]
+  const identities = await resolveLeaderboardIdentities(
+    input.profileRepository,
+    rows.map((row) => readString(row.user_id) ?? ""),
+  )
+  const entries: SongStreakLeaderboardEntry[] = []
+  for (const row of rows) {
+    const userId = readString(row.user_id)
+    if (!userId) continue
+    const identity = identities.get(userId)
+    if (!identity) continue
+    entries.push({
+      best_streak: Number(row.best_streak ?? 0),
+      current_streak: Number(row.current_streak ?? 0),
+      identity,
+      is_viewer: userId === input.userId,
+      last_qualified_date: readString(row.last_qualified_date) ?? today,
+      rank: entries.length + 1,
+      streak_started_date: readString(row.streak_started_date) ?? today,
+      total_qualified_days: Number(row.total_qualified_days ?? 0),
+    })
+    if (entries.length >= input.limit) break
+  }
+
+  return {
+    date: today,
+    summary: {
+      entries,
+      total_active_streaks: Number(totalActiveRow?.active_count ?? 0),
+      viewer: viewerStanding({ day: viewerDay, row: viewerRow, today, yesterday }),
+    },
+  }
+}
+
+function isMissingStreakTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)
+}
+
+export async function getPostStreakSummary(input: {
+  client: Client
+  postId: string
+  profileRepository: ProfileRepository
+  userId: string | null
+}): Promise<SongStreakSummary | null> {
+  if (!input.userId) return null
+  const post = await getStudyPostById(input.client, input.postId)
+  if (!post || post.post_type !== "song" || post.status !== "published") return null
+  try {
+    await requireMemberAccess(input.client, post.community_id, input.userId)
+  } catch (error) {
+    if (isMissingStreakTableError(error)) return null
+    if (error instanceof HttpError && error.status === 404) return null
+    throw error
+  }
+  try {
+    return (await readSongStreakSummary({
+      client: input.client,
+      limit: 3,
+      postId: input.postId,
+      profileRepository: input.profileRepository,
+      userId: input.userId,
+    })).summary
+  } catch (error) {
+    if (isMissingStreakTableError(error)) return null
+    throw error
+  }
+}
+
+export async function getPostStreakLeaderboard(input: {
+  actor: ActorContext | AdminActorContext
+  communityId: string
+  communityRepository: CommunityDatabaseBindingRepository
+  env: Env
+  limit?: number | null
+  postId: string
+  profileRepository: ProfileRepository
+}): Promise<SongStreakLeaderboard> {
+  const limit = clampStreakLeaderboardLimit(input.limit)
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const post = await getStudyPostById(db.client, input.postId)
+    if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
+    await requireMemberAccess(db.client as Client, input.communityId, input.actor.userId)
+    if (post.status !== "published" && !await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
+      throw notFoundError("Post not found")
+    }
+
+    const { date, summary } = await readSongStreakSummary({
+      client: db.client as Client,
+      limit,
+      postId: input.postId,
+      profileRepository: input.profileRepository,
+      userId: input.actor.userId,
+    })
+
+    return {
+      community_id: publicCommunityId(input.communityId),
+      date,
+      entries: summary.entries,
+      object: "song_streak_leaderboard",
+      post_id: publicPostId(input.postId),
+      total_active_streaks: summary.total_active_streaks,
+      viewer: summary.viewer,
     }
   } finally {
     await db.close()

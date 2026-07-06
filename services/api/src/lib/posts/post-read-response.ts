@@ -16,6 +16,7 @@ import {
 } from "./post-jobs"
 import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydration"
 import { getPostReadMetrics } from "./community-post-metrics-store"
+import { getPostStreakSummary } from "./post-study-service"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
 
@@ -121,12 +122,35 @@ export async function hydrateAuthorPublicHandlesForResponses(input: {
   }
 }
 
+export async function hydrateSongStreakSummariesForResponses(input: {
+  client: Client
+  responses: LocalizedPostResponse[]
+  profileRepository?: ProfileRepository | null
+  viewerUserId?: string | null
+}): Promise<void> {
+  if (!input.profileRepository || !input.viewerUserId) return
+
+  await Promise.all(input.responses.map(async (response) => {
+    if (response.post.post_type !== "song" || response.post.status !== "published") {
+      response.streak_summary = null
+      return
+    }
+    response.streak_summary = await getPostStreakSummary({
+      client: input.client,
+      postId: response.post.post_id,
+      profileRepository: input.profileRepository!,
+      userId: input.viewerUserId ?? null,
+    })
+  }))
+}
+
 export async function hydrateAndEnqueuePostReadResponses(input: {
   client: Client
   communityId: string
   responses: LocalizedPostResponse[]
   communityRepository?: PostReadResponseCommunityRepository | null
   profileRepository?: ProfileRepository | null
+  viewerUserId?: string | null
 }): Promise<void> {
   if (input.communityRepository) {
     await hydrateCrosspostSourcesForResponses({
@@ -139,6 +163,13 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   await hydrateAuthorPublicHandlesForResponses({
     responses: input.responses,
     profileRepository: input.profileRepository,
+  })
+
+  await hydrateSongStreakSummariesForResponses({
+    client: input.client,
+    responses: input.responses,
+    profileRepository: input.profileRepository,
+    viewerUserId: input.viewerUserId,
   })
 
   await hydrateDerivativeSourcesForResponses({

@@ -13,7 +13,7 @@ import { getMembershipGatePolicy } from "../communities/membership/gate-policy-s
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
-import { hydrateAuthorPublicHandlesForResponses } from "../posts/post-read-response"
+import { hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
@@ -460,6 +460,12 @@ export async function readHomeFeedCommunityItems(input: {
     await hydrateAuthorPublicHandlesForResponses({
       responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
+    })
+    await hydrateSongStreakSummariesForResponses({
+      client: db.client,
+      responses: postReadJobs.map((job) => job.response),
+      profileRepository: input.profileRepository,
+      viewerUserId: input.userId,
     })
     if (communitySummary) {
       const serializedCommunitySummary = serializeHomeFeedCommunitySummary(communitySummary)

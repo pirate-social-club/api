@@ -181,6 +181,42 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
     })
   })
 
+  test("localized post serializer exposes streak summary", () => {
+    const response = makeLocalizedResponse(makeLinkPost({ post_type: "song" }), "en")
+    response.streak_summary = {
+      entries: [{
+        best_streak: 23,
+        current_streak: 21,
+        identity: {
+          avatar_ref: null,
+          display_name: "lena.pirate",
+          handle: "lena.pirate",
+          user_id: "usr_lena",
+        },
+        is_viewer: false,
+        last_qualified_date: "2026-07-06",
+        rank: 1,
+        streak_started_date: "2026-06-16",
+        total_qualified_days: 26,
+      }],
+      total_active_streaks: 5,
+      viewer: {
+        alive: true,
+        best_streak: 14,
+        current_streak: 14,
+        karaoke_passed_today: false,
+        qualified_today: false,
+        study_attempts_today: 6,
+        study_target_today: 10,
+        total_qualified_days: 19,
+      },
+    }
+
+    const result = serializeLocalizedPostResponse(response)
+
+    expect(result.streak_summary).toEqual(response.streak_summary)
+  })
+
   test("home_feed surface keeps only resolved locale and source language translations", () => {
     const response = makeLocalizedResponse(makeLinkPost(), "es")
     const result = serializeLocalizedPostResponse(response, { surface: "home_feed" })

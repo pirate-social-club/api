@@ -612,6 +612,7 @@ export type LocalizedPostResponse = {
     source_language?: string | null
     target_language?: string | null
   } | null
+  streak_summary?: ContractLocalizedPostResponse["streak_summary"]
   asset_story?: {
     story_ip: string | null
     story_royalty_registration_status: "none" | "pending" | "registered" | "failed"
