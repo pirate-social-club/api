@@ -26,6 +26,7 @@ export type StoryRoyaltyRegistrationResult = {
   storyIpId: string
   storyIpNftContract: string
   storyIpNftTokenId: string
+  ipRoyaltyVault: string | null
   storyLicenseTermsId: string | null
   storyLicenseTemplate: string | null
   storyRoyaltyPolicy: string
@@ -34,6 +35,10 @@ export type StoryRoyaltyRegistrationResult = {
   storyRoyaltyRegistrationStatus: "registered"
   storyDerivativeRegisteredAt: string | null
 }
+
+type StoryRoyaltyRegistrationTestResult =
+  & Omit<StoryRoyaltyRegistrationResult, "ipRoyaltyVault">
+  & { ipRoyaltyVault?: string | null }
 
 type ResolvedDerivativeParent = {
   ipId: `0x${string}`
@@ -92,6 +97,9 @@ type StoryIpAssetClient = {
 
 type StoryRoyaltySdkClient = {
   ipAsset: StoryIpAssetClient
+  royalty?: {
+    getRoyaltyVaultAddress: (ipId: `0x${string}`) => Promise<`0x${string}` | string>
+  }
   license?: StoryLicenseClient
 }
 
@@ -121,7 +129,7 @@ let testRoyaltyRegistrar: ((input: {
   assetKind: StoryRoyaltyAssetKind
   bundle: SongArtifactBundle | null
   primaryContentHash: `0x${string}`
-}) => Promise<StoryRoyaltyRegistrationResult | null>) | null = null
+}) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null = null
 
 let testStoryRoyaltySdkClientFactory: ((input: {
   env: Env
@@ -143,7 +151,7 @@ export function setStoryRoyaltyRegistrarForTests(
     assetKind: StoryRoyaltyAssetKind
     bundle: SongArtifactBundle | null
     primaryContentHash: `0x${string}`
-  }) => Promise<StoryRoyaltyRegistrationResult | null>) | null,
+  }) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null,
 ): void {
   testRoyaltyRegistrar = registrar
 }
@@ -696,7 +704,8 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   primaryContentHash: `0x${string}`
 }): Promise<StoryRoyaltyRegistrationResult | null> {
   if (testRoyaltyRegistrar) {
-    return await testRoyaltyRegistrar(input)
+    const result = await testRoyaltyRegistrar(input)
+    return result ? { ...result, ipRoyaltyVault: result.ipRoyaltyVault ?? null } : null
   }
 
   const rightsBasis = normalizeStoryRoyaltyRightsBasis(input.rightsBasis)
@@ -754,6 +763,20 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const royaltyPolicy = resolveStoryRoyaltyPolicyAddress(input.env)
   const defaultMintingFee = resolveStoryRoyaltyDefaultMintingFee(input.env)
   const maxLicenseTokens = resolveStoryRoyaltyMaxLicenseTokens(input.env)
+  const resolveVault = async (ipId: `0x${string}`): Promise<string | null> => {
+    try {
+      const vault = await storyClient.royalty?.getRoyaltyVaultAddress(ipId)
+      return typeof vault === "string" && vault !== "0x0000000000000000000000000000000000000000" ? vault : null
+    } catch (error) {
+      console.warn("[story] royalty vault lookup failed", {
+        community_id: input.communityId,
+        asset_id: input.assetId,
+        story_ip_id: ipId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    }
+  }
 
   if (rightsBasis === "derivative") {
     const derivativeResponse = await withStoryRegistrationRetry(() =>
@@ -777,11 +800,13 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       }),
     )
     const derivativeIpId = derivativeResponse.ipId!
+    const ipRoyaltyVault = await resolveVault(derivativeIpId)
 
     return {
       storyIpId: derivativeIpId,
       storyIpNftContract: spgNftContract,
       storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
+      ipRoyaltyVault,
       storyLicenseTermsId: null,
       storyLicenseTemplate: null,
       storyRoyaltyPolicy: royaltyPolicy,
@@ -826,6 +851,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     storyIpId: originalResponse.ipId!,
     storyIpNftContract: spgNftContract,
     storyIpNftTokenId: originalResponse.tokenId!.toString(),
+    ipRoyaltyVault: await resolveVault(originalResponse.ipId!),
     storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
     storyLicenseTemplate: null,
     storyRoyaltyPolicy: royaltyPolicy,

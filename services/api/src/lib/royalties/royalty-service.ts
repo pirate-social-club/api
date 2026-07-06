@@ -4,10 +4,11 @@ import type { Env } from "../../env"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import { listCommunityMembershipProjectionRowsByUserId } from "../auth/auth-db-community-queries"
+import { listActiveWalletAttachmentRows } from "../auth/auth-db-user-queries"
 import { getControlPlaneClient } from "../runtime-deps"
 import { resolveStoryChainId, resolveStoryRpcUrl } from "../story/story-runtime-config"
 import { listNotificationFeed } from "../notifications/notification-read-store"
-import { listUserStoryAssets } from "./royalty-queries"
+import { listProjectedRoyaltyAllocationStoryAssets, listUserStoryAssets, type UserStoryAssetRow } from "./royalty-queries"
 import type {
   ClaimableRoyaltiesResponse,
   ClaimableRoyaltyItem,
@@ -36,6 +37,12 @@ export async function getClaimableRoyaltiesForUser(input: {
 }): Promise<ClaimableRoyaltiesResponse> {
   const controlPlane = getControlPlaneClient(input.env)
   try {
+    const walletRows = await listActiveWalletAttachmentRows(controlPlane, input.userId)
+    const projectedAssets = await listProjectedRoyaltyAllocationStoryAssets({
+      client: controlPlane,
+      userId: input.userId,
+      walletAddressesNormalized: walletRows.map((row) => row.wallet_address_normalized),
+    })
     const memberships = await listCommunityMembershipProjectionRowsByUserId(controlPlane, input.userId)
     const memberCommunityIds = new Set(
       memberships
@@ -43,7 +50,7 @@ export async function getClaimableRoyaltiesForUser(input: {
         .map((m) => m.community_id),
     )
 
-    if (memberCommunityIds.size === 0) {
+    if (memberCommunityIds.size === 0 && projectedAssets.length === 0) {
       return {
         items: [],
         total_claimable_wip_wei: "0",
@@ -53,42 +60,49 @@ export async function getClaimableRoyaltiesForUser(input: {
 
     const storyClient = createReadOnlyStoryClient(input.env)
     const items: ClaimableRoyaltyItem[] = []
+    const seenStoryIps = new Set<string>()
+
+    async function appendClaimableAssets(assets: UserStoryAssetRow[], source: { communityId?: string | null } = {}): Promise<void> {
+      for (const asset of assets) {
+        if (!asset.story_ip_id || seenStoryIps.has(asset.story_ip_id)) continue
+        seenStoryIps.add(asset.story_ip_id)
+
+        try {
+          const claimableWei = await storyClient.royalty.claimableRevenue({
+            ipId: asset.story_ip_id as `0x${string}`,
+            claimer: asset.story_ip_id as `0x${string}`,
+            token: WIP_TOKEN_ADDRESS,
+          })
+
+          if (claimableWei > 0n) {
+            items.push({
+              ip: asset.story_ip_id,
+              claimable_wip_wei: claimableWei.toString(),
+              asset: `asset_${asset.asset_id}`,
+              community: `com_${asset.community_id}`,
+              title: asset.display_title,
+            })
+          }
+        } catch (error) {
+          console.warn("[royalty-service] claimableRevenue check failed", {
+            userId: input.userId,
+            communityId: source.communityId ?? asset.community_id,
+            assetId: asset.asset_id,
+            ipId: asset.story_ip_id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+    }
+
+    await appendClaimableAssets(projectedAssets)
 
     for (const communityId of memberCommunityIds) {
       let db: Awaited<ReturnType<typeof openCommunityReadClient>> | null = null
       try {
         db = await openCommunityReadClient(input.env, input.communityRepository, communityId)
         const assets = await listUserStoryAssets(db.client, input.userId)
-
-        for (const asset of assets) {
-          if (!asset.story_ip_id) continue
-
-          try {
-            const claimableWei = await storyClient.royalty.claimableRevenue({
-              ipId: asset.story_ip_id as `0x${string}`,
-              claimer: asset.story_ip_id as `0x${string}`,
-              token: WIP_TOKEN_ADDRESS,
-            })
-
-            if (claimableWei > 0n) {
-              items.push({
-                ip: asset.story_ip_id,
-                claimable_wip_wei: claimableWei.toString(),
-                asset: `asset_${asset.asset_id}`,
-                community: `com_${asset.community_id}`,
-                title: asset.display_title,
-              })
-            }
-          } catch (error) {
-            console.warn("[royalty-service] claimableRevenue check failed", {
-              userId: input.userId,
-              communityId,
-              assetId: asset.asset_id,
-              ipId: asset.story_ip_id,
-              error: error instanceof Error ? error.message : String(error),
-            })
-          }
-        }
+        await appendClaimableAssets(assets, { communityId })
       } catch (error) {
         console.warn("[royalty-service] community scan failed", {
           userId: input.userId,
