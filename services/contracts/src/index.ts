@@ -2180,6 +2180,7 @@ export type SongStudyAttemptRequest = {
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
   selected_option_id?: string;
+  target_language?: string;
   transcript?: string;
 };
 
