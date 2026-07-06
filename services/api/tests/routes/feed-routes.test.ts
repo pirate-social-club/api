@@ -457,7 +457,7 @@ describe("feed routes", () => {
     expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
     expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
     expect(response.headers.get("server-timing")).toContain("viewer;dur=")
-    expect(response.headers.get("vary")).not.toContain("Authorization")
+    expect(response.headers.get("vary") ?? "").not.toContain("Authorization")
     const body = await json(response) as {
       items: unknown[]
       top_communities: unknown[]
@@ -603,7 +603,7 @@ describe("feed routes", () => {
     expect(response.status).toBe(200)
     expect(response.headers.get("x-pirate-materialized-feed")).toBe("hit")
     expect(response.headers.get("server-timing")).toContain("materialized-public-feed-hit;dur=")
-    expect(response.headers.get("vary")).not.toContain("Authorization")
+    expect(response.headers.get("vary") ?? "").not.toContain("Authorization")
     expect(await json(response)).toEqual(materializedBody)
   })
 
@@ -653,6 +653,10 @@ describe("feed routes", () => {
   test("public read cache wrapper annotates feed misses and hits", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
+    const env = {
+      ...ctx.env,
+      CORS_ALLOWED_ORIGINS: "https://app.pirate.test, https://admin.pirate.test",
+    }
     let cachedResponse: Response | undefined
     let storedResponse: Response | undefined
     let putCount = 0
@@ -667,28 +671,35 @@ describe("feed routes", () => {
 
     const missExecution = createExecutionContext()
     const miss = await fetchHandler(
-      new Request("http://pirate.test/feed/home/public?sort=best&locale=en"),
-      ctx.env,
+      new Request("http://pirate.test/feed/home/public?sort=best&locale=en", {
+        headers: { Origin: "https://app.pirate.test" },
+      }),
+      env,
       missExecution.ctx,
     )
     expect(miss.headers.get("x-pirate-cache")).toBe("miss")
     expect(miss.headers.get("x-pirate-cache-stored")).toBe("1")
+    expect(miss.headers.get("access-control-allow-origin")).toBe("https://app.pirate.test")
     expect(storedResponse?.headers.get("x-pirate-cache")).toBeNull()
     expect(storedResponse?.headers.get("cache-control")).toBe("public, max-age=360")
     expect(storedResponse?.headers.get("cdn-cache-control")).toBe("public, max-age=360")
+    expect(storedResponse?.headers.get("access-control-allow-origin")).toBeNull()
     expect(storedResponse?.headers.get("x-pirate-cache-created-at")).not.toBeNull()
     await Promise.all(missExecution.waitUntilPromises)
     expect(putCount).toBe(1)
 
     const hitExecution = createExecutionContext()
     const hit = await fetchHandler(
-      new Request("http://pirate.test/feed/home/public?sort=best&locale=en"),
-      ctx.env,
+      new Request("http://pirate.test/feed/home/public?sort=best&locale=en", {
+        headers: { Origin: "https://admin.pirate.test" },
+      }),
+      env,
       hitExecution.ctx,
     )
     expect(hit.headers.get("x-pirate-cache")).toBe("hit")
     expect(hit.headers.get("x-pirate-cache-stored")).toBeNull()
     expect(hit.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(hit.headers.get("access-control-allow-origin")).toBe("https://admin.pirate.test")
     expect(hit.headers.get("x-pirate-cache-created-at")).toBeNull()
 
     cachedResponse = new Response(JSON.stringify({
@@ -707,7 +718,7 @@ describe("feed routes", () => {
     const staleExecution = createExecutionContext()
     const stale = await fetchHandler(
       new Request("http://pirate.test/feed/home/public?sort=best&locale=en"),
-      ctx.env,
+      env,
       staleExecution.ctx,
     )
     expect(stale.headers.get("x-pirate-cache")).toBe("stale")
