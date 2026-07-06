@@ -33,13 +33,7 @@ import users from "./routes/users"
 import verification from "./routes/verification"
 import walletIdentities from "./routes/wallet-identities"
 import {
-  buildPublicReadCacheKey,
   isPublicReadCacheRequest,
-  isPublicReadCacheResponse,
-  PUBLIC_READ_CACHE_CONTROL,
-  PUBLIC_READ_CACHE_FRESH_SECONDS,
-  PUBLIC_READ_CACHE_STALE_SECONDS,
-  PUBLIC_READ_CDN_CACHE_CONTROL,
 } from "./routes/cache-headers"
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
@@ -64,14 +58,8 @@ import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
 import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
 import type { Env } from "./env"
-import {
-  publicReadCacheFillRequests,
-  publicReadCacheRefreshRequests,
-  type PublicReadCacheFillResult,
-} from "./lib/public-read-cache-state"
 import publicReadApp from "./routes/public-read-app"
 
-export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
 export { OperatorSigningCoordinatorDO }
@@ -84,8 +72,6 @@ declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
 declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 
 const app = new Hono<{ Bindings: Env }>()
-const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
-const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
 
 type PublicReadEntrypoint = {
   fetch(request: Request): Promise<Response>
@@ -290,152 +276,6 @@ app.onError((error, c) => {
   })
 })
 
-async function fetchWithPublicReadCache(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  if (!isPublicReadCacheRequest(req) || typeof caches === "undefined") {
-    return withPublicReadCacheHeaders(await app.fetch(req, env, ctx), {
-      stored: null,
-      status: "bypass",
-    })
-  }
-
-  const cache = await caches.open("public-read")
-  const cacheKey = buildPublicReadCacheKey(req)
-  const cacheKeyId = cacheKey.url
-  const cachedResponse = await cache.match(cacheKey)
-  if (cachedResponse) {
-    const freshness = getPublicReadCachedResponseFreshness(cachedResponse)
-    if (freshness === "stale") {
-      ctx.waitUntil(refreshPublicReadCache(req, env, ctx, cache, cacheKey, cacheKeyId))
-      return withPublicReadCacheHeaders(cachedResponse, {
-        restorePublicCacheHeaders: true,
-        stored: null,
-        status: "stale",
-      })
-    }
-    return withPublicReadCacheHeaders(cachedResponse, {
-      restorePublicCacheHeaders: true,
-      stored: null,
-      status: "hit",
-    })
-  }
-
-  const existingFill = publicReadCacheFillRequests.get(cacheKeyId)
-  const fill = existingFill ?? startPublicReadCacheFill(req, env, ctx, cache, cacheKey, cacheKeyId)
-  const result = await fill
-  return withPublicReadCacheHeaders(buildPublicReadCacheFillResponse(result), {
-    deduped: Boolean(existingFill),
-    stored: result.cacheable,
-    status: "miss",
-  })
-}
-
-function startPublicReadCacheFill(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  cache: Cache,
-  cacheKey: Request,
-  cacheKeyId: string,
-): Promise<PublicReadCacheFillResult> {
-  const fill = fillPublicReadCache(req, env, ctx, cache, cacheKey).finally(() => {
-    publicReadCacheFillRequests.delete(cacheKeyId)
-  })
-  publicReadCacheFillRequests.set(cacheKeyId, fill)
-  return fill
-}
-
-async function fillPublicReadCache(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  cache: Cache,
-  cacheKey: Request,
-): Promise<PublicReadCacheFillResult> {
-  const response = await fetchPublicRead(req, env, ctx)
-  const cacheable = isPublicReadCacheResponse(response)
-  const body = await response.arrayBuffer()
-  const result: PublicReadCacheFillResult = {
-    body,
-    cacheable,
-    headers: [...response.headers.entries()],
-    status: response.status,
-    statusText: response.statusText,
-  }
-  if (cacheable) {
-    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(stripCorsHeaders(buildPublicReadCacheFillResponse(result)))))
-  }
-  return result
-}
-
-function buildPublicReadCacheFillResponse(result: PublicReadCacheFillResult): Response {
-  return new Response(result.body.slice(0), {
-    headers: result.headers,
-    status: result.status,
-    statusText: result.statusText,
-  })
-}
-
-function buildPublicReadWorkerCacheResponse(response: Response): Response {
-  const stored = new Response(response.body, response)
-  const maxAgeSeconds = PUBLIC_READ_CACHE_FRESH_SECONDS + PUBLIC_READ_CACHE_STALE_SECONDS
-  const workerCacheControl = `public, max-age=${maxAgeSeconds}`
-  stored.headers.set("Cache-Control", workerCacheControl)
-  stored.headers.set("CDN-Cache-Control", workerCacheControl)
-  stored.headers.set(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER, String(Date.now()))
-  stored.headers.set(
-    PUBLIC_READ_WORKER_CACHE_TTL_HEADER,
-    `${PUBLIC_READ_CACHE_FRESH_SECONDS},${PUBLIC_READ_CACHE_STALE_SECONDS}`,
-  )
-  return stored
-}
-
-function getPublicReadCachedResponseFreshness(response: Response): "fresh" | "stale" {
-  const created = Number(response.headers.get(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER))
-  if (!Number.isFinite(created) || created <= 0) {
-    return "fresh"
-  }
-
-  const ageMs = Date.now() - created
-  return ageMs > PUBLIC_READ_CACHE_FRESH_SECONDS * 1000 ? "stale" : "fresh"
-}
-
-async function refreshPublicReadCache(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  cache: Cache,
-  cacheKey: Request,
-  cacheKeyId: string,
-): Promise<void> {
-  const existingRefresh = publicReadCacheRefreshRequests.get(cacheKeyId)
-  if (existingRefresh) {
-    return existingRefresh
-  }
-
-  const refresh = refreshPublicReadCacheOnce(req, env, ctx, cache, cacheKey).finally(() => {
-    publicReadCacheRefreshRequests.delete(cacheKeyId)
-  })
-  publicReadCacheRefreshRequests.set(cacheKeyId, refresh)
-  return refresh
-}
-
-async function refreshPublicReadCacheOnce(
-  req: Request,
-  env: Env,
-  ctx: ExecutionContext,
-  cache: Cache,
-  cacheKey: Request,
-): Promise<void> {
-  try {
-    const response = await fetchPublicRead(req, env, ctx)
-    if (isPublicReadCacheResponse(response)) {
-      await cache.put(cacheKey, buildPublicReadWorkerCacheResponse(stripCorsHeaders(response.clone())))
-    }
-  } catch (error) {
-    console.error("[public-read-cache] stale refresh failed", error)
-  }
-}
-
 async function fetchPublicRead(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const forwarded = buildPublicReadEntrypointRequest(req)
   const publicReadContext = ctx as PublicReadExecutionContext
@@ -456,29 +296,6 @@ function buildPublicReadEntrypointRequest(req: Request): Request {
   })
 }
 
-function withPublicReadCacheHeaders(response: Response, input: {
-  deduped?: boolean
-  restorePublicCacheHeaders?: boolean
-  status: "bypass" | "hit" | "miss" | "stale"
-  stored: boolean | null
-}): Response {
-  const annotated = new Response(response.body, response)
-  annotated.headers.delete(PUBLIC_READ_WORKER_CACHE_CREATED_HEADER)
-  annotated.headers.delete(PUBLIC_READ_WORKER_CACHE_TTL_HEADER)
-  if (input.restorePublicCacheHeaders) {
-    annotated.headers.set("Cache-Control", PUBLIC_READ_CACHE_CONTROL)
-    annotated.headers.set("CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
-  }
-  annotated.headers.set("x-pirate-cache", input.status)
-  if (input.stored !== null) {
-    annotated.headers.set("x-pirate-cache-stored", input.stored ? "1" : "0")
-  }
-  if (input.deduped) {
-    annotated.headers.set("x-pirate-cache-deduped", "1")
-  }
-  return annotated
-}
-
 const CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
 const CORS_ALLOW_HEADERS = [
   "Content-Type",
@@ -493,23 +310,6 @@ const CORS_ALLOW_HEADERS = [
   "X-Pirate-Submit-Trace-Id",
   "X-Request-Id",
 ]
-const CORS_RESPONSE_HEADER_NAMES = [
-  "Access-Control-Allow-Origin",
-  "Access-Control-Allow-Methods",
-  "Access-Control-Allow-Headers",
-  "Access-Control-Allow-Credentials",
-  "Access-Control-Expose-Headers",
-  "Access-Control-Max-Age",
-]
-
-function stripCorsHeaders(response: Response): Response {
-  const stripped = new Response(response.body, response)
-  for (const headerName of CORS_RESPONSE_HEADER_NAMES) {
-    stripped.headers.delete(headerName)
-  }
-  return stripped
-}
-
 function appendVaryHeader(headers: Headers, field: string): void {
   const existing = (headers.get("Vary") ?? "")
     .split(",")
@@ -540,6 +340,13 @@ function applyCorsHeaders(request: Request, response: Response, env: Env): Respo
   next.headers.set("Access-Control-Allow-Origin", allowedOrigin)
   appendVaryHeader(next.headers, "Origin")
   return next
+}
+
+async function fetchApi(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const response = isPublicReadCacheRequest(req)
+    ? await fetchPublicRead(req, env, ctx)
+    : await app.fetch(req, env, ctx)
+  return applyCorsHeaders(req, response, env)
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
@@ -759,7 +566,7 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 const SCHEDULED_LEASE_TTL_MS = 120_000
 
 const handler: ExportedHandler<Env> = {
-  fetch: async (req, env, ctx) => applyCorsHeaders(req, await fetchWithPublicReadCache(req, env, ctx), env),
+  fetch: fetchApi,
 
   scheduled: (controller, env, ctx) => {
     // Story signer funding watchdog. Read-only RPC (no control-plane connection),
