@@ -64,6 +64,37 @@ describe("assertPostCreateRequest link_url scheme", () => {
   })
 })
 
+describe("assertPostCreateRequest age_gate_policy", () => {
+  test("accepts omitted, none, and 18_plus author declarations", () => {
+    expect(() => assertPostCreateRequest({
+      idempotency_key: "idem_text_omitted",
+      post_type: "text",
+      title: "plain",
+    } as CreatePostRequest, COMMUNITY_ID)).not.toThrow()
+    expect(() => assertPostCreateRequest({
+      idempotency_key: "idem_text_none",
+      post_type: "text",
+      title: "plain",
+      age_gate_policy: "none",
+    } as CreatePostRequest, COMMUNITY_ID)).not.toThrow()
+    expect(() => assertPostCreateRequest({
+      idempotency_key: "idem_text_adult",
+      post_type: "text",
+      title: "plain",
+      age_gate_policy: "18_plus",
+    } as CreatePostRequest, COMMUNITY_ID)).not.toThrow()
+  })
+
+  test("rejects unsupported author age gate declarations", () => {
+    expect(() => assertPostCreateRequest({
+      idempotency_key: "idem_text_bad",
+      post_type: "text",
+      title: "plain",
+      age_gate_policy: "13_plus",
+    } as unknown as CreatePostRequest, COMMUNITY_ID)).toThrow(/age_gate_policy/)
+  })
+})
+
 describe("assertPostCreateRequest royalty_allocations", () => {
   test("accepts a valid creator+collaborator split on a song", () => {
     expect(() => assertPostCreateRequest(songRequest(validSplit()), COMMUNITY_ID)).not.toThrow()

@@ -574,6 +574,7 @@ type CreatePostRequestBase = {
   promotion_disclosure?: PromotionDisclosure | null
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid"
   visibility?: "public" | "members_only"
+  age_gate_policy?: "none" | "18_plus" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
   song_artifact_bundle?: string | null

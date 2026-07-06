@@ -74,6 +74,10 @@ function buildAnalysisOverride(input: {
   }
 }
 
+function mergeAgeGatePolicy(...policies: Array<Post["age_gate_policy"] | null | undefined>): Post["age_gate_policy"] {
+  return policies.includes("18_plus") ? "18_plus" : "none"
+}
+
 export async function preparePostCreate(input: {
   env: Env
   requestUrl: string
@@ -88,6 +92,7 @@ export async function preparePostCreate(input: {
   let writeBody: PreparedPostCreateBody = input.body
   let resolvedSongBundleForAsset: PreparedPostCreate["resolvedSongBundleForAsset"] = null
   let resolvedVideoAsset: PreparedPostCreate["resolvedVideoAsset"] = null
+  const requestedAgeGatePolicy = input.body.age_gate_policy === "18_plus" ? "18_plus" : "none"
 
   if ((input.body.identity_mode ?? "public") === "anonymous") {
     const policy = await getCommunityPostPolicy(input.communityDbClient, input.communityId)
@@ -142,7 +147,7 @@ export async function preparePostCreate(input: {
         community: input.community,
         analysisState: postAnalysis.analysis_state,
         contentSafetyState: postAnalysis.content_safety_state,
-        ageGatePolicy: postAnalysis.age_gate_policy,
+        ageGatePolicy: mergeAgeGatePolicy(requestedAgeGatePolicy, postAnalysis.age_gate_policy),
       }),
       resolvedSongBundleForAsset,
       resolvedVideoAsset,
@@ -198,9 +203,11 @@ export async function preparePostCreate(input: {
         analysisOverride: {
           analysis_state: postAnalysis.analysis_state,
           content_safety_state: postAnalysis.content_safety_state,
-          age_gate_policy: input.community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus"
-            ? "18_plus"
-            : "none",
+          age_gate_policy: mergeAgeGatePolicy(
+            input.community.default_age_gate_policy,
+            requestedAgeGatePolicy,
+            postAnalysis.age_gate_policy,
+          ),
           status: "processing",
         },
         resolvedSongBundleForAsset,
@@ -229,9 +236,11 @@ export async function preparePostCreate(input: {
     const contentSafetyState = postAnalysis.content_safety_state === "safe"
       ? preparedSong.resolvedSongBundleForAsset.contentSafetyState
       : postAnalysis.content_safety_state
-    const ageGatePolicy = preparedSong.resolvedSongBundleForAsset.ageGatePolicy === "18_plus" || postAnalysis.age_gate_policy === "18_plus"
-      ? "18_plus"
-      : "none"
+    const ageGatePolicy = mergeAgeGatePolicy(
+      preparedSong.resolvedSongBundleForAsset.ageGatePolicy,
+      requestedAgeGatePolicy,
+      postAnalysis.age_gate_policy,
+    )
 
     return {
       writeBody,
@@ -272,7 +281,7 @@ export async function preparePostCreate(input: {
       community: input.community,
       analysisState: postAnalysis.analysis_state,
       contentSafetyState: postAnalysis.content_safety_state,
-      ageGatePolicy: postAnalysis.age_gate_policy,
+      ageGatePolicy: mergeAgeGatePolicy(requestedAgeGatePolicy, postAnalysis.age_gate_policy),
     }),
     resolvedSongBundleForAsset,
     resolvedVideoAsset,
