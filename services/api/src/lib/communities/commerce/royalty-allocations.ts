@@ -49,6 +49,42 @@ export type AllocationRow = {
   createdAt: string
 }
 
+export type StoryRoyaltyShareRow = {
+  walletAddressNormalized: `0x${string}`
+  shareBps: number
+  percentage: number
+}
+
+export function buildStoryRoyaltySharesFromAllocationRows(rows: Array<{
+  walletAddressNormalized: string
+  shareBps: number
+}>): StoryRoyaltyShareRow[] {
+  if (rows.length === 0) return []
+  const shares = rows.map((row) => {
+    const wallet = String(row.walletAddressNormalized || "").trim().toLowerCase()
+    const shareBps = Number(row.shareBps)
+    if (!/^0x[0-9a-f]{40}$/.test(wallet)) {
+      throw badRequestError("royalty_allocations wallet snapshot is invalid")
+    }
+    if (!Number.isInteger(shareBps) || shareBps <= 0 || shareBps > 10_000) {
+      throw badRequestError("royalty_allocations share snapshot is invalid")
+    }
+    if (shareBps % 100 !== 0) {
+      throw badRequestError("royalty_allocations on Story require whole-percent shares")
+    }
+    return {
+      walletAddressNormalized: wallet as `0x${string}`,
+      shareBps,
+      percentage: shareBps / 100,
+    }
+  })
+  const totalBps = shares.reduce((sum, row) => sum + row.shareBps, 0)
+  if (totalBps !== 10_000) {
+    throw badRequestError("royalty_allocations shares must total 10000 bps")
+  }
+  return shares
+}
+
 // Deterministic, reorder-stable: recipients are canonicalised by sorting on normalized
 // address before hashing, so UI reordering does not change registration identity.
 export async function computeAllocationFingerprint(input: {
@@ -202,4 +238,71 @@ export async function assertExistingAssetAllocationMatches(input: {
   if (storedFingerprint !== input.requestedFingerprint) {
     throw conflictError("royalty_allocations do not match the already-created asset")
   }
+}
+
+export async function loadStoryRoyaltySharesForAsset(input: {
+  client: Pick<Client, "execute">
+  communityId: string
+  assetId: string
+}): Promise<StoryRoyaltyShareRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT wallet_address_normalized, share_bps
+      FROM initial_royalty_allocations
+      WHERE community_id = ?1
+        AND asset_id = ?2
+      ORDER BY position ASC
+    `,
+    args: [input.communityId, input.assetId],
+  })
+  if (result.rows.length === 0) return []
+
+  return buildStoryRoyaltySharesFromAllocationRows(result.rows.map((row) => ({
+    walletAddressNormalized: String(row.wallet_address_normalized || ""),
+    shareBps: Number(row.share_bps),
+  })))
+}
+
+export async function markStoryRoyaltyAllocationRegistrationPendingVerification(input: {
+  client: Pick<Client, "execute">
+  communityId: string
+  assetId: string
+  ipRoyaltyVault: string | null
+  distributionTxHash: string | null
+  registeredAt: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE initial_royalty_allocations
+      SET distribution_status = 'pending',
+          failure_reason = NULL,
+          registered_at = ?3
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [input.communityId, input.assetId, input.registeredAt],
+  })
+  await input.client.execute({
+    sql: `
+      UPDATE assets
+      SET royalty_allocation_status = 'verification_pending',
+          royalty_allocation_effect_key = ?3,
+          royalty_allocation_tx_hash = ?4,
+          ip_royalty_vault = COALESCE(?5, ip_royalty_vault),
+          royalty_allocation_registered_at = ?6,
+          royalty_allocation_projection_synced = 0,
+          updated_at = ?6
+      WHERE community_id = ?1
+        AND asset_id = ?2
+        AND royalty_allocation_status <> 'none'
+    `,
+    args: [
+      input.communityId,
+      input.assetId,
+      `story-rt:${input.assetId}`,
+      input.distributionTxHash,
+      input.ipRoyaltyVault,
+      input.registeredAt,
+    ],
+  })
 }

@@ -377,6 +377,7 @@ describe("story royalty registration service", () => {
     const derivativeRequests: Array<{
       nft: { recipient: string }
       derivData: { parentIpIds: string[]; licenseTermsIds: bigint[] }
+      royaltyShares?: Array<{ recipient: string; percentage: number }>
     }> = []
     const metadataPayloads: Array<{ path: string; payload: unknown }> = []
     let attachCalls = 0
@@ -397,6 +398,8 @@ describe("story royalty registration service", () => {
           return {
             ipId: derivativeIpId,
             tokenId: 456n,
+            ipRoyaltyVault: derivativeVault,
+            distributeRoyaltyTokensTxHash: "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           }
         },
         async registerIpAsset() {
@@ -492,12 +495,20 @@ describe("story royalty registration service", () => {
           coverArtRef,
         }),
         primaryContentHash: "0xdef456",
+        royaltyShares: [
+          { walletAddressNormalized: testWallet, shareBps: 9000, percentage: 90 },
+          { walletAddressNormalized: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", shareBps: 1000, percentage: 10 },
+        ],
       })
 
       expect(derivativeRequests).toHaveLength(1)
       expect(derivativeRequests[0]?.nft.recipient).toBe(testWallet)
       expect(derivativeRequests[0]?.derivData.parentIpIds).toEqual([parentIpId])
       expect(derivativeRequests[0]?.derivData.licenseTermsIds).toEqual([17n])
+      expect(derivativeRequests[0]?.royaltyShares).toEqual([
+        { recipient: testWallet, percentage: 90 },
+        { recipient: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", percentage: 10 },
+      ])
       expect(attachCalls).toBe(0)
       expect(metadataPayloads.find((entry) => entry.path.endsWith("/ip.json"))?.payload).toMatchObject({
         cover_art_ref: coverArtRef,
@@ -508,6 +519,7 @@ describe("story royalty registration service", () => {
       expect(result).toMatchObject({
         storyIpId: derivativeIpId,
         ipRoyaltyVault: derivativeVault,
+        royaltyDistributionTxHash: "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         storyIpNftTokenId: "456",
         storyLicenseTermsId: null,
         storyDerivativeParentIpIds: [parentIpId],

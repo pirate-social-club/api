@@ -78,6 +78,8 @@ function assetRow(overrides: Partial<AssetRow> = {}): AssetRow {
     story_royalty_registration_status: "failed",
     story_status: "failed",
     story_write_condition: null,
+    royalty_allocation_status: "none",
+    royalty_allocation_fingerprint: null,
     updated_at: "2026-07-05T00:00:00.000Z",
     ...overrides,
   }
@@ -267,6 +269,8 @@ function fakeCreateClient() {
               story_write_condition: args[39] as AssetRow["story_write_condition"],
               locked_delivery_storage_ref: args[40] as AssetRow["locked_delivery_storage_ref"],
               locked_delivery_secret_json: args[41] as AssetRow["locked_delivery_secret_json"],
+              royalty_allocation_status: args[42] as AssetRow["royalty_allocation_status"],
+              royalty_allocation_fingerprint: args[44] as AssetRow["royalty_allocation_fingerprint"],
             })
           } else if (statement.sql.includes("INSERT INTO initial_royalty_allocations")) {
             allocationInsertStatements.push(statement)
