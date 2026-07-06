@@ -14,9 +14,8 @@ import { isCommunityStudyEnabled } from "../communities/community-study-policy-s
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import {
-  getActiveCommunityElevenLabsCredentialPresence,
-  hasActiveCommunityElevenLabsCredential,
-  type ActiveCredentialPresence,
+  getCommunityElevenLabsStudyCapability,
+  type CommunityElevenLabsStudyCapability,
 } from "../communities/assistant-policy/credential-service"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
 import { canGenerateStudyTranslations, requestStudyPackGeneration, type StudyGeneratedLine } from "./post-study-generation-provider"
@@ -221,8 +220,8 @@ export type SongStudyAttemptResult = {
 export type SongStudyAttemptTiming = {
   access_read_batch_ms?: number
   close_client_ms?: number
-  credential_cache?: ActiveCredentialPresence["cache"]
   credential_probe_ms?: number
+  credential_source?: CommunityElevenLabsStudyCapability["source"]
   community_id: string
   due_review_count_ms?: number
   exercise_id: string
@@ -1427,10 +1426,11 @@ export async function getPostStudyPayload(input: {
       }
     }
 
-    const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+    const includeSayItBack = (await getCommunityElevenLabsStudyCapability({
+      client: db.client,
       env: input.env,
       communityId: input.communityId,
-    })
+    })).active
     const now = nowIso()
     const reServeDueReviews = dueReviewServingEnabled(input.env)
     const canonicalExerciseRows = await listExercises({
@@ -2114,7 +2114,7 @@ async function resolveStudyStreakTargetCount(input: {
   userId: string
 }): Promise<{
   count: number
-  credentialCache?: ActiveCredentialPresence["cache"]
+  credentialSource?: CommunityElevenLabsStudyCapability["source"]
   credentialProbeMs?: number
   dueReviewCountMs?: number
   totalMs: number
@@ -2127,12 +2127,13 @@ async function resolveStudyStreakTargetCount(input: {
     }
   }
   const credentialProbeStartedAt = performance.now()
-  const credentialPresence = await getActiveCommunityElevenLabsCredentialPresence({
+  const capability = await getCommunityElevenLabsStudyCapability({
+    client: input.client,
     env: input.env,
     communityId: input.communityId,
   })
   const credentialProbeMs = elapsedMs(credentialProbeStartedAt)
-  const includeSayItBack = credentialPresence.active
+  const includeSayItBack = capability.active
   const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
   const dueReviewCountStartedAt = performance.now()
   const dueBefore = await countDueReviewExercises({
@@ -2147,7 +2148,7 @@ async function resolveStudyStreakTargetCount(input: {
   const dueReviewCountMs = elapsedMs(dueReviewCountStartedAt)
   return {
     count: studyTargetCountFromDueBefore(dueBefore + (input.additionalDueCount ?? 0)),
-    credentialCache: credentialPresence.cache,
+    credentialSource: capability.source,
     credentialProbeMs,
     dueReviewCountMs,
     totalMs: elapsedMs(startedAt),
@@ -2205,8 +2206,8 @@ export async function submitPostStudyAttempt(input: {
   let writeTxMs: number | undefined
   let streakInlineMs: number | undefined
   let closeClientMs: number | undefined
-  let credentialCache: ActiveCredentialPresence["cache"] | undefined
   let credentialProbeMs: number | undefined
+  let credentialSource: CommunityElevenLabsStudyCapability["source"] | undefined
   let dueReviewCountMs: number | undefined
   let streakTargetCountMs: number | undefined
   let timingOutcome = "error"
@@ -2334,7 +2335,7 @@ export async function submitPostStudyAttempt(input: {
         userId: input.actor.userId,
       })
       : null
-    credentialCache = studyStreakTarget?.credentialCache
+    credentialSource = studyStreakTarget?.credentialSource
     credentialProbeMs = studyStreakTarget?.credentialProbeMs
     dueReviewCountMs = studyStreakTarget?.dueReviewCountMs
     streakTargetCountMs = studyStreakTarget?.totalMs
@@ -2438,8 +2439,8 @@ export async function submitPostStudyAttempt(input: {
       const timing: SongStudyAttemptTiming = {
         access_read_batch_ms: accessReadBatchMs,
         close_client_ms: closeClientMs,
-        credential_cache: credentialCache,
         credential_probe_ms: credentialProbeMs,
+        credential_source: credentialSource,
         community_id: input.communityId,
         due_review_count_ms: dueReviewCountMs,
         exercise_id: exerciseId,

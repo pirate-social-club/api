@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
+import { getCommunityElevenLabsStudyCapability } from "../../../src/lib/communities/assistant-policy/credential-service"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
 import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
 import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, getSongStudyAttemptTiming, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
@@ -473,6 +474,58 @@ afterEach(async () => {
 }, 120_000)
 
 describe("post study service", () => {
+  test("revalidates stale local ElevenLabs study capability from the control plane", async () => {
+    await exec(`
+      UPDATE communities
+      SET settings_json = ?2
+      WHERE community_id = ?1
+    `, [COMMUNITY_ID, JSON.stringify({
+      assistant_credential_capabilities: {
+        elevenlabs_active: false,
+        updated_at: "2026-06-27T08:00:00.000Z",
+      },
+    })])
+
+    const capability = await getCommunityElevenLabsStudyCapability({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      env: env(),
+    })
+
+    expect(capability).toEqual({
+      active: true,
+      source: "control_plane_miss",
+    })
+
+    const row = await client!.execute("SELECT settings_json FROM communities WHERE community_id = ?1", [COMMUNITY_ID])
+    const settings = JSON.parse(String(row.rows[0]?.settings_json ?? "{}")) as Record<string, unknown>
+    const capabilities = settings.assistant_credential_capabilities as Record<string, unknown>
+    expect(capabilities.elevenlabs_active).toBe(true)
+  })
+
+  test("concurrent ElevenLabs study capability read-throughs backfill idempotently", async () => {
+    const [first, second] = await Promise.all([
+      getCommunityElevenLabsStudyCapability({
+        client: client!,
+        communityId: COMMUNITY_ID,
+        env: env(),
+      }),
+      getCommunityElevenLabsStudyCapability({
+        client: client!,
+        communityId: COMMUNITY_ID,
+        env: env(),
+      }),
+    ])
+
+    expect(first.active).toBe(true)
+    expect(second.active).toBe(true)
+
+    const row = await client!.execute("SELECT settings_json FROM communities WHERE community_id = ?1", [COMMUNITY_ID])
+    const settings = JSON.parse(String(row.rows[0]?.settings_json ?? "{}")) as Record<string, unknown>
+    const capabilities = settings.assistant_credential_capabilities as Record<string, unknown>
+    expect(capabilities.elevenlabs_active).toBe(true)
+  })
+
   test("returns ready exercises without exposing the multiple-choice answer", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -1501,7 +1554,7 @@ describe("post study service", () => {
       postId: POST_ID,
     })
     const firstTiming = getSongStudyAttemptTiming(firstReview)
-    expect(firstTiming?.credential_cache).toBe("miss")
+    expect(firstTiming?.credential_source).toBe("control_plane_miss")
     expect(typeof firstTiming?.credential_probe_ms).toBe("number")
     expect(typeof firstTiming?.due_review_count_ms).toBe("number")
     expect(typeof firstTiming?.streak_target_count_ms).toBe("number")
@@ -1532,7 +1585,7 @@ describe("post study service", () => {
       postId: POST_ID,
     })
     const secondTiming = getSongStudyAttemptTiming(secondReview)
-    expect(secondTiming?.credential_cache).toBe("hit")
+    expect(secondTiming?.credential_source).toBe("local")
     expect(typeof secondTiming?.credential_probe_ms).toBe("number")
     expect(typeof secondTiming?.due_review_count_ms).toBe("number")
     expect(typeof secondTiming?.streak_target_count_ms).toBe("number")
