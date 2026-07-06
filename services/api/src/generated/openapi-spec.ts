@@ -13122,12 +13122,6 @@ const spec = {
           "attempt_number": {
             "type": "integer"
           },
-          "review_session_id": {
-            "type": "string"
-          },
-          "target_language": {
-            "type": "string"
-          },
           "selected_option_id": {
             "type": "string"
           },
@@ -17968,9 +17962,6 @@ const spec = {
               "reference_text": {
                 "type": "string"
               },
-              "review_session_id": {
-                "type": "string"
-              },
               "translation_text": {
                 "type": "string",
                 "nullable": true
@@ -18037,9 +18028,6 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
-              },
-              "review_session_id": {
-                "type": "string"
               }
             },
             "additionalProperties": false
