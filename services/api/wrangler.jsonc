@@ -299,6 +299,8 @@
         "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
         "PIRATE_WEB_PUBLIC_ORIGIN": "https://staging.pirate.sc",
         "CORS_ALLOWED_ORIGINS": "https://staging.pirate.sc",
+        "SONG_STUDY_ATTEMPT_TIMING_LOGS": "true",
+        "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
         "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
         "FILEBASE_S3_REGION": "us-east-1",
