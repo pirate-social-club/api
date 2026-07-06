@@ -2,6 +2,8 @@ import { WorkerEntrypoint } from "cloudflare:workers"
 import type {
   ShardAdminGetPoolRowRequest,
   ShardAdminGetPoolRowResponse,
+  ShardAdminPoolStatsRequest,
+  ShardAdminPoolStatsResponse,
   ShardAdminReleaseRequest,
   ShardAdminReleaseResponse,
   ShardAdminResetRequest,
@@ -22,6 +24,7 @@ import {
   runShardBind,
   runShardGetPoolRow,
   runShardLoadSnapshot,
+  runShardPoolStats,
   runShardRead,
   runShardRelease,
   runShardReset,
@@ -115,6 +118,12 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     input: ShardAdminReleaseRequest,
   ): Promise<ShardResult<ShardAdminReleaseResponse>> {
     return runShardRelease(this.env, input)
+  }
+
+  communityD1PoolStats(
+    input: ShardAdminPoolStatsRequest,
+  ): Promise<ShardResult<ShardAdminPoolStatsResponse>> {
+    return runShardPoolStats(this.env, input)
   }
 
   async fetch(): Promise<Response> {

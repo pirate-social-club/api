@@ -41,6 +41,8 @@ export type Env = {
    * scheduled tasks, including community job processing, still run.
    */
   COMMUNITY_D1_RECONCILER_ONLY?: string
+  /** Warn from scheduled cron when allocatable community D1 bindings are at or below this count. Defaults to 2. */
+  COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD?: string
   /**
    * Region label recorded on D1-native routing rows (satisfies the 0117
    * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set

@@ -49,6 +49,7 @@ import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
+import { checkScheduledD1PoolCapacity } from "./lib/communities/provisioning/pool-capacity-watchdog"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -594,6 +595,11 @@ const handler: ExportedHandler<Env> = {
     ctx.waitUntil(
       runStoryRuntimeFundingWatchdog(env).catch((error) => {
         console.error("[scheduled] story funding watchdog crashed (fail-soft)", error)
+      }),
+    )
+    ctx.waitUntil(
+      checkScheduledD1PoolCapacity(env).catch((error) => {
+        console.error("[scheduled] community D1 pool capacity watchdog crashed (fail-soft)", error)
       }),
     )
 

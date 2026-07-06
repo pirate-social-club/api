@@ -91,6 +91,34 @@ function communityProvisioningFailureDetails(
   return details
 }
 
+function communityProvisioningFailureError(input: {
+  error: unknown
+  mode: CommunityProvisioningMode
+  communityId: string
+  jobId: string
+}): HttpError {
+  const details = {
+    ...communityProvisioningFailureDetails(input.error, input.mode),
+    community_id: input.communityId,
+    job_id: input.jobId,
+  }
+
+  if (input.error instanceof HttpError) {
+    return new HttpError(
+      input.error.status,
+      input.error.code,
+      input.error.message,
+      input.error.retryable,
+      {
+        ...(input.error.details ?? {}),
+        ...details,
+      },
+    )
+  }
+
+  return internalError("Community provisioning failed", details)
+}
+
 async function upsertLocalNamespaceAttachment(input: {
   env: Env
   repo: CommunityDatabaseBindingRepository
@@ -287,14 +315,12 @@ async function createNamespacelessCommunity(input: {
       })
     })
 
-    throw internalError(
-      "Community provisioning failed",
-      {
-        ...communityProvisioningFailureDetails(error, backend.mode),
-        community_id: communityId,
-        job_id: prepared.job.job_id,
-      },
-    )
+    throw communityProvisioningFailureError({
+      error,
+      mode: backend.mode,
+      communityId,
+      jobId: prepared.job.job_id,
+    })
   }
 }
 
@@ -409,14 +435,12 @@ async function provisionNamespacedCommunity(input: {
         })
       })
 
-      throw internalError(
-        "Community provisioning failed",
-        {
-          ...communityProvisioningFailureDetails(error, backend.mode),
-          community_id: communityId,
-          job_id: prepared.job.job_id,
-        },
-      )
+      throw communityProvisioningFailureError({
+        error,
+        mode: backend.mode,
+        communityId,
+        jobId: prepared.job.job_id,
+      })
     }
 
     const communityRow = await repo.getCommunityById(communityId)

@@ -45,6 +45,10 @@ function fakeShard() {
       calls.push({ m: "communityD1Release", input })
       return { ok: true as const, value: { released: true } }
     },
+    communityD1PoolStats: async (input: any) => {
+      calls.push({ m: "communityD1PoolStats", input })
+      return { ok: true as const, value: { total: 1, allocated: 0, free: 1, quarantined: 0 } }
+    },
   }
 }
 

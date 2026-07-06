@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 function findTestFiles(root: string): string[] {
   const files: string[] = [];
@@ -25,6 +25,15 @@ function findTestFiles(root: string): string[] {
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const explicitTestFiles = args.filter((arg) => arg !== "--dry-run");
+const bunTestTimeoutMs = Number(
+  process.env.ROUTE_TEST_BUN_TIMEOUT_MS ?? "30000",
+);
+const processTimeoutMs = Number(
+  process.env.ROUTE_TEST_PROCESS_TIMEOUT_MS ?? "120000",
+);
+const processKillGraceMs = Number(
+  process.env.ROUTE_TEST_PROCESS_KILL_GRACE_MS ?? "10000",
+);
 
 const testFiles =
   explicitTestFiles.length > 0
@@ -36,6 +45,67 @@ const testFiles =
         .map((path) => relative(process.cwd(), path))
         .sort();
 
+async function runTestFile(testFile: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn("bun", [
+      "test",
+      "--max-concurrency=1",
+      "--timeout",
+      String(bunTestTimeoutMs),
+      testFile,
+    ], {
+      stdio: "inherit",
+    });
+
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      console.error(
+        `[route-tests] ${testFile} exceeded process timeout ${processTimeoutMs}ms`,
+      );
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, processKillGraceMs);
+    }, processTimeoutMs);
+
+    child.once("error", (error) => {
+      clearTimeout(timeoutTimer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+
+      console.error(
+        `[route-tests] ${testFile} failed to run: ${error.message}`,
+      );
+      resolve(1);
+    });
+
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeoutTimer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+
+      if (timedOut) {
+        resolve(124);
+        return;
+      }
+
+      if (signal) {
+        console.error(
+          `[route-tests] ${testFile} exited after signal ${signal}`,
+        );
+        resolve(1);
+        return;
+      }
+
+      resolve(code ?? 1);
+    });
+  });
+}
+
 for (const [index, testFile] of testFiles.entries()) {
   console.log(
     `[route-tests] ${index + 1}/${testFiles.length} ${testFile}`,
@@ -45,17 +115,9 @@ for (const [index, testFile] of testFiles.entries()) {
     continue;
   }
 
-  const result = spawnSync("bun", [
-    "test",
-    "--max-concurrency=1",
-    "--timeout",
-    "30000",
-    testFile,
-  ], {
-    stdio: "inherit",
-  });
+  const status = await runTestFile(testFile);
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+  if (status !== 0) {
+    process.exit(status);
   }
 }

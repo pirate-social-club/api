@@ -17,6 +17,8 @@ import {
   type ShardWriteRequest,
   type ShardAdminGetPoolRowRequest,
   type ShardAdminGetPoolRowResponse,
+  type ShardAdminPoolStatsRequest,
+  type ShardAdminPoolStatsResponse,
   type ShardAdminResetRequest,
   type ShardAdminResetResponse,
   type ShardAdminReleaseRequest,
@@ -733,4 +735,39 @@ export async function runShardRelease(
     .run()
 
   return { ok: true, value: { released: (result.meta?.changes ?? 0) > 0 } }
+}
+
+/** Admin: aggregate pool capacity using the allocator's exact free/quarantine predicate. */
+export async function runShardPoolStats(
+  env: ShardEnv,
+  input: ShardAdminPoolStatsRequest,
+): Promise<ShardResult<ShardAdminPoolStatsResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+
+  const quarantineThreshold = new Date(Date.now() - QUARANTINE_WINDOW_MS).toISOString()
+  const row = await pool
+    .prepare(
+      "SELECT " +
+        "COUNT(*) AS total, " +
+        "SUM(CASE WHEN community_id IS NOT NULL THEN 1 ELSE 0 END) AS allocated, " +
+        "SUM(CASE WHEN community_id IS NULL AND (released_at IS NULL OR released_at < ?1) THEN 1 ELSE 0 END) AS free, " +
+        "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined " +
+        "FROM d1_pool",
+    )
+    .bind(quarantineThreshold)
+    .first()
+  const r = row as Record<string, unknown> | null
+
+  return {
+    ok: true,
+    value: {
+      total: Number(r?.["total"] ?? 0),
+      allocated: Number(r?.["allocated"] ?? 0),
+      free: Number(r?.["free"] ?? 0),
+      quarantined: Number(r?.["quarantined"] ?? 0),
+    },
+  }
 }

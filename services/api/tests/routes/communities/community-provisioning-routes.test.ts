@@ -44,6 +44,19 @@ function fakeProvisioningShard(bindingName: string, calls: Array<{ m: string; in
   } as unknown as ShardRpc
 }
 
+function fakeExhaustedProvisioningShard(calls: Array<{ m: string; input: unknown }>): ShardRpc {
+  return {
+    async communityD1Bind(input: { communityId: string; now: string }) {
+      calls.push({ m: "communityD1Bind", input })
+      return {
+        ok: false,
+        code: "shard_pool_exhausted",
+        message: "d1_pool has no free binding to allocate",
+      }
+    },
+  } as unknown as ShardRpc
+}
+
 describe("community provisioning routes", () => {
   test("development community create uses local provisioning when LOCAL_COMMUNITY_DB_ROOT is configured", async () => {
     const ctx = await createRouteTestContext({
@@ -146,6 +159,46 @@ describe("d1_native community provisioning", () => {
       region: "weur",
     })
 
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
+
+  testWithTimeout("namespaceless create preserves retryable pool exhaustion as 503", async () => {
+    const calls: Array<{ m: string; input: unknown }> = []
+    const ctx = await createRouteTestContext({
+      LOCAL_COMMUNITY_DB_ROOT: "",
+      COMMUNITY_D1_SHARD: fakeExhaustedProvisioningShard(calls),
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-d1-native-pool-empty-route-test")
+
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "D1 Native Pool Empty Club",
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+
+    expect(response.status).toBe(503)
+    const body = await json(response) as {
+      code: string
+      message: string
+      retryable: boolean
+      details?: {
+        error_code?: string
+        error_status?: number
+        community_id?: string
+        job_id?: string
+      }
+    }
+    expect(body.code).toBe("d1_pool_exhausted")
+    expect(body.retryable).toBe(true)
+    expect(body.message).toContain("shard pool exhausted")
+    expect(body.details).toMatchObject({
+      error_code: "d1_pool_exhausted",
+      error_status: 503,
+    })
+    expect(body.details?.community_id).toMatch(/^cmt_/)
+    expect(body.details?.job_id).toMatch(/^job_/)
+    expect(calls.map((c) => c.m)).toEqual(["communityD1Bind"])
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("namespaced create reaches provisioning_succeeded with namespace metadata and a ready d1 routing row", async () => {
