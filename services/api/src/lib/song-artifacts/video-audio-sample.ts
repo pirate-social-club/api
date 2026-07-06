@@ -5,6 +5,7 @@ import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
 const DEFAULT_FFMPEG_BIN = "ffmpeg"
 const FFMPEG_TIMEOUT_MS = 120_000
+const SOURCE_DOWNLOAD_TIMEOUT_MS = 60_000
 // Full-resolution source is only needed long enough to demux one short audio
 // sample; refuse to pull absurd sources into the container.
 const DEFAULT_MAX_SOURCE_BYTES = 512 * 1024 * 1024
@@ -49,6 +50,53 @@ function maxSourceBytes(env: Env): number {
   return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_MAX_SOURCE_BYTES
 }
 
+async function readResponseBytesWithCap(input: {
+  response: Response
+  maxBytes: number
+  timeoutMs: number
+}): Promise<Uint8Array | "source_too_large"> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(providerUnavailable("Video source download timed out"))
+    }, input.timeoutMs)
+  })
+  const chunks: Uint8Array[] = []
+  let total = 0
+
+  try {
+    const reader = input.response.body?.getReader()
+    if (!reader) {
+      const bytes = new Uint8Array(await Promise.race([input.response.arrayBuffer(), timeoutPromise]))
+      return bytes.byteLength > input.maxBytes ? "source_too_large" : bytes
+    }
+
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise])
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > input.maxBytes) {
+        await reader.cancel().catch(() => {})
+        return "source_too_large"
+      }
+      chunks.push(value)
+    }
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return bytes
+}
+
 // Runs inside the song-preview container (Bun + native ffmpeg + Filebase
 // creds). Unlike audio preview cropping, the source is written to a temp file:
 // user MP4s routinely carry the moov atom at the end, which ffmpeg cannot seek
@@ -76,10 +124,15 @@ export async function extractVideoAudioSampleForObject(input: {
   const sourcePath = join(tmpdir(), `video-analysis-${crypto.randomUUID()}.bin`)
 
   try {
-    const written = await runtime.write(sourcePath, response)
-    if (written > cap) {
+    const sourceBytes = await readResponseBytesWithCap({
+      response,
+      maxBytes: cap,
+      timeoutMs: SOURCE_DOWNLOAD_TIMEOUT_MS,
+    })
+    if (sourceBytes === "source_too_large") {
       return { kind: "skipped", reason: "source_too_large" }
     }
+    await runtime.write(sourcePath, sourceBytes)
 
     const ffmpegBin = trimEnv(input.env.SONG_PREVIEW_FFMPEG_BIN) || DEFAULT_FFMPEG_BIN
     const process = runtime.spawn([
