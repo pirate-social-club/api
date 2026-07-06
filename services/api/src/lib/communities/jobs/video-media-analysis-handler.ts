@@ -3,7 +3,7 @@ import { trimEnv } from "../../env-strings"
 import { providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import type { Client } from "../../sql-client"
-import { identifyAudioSampleWithAcrCloud } from "../../song-artifacts/song-artifact-analysis"
+import { evaluateLyricsModeration, identifyAudioSampleWithAcrCloud } from "../../song-artifacts/song-artifact-analysis"
 import {
   extractVideoAudioSampleForObject,
   requestVideoAudioSampleFromService,
@@ -13,16 +13,23 @@ import {
 import {
   computeVideoRightsOutcome,
   persistVideoRightsAnalysis,
+  type VideoAudioSafetyEvaluation,
   type VideoRightsAcrCustomMatch,
   type VideoRightsAcrEvaluation,
   type VideoRightsDeclaredReferences,
 } from "../../posts/video-rights-analysis"
+import {
+  createModerationCase,
+  createModerationSignal,
+  getOpenModerationCaseForTarget,
+} from "../../moderation/community-moderation-store"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { COMMUNITY_JOB_MAX_ATTEMPTS } from "./runner-types"
 import type { DbExecutor } from "../../db-helpers"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
+import type { Post } from "../../../types"
 
 export type VideoMediaAnalysisJobPayload = {
   post_id: string
@@ -38,8 +45,35 @@ type VideoAudioSampleExtractor = (input: {
 }) => Promise<VideoAudioSampleResult>
 
 type AudioSampleIdentifier = typeof identifyAudioSampleWithAcrCloud
+type AudioSampleTranscriber = (input: {
+  env: Env
+  sampleBytes: ArrayBuffer | Uint8Array
+  filename: string
+  mimeType: string
+  communityId: string
+  postId: string
+}) => Promise<VideoAudioTranscriptResult>
+
+type VideoAudioTranscriptResult =
+  | {
+    kind: "completed"
+    text: string
+    providerResult: Record<string, unknown> | null
+  }
+  | {
+    kind: "skipped"
+    reason: string
+  }
+  | {
+    kind: "failed"
+    error: string
+    providerResult?: Record<string, unknown> | null
+  }
 
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 180_000
+const DEFAULT_ELEVENLABS_TIMEOUT_MS = 120_000
+const DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
+const ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
 function isLocalServiceHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
@@ -89,13 +123,16 @@ const defaultExtractor: VideoAudioSampleExtractor = async (input) => {
 
 let videoAudioSampleExtractor: VideoAudioSampleExtractor | null = null
 let audioSampleIdentifier: AudioSampleIdentifier | null = null
+let audioSampleTranscriber: AudioSampleTranscriber | null = null
 
 export function setVideoMediaAnalysisProvidersForTests(input: {
   extractor?: VideoAudioSampleExtractor | null
   identifier?: AudioSampleIdentifier | null
+  transcriber?: AudioSampleTranscriber | null
 } | null): void {
   videoAudioSampleExtractor = input?.extractor ?? null
   audioSampleIdentifier = input?.identifier ?? null
+  audioSampleTranscriber = input?.transcriber ?? null
 }
 
 export function chooseVideoSampleWindow(durationMs: number | null | undefined): VideoAudioSampleWindow {
@@ -139,6 +176,241 @@ function parseAcrEvaluation(providerResult: Record<string, unknown> | null): Vid
     musicMatches,
     customMatches,
     providerResult,
+  }
+}
+
+function providerTimeoutMs(value: string | undefined, fallbackMs: number): number {
+  const parsed = Number.parseInt(trimEnv(value) || "", 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs
+}
+
+function parseElevenLabsTranscriptionBody(body: unknown): {
+  text: string
+  providerResult: Record<string, unknown>
+} | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null
+  }
+  const record = body as Record<string, unknown>
+  const text = typeof record.text === "string" ? record.text.trim() : ""
+  return text ? { text, providerResult: record } : null
+}
+
+const defaultTranscriber: AudioSampleTranscriber = async (input) => {
+  const apiKey = trimEnv(input.env.ELEVENLABS_API_KEY)
+  if (!apiKey) {
+    return { kind: "skipped", reason: "missing_elevenlabs_configuration" }
+  }
+
+  const sampleBytes = input.sampleBytes instanceof Uint8Array
+    ? input.sampleBytes.slice().buffer
+    : input.sampleBytes
+  if (sampleBytes.byteLength <= 0) {
+    return { kind: "skipped", reason: "empty_audio_sample" }
+  }
+
+  const model = trimEnv(input.env.ELEVENLABS_STT_MODEL) || DEFAULT_ELEVENLABS_STT_MODEL
+  const form = new FormData()
+  form.set("file", new File([sampleBytes], input.filename, { type: input.mimeType }))
+  form.set("model_id", model)
+
+  const timeoutMs = providerTimeoutMs(input.env.ELEVENLABS_TIMEOUT_MS, DEFAULT_ELEVENLABS_TIMEOUT_MS)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(ELEVENLABS_STT_URL, {
+      method: "POST",
+      headers: { "xi-api-key": apiKey },
+      body: form,
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      return { kind: "failed", error: `http_${response.status}` }
+    }
+    const parsed = parseElevenLabsTranscriptionBody(await response.json().catch(() => null))
+    if (!parsed) {
+      return { kind: "failed", error: "invalid_response" }
+    }
+    return {
+      kind: "completed",
+      text: parsed.text,
+      providerResult: {
+        provider: "elevenlabs",
+        model,
+        provider_result: parsed.providerResult,
+      },
+    }
+  } catch (error) {
+    return {
+      kind: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function evaluateVideoAudioSafety(input: {
+  env: Env
+  sample: Extract<VideoAudioSampleResult, { kind: "sample" }>
+  communityId: string
+  postId: string
+}): Promise<VideoAudioSafetyEvaluation> {
+  const transcriber = audioSampleTranscriber ?? defaultTranscriber
+  const transcript = await transcriber({
+    env: input.env,
+    sampleBytes: input.sample.bytes,
+    filename: `${input.postId}-soundtrack-sample.wav`,
+    mimeType: input.sample.mimeType,
+    communityId: input.communityId,
+    postId: input.postId,
+  })
+  if (transcript.kind === "skipped") {
+    return {
+      contentSafetyState: "pending",
+      ageGatePolicy: "none",
+      transcript: null,
+      transcriptProviderResult: null,
+      moderationStatus: "skipped",
+      moderationError: transcript.reason,
+      moderationResult: {
+        provider: "video_audio_safety",
+        skipped: true,
+        skip_reason: transcript.reason,
+      },
+    }
+  }
+  if (transcript.kind === "failed") {
+    return {
+      contentSafetyState: "pending",
+      ageGatePolicy: "none",
+      transcript: null,
+      transcriptProviderResult: transcript.providerResult ?? null,
+      moderationStatus: "failed",
+      moderationError: transcript.error,
+      moderationResult: {
+        provider: "video_audio_safety",
+        transcript: transcript.providerResult ?? null,
+        error: transcript.error,
+      },
+    }
+  }
+  const lyricsModeration = await evaluateLyricsModeration({
+    env: input.env,
+    lyrics: transcript.text,
+  })
+  return {
+    contentSafetyState: lyricsModeration.contentSafetyState,
+    ageGatePolicy: lyricsModeration.ageGatePolicy,
+    transcript: transcript.text,
+    transcriptProviderResult: transcript.providerResult,
+    moderationStatus: lyricsModeration.moderationStatus,
+    moderationError: lyricsModeration.moderationError,
+    moderationResult: {
+      provider: "video_audio_safety",
+      transcript: transcript.providerResult,
+      transcript_text_length: transcript.text.length,
+      text_age_gate: lyricsModeration.moderationResult,
+    },
+  }
+}
+
+function contentSafetyRank(value: Post["content_safety_state"]): number {
+  switch (value) {
+    case "adult":
+      return 3
+    case "sensitive":
+      return 2
+    case "safe":
+      return 1
+    case "pending":
+    default:
+      return 0
+  }
+}
+
+export function mergeVideoAudioSafetyWithPost(input: {
+  postContentSafetyState: Post["content_safety_state"]
+  postAgeGatePolicy: Post["age_gate_policy"]
+  audioSafety: VideoAudioSafetyEvaluation | null
+}): Pick<Post, "content_safety_state" | "age_gate_policy"> | null {
+  const audioSafety = input.audioSafety
+  if (!audioSafety || audioSafety.moderationStatus === "skipped" || audioSafety.moderationStatus === "failed") {
+    return null
+  }
+  const nextContentSafetyState = contentSafetyRank(audioSafety.contentSafetyState) > contentSafetyRank(input.postContentSafetyState)
+    ? audioSafety.contentSafetyState
+    : input.postContentSafetyState
+  const nextAgeGatePolicy = input.postAgeGatePolicy === "18_plus" || audioSafety.ageGatePolicy === "18_plus"
+    ? "18_plus"
+    : "none"
+  if (
+    nextContentSafetyState === input.postContentSafetyState
+    && nextAgeGatePolicy === input.postAgeGatePolicy
+  ) {
+    return null
+  }
+  return {
+    content_safety_state: nextContentSafetyState,
+    age_gate_policy: nextAgeGatePolicy,
+  }
+}
+
+async function applyVideoAudioSafetyToPost(input: {
+  client: Client
+  communityId: string
+  postId: string
+  currentContentSafetyState: Post["content_safety_state"]
+  currentAgeGatePolicy: Post["age_gate_policy"]
+  audioSafety: VideoAudioSafetyEvaluation | null
+  mediaAnalysisResultId: string
+  now: string
+}): Promise<void> {
+  const merged = mergeVideoAudioSafetyWithPost({
+    postContentSafetyState: input.currentContentSafetyState,
+    postAgeGatePolicy: input.currentAgeGatePolicy,
+    audioSafety: input.audioSafety,
+  })
+  if (!merged) {
+    return
+  }
+  await input.client.execute({
+    sql: `
+      UPDATE posts
+      SET content_safety_state = ?2,
+          age_gate_policy = ?3,
+          updated_at = ?4
+      WHERE post_id = ?1
+    `,
+    args: [input.postId, merged.content_safety_state, merged.age_gate_policy, input.now],
+  })
+  if (input.currentAgeGatePolicy !== "18_plus" && merged.age_gate_policy === "18_plus") {
+    const existingCase = await getOpenModerationCaseForTarget({
+      executor: input.client,
+      communityId: input.communityId,
+      target: { postId: input.postId },
+    })
+    const moderationCase = existingCase ?? await createModerationCase({
+      executor: input.client,
+      communityId: input.communityId,
+      target: { postId: input.postId },
+      priority: "medium",
+      openedBy: "platform_analysis",
+      now: input.now,
+    })
+    await createModerationSignal({
+      executor: input.client,
+      communityId: input.communityId,
+      postId: input.postId,
+      moderationCaseId: moderationCase.moderation_case_id,
+      signalType: "audio_transcript_age_gate",
+      severity: "medium",
+      provider: "video_audio_safety",
+      providerLabel: "audio_transcript_age_gate",
+      analysisResultRef: input.mediaAnalysisResultId,
+      evidenceRef: input.audioSafety ? JSON.stringify(input.audioSafety.moderationResult) : null,
+      now: input.now,
+    })
   }
 }
 
@@ -221,7 +493,12 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
     }
 
     const postResult = await db.client.execute({
-      sql: `SELECT post_id, asset_id, upstream_asset_refs_json, status FROM posts WHERE post_id = ?1 LIMIT 1`,
+      sql: `
+        SELECT post_id, asset_id, upstream_asset_refs_json, status, content_safety_state, age_gate_policy
+        FROM posts
+        WHERE post_id = ?1
+        LIMIT 1
+      `,
       args: [postId],
     })
     const postRow = postResult.rows[0]
@@ -233,6 +510,15 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       return null
     }
     const assetId = typeof postRow.asset_id === "string" && postRow.asset_id ? postRow.asset_id : null
+    const currentContentSafetyState = (
+      postRow.content_safety_state === "safe"
+      || postRow.content_safety_state === "sensitive"
+      || postRow.content_safety_state === "adult"
+      || postRow.content_safety_state === "pending"
+    )
+      ? postRow.content_safety_state as Post["content_safety_state"]
+      : "pending"
+    const currentAgeGatePolicy = postRow.age_gate_policy === "18_plus" ? "18_plus" : "none"
 
     const declared = await resolveDeclaredReferences({
       client: db.client,
@@ -254,6 +540,7 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
     }
     let analysisSkippedReason: string | null = null
     let audioTrackPresent = true
+    let audioSafety: VideoAudioSafetyEvaluation | null = null
     if (sample.kind === "no_audio_track") {
       audioTrackPresent = false
     } else if (sample.kind === "skipped") {
@@ -272,6 +559,12 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
         // terminal attempt persists a review_required outcome.
         throw providerUnavailable(`ACRCloud identification failed: ${acr.providerError}`)
       }
+      audioSafety = await evaluateVideoAudioSafety({
+        env: input.env,
+        sample,
+        communityId: input.job.community_id,
+        postId,
+      })
     }
 
     const decision = computeVideoRightsOutcome({
@@ -288,12 +581,25 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       decision,
       acr,
       declared,
+      audioSafety,
       sampleWindow: sample.kind === "sample" ? window : null,
+    })
+    await applyVideoAudioSafetyToPost({
+      client: db.client,
+      communityId: input.job.community_id,
+      postId,
+      currentContentSafetyState,
+      currentAgeGatePolicy,
+      audioSafety,
+      mediaAnalysisResultId: persisted.mediaAnalysisResultId,
+      now: nowIso(),
     })
     console.log("[video-media-analysis] outcome recorded", {
       community_id: input.job.community_id,
       post_id: postId,
       outcome: decision.outcome,
+      audio_content_safety_state: audioSafety?.contentSafetyState ?? null,
+      audio_age_gate_policy: audioSafety?.ageGatePolicy ?? null,
       policy_reason_code: decision.policyReasonCode,
       media_analysis_result_id: persisted.mediaAnalysisResultId,
       rights_review_case_id: persisted.rightsReviewCaseId,

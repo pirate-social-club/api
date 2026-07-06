@@ -43,6 +43,16 @@ export type VideoRightsDecision = {
   caseTrigger: VideoRightsCaseTrigger | null
 }
 
+export type VideoAudioSafetyEvaluation = {
+  contentSafetyState: "pending" | "safe" | "sensitive" | "adult"
+  ageGatePolicy: "none" | "18_plus"
+  transcript: string | null
+  transcriptProviderResult: Record<string, unknown> | null
+  moderationStatus: "completed" | "failed" | "skipped"
+  moderationError: string | null
+  moderationResult: Record<string, unknown> | null
+}
+
 export function computeVideoRightsOutcome(input: {
   declared: VideoRightsDeclaredReferences
   acr: VideoRightsAcrEvaluation
@@ -159,6 +169,7 @@ export type PersistVideoRightsAnalysisInput = {
   decision: VideoRightsDecision
   acr: VideoRightsAcrEvaluation
   declared: VideoRightsDeclaredReferences
+  audioSafety?: VideoAudioSafetyEvaluation | null
   sampleWindow: { start_ms: number; duration_ms: number } | null
   createdAt?: string
 }
@@ -187,17 +198,24 @@ export async function persistVideoRightsAnalysis(
       input.postId,
       input.assetId,
       input.decision.outcome,
-      // Video-audio safety classification is a separate punch-list item; the
-      // schema requires a value, so record that safety was not evaluated here.
-      "pending",
-      "none",
+      input.audioSafety?.contentSafetyState ?? "pending",
+      input.audioSafety?.ageGatePolicy ?? "none",
       JSON.stringify({ source: "video_media_analysis", sample_window: input.sampleWindow }),
       input.acr.musicMatches.length ? JSON.stringify(input.acr.musicMatches) : null,
       input.acr.customMatches.length ? JSON.stringify(input.acr.customMatches.map((match) => match.raw)) : null,
       input.acr.missingConfiguration ? "missing_configuration" : input.acr.providerError ? "provider_failed" : null,
       input.acr.providerError,
       acrCheckedAt,
-      null,
+      input.audioSafety ? JSON.stringify({
+        provider: "video_audio_safety",
+        transcript: input.audioSafety.transcript,
+        transcript_provider_result: input.audioSafety.transcriptProviderResult,
+        moderation_status: input.audioSafety.moderationStatus,
+        moderation_error: input.audioSafety.moderationError,
+        moderation_result: input.audioSafety.moderationResult,
+        content_safety_state: input.audioSafety.contentSafetyState,
+        age_gate_policy: input.audioSafety.ageGatePolicy,
+      }) : null,
       JSON.stringify({
         declared_bundle_ids: input.declared.declaredBundleIds,
         declared_asset_ids: input.declared.declaredAssetIds,
