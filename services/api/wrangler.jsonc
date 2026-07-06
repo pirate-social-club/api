@@ -486,6 +486,7 @@
         "HNS_VERIFIER_BASE_URL": "https://verifier.pirate.sc/hns",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
+        "COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD": "15",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
 	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
