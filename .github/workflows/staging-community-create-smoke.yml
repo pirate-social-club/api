@@ -1,0 +1,56 @@
+name: staging-community-create-smoke
+
+# MANUAL ONLY - no `schedule:` trigger by design.
+#
+# This smoke creates a real staging community and permanently consumes one D1
+# pool binding on every run because archive/delete does not currently release
+# loaded bindings. Run it on demand after staging deploys or changes touching
+# community creation/provisioning. Continuous low-capacity detection is handled
+# cheaply by the scheduled D1 pool watchdog in the API worker.
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Pirate API base URL to smoke"
+        required: true
+        default: "https://api-staging.pirate.sc"
+      subject:
+        description: "JWT subject / test user id to create as"
+        required: false
+        default: "usr_community_create_ci_smoke"
+
+permissions:
+  contents: read
+
+jobs:
+  community-create-smoke:
+    name: Staging community create smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
+      AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
+      AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      PIRATE_SMOKE_API_BASE_URL: ${{ inputs.api_base_url }}
+      PIRATE_SMOKE_SUBJECT: ${{ inputs.subject }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install shared dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: services/api
+        run: bun install --frozen-lockfile
+
+      - name: Run staging community create smoke
+        working-directory: services/api
+        run: bun run smoke:community-create
