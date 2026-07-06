@@ -17,7 +17,7 @@ describe("public read cache keys", () => {
     expect(first).toContain("sort=best")
   })
 
-  test("still varies feed cache keys by origin", () => {
+  test("does not vary public feed cache keys by origin", () => {
     const production = cacheKeyUrl("https://api.pirate.sc/feed/home/public?locale=en&sort=best", {
       Origin: "https://pirate.sc",
     })
@@ -25,8 +25,31 @@ describe("public read cache keys", () => {
       Origin: "https://staging.pirate.sc",
     })
 
-    expect(staging).not.toBe(production)
-    expect(production).toContain("__cache_origin=https%3A%2F%2Fpirate.sc")
-    expect(staging).toContain("__cache_origin=https%3A%2F%2Fstaging.pirate.sc")
+    expect(staging).toBe(production)
+    expect(production).not.toContain("__cache_origin=")
+  })
+
+  test("varies structured public read cache keys by representation headers, not origin or language", () => {
+    const json = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
+      Accept: "application/json",
+      "Accept-Language": "en-US",
+      Origin: "https://pirate.sc",
+    })
+    const markdown = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
+      Accept: "text/markdown",
+      "Accept-Language": "en-US",
+      Origin: "https://pirate.sc",
+    })
+    const stagingJson = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
+      Accept: "application/json",
+      "Accept-Language": "fr-FR",
+      Origin: "https://staging.pirate.sc",
+    })
+
+    expect(markdown).not.toBe(json)
+    expect(stagingJson).toBe(json)
+    expect(json).toContain("__cache_accept=application%2Fjson")
+    expect(json).not.toContain("__cache_accept-language=")
+    expect(json).not.toContain("__cache_origin=")
   })
 })

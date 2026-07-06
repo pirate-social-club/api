@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { captureException, withSentry } from "@sentry/cloudflare"
+import { WorkerEntrypoint } from "cloudflare:workers"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -12,7 +13,6 @@ import comments from "./routes/comments"
 import communities from "./routes/communities"
 import discovery from "./routes/discovery"
 import karaokeSessions from "./routes/karaoke-sessions"
-import feed from "./routes/feed"
 import geo from "./routes/geo"
 import jobs from "./routes/jobs"
 import mcp from "./routes/mcp"
@@ -21,12 +21,9 @@ import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
-import publicComments from "./routes/public-comments"
 import publicAgents from "./routes/public-agents"
-import publicCommunities from "./routes/public-communities"
 import publicNames from "./routes/public-names"
 import publicNamespaces from "./routes/public-namespaces"
-import publicPosts from "./routes/public-posts"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
@@ -73,6 +70,7 @@ import {
   publicReadCacheRefreshRequests,
   type PublicReadCacheFillResult,
 } from "./lib/public-read-cache-state"
+import publicReadApp from "./routes/public-read-app"
 
 export { resetPublicReadCacheDedupeForTests } from "./lib/public-read-cache-state"
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
@@ -89,6 +87,16 @@ declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 const app = new Hono<{ Bindings: Env }>()
 const PUBLIC_READ_WORKER_CACHE_CREATED_HEADER = "x-pirate-cache-created-at"
 const PUBLIC_READ_WORKER_CACHE_TTL_HEADER = "x-pirate-cache-ttl"
+
+type PublicReadEntrypoint = {
+  fetch(request: Request): Promise<Response>
+}
+
+type PublicReadExecutionContext = ExecutionContext & {
+  exports?: {
+    CachedPublicReads?: PublicReadEntrypoint
+  }
+}
 
 type BuildVersionMetadata = {
   git_ref: string | null
@@ -168,23 +176,18 @@ function isTrustedHnsWebOrigin(origin: string): boolean {
 
 app.use(
   "/*",
-  cors({
-    origin: configuredCorsOrigin,
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Idempotency-Key",
-      "X-Admin-As-User-Id",
-      "X-Admin-Token",
-      "X-Agent-Connection-Token",
-      "X-Pirate-Altcha",
-      "X-Pirate-Anonymous-Id",
-      "X-Pirate-Session-Id",
-      "X-Pirate-Submit-Trace-Id",
-      "X-Request-Id",
-    ],
-  }),
+  async (c, next) => {
+    if (isPublicReadCacheRequest(c.req.raw)) {
+      await next()
+      return
+    }
+
+    return cors({
+      origin: configuredCorsOrigin,
+      allowMethods: CORS_ALLOW_METHODS,
+      allowHeaders: CORS_ALLOW_HEADERS,
+    })(c, next)
+  },
 )
 
 app.use("*", async (_c, next) => {
@@ -222,7 +225,7 @@ app.route("/admin/debug", debugPipeline)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
-app.route("/feed", feed)
+app.route("/", publicReadApp)
 app.route("/geo", geo)
 app.route("/jobs", jobs)
 app.route("/karaoke/sessions", karaokeSessions)
@@ -231,12 +234,9 @@ app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/posts", posts)
-app.route("/public-comments", publicComments)
 app.route("/public-agents", publicAgents)
-app.route("/public-communities", publicCommunities)
 app.route("/public-names", publicNames)
 app.route("/public-namespaces", publicNamespaces)
-app.route("/public-posts", publicPosts)
 app.route("/public-profiles", publicProfiles)
 app.route("/profile-media", profileMedia)
 app.route("/users", users)
@@ -352,7 +352,7 @@ async function fillPublicReadCache(
   cache: Cache,
   cacheKey: Request,
 ): Promise<PublicReadCacheFillResult> {
-  const response = await app.fetch(req, env, ctx)
+  const response = await fetchPublicRead(req, env, ctx)
   const cacheable = isPublicReadCacheResponse(response)
   const body = await response.arrayBuffer()
   const result: PublicReadCacheFillResult = {
@@ -363,7 +363,7 @@ async function fillPublicReadCache(
     statusText: response.statusText,
   }
   if (cacheable) {
-    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(buildPublicReadCacheFillResponse(result))))
+    ctx.waitUntil(cache.put(cacheKey, buildPublicReadWorkerCacheResponse(stripCorsHeaders(buildPublicReadCacheFillResponse(result)))))
   }
   return result
 }
@@ -428,13 +428,33 @@ async function refreshPublicReadCacheOnce(
   cacheKey: Request,
 ): Promise<void> {
   try {
-    const response = await app.fetch(req, env, ctx)
+    const response = await fetchPublicRead(req, env, ctx)
     if (isPublicReadCacheResponse(response)) {
-      await cache.put(cacheKey, buildPublicReadWorkerCacheResponse(response.clone()))
+      await cache.put(cacheKey, buildPublicReadWorkerCacheResponse(stripCorsHeaders(response.clone())))
     }
   } catch (error) {
     console.error("[public-read-cache] stale refresh failed", error)
   }
+}
+
+async function fetchPublicRead(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const forwarded = buildPublicReadEntrypointRequest(req)
+  const publicReadContext = ctx as PublicReadExecutionContext
+  const exportedEntrypoint = publicReadContext.exports?.CachedPublicReads
+  if (exportedEntrypoint) {
+    return exportedEntrypoint.fetch(forwarded)
+  }
+  return publicReadApp.fetch(forwarded, env, ctx)
+}
+
+function buildPublicReadEntrypointRequest(req: Request): Request {
+  const headers = new Headers(req.headers)
+  headers.delete("Authorization")
+  headers.delete("Origin")
+  return new Request(req.url, {
+    headers,
+    method: "GET",
+  })
 }
 
 function withPublicReadCacheHeaders(response: Response, input: {
@@ -458,6 +478,69 @@ function withPublicReadCacheHeaders(response: Response, input: {
     annotated.headers.set("x-pirate-cache-deduped", "1")
   }
   return annotated
+}
+
+const CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+const CORS_ALLOW_HEADERS = [
+  "Content-Type",
+  "Authorization",
+  "Idempotency-Key",
+  "X-Admin-As-User-Id",
+  "X-Admin-Token",
+  "X-Agent-Connection-Token",
+  "X-Pirate-Altcha",
+  "X-Pirate-Anonymous-Id",
+  "X-Pirate-Session-Id",
+  "X-Pirate-Submit-Trace-Id",
+  "X-Request-Id",
+]
+const CORS_RESPONSE_HEADER_NAMES = [
+  "Access-Control-Allow-Origin",
+  "Access-Control-Allow-Methods",
+  "Access-Control-Allow-Headers",
+  "Access-Control-Allow-Credentials",
+  "Access-Control-Expose-Headers",
+  "Access-Control-Max-Age",
+]
+
+function stripCorsHeaders(response: Response): Response {
+  const stripped = new Response(response.body, response)
+  for (const headerName of CORS_RESPONSE_HEADER_NAMES) {
+    stripped.headers.delete(headerName)
+  }
+  return stripped
+}
+
+function appendVaryHeader(headers: Headers, field: string): void {
+  const existing = (headers.get("Vary") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+  const existingLower = new Set(existing.map((value) => value.toLowerCase()))
+  if (!existingLower.has(field.toLowerCase())) {
+    headers.set("Vary", [...existing, field].join(", "))
+  }
+}
+
+function applyCorsHeaders(request: Request, response: Response, env: Env): Response {
+  if (response.headers.has("Access-Control-Allow-Origin")) {
+    return response
+  }
+
+  const origin = request.headers.get("Origin")
+  if (!origin) {
+    return response
+  }
+
+  const allowedOrigin = configuredCorsOrigin(origin, { env })
+  if (!allowedOrigin) {
+    return response
+  }
+
+  const next = new Response(response.body, response)
+  next.headers.set("Access-Control-Allow-Origin", allowedOrigin)
+  appendVaryHeader(next.headers, "Origin")
+  return next
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
@@ -695,7 +778,7 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 const SCHEDULED_LEASE_TTL_MS = 120_000
 
 const handler: ExportedHandler<Env> = {
-  fetch: (req, env, ctx) => fetchWithPublicReadCache(req, env, ctx),
+  fetch: async (req, env, ctx) => applyCorsHeaders(req, await fetchWithPublicReadCache(req, env, ctx), env),
 
   scheduled: (controller, env, ctx) => {
     // Story signer funding watchdog. Read-only RPC (no control-plane connection),
@@ -772,6 +855,12 @@ const handler: ExportedHandler<Env> = {
       }),
     )
   },
+}
+
+export class CachedPublicReads extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    return publicReadApp.fetch(request, this.env, this.ctx)
+  }
 }
 
 export { app }
