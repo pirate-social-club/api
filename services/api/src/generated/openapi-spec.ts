@@ -13281,6 +13281,9 @@ const spec = {
           "selected_option_id": {
             "type": "string"
           },
+          "target_language": {
+            "type": "string"
+          },
           "transcript": {
             "type": "string"
           }
