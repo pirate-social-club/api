@@ -58,6 +58,7 @@ export async function markPostPublishFailed(input: {
   failureMessage: string
   retryable: boolean
   now: string
+  onlyIfStatus?: Post["status"] | null
 }): Promise<Post> {
   await input.executor.execute({
     sql: `
@@ -69,8 +70,16 @@ export async function markPostPublishFailed(input: {
           publish_failed_at = ?5,
           updated_at = ?5
       WHERE post_id = ?1
+        AND (?6 IS NULL OR status = ?6)
     `,
-    args: [input.postId, input.failureCode, input.failureMessage, input.retryable ? 1 : 0, input.now],
+    args: [
+      input.postId,
+      input.failureCode,
+      input.failureMessage,
+      input.retryable ? 1 : 0,
+      input.now,
+      input.onlyIfStatus ?? null,
+    ],
   })
 
   const updated = await getPostById(input.executor, input.postId)

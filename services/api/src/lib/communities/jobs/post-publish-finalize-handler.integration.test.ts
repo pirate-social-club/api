@@ -18,6 +18,7 @@ type State = {
   primaryUploadAvailable: boolean
   projectionPayloads: string[]
   projectionStatuses: string[]
+  reconcileRows: Array<{ post_id: string }>
   requestStatuses: string[]
   throwAssetError: boolean
   throwCatalogError: boolean
@@ -92,6 +93,7 @@ const state: State = {
   primaryUploadAvailable: true,
   projectionPayloads: [],
   projectionStatuses: [],
+  reconcileRows: [],
   requestStatuses: [],
   throwAssetError: false,
   throwCatalogError: false,
@@ -99,7 +101,12 @@ const state: State = {
 }
 
 const client = {
-  execute: mock(async () => ({ rows: [] })),
+  execute: mock(async (query?: { sql?: string }) => {
+    if (typeof query?.sql === "string" && query.sql.includes("FROM posts")) {
+      return { rows: state.reconcileRows }
+    }
+    return { rows: [] }
+  }),
 }
 
 mock.module("../community-read-access", () => ({
@@ -126,7 +133,10 @@ mock.module("../../posts/community-post-mutation-store", () => ({
     }
     return state.post
   }),
-  markPostPublishFailed: mock(async (input: { failureCode: string; retryable: boolean }) => {
+  markPostPublishFailed: mock(async (input: { failureCode: string; onlyIfStatus?: Post["status"] | null; retryable: boolean }) => {
+    if (input.onlyIfStatus && state.post.status !== input.onlyIfStatus) {
+      return state.post
+    }
     state.markedFailed.push({
       failureCode: input.failureCode,
       retryable: input.retryable,
@@ -213,18 +223,22 @@ mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
 
-const { runPostPublishFinalize } = await import("./post-publish-finalize-handler")
+const { reconcileStuckPostPublishFinalizeJobs, runPostPublishFinalize } = await import("./post-publish-finalize-handler")
+
+function communityRepository() {
+  return {
+    updateCommunityPostProjectionPayload: mock(async (input: { projectedPayloadJson: string }) => {
+      state.projectionPayloads.push(input.projectedPayloadJson)
+    }),
+    updateCommunityPostProjectionStatus: mock(async (input: { status: string }) => {
+      state.projectionStatuses.push(input.status)
+    }),
+  }
+}
 
 function handlerInput() {
   return {
-    communityRepository: {
-      updateCommunityPostProjectionPayload: mock(async (input: { projectedPayloadJson: string }) => {
-        state.projectionPayloads.push(input.projectedPayloadJson)
-      }),
-      updateCommunityPostProjectionStatus: mock(async (input: { status: string }) => {
-        state.projectionStatuses.push(input.status)
-      }),
-    },
+    communityRepository: communityRepository(),
     env: {},
     job: {
       community_id: COMMUNITY_ID,
@@ -245,6 +259,7 @@ beforeEach(() => {
   state.primaryUploadAvailable = true
   state.projectionPayloads = []
   state.projectionStatuses = []
+  state.reconcileRows = []
   state.requestStatuses = []
   state.throwAssetError = false
   state.throwCatalogError = false
@@ -360,5 +375,60 @@ describe("runPostPublishFinalize integration", () => {
       consumed: 1,
       retryable: true,
     })
+  })
+
+  test("reconciles stuck processing posts through the shared failed-state path", async () => {
+    state.reconcileRows = [{ post_id: POST_ID }]
+
+    const summary = await reconcileStuckPostPublishFinalizeJobs({
+      communityIds: [COMMUNITY_ID],
+      communityRepository: communityRepository(),
+      env: {},
+      maxPostsPerCommunity: 25,
+      now: "2026-07-06T12:00:00.000Z",
+    } as never)
+
+    expect(summary).toEqual({
+      checked_communities: 1,
+      failed_posts: 1,
+      communities: [{
+        community_id: COMMUNITY_ID,
+        failed_posts: 1,
+        has_more: false,
+      }],
+      failed_communities: [],
+    })
+    expect(state.markedFailed).toEqual([{ failureCode: "internal_error", retryable: true }])
+    expect(state.requestStatuses).toEqual(["failed"])
+    expect(state.projectionStatuses).toEqual(["failed"])
+    expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
+      post_id: POST_ID,
+      publish_failure_code: "internal_error",
+      publish_failure_retryable: true,
+      status: "failed",
+    })
+  })
+
+  test("does not downgrade a post that publishes after the stuck scan", async () => {
+    state.reconcileRows = [{ post_id: POST_ID }]
+    state.post = basePost({ status: "published" })
+
+    const summary = await reconcileStuckPostPublishFinalizeJobs({
+      communityIds: [COMMUNITY_ID],
+      communityRepository: communityRepository(),
+      env: {},
+      maxPostsPerCommunity: 25,
+      now: "2026-07-06T12:00:00.000Z",
+    } as never)
+
+    expect(summary).toEqual({
+      checked_communities: 1,
+      failed_posts: 0,
+      communities: [],
+      failed_communities: [],
+    })
+    expect(state.markedFailed).toEqual([])
+    expect(state.requestStatuses).toEqual([])
+    expect(state.projectionStatuses).toEqual([])
   })
 })
