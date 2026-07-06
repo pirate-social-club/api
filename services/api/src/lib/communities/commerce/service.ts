@@ -1278,6 +1278,60 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       bundleId: asset.song_artifact_bundle_id,
       rightsBasis: asset.rights_basis,
       upstreamAssetRefs: post.upstream_asset_refs ?? null,
+      preparedDelivery: asset.story_asset_version_id
+        && asset.story_cdr_vault_uuid
+        && asset.story_namespace
+        && asset.story_entitlement_token_id
+        && asset.story_read_condition
+        && asset.story_write_condition
+        && asset.locked_delivery_ref
+        && asset.locked_delivery_storage_ref
+        && asset.locked_delivery_secret_json
+        ? {
+          storyAssetVersionId: asset.story_asset_version_id,
+          storyCdrVaultUuid: asset.story_cdr_vault_uuid,
+          storyNamespace: asset.story_namespace,
+          storyEntitlementTokenId: asset.story_entitlement_token_id,
+          storyReadCondition: asset.story_read_condition,
+          storyWriteCondition: asset.story_write_condition,
+          lockedDeliveryRef: asset.locked_delivery_ref,
+          lockedDeliveryStorageRef: asset.locked_delivery_storage_ref,
+          lockedDeliveryMetadataJson: asset.locked_delivery_secret_json,
+        }
+        : null,
+      onPreparedDelivery: async (prepared) => {
+        await input.client.execute({
+          sql: `
+            UPDATE assets
+            SET story_asset_version_id = ?3,
+                story_cdr_vault_uuid = ?4,
+                story_namespace = ?5,
+                story_entitlement_token_id = ?6,
+                story_read_condition = ?7,
+                story_write_condition = ?8,
+                locked_delivery_ref = ?9,
+                locked_delivery_storage_ref = ?10,
+                locked_delivery_secret_json = ?11,
+                updated_at = ?12
+            WHERE community_id = ?1
+              AND asset_id = ?2
+          `,
+          args: [
+            input.communityId,
+            asset.asset_id,
+            prepared.storyAssetVersionId,
+            prepared.storyCdrVaultUuid,
+            prepared.storyNamespace,
+            prepared.storyEntitlementTokenId,
+            prepared.storyReadCondition,
+            prepared.storyWriteCondition,
+            prepared.lockedDeliveryRef,
+            prepared.lockedDeliveryStorageRef,
+            prepared.lockedDeliveryMetadataJson,
+            nowIso(),
+          ],
+        })
+      },
     })
     storyStatus = lockedDelivery.storyStatus
     if (lockedDelivery.storyStatus === "published") {
