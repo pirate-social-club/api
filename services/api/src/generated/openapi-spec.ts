@@ -42,9 +42,6 @@ const spec = {
       "name": "Public Names"
     },
     {
-      "name": "Bookings"
-    },
-    {
       "name": "Communities"
     },
     {
@@ -54,13 +51,13 @@ const spec = {
       "name": "Posts"
     },
     {
-      "name": "Song Study"
-    },
-    {
       "name": "Comments"
     },
     {
       "name": "Livestreams"
+    },
+    {
+      "name": "Bookings"
     },
     {
       "name": "Questions"
@@ -70,6 +67,9 @@ const spec = {
     },
     {
       "name": "Tracks"
+    },
+    {
+      "name": "Song Study"
     },
     {
       "name": "Moderation"
@@ -1456,6 +1456,45 @@ const spec = {
         "operationId": "get_users_me"
       }
     },
+    "/users/me/identity-wallet": {
+      "put": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Set the current user's identity wallet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetIdentityWalletRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "put_users_me_identity_wallet"
+      }
+    },
     "/profiles/me": {
       "get": {
         "tags": [
@@ -2011,1440 +2050,6 @@ const spec = {
           }
         },
         "operationId": "get_public_names_by_label_status"
-      }
-    },
-    "/host-bookings/me/profile": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Get the authenticated host booking profile",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingProfileResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/AuthError"
-          }
-        },
-        "operationId": "get_host_bookings_me_profile"
-      },
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Upsert the authenticated host booking profile",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateBookingProfileRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingProfile"
-                }
-              }
-            }
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingProfile"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AuthError"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_host_bookings_me_profile"
-      }
-    },
-    "/host-bookings/me/profile/publish": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Publish the authenticated host booking profile",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingProfile"
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_host_bookings_me_profile_publish"
-      }
-    },
-    "/host-bookings/me/profile/unpublish": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Unpublish the authenticated host booking profile",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingProfile"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_host_bookings_me_profile_unpublish"
-      }
-    },
-    "/host-bookings/me/availability-rules": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "List weekly availability rules",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "object",
-                    "data",
-                    "has_more"
-                  ],
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "enum": [
-                        "list"
-                      ]
-                    },
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/AvailabilityRule"
-                      }
-                    },
-                    "has_more": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_host_bookings_me_availability_rules"
-      },
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a weekly availability rule",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateAvailabilityRuleRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AvailabilityRule"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_host_bookings_me_availability_rules"
-      }
-    },
-    "/host-bookings/me/availability-rules/{rule_id}": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Update a weekly availability rule",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateAvailabilityRuleRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AvailabilityRule"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "post_host_bookings_me_availability_rules_by_rule_id",
-        "parameters": [
-          {
-            "name": "rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      },
-      "delete": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Delete a weekly availability rule",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "delete_host_bookings_me_availability_rules_by_rule_id",
-        "parameters": [
-          {
-            "name": "rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/host-bookings/me/availability-exceptions": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "List one-off availability exceptions",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "object",
-                    "data",
-                    "has_more"
-                  ],
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "enum": [
-                        "list"
-                      ]
-                    },
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/AvailabilityException"
-                      }
-                    },
-                    "has_more": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_host_bookings_me_availability_exceptions"
-      },
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a one-off availability exception",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateAvailabilityExceptionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AvailabilityException"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_host_bookings_me_availability_exceptions"
-      }
-    },
-    "/host-bookings/me/availability-exceptions/{exception_id}": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Update a one-off availability exception",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateAvailabilityExceptionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AvailabilityException"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "post_host_bookings_me_availability_exceptions_by_exception_id",
-        "parameters": [
-          {
-            "name": "exception_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      },
-      "delete": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Delete a one-off availability exception",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "delete_host_bookings_me_availability_exceptions_by_exception_id",
-        "parameters": [
-          {
-            "name": "exception_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/host-bookings/me/price-rules": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "List variable price rules",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "object",
-                    "data",
-                    "has_more"
-                  ],
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "enum": [
-                        "list"
-                      ]
-                    },
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/PriceRule"
-                      }
-                    },
-                    "has_more": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_host_bookings_me_price_rules"
-      },
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a variable price rule",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreatePriceRuleRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PriceRule"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_host_bookings_me_price_rules"
-      }
-    },
-    "/host-bookings/me/price-rules/{price_rule_id}": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Update a variable price rule",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdatePriceRuleRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PriceRule"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "post_host_bookings_me_price_rules_by_price_rule_id",
-        "parameters": [
-          {
-            "name": "price_rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      },
-      "delete": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Delete a variable price rule",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "delete_host_bookings_me_price_rules_by_price_rule_id",
-        "parameters": [
-          {
-            "name": "price_rule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "List authenticated user's bookings",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "object",
-                    "data",
-                    "has_more"
-                  ],
-                  "properties": {
-                    "object": {
-                      "type": "string",
-                      "enum": [
-                        "list"
-                      ]
-                    },
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Booking"
-                      }
-                    },
-                    "has_more": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_bookings"
-      }
-    },
-    "/bookings/hosts/{host_user_id}/slots": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "security": [],
-        "summary": "Resolve public bookable slots for a host",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingSlotsResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_hosts_by_host_user_id_slots",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-hosts/{host_user_id}/slots": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "security": [],
-        "summary": "Resolve public bookable slots for a host",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingSlotsResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_booking_hosts_by_host_user_id_slots",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/hosts/{host_user_id}/holds": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a booking hold for a host slot",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "hold"
-                  ],
-                  "properties": {
-                    "hold": {
-                      "$ref": "#/components/schemas/BookingHold"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_hosts_by_host_user_id_holds",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-hosts/{host_user_id}/holds": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a booking hold for a host slot",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "hold"
-                  ],
-                  "properties": {
-                    "hold": {
-                      "$ref": "#/components/schemas/BookingHold"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_hosts_by_host_user_id_holds",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/holds/{hold_id}/quote": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Quote a booking hold",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "quote"
-                  ],
-                  "properties": {
-                    "quote": {
-                      "$ref": "#/components/schemas/BookingQuote"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_holds_by_hold_id_quote",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-holds/{hold_id}/quote": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Quote a booking hold",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "quote"
-                  ],
-                  "properties": {
-                    "quote": {
-                      "$ref": "#/components/schemas/BookingQuote"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_quote",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/holds/{hold_id}/confirm": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Confirm a paid booking hold",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_bookings_holds_by_hold_id_confirm",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-holds/{hold_id}/confirm": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Confirm a paid booking hold",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_confirm",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Get a booking visible to the authenticated party",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_by_booking_id",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/cancel": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Mutate a booking lifecycle state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_cancel",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/start": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Mutate a booking lifecycle state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_start",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/complete": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Mutate a booking lifecycle state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_complete",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/no-show": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Mutate a booking lifecycle state",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_no_show",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/session/attach": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Attach to a private booking video session",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingSessionAttachResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_session_attach",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/session/heartbeat": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Record a booking video session heartbeat",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "session_id"
-                ],
-                "properties": {
-                  "session_id": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "ok"
-                  ],
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_session_heartbeat",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/settlement-review/pending": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "List pending booking settlement reviews",
-        "security": [
-          {
-            "operatorCredentialAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          }
-        },
-        "operationId": "get_bookings_settlement_review_pending"
-      }
-    },
-    "/bookings/{booking_id}/settlement-review": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Get a booking settlement review",
-        "security": [
-          {
-            "operatorCredentialAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_by_booking_id_settlement_review",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/{booking_id}/settlement-review/resolve": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Resolve an ambiguous booking settlement review",
-        "security": [
-          {
-            "operatorCredentialAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveBookingSettlementReviewRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
-                }
-              }
-            }
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_by_booking_id_settlement_review_resolve",
-        "parameters": [
-          {
-            "name": "booking_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
       }
     },
     "/communities": {
@@ -4392,6 +2997,254 @@ const spec = {
         "operationId": "get_communities_by_community_id_join_eligibility"
       }
     },
+    "/communities/{community_id}/live-rooms/{live_room_id}/recording-draft": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Get a host-visible livestream recording draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomRecordingDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_live_rooms_by_live_room_id_recording_draft"
+      }
+    },
+    "/communities/{community_id}/live-rooms/{live_room_id}/replay-draft": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Get a host-visible livestream replay draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomRecordingDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_live_rooms_by_live_room_id_replay_draft"
+      },
+      "patch": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Update a livestream replay draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLiveRoomReplayDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomRecordingDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "patch_communities_by_community_id_live_rooms_by_live_room_id_replay_draft"
+      }
+    },
+    "/communities/{community_id}/live-rooms/{live_room_id}/replay-draft/publish": {
+      "post": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Publish a livestream replay draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishLiveRoomReplayDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomRecordingDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_communities_by_community_id_live_rooms_by_live_room_id_replay_draft_publish"
+      }
+    },
+    "/communities/{community_id}/live-rooms/{live_room_id}/replay/access": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Resolve authenticated replay access",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomReplayAccessDecision"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_live_rooms_by_live_room_id_replay_access"
+      }
+    },
+    "/communities/{community_id}/live-rooms/{live_room_id}/replay/content": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "summary": "Fetch authenticated replay bytes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_live_rooms_by_live_room_id_replay_content"
+      }
+    },
     "/communities/{community_id}/posts": {
       "post": {
         "tags": [
@@ -4496,6 +3349,43 @@ const spec = {
           }
         },
         "operationId": "get_communities_by_community_id_posts"
+      }
+    },
+    "/communities/{community_id}/posts/pending": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "List the caller's pending posts in a community",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/Locale"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_communities_by_community_id_posts_pending"
       }
     },
     "/communities/{community_id}/posts/{post_id}/comments": {
@@ -4621,6 +3511,46 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_remove"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/publish-retry": {
+      "post": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Retry asynchronous post publication",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_publish_retry"
       }
     },
     "/communities/{community_id}/posts/{post_id}/comments-lock": {
@@ -4784,25 +3714,16 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           },
           "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/EligibilityFailed"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "503": {
             "content": {
@@ -5437,6 +4358,1440 @@ const spec = {
         "operationId": "get_karaoke_sessions_by_session_id_websocket"
       }
     },
+    "/bookings": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List authenticated user's bookings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Booking"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings"
+      }
+    },
+    "/bookings/hosts/{host_user_id}/slots": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "security": [],
+        "summary": "Resolve public bookable slots for a host",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSlotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_hosts_by_host_user_id_slots",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-hosts/{host_user_id}/slots": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "security": [],
+        "summary": "Resolve public bookable slots for a host",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSlotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_booking_hosts_by_host_user_id_slots",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/hosts/{host_user_id}/holds": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a booking hold for a host slot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "hold"
+                  ],
+                  "properties": {
+                    "hold": {
+                      "$ref": "#/components/schemas/BookingHold"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_hosts_by_host_user_id_holds",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-hosts/{host_user_id}/holds": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a booking hold for a host slot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "hold"
+                  ],
+                  "properties": {
+                    "hold": {
+                      "$ref": "#/components/schemas/BookingHold"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_booking_hosts_by_host_user_id_holds",
+        "parameters": [
+          {
+            "name": "host_user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/holds/{hold_id}/quote": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Quote a booking hold",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "quote"
+                  ],
+                  "properties": {
+                    "quote": {
+                      "$ref": "#/components/schemas/BookingQuote"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_holds_by_hold_id_quote",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-holds/{hold_id}/quote": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Quote a booking hold",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "quote"
+                  ],
+                  "properties": {
+                    "quote": {
+                      "$ref": "#/components/schemas/BookingQuote"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_booking_holds_by_hold_id_quote",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/holds/{hold_id}/confirm": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Confirm a paid booking hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_holds_by_hold_id_confirm",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-holds/{hold_id}/confirm": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Confirm a paid booking hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking",
+                    "already_confirmed"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    },
+                    "already_confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_booking_holds_by_hold_id_confirm",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/settlement-review/pending": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List pending booking settlement reviews",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings_settlement_review_pending"
+      }
+    },
+    "/bookings/{booking_id}": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get a booking visible to the authenticated party",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/settlement-review": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get a booking settlement review",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id_settlement_review",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/settlement-review/resolve": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Resolve an ambiguous booking settlement review",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBookingSettlementReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBookingSettlementReviewResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_settlement_review_resolve",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/cancel": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_cancel",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/start": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_start",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/complete": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_complete",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/no-show": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Mutate a booking lifecycle state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "required": [
+                    "booking"
+                  ],
+                  "properties": {
+                    "booking": {
+                      "$ref": "#/components/schemas/Booking"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_no_show",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/session/attach": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Attach to a private booking video session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingSessionAttachResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_session_attach",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{booking_id}/session/heartbeat": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Record a booking video session heartbeat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "session_id"
+                ],
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_bookings_by_booking_id_session_heartbeat",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/host-bookings/me/profile": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Get the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "get_host_bookings_me_profile"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Upsert the authenticated host booking profile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBookingProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_profile"
+      }
+    },
+    "/host-bookings/me/profile/publish": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Publish the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_profile_publish"
+      }
+    },
+    "/host-bookings/me/profile/unpublish": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Unpublish the authenticated host booking profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingProfile"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_profile_unpublish"
+      }
+    },
+    "/host-bookings/me/availability-rules": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List weekly availability rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AvailabilityRule"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_availability_rules"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a weekly availability rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAvailabilityRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityRule"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_rules"
+      }
+    },
+    "/host-bookings/me/availability-rules/{rule_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a weekly availability rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAvailabilityRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityRule"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_rules_by_rule_id",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a weekly availability rule",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_availability_rules_by_rule_id",
+        "parameters": [
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/host-bookings/me/availability-exceptions": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List one-off availability exceptions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AvailabilityException"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_availability_exceptions"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a one-off availability exception",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAvailabilityExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityException"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_exceptions"
+      }
+    },
+    "/host-bookings/me/availability-exceptions/{exception_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a one-off availability exception",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAvailabilityExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailabilityException"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_availability_exceptions_by_exception_id",
+        "parameters": [
+          {
+            "name": "exception_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a one-off availability exception",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_availability_exceptions_by_exception_id",
+        "parameters": [
+          {
+            "name": "exception_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/host-bookings/me/price-rules": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List variable price rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceRule"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_host_bookings_me_price_rules"
+      },
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Create a variable price rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRule"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_host_bookings_me_price_rules"
+      }
+    },
+    "/host-bookings/me/price-rules/{price_rule_id}": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Update a variable price rule",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePriceRuleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceRule"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_host_bookings_me_price_rules_by_price_rule_id",
+        "parameters": [
+          {
+            "name": "price_rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Delete a variable price rule",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_host_bookings_me_price_rules_by_price_rule_id",
+        "parameters": [
+          {
+            "name": "price_rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/posts/{post_id}": {
       "get": {
         "tags": [
@@ -5469,6 +5824,84 @@ const spec = {
           }
         },
         "operationId": "get_posts_by_post_id"
+      }
+    },
+    "/public-communities/{community_id}/live-rooms/{live_room_id}/replay/access": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "security": [],
+        "summary": "Resolve public replay access",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveRoomReplayAccessDecision"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_public_communities_by_community_id_live_rooms_by_live_room_id_replay_access"
+      }
+    },
+    "/public-communities/{community_id}/live-rooms/{live_room_id}/replay/content": {
+      "get": {
+        "tags": [
+          "Livestreams"
+        ],
+        "security": [],
+        "summary": "Fetch public replay bytes",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LiveRoomId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_public_communities_by_community_id_live_rooms_by_live_room_id_replay_content"
       }
     },
     "/posts/{post_id}/vote": {
@@ -6435,6 +6868,14 @@ const spec = {
           "type": "integer",
           "minimum": 1,
           "maximum": 100
+        }
+      },
+      "LiveRoomId": {
+        "in": "path",
+        "name": "live_room_id",
+        "required": true,
+        "schema": {
+          "type": "string"
         }
       },
       "Locale": {
@@ -8370,6 +8811,17 @@ const spec = {
           }
         }
       },
+      "SetIdentityWalletRequest": {
+        "type": "object",
+        "required": [
+          "wallet_attachment_id"
+        ],
+        "properties": {
+          "wallet_attachment_id": {
+            "type": "string"
+          }
+        }
+      },
       "Profile": {
         "type": "object",
         "required": [
@@ -8463,6 +8915,9 @@ const spec = {
           "primary_wallet_address": {
             "type": "string",
             "nullable": true
+          },
+          "is_bookable": {
+            "type": "boolean"
           },
           "xmtp_inbox": {
             "type": "string",
@@ -8897,721 +9352,6 @@ const spec = {
           }
         ]
       },
-      "BookingProfileResponse": {
-        "oneOf": [
-          {
-            "$ref": "#/BookingProfile"
-          },
-          {
-            "$ref": "#/BookingProfileEmpty"
-          }
-        ]
-      },
-      "UpdateBookingProfileRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "host_timezone": {
-            "type": "string"
-          },
-          "base_price_cents": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "default_slot_duration_seconds": {
-            "type": "integer",
-            "minimum": 60
-          },
-          "display_headline": {
-            "type": "string",
-            "nullable": true
-          },
-          "bio": {
-            "type": "string",
-            "nullable": true
-          },
-          "topics": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
-          },
-          "intro_video_ref": {
-            "type": "string",
-            "nullable": true
-          },
-          "platform_fee_bps": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "payout_wallet_address": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
-      "BookingProfile": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "object",
-          "host",
-          "host_timezone",
-          "base_price_cents",
-          "default_slot_duration_seconds",
-          "platform_fee_bps",
-          "is_published",
-          "created",
-          "updated"
-        ],
-        "properties": {
-          "object": {
-            "type": "string",
-            "enum": [
-              "booking_profile"
-            ]
-          },
-          "host": {
-            "type": "string"
-          },
-          "display_headline": {
-            "type": "string",
-            "nullable": true
-          },
-          "bio": {
-            "type": "string",
-            "nullable": true
-          },
-          "topics": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "string"
-            }
-          },
-          "intro_video_ref": {
-            "type": "string",
-            "nullable": true
-          },
-          "host_timezone": {
-            "type": "string"
-          },
-          "base_price_cents": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "default_slot_duration_seconds": {
-            "type": "integer",
-            "minimum": 60
-          },
-          "platform_fee_bps": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "payout_wallet_address": {
-            "type": "string",
-            "nullable": true
-          },
-          "is_published": {
-            "type": "boolean"
-          },
-          "created": {
-            "type": "integer"
-          },
-          "updated": {
-            "type": "integer"
-          }
-        }
-      },
-      "AvailabilityRule": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "object",
-          "id",
-          "by_weekday",
-          "start_local",
-          "end_local",
-          "slot_duration_seconds",
-          "effective_from",
-          "effective_until",
-          "created",
-          "updated"
-        ],
-        "properties": {
-          "object": {
-            "type": "string",
-            "enum": [
-              "availability_rule"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "by_weekday": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "start_local": {
-            "type": "string"
-          },
-          "end_local": {
-            "type": "string"
-          },
-          "slot_duration_seconds": {
-            "type": "integer",
-            "minimum": 60
-          },
-          "effective_from": {
-            "type": "integer",
-            "nullable": true
-          },
-          "effective_until": {
-            "type": "integer",
-            "nullable": true
-          },
-          "created": {
-            "type": "integer"
-          },
-          "updated": {
-            "type": "integer"
-          }
-        }
-      },
-      "CreateAvailabilityRuleRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "by_weekday",
-          "start_local",
-          "end_local",
-          "slot_duration_seconds"
-        ],
-        "properties": {
-          "by_weekday": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "start_local": {
-            "type": "string"
-          },
-          "end_local": {
-            "type": "string"
-          },
-          "slot_duration_seconds": {
-            "type": "integer",
-            "minimum": 60
-          },
-          "effective_from_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "effective_until_utc": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "UpdateAvailabilityRuleRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "by_weekday": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "start_local": {
-            "type": "string"
-          },
-          "end_local": {
-            "type": "string"
-          },
-          "slot_duration_seconds": {
-            "type": "integer",
-            "minimum": 60
-          },
-          "effective_from_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "effective_until_utc": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "AvailabilityException": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "object",
-          "id",
-          "kind",
-          "start",
-          "end",
-          "created"
-        ],
-        "properties": {
-          "object": {
-            "type": "string",
-            "enum": [
-              "availability_exception"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "block",
-              "open"
-            ]
-          },
-          "start": {
-            "type": "integer"
-          },
-          "end": {
-            "type": "integer"
-          },
-          "created": {
-            "type": "integer"
-          }
-        }
-      },
-      "CreateAvailabilityExceptionRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "kind",
-          "start_utc",
-          "end_utc"
-        ],
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "block",
-              "open"
-            ]
-          },
-          "start_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "end_utc": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "UpdateAvailabilityExceptionRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "block",
-              "open"
-            ]
-          },
-          "start_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "end_utc": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "PriceRule": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "object",
-          "id",
-          "match_weekday",
-          "match_local_start",
-          "match_local_end",
-          "match_duration_seconds",
-          "price_cents",
-          "priority",
-          "created",
-          "updated"
-        ],
-        "properties": {
-          "object": {
-            "type": "string",
-            "enum": [
-              "price_rule"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "match_weekday": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "match_local_start": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_local_end": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_duration_seconds": {
-            "type": "integer",
-            "nullable": true,
-            "minimum": 60
-          },
-          "price_cents": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "priority": {
-            "type": "integer"
-          },
-          "created": {
-            "type": "integer"
-          },
-          "updated": {
-            "type": "integer"
-          }
-        }
-      },
-      "CreatePriceRuleRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "price_cents"
-        ],
-        "properties": {
-          "match_weekday": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "match_local_start": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_local_end": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_duration_seconds": {
-            "type": "integer",
-            "nullable": true,
-            "minimum": 60
-          },
-          "price_cents": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "priority": {
-            "type": "integer"
-          }
-        }
-      },
-      "UpdatePriceRuleRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "match_weekday": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 6
-            }
-          },
-          "match_local_start": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_local_end": {
-            "type": "string",
-            "nullable": true
-          },
-          "match_duration_seconds": {
-            "type": "integer",
-            "nullable": true,
-            "minimum": 60
-          },
-          "price_cents": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "priority": {
-            "type": "integer"
-          }
-        }
-      },
-      "Booking": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "booking_id",
-          "host_user_id",
-          "booker_user_id",
-          "slot_start_utc",
-          "slot_end_utc",
-          "gross_cents",
-          "platform_fee_cents",
-          "host_payout_cents",
-          "status"
-        ],
-        "properties": {
-          "booking_id": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/BookingStatus"
-          },
-          "host_user_id": {
-            "type": "string"
-          },
-          "booker_user_id": {
-            "type": "string"
-          },
-          "slot_start_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "slot_end_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "gross_cents": {
-            "type": "integer"
-          },
-          "platform_fee_cents": {
-            "type": "integer"
-          },
-          "host_payout_cents": {
-            "type": "integer"
-          }
-        }
-      },
-      "BookingSlotsResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "host_timezone",
-          "viewer_timezone",
-          "slots"
-        ],
-        "properties": {
-          "host_timezone": {
-            "type": "string"
-          },
-          "viewer_timezone": {
-            "type": "string"
-          },
-          "slots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/ResolvedBookingSlot"
-            }
-          }
-        }
-      },
-      "CreateBookingHoldRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "slot_start_utc",
-          "slot_end_utc"
-        ],
-        "properties": {
-          "slot_start_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "slot_end_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "source_community_id": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
-      "BookingHold": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "hold_id": {
-            "type": "string"
-          }
-        }
-      },
-      "BookingQuote": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "hold_id",
-          "gross_cents",
-          "platform_fee_bps",
-          "platform_fee_cents",
-          "host_payout_cents",
-          "expires_at_utc",
-          "payment"
-        ],
-        "properties": {
-          "hold_id": {
-            "type": "string"
-          },
-          "gross_cents": {
-            "type": "integer"
-          },
-          "platform_fee_bps": {
-            "type": "integer"
-          },
-          "platform_fee_cents": {
-            "type": "integer"
-          },
-          "host_payout_cents": {
-            "type": "integer"
-          },
-          "expires_at_utc": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "payment": {
-            "$ref": "#/BookingPaymentInstructions"
-          }
-        }
-      },
-      "ConfirmBookingHoldRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "funding_tx_ref",
-          "wallet_attachment_id"
-        ],
-        "properties": {
-          "funding_tx_ref": {
-            "type": "string"
-          },
-          "wallet_attachment_id": {
-            "type": "string"
-          }
-        }
-      },
-      "BookingSessionAttachResponse": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "session_id",
-          "party",
-          "channel",
-          "agora"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "string"
-          },
-          "party": {
-            "type": "string",
-            "enum": [
-              "host",
-              "booker"
-            ]
-          },
-          "channel": {
-            "type": "string"
-          },
-          "agora": {
-            "type": "object",
-            "nullable": true,
-            "additionalProperties": true
-          }
-        }
-      },
-      "ResolveBookingSettlementReviewRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "resolution",
-          "expected_review_version"
-        ],
-        "properties": {
-          "resolution": {
-            "type": "string",
-            "enum": [
-              "completed",
-              "no_show_host",
-              "no_show_booker"
-            ]
-          },
-          "expected_review_version": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "note": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
-      "ResolveBookingSettlementReviewResponse": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "booking",
-          "resolution",
-          "pending_settlement",
-          "replayed"
-        ],
-        "properties": {
-          "booking": {
-            "$ref": "#/Booking"
-          },
-          "resolution": {
-            "type": "string",
-            "enum": [
-              "completed",
-              "no_show_host",
-              "no_show_booker"
-            ]
-          },
-          "pending_settlement": {
-            "type": "boolean"
-          },
-          "replayed": {
-            "type": "boolean"
-          }
-        }
-      },
       "CreateCommunityRequest": {
         "oneOf": [
           {
@@ -9657,6 +9397,7 @@ const spec = {
           "status",
           "provisioning_state",
           "membership_mode",
+          "karaoke_enabled",
           "allow_anonymous_identity",
           "human_verification_lane",
           "human_verification_lane_origin",
@@ -9668,7 +9409,6 @@ const spec = {
           "governance_mode",
           "donation_policy_mode",
           "donation_partner_status",
-          "karaoke_enabled",
           "money_policy",
           "content_authenticity_policy",
           "content_authenticity_detection_policy",
@@ -9709,19 +9449,6 @@ const spec = {
             "type": "string",
             "nullable": true
           },
-          "store_url": {
-            "type": "string",
-            "format": "uri",
-            "nullable": true
-          },
-          "store_label": {
-            "type": "string",
-            "nullable": true
-          },
-          "country_code": {
-            "type": "string",
-            "nullable": true
-          },
           "namespace_verification": {
             "type": "string",
             "nullable": true
@@ -9731,6 +9458,18 @@ const spec = {
             "nullable": true
           },
           "pending_namespace_verification_session": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "store_label": {
+            "type": "string",
+            "nullable": true
+          },
+          "country_code": {
             "type": "string",
             "nullable": true
           },
@@ -10346,6 +10085,10 @@ const spec = {
             "nullable": true
           },
           "live_room": {
+            "type": "string",
+            "nullable": true
+          },
+          "replay_asset": {
             "type": "string",
             "nullable": true
           },
@@ -11340,7 +11083,6 @@ const spec = {
           "display_name",
           "membership_mode",
           "human_verification_lane",
-          "karaoke_enabled",
           "moderators",
           "membership_gate_summaries",
           "rules",
@@ -11383,7 +11125,6 @@ const spec = {
           },
           "store_url": {
             "type": "string",
-            "format": "uri",
             "nullable": true
           },
           "store_label": {
@@ -11680,6 +11421,198 @@ const spec = {
           }
         }
       },
+      "LiveRoomRecordingDraft": {
+        "type": "object",
+        "required": [
+          "object",
+          "live_room",
+          "recording_enabled",
+          "replay_status",
+          "status",
+          "replay_asset",
+          "recording"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "live_room_replay_draft"
+            ]
+          },
+          "live_room": {
+            "type": "string"
+          },
+          "recording_enabled": {
+            "type": "boolean"
+          },
+          "replay_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "processing",
+              "review_pending",
+              "published",
+              "failed"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_recorded",
+              "processing",
+              "ready",
+              "published",
+              "failed"
+            ]
+          },
+          "replay_asset": {
+            "nullable": true,
+            "$ref": "#/components/schemas/LiveRoomReplayAsset"
+          },
+          "recording": {
+            "nullable": true,
+            "$ref": "#/components/schemas/LiveRoomRecording"
+          }
+        }
+      },
+      "UpdateLiveRoomReplayDraftRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "caption": {
+            "type": "string",
+            "nullable": true
+          },
+          "preview_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "access_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "free",
+              "included_with_ticket",
+              "paid"
+            ]
+          },
+          "allocations": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/UpdateLiveRoomReplayAllocation"
+            }
+          }
+        }
+      },
+      "PublishLiveRoomReplayDraftRequest": {
+        "type": "object",
+        "properties": {
+          "access_mode": {
+            "type": "string",
+            "enum": [
+              "free",
+              "included_with_ticket",
+              "paid"
+            ]
+          },
+          "listing": {
+            "nullable": true,
+            "$ref": "#/components/schemas/CreateCommunityListingRequest"
+          }
+        }
+      },
+      "LiveRoomReplayAccessDecision": {
+        "type": "object",
+        "required": [
+          "live_room",
+          "replay_asset",
+          "replay_status",
+          "access_mode",
+          "locked_delivery_status",
+          "access_granted",
+          "decision_reason",
+          "delivery_kind",
+          "delivery_ref",
+          "story_cdr_access"
+        ],
+        "properties": {
+          "live_room": {
+            "type": "string"
+          },
+          "replay_asset": {
+            "type": "string",
+            "nullable": true
+          },
+          "replay_listing": {
+            "nullable": true,
+            "$ref": "#/components/schemas/CommunityListing"
+          },
+          "replay_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "processing",
+              "review_pending",
+              "published",
+              "failed"
+            ]
+          },
+          "access_mode": {
+            "type": "string",
+            "enum": [
+              "free",
+              "included_with_ticket",
+              "paid"
+            ]
+          },
+          "locked_delivery_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "requested",
+              "ready",
+              "failed"
+            ]
+          },
+          "access_granted": {
+            "type": "boolean"
+          },
+          "decision_reason": {
+            "type": "string",
+            "enum": [
+              "free",
+              "creator",
+              "moderator",
+              "purchase_entitlement",
+              "purchase_required",
+              "delivery_pending",
+              "not_published",
+              "not_available"
+            ]
+          },
+          "delivery_kind": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "primary_content_ref",
+              "story_cdr_ref"
+            ]
+          },
+          "delivery_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "story_cdr_access": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
       "CreatePostRequest": {
         "type": "object",
         "oneOf": [
@@ -11822,6 +11755,14 @@ const spec = {
                 "maximum": 100,
                 "nullable": true
               },
+              "royalty_allocations": {
+                "type": "array",
+                "maxItems": 10,
+                "nullable": true,
+                "items": {
+                  "$ref": "#/components/schemas/RoyaltyAllocationRequest"
+                }
+              },
               "media_refs": {
                 "type": "array",
                 "minItems": 1,
@@ -11957,6 +11898,14 @@ const spec = {
                 "maximum": 100,
                 "nullable": true
               },
+              "royalty_allocations": {
+                "type": "array",
+                "maxItems": 10,
+                "nullable": true,
+                "items": {
+                  "$ref": "#/components/schemas/RoyaltyAllocationRequest"
+                }
+              },
               "title": {
                 "type": "string",
                 "nullable": true
@@ -11993,10 +11942,9 @@ const spec = {
                 {
                   "allOf": [
                     {
-                      "required": [
-                        "song_artifact_bundle"
-                      ]
+                      "required": null
                     },
+                    "song_artifact_bundle",
                     {
                       "required": [
                         "lyrics"
@@ -12040,6 +11988,18 @@ const spec = {
         "properties": {
           "idempotency_key": {
             "type": "string"
+          },
+          "publish_mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "default": "sync"
+          },
+          "listing_draft": {
+            "$ref": "#/components/schemas/CreatePostListingDraft",
+            "nullable": true
           },
           "authorship_mode": {
             "type": "string",
@@ -12249,6 +12209,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "author_public_handle": {
+            "type": "string",
+            "nullable": true
+          },
           "authorship_mode": {
             "type": "string",
             "enum": [
@@ -12326,7 +12290,9 @@ const spec = {
             "type": "string",
             "enum": [
               "draft",
+              "processing",
               "published",
+              "failed",
               "hidden",
               "removed",
               "deleted"
@@ -12354,6 +12320,18 @@ const spec = {
               "public",
               "members_only"
             ]
+          },
+          "publish_failure_code": {
+            "$ref": "#/components/schemas/PostPublishFailureCode",
+            "nullable": true
+          },
+          "publish_failure_message": {
+            "type": "string",
+            "nullable": true
+          },
+          "publish_failure_retryable": {
+            "type": "boolean",
+            "nullable": true
           },
           "title": {
             "type": "string",
@@ -12712,6 +12690,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "author_public_handle": {
+            "type": "string",
+            "nullable": true
+          },
           "authorship_mode": {
             "type": "string",
             "enum": [
@@ -12965,6 +12947,7 @@ const spec = {
           },
           "object": {
             "type": "string",
+            "readOnly": true,
             "enum": [
               "karaoke_session"
             ]
@@ -12982,18 +12965,15 @@ const spec = {
             "type": "string"
           },
           "token_expires_at": {
-            "type": "integer",
-            "format": "int64"
+            "type": "integer"
           },
           "session_expires_at": {
-            "type": "integer",
-            "format": "int64"
+            "type": "integer"
           },
           "scoring_policy": {
             "$ref": "#/components/schemas/KaraokeScoringPolicy"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "SongStudyPayload": {
         "type": "object",
@@ -13050,6 +13030,9 @@ const spec = {
               "$ref": "#/components/schemas/SongStudyExercise"
             }
           },
+          "session": {
+            "$ref": "#/components/schemas/SongStudySessionSummary"
+          },
           "study_pack_version": {
             "type": "integer"
           },
@@ -13090,6 +13073,12 @@ const spec = {
           },
           "attempt_number": {
             "type": "integer"
+          },
+          "review_session_id": {
+            "type": "string"
+          },
+          "target_language": {
+            "type": "string"
           },
           "selected_option_id": {
             "type": "string"
@@ -13329,11 +13318,11 @@ const spec = {
           },
           "upload_mode": {
             "type": "string",
+            "nullable": true,
             "enum": [
               "proxy",
               "direct_multipart"
-            ],
-            "nullable": true
+            ]
           }
         }
       },
@@ -13387,7 +13376,8 @@ const spec = {
             "enum": [
               "pending_upload",
               "uploaded",
-              "failed"
+              "failed",
+              "cancelled"
             ]
           },
           "storage_ref": {
@@ -13405,10 +13395,6 @@ const spec = {
             "nullable": true
           },
           "content_hash": {
-            "type": "string",
-            "nullable": true
-          },
-          "ipfs_cid": {
             "type": "string",
             "nullable": true
           },
@@ -13436,6 +13422,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "ipfs_cid": {
+            "type": "string",
+            "nullable": true
+          },
           "upload_url": {
             "type": "string"
           },
@@ -13445,24 +13435,55 @@ const spec = {
             "additionalProperties": false,
             "required": [
               "id",
+              "status",
+              "object_key",
               "upload_id",
               "part_size_bytes",
-              "total_parts"
+              "total_parts",
+              "expires_at",
+              "sign_part_url",
+              "complete",
+              "abort"
             ],
             "properties": {
               "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "parts_uploading",
+                  "completing",
+                  "head_verifying",
+                  "uploaded",
+                  "aborting",
+                  "aborted"
+                ]
+              },
+              "object_key": {
                 "type": "string"
               },
               "upload_id": {
                 "type": "string"
               },
               "part_size_bytes": {
-                "type": "integer",
-                "minimum": 1
+                "type": "integer"
               },
               "total_parts": {
-                "type": "integer",
-                "minimum": 1
+                "type": "integer"
+              },
+              "expires_at": {
+                "type": "string"
+              },
+              "sign_part_url": {
+                "type": "string"
+              },
+              "complete": {
+                "type": "string"
+              },
+              "abort": {
+                "type": "string"
               }
             }
           },
@@ -13520,6 +13541,14 @@ const spec = {
           },
           "lyrics": {
             "type": "string"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "deferred"
+            ],
+            "default": "sync"
           },
           "genius_annotations_url": {
             "type": "string",
@@ -13727,6 +13756,721 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "Booking": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "booking_id",
+          "host_user_id",
+          "booker_user_id",
+          "slot_start_utc",
+          "slot_end_utc",
+          "gross_cents",
+          "platform_fee_cents",
+          "host_payout_cents",
+          "status"
+        ],
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/BookingStatus"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "booker_user_id": {
+            "type": "string"
+          },
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          }
+        }
+      },
+      "BookingSlotsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host_timezone",
+          "viewer_timezone",
+          "slots"
+        ],
+        "properties": {
+          "host_timezone": {
+            "type": "string"
+          },
+          "viewer_timezone": {
+            "type": "string"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/ResolvedBookingSlot"
+            }
+          }
+        }
+      },
+      "CreateBookingHoldRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slot_start_utc",
+          "slot_end_utc"
+        ],
+        "properties": {
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source_community_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "BookingHold": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BookingQuote": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "hold_id",
+          "gross_cents",
+          "platform_fee_bps",
+          "platform_fee_cents",
+          "host_payout_cents",
+          "expires_at_utc",
+          "payment"
+        ],
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "platform_fee_bps": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          },
+          "expires_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payment": {
+            "$ref": "#/BookingPaymentInstructions"
+          }
+        }
+      },
+      "ConfirmBookingHoldRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "funding_tx_ref",
+          "wallet_attachment_id"
+        ],
+        "properties": {
+          "funding_tx_ref": {
+            "type": "string"
+          },
+          "wallet_attachment_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveBookingSettlementReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resolution",
+          "expected_review_version"
+        ],
+        "properties": {
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_show_host",
+              "no_show_booker"
+            ]
+          },
+          "expected_review_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ResolveBookingSettlementReviewResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "booking",
+          "resolution",
+          "pending_settlement",
+          "replayed"
+        ],
+        "properties": {
+          "booking": {
+            "$ref": "#/Booking"
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_show_host",
+              "no_show_booker"
+            ]
+          },
+          "pending_settlement": {
+            "type": "boolean"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BookingSessionAttachResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "session_id",
+          "party",
+          "channel",
+          "agora"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "party": {
+            "type": "string",
+            "enum": [
+              "host",
+              "booker"
+            ]
+          },
+          "channel": {
+            "type": "string"
+          },
+          "agora": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          }
+        }
+      },
+      "BookingProfileResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/BookingProfile"
+          },
+          {
+            "$ref": "#/BookingProfileEmpty"
+          }
+        ]
+      },
+      "UpdateBookingProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host_timezone": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default_slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "display_headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
+            "type": "string",
+            "nullable": true
+          },
+          "topics": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro_video_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "platform_fee_bps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payout_wallet_address": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "BookingProfile": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "object",
+          "host",
+          "host_timezone",
+          "base_price_cents",
+          "default_slot_duration_seconds",
+          "platform_fee_bps",
+          "is_published",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "booking_profile"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "display_headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "bio": {
+            "type": "string",
+            "nullable": true
+          },
+          "topics": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "intro_video_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "host_timezone": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default_slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "platform_fee_bps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payout_wallet_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_published": {
+            "type": "boolean"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "AvailabilityRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "by_weekday",
+          "start_local",
+          "end_local",
+          "slot_duration_seconds",
+          "effective_from",
+          "effective_until",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "availability_rule"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from": {
+            "type": "integer",
+            "nullable": true
+          },
+          "effective_until": {
+            "type": "integer",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateAvailabilityRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "by_weekday",
+          "start_local",
+          "end_local",
+          "slot_duration_seconds"
+        ],
+        "properties": {
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_until_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateAvailabilityRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "by_weekday": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "start_local": {
+            "type": "string"
+          },
+          "end_local": {
+            "type": "string"
+          },
+          "slot_duration_seconds": {
+            "type": "integer",
+            "minimum": 60
+          },
+          "effective_from_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_until_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AvailabilityException": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "kind",
+          "start",
+          "end",
+          "created"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "availability_exception"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start": {
+            "type": "integer"
+          },
+          "end": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateAvailabilityExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "start_utc",
+          "end_utc"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateAvailabilityExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "block",
+              "open"
+            ]
+          },
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PriceRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "id",
+          "match_weekday",
+          "match_local_start",
+          "match_local_end",
+          "match_duration_seconds",
+          "price_cents",
+          "priority",
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "price_rule"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreatePriceRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "price_cents"
+        ],
+        "properties": {
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
+          }
+        }
+      },
+      "UpdatePriceRuleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "match_weekday": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          "match_local_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_local_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "match_duration_seconds": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 60
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "priority": {
+            "type": "integer"
           }
         }
       },
@@ -16264,6 +17008,146 @@ const spec = {
           }
         }
       },
+      "LiveRoomReplayAsset": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "publication_status",
+          "title",
+          "caption",
+          "duration_ms",
+          "preview_ref",
+          "access_mode",
+          "locked_delivery_status",
+          "published_at",
+          "allocations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "live_room_replay_asset"
+            ]
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "failed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "caption": {
+            "type": "string",
+            "nullable": true
+          },
+          "duration_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "preview_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "access_mode": {
+            "type": "string",
+            "enum": [
+              "free",
+              "included_with_ticket",
+              "paid"
+            ]
+          },
+          "locked_delivery_status": {
+            "type": "string",
+            "enum": [
+              "none",
+              "requested",
+              "ready",
+              "failed"
+            ]
+          },
+          "published_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "allocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveRoomReplayAllocation"
+            }
+          }
+        }
+      },
+      "LiveRoomRecording": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "status",
+          "failure_reason",
+          "raw_artifact"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "agora"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "recording",
+              "stopping",
+              "captured",
+              "ingesting",
+              "failed"
+            ]
+          },
+          "failure_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "raw_artifact": {
+            "nullable": true,
+            "$ref": "#/components/schemas/LiveRoomRecordingRawArtifact"
+          }
+        }
+      },
+      "UpdateLiveRoomReplayAllocation": {
+        "type": "object",
+        "properties": {
+          "participant_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "external_party_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "nullable": true
+          },
+          "share_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          }
+        }
+      },
       "ImageMediaDescriptor": {
         "type": "object",
         "required": [
@@ -16293,6 +17177,31 @@ const spec = {
           "height": {
             "type": "integer",
             "nullable": true
+          }
+        }
+      },
+      "RoyaltyAllocationRequest": {
+        "type": "object",
+        "required": [
+          "recipient_kind",
+          "wallet_address",
+          "share_bps"
+        ],
+        "properties": {
+          "recipient_kind": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "collaborator"
+            ]
+          },
+          "wallet_address": {
+            "type": "string"
+          },
+          "share_bps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
           }
         }
       },
@@ -16385,6 +17294,45 @@ const spec = {
           },
           "duration_ms": {
             "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "CreatePostListingDraft": {
+        "type": "object",
+        "required": [
+          "price_cents",
+          "regional_pricing_enabled",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "regional_pricing_enabled": {
+            "type": "boolean"
+          },
+          "donation_partner": {
+            "type": "string",
+            "nullable": true
+          },
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
             "nullable": true
           }
         }
@@ -16539,6 +17487,22 @@ const spec = {
             "nullable": true
           }
         }
+      },
+      "PostPublishFailureCode": {
+        "type": "string",
+        "enum": [
+          "song_analysis_blocked",
+          "song_analysis_review_required",
+          "song_rights_reference_required",
+          "song_preview_generation_failed",
+          "text_moderation_blocked",
+          "story_royalty_registration_failed",
+          "story_locked_delivery_failed",
+          "listing_creation_failed",
+          "catalog_sync_failed",
+          "provider_unavailable",
+          "internal_error"
+        ]
       },
       "PostEmbed": {
         "oneOf": [
@@ -16805,11 +17769,9 @@ const spec = {
         ]
       },
       "KaraokeScoringPolicy": {
-        "type": "object",
         "oneOf": [
           {
             "type": "object",
-            "title": "KaraokeScoringPolicyDisabled",
             "required": [
               "kind"
             ],
@@ -16820,12 +17782,10 @@ const spec = {
                   "disabled"
                 ]
               }
-            },
-            "additionalProperties": false
+            }
           },
           {
             "type": "object",
-            "title": "KaraokeScoringPolicyEnabled",
             "required": [
               "kind",
               "provider",
@@ -16858,11 +17818,9 @@ const spec = {
                 ]
               },
               "voice_coach_enabled": {
-                "type": "boolean",
-                "default": false
+                "type": "boolean"
               }
-            },
-            "additionalProperties": false
+            }
           }
         ]
       },
@@ -16909,6 +17867,9 @@ const spec = {
                 "type": "string"
               },
               "reference_text": {
+                "type": "string"
+              },
+              "review_session_id": {
                 "type": "string"
               },
               "translation_text": {
@@ -16977,11 +17938,38 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
+              },
+              "review_session_id": {
+                "type": "string"
               }
             },
             "additionalProperties": false
           }
         ]
+      },
+      "SongStudySessionSummary": {
+        "type": "object",
+        "required": [
+          "due_count",
+          "served_count",
+          "total_units"
+        ],
+        "properties": {
+          "due_count": {
+            "type": "integer"
+          },
+          "served_count": {
+            "type": "integer"
+          },
+          "total_units": {
+            "type": "integer"
+          },
+          "next_due_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
       },
       "SongStudyLockedReason": {
         "type": "string",
@@ -17268,6 +18256,11 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "decentralized_storage": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true
+          },
           "duration_ms": {
             "type": "integer",
             "nullable": true
@@ -17279,11 +18272,6 @@ const spec = {
           "clip_duration_ms": {
             "type": "integer",
             "nullable": true
-          },
-          "decentralized_storage": {
-            "type": "object",
-            "nullable": true,
-            "additionalProperties": true
           }
         }
       },
@@ -17307,6 +18295,13 @@ const spec = {
           "content_hash": {
             "type": "string",
             "nullable": true
+          },
+          "upload_mode": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "direct_multipart"
+            ]
           },
           "width": {
             "type": "integer",
@@ -17370,6 +18365,7 @@ const spec = {
           "viewer_membership_status",
           "membership_gate_summaries"
         ],
+        "additionalProperties": false,
         "properties": {
           "community_id": {
             "type": "string"
@@ -17533,6 +18529,7 @@ const spec = {
           "story_ip",
           "story_royalty_registration_status"
         ],
+        "additionalProperties": false,
         "properties": {
           "story_ip": {
             "type": "string",
@@ -17557,6 +18554,7 @@ const spec = {
           "kind",
           "relationship_type"
         ],
+        "additionalProperties": false,
         "properties": {
           "source_ref": {
             "type": "string"
@@ -19440,6 +20438,79 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/RequiredActionNode"
             }
+          }
+        }
+      },
+      "LiveRoomReplayAllocation": {
+        "type": "object",
+        "required": [
+          "id",
+          "participant_user",
+          "external_party_ref",
+          "role",
+          "share_bps",
+          "rights_basis",
+          "approval_status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "participant_user": {
+            "type": "string",
+            "nullable": true
+          },
+          "external_party_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "role": {
+            "type": "string"
+          },
+          "share_bps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "rights_basis": {
+            "type": "string"
+          },
+          "approval_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ]
+          }
+        }
+      },
+      "LiveRoomRecordingRawArtifact": {
+        "type": "object",
+        "required": [
+          "provider",
+          "ipfs_cid",
+          "mime_type",
+          "size_bytes"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "filebase",
+              "agora_capture"
+            ]
+          },
+          "ipfs_cid": {
+            "type": "string",
+            "nullable": true
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

@@ -143,6 +143,18 @@ async function applyStudyMigration(): Promise<void> {
       }
     }
   }
+
+  const attemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
+  if (!attemptColumns.rows.some((row) => String(row.name) === "review_session_id")) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1118_song_study_review_sessions.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
+
 }
 
 async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {
@@ -723,6 +735,12 @@ describe("post study service", () => {
       env: env(),
       postId: POST_ID,
     })
+    await exec(`
+      UPDATE song_study_review_state
+      SET due_at = '2100-01-01T00:00:00.000Z'
+      WHERE user_id = ?1
+        AND post_id = ?2
+    `, [LEARNER_ID, POST_ID])
 
     const payload = await getPostStudyPayload({
       actor: learnerActor,
@@ -736,6 +754,153 @@ describe("post study service", () => {
     expect(payload.access).toBe("ready")
     expect(payload.exercise_count).toBe(0)
     expect(payload.exercises).toEqual([])
+    expect(payload.session).toEqual({
+      due_count: 0,
+      next_due_at: 4102444800,
+      served_count: 0,
+      total_units: 3,
+    })
+  })
+
+  test("keeps due reviews hidden until the re-serving rollout flag is enabled", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-review-prereq-say-1",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-review-prereq-say-2",
+        transcript: "Hold me close until the morning",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-review-prereq-choice-learn",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    await exec(`
+      UPDATE song_study_review_state
+      SET due_at = CASE
+        WHEN line_id = 'line_002' AND exercise_type = 'translation_choice'
+          THEN '2026-06-28T08:00:00.000Z'
+        ELSE '2100-01-01T00:00:00.000Z'
+      END
+      WHERE user_id = ?1
+        AND post_id = ?2
+    `, [LEARNER_ID, POST_ID])
+
+    const hiddenPayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(hiddenPayload.access).toBe("ready")
+    expect(hiddenPayload.exercise_count).toBe(0)
+    expect(hiddenPayload.exercises).toEqual([])
+    expect(hiddenPayload.session).toEqual({
+      due_count: 0,
+      served_count: 0,
+      total_units: 3,
+    })
+
+    const duePayload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(duePayload.access).toBe("ready")
+    expect(duePayload.exercise_count).toBe(1)
+    expect(duePayload.exercises.map((exercise) => exercise.id)).toEqual(["stu:stu_2:translation_choice:es"])
+    expect(duePayload.exercises[0]).toMatchObject({
+      review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+    })
+    expect(duePayload.session).toEqual({
+      due_count: 1,
+      served_count: 1,
+      total_units: 3,
+    })
+
+    const reviewAttempt = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-review-choice-due",
+        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+    expect(reviewAttempt.outcome).toBe("correct")
+
+    const attempts = await client!.execute({
+      sql: `
+        SELECT attempt_number, review_session_id
+        FROM song_study_attempt
+        WHERE user_id = ?1
+          AND exercise_id = 'stu:stu_2:translation_choice:es'
+        ORDER BY created_at ASC, review_session_id ASC
+      `,
+      args: [LEARNER_ID],
+    })
+    expect(attempts.rows.map((row) => ({
+      attempt_number: Number(row.attempt_number),
+      review_session_id: String(row.review_session_id),
+    }))).toEqual([
+      {
+        attempt_number: 1,
+        review_session_id: "learn",
+      },
+      {
+        attempt_number: 1,
+        review_session_id: "review:line_002:translation_choice:es:2026-06-28T08:00:00.000Z",
+      },
+    ])
   })
 
   test("rejects conflicting idempotency-key reuse", async () => {
