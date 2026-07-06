@@ -4115,6 +4115,146 @@ const spec = {
         "operationId": "post_communities_by_community_id_moderation_cases_by_moderation_case_id_actions"
       }
     },
+    "/communities/{community_id}/rights-review/cases": {
+      "get": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "List rights review cases for a community",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RightsReviewCaseListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_rights_review_cases"
+      }
+    },
+    "/communities/{community_id}/rights-review/cases/{rights_review_case_id}": {
+      "get": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "Read a rights review case",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/RightsReviewCaseId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RightsReviewCaseDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_rights_review_cases_by_rights_review_case_id"
+      }
+    },
+    "/communities/{community_id}/rights-review/cases/{rights_review_case_id}/actions": {
+      "post": {
+        "tags": [
+          "Moderation"
+        ],
+        "summary": "Apply a rights review action",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/RightsReviewCaseId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRightsReviewActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RightsReviewCaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_rights_review_cases_by_rights_review_case_id_actions"
+      }
+    },
     "/communities/{community_id}/song-artifact-uploads": {
       "post": {
         "tags": [
@@ -6986,6 +7126,14 @@ const spec = {
       "ModerationCaseId": {
         "in": "path",
         "name": "moderation_case_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RightsReviewCaseId": {
+        "in": "path",
+        "name": "rights_review_case_id",
         "required": true,
         "schema": {
           "type": "string"
@@ -13369,6 +13517,72 @@ const spec = {
           }
         }
       },
+      "RightsReviewCaseListResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RightsReviewCaseListItem"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RightsReviewCaseDetail": {
+        "type": "object",
+        "required": [
+          "case",
+          "analysis",
+          "post"
+        ],
+        "properties": {
+          "case": {
+            "$ref": "#/components/schemas/RightsReviewCase"
+          },
+          "analysis": {
+            "$ref": "#/components/schemas/MediaAnalysisResult",
+            "nullable": true
+          },
+          "post": {
+            "$ref": "#/components/schemas/Post",
+            "nullable": true
+          }
+        }
+      },
+      "CreateRightsReviewActionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action_type"
+        ],
+        "properties": {
+          "action_type": {
+            "type": "string",
+            "enum": [
+              "start_review",
+              "clear",
+              "clear_with_upstream_refs",
+              "needs_more_evidence",
+              "block"
+            ]
+          },
+          "evidence_refs": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "CreateSongArtifactUploadRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -18371,6 +18585,238 @@ const spec = {
           "restore",
           "age_gate"
         ]
+      },
+      "RightsReviewCaseListItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RightsReviewCase"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "analysis",
+              "post"
+            ],
+            "properties": {
+              "analysis": {
+                "$ref": "#/components/schemas/MediaAnalysisResult",
+                "nullable": true
+              },
+              "post": {
+                "$ref": "#/components/schemas/ModerationCasePostPreview",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "RightsReviewCase": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rights_review_case_id",
+          "subject_type",
+          "subject_id",
+          "community_id",
+          "status",
+          "trigger_source",
+          "analysis_result_ref",
+          "submitted_evidence_refs",
+          "resolution",
+          "resolver_user_id",
+          "created_at",
+          "updated_at",
+          "resolved_at"
+        ],
+        "properties": {
+          "rights_review_case_id": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "asset",
+              "post",
+              "live_room",
+              "replay_asset"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "under_review",
+              "resolved",
+              "blocked"
+            ]
+          },
+          "trigger_source": {
+            "type": "string",
+            "enum": [
+              "acrcloud_match",
+              "declared_reference_mismatch",
+              "manual_report",
+              "operator_escalation"
+            ]
+          },
+          "analysis_result_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "submitted_evidence_refs": {
+            "nullable": true
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "clear_with_upstream_refs",
+              "block",
+              "needs_more_evidence"
+            ],
+            "nullable": true
+          },
+          "resolver_user_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "MediaAnalysisResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "media_analysis_result_id",
+          "community_id",
+          "source_post_id",
+          "source_asset_id",
+          "outcome",
+          "content_safety_state",
+          "age_gate_policy",
+          "trigger_sources",
+          "acrcloud_music_match",
+          "acrcloud_custom_match",
+          "acrcloud_error_code",
+          "acrcloud_error_message",
+          "acrcloud_checked_at",
+          "safety_signals",
+          "authenticity_signals",
+          "policy_reason_code",
+          "policy_reason",
+          "resolved_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "media_analysis_result_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "source_post_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "source_asset_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "allow_with_required_reference",
+              "review_required",
+              "blocked"
+            ]
+          },
+          "content_safety_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ]
+          },
+          "trigger_sources": {
+            "nullable": true
+          },
+          "acrcloud_music_match": {
+            "nullable": true
+          },
+          "acrcloud_custom_match": {
+            "nullable": true
+          },
+          "acrcloud_error_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "acrcloud_error_message": {
+            "type": "string",
+            "nullable": true
+          },
+          "acrcloud_checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "safety_signals": {
+            "nullable": true
+          },
+          "authenticity_signals": {
+            "nullable": true
+          },
+          "policy_reason_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "policy_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolved_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "SongArtifactUploadRef": {
         "type": "object",
