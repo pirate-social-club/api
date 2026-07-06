@@ -109,6 +109,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     publish_failure_code: post.publish_failure_code ?? null,
     publish_failure_message: post.publish_failure_message ?? null,
     publish_failure_retryable: post.publish_failure_retryable ?? null,
+    publish_failed_at: post.publish_failed_at ? unixSeconds(post.publish_failed_at) : null,
     created: unixSeconds(post.created_at),
     label_assignment_status: post.label_assignment_status,
     label_assigned_by: post.label_assigned_by,

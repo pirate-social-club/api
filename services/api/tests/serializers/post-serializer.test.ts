@@ -147,6 +147,21 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
     expect(result.anchor_live_room_status).toBe("live")
   })
 
+  test("post serializer exposes publish failure timestamp", () => {
+    const result = serializePost(makeLinkPost({
+      publish_failure_code: "internal_error",
+      publish_failure_message: "Finalize failed",
+      publish_failure_retryable: true,
+      publish_failed_at: "2026-07-06T19:00:00.000Z",
+      status: "failed",
+    }))
+
+    expect(result.publish_failure_code).toBe("internal_error")
+    expect(result.publish_failure_message).toBe("Finalize failed")
+    expect(result.publish_failure_retryable).toBe(true)
+    expect(result.publish_failed_at).toBe(Date.parse("2026-07-06T19:00:00.000Z") / 1000)
+  })
+
   test("localized post serializer exposes asset Story summary", () => {
     const response = makeLocalizedResponse(makeLinkPost(), "en")
     response.asset_story = {

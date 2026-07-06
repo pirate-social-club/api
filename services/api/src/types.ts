@@ -527,6 +527,7 @@ export type Post = {
   publish_failure_code?: PostPublishFailureCodeValue | null
   publish_failure_message?: string | null
   publish_failure_retryable?: boolean | null
+  publish_failed_at?: string | null
   idempotency_body_hash?: string | null
   asset_story?: {
     story_ip: string | null
