@@ -129,6 +129,12 @@ export async function publishLockedAssetVersionToStory(input: {
   const ownerSigner = new Wallet(ownerPrivateKey, provider)
   const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
 
+  await ensureStoryPublishOperatorAuthorized({
+    env: input.env,
+    provider,
+    operatorAddress: operatorSigner.address,
+  })
+
   const configureTx = await sendContractTxWithPolicy({
     provider,
     signer: ownerSigner,
@@ -147,12 +153,6 @@ export async function publishLockedAssetVersionToStory(input: {
   if (!configureReceipt || configureReceipt.status !== 1) {
     throw new Error("story_entitlement_class_configure_failed")
   }
-
-  await ensureStoryPublishOperatorAuthorized({
-    env: input.env,
-    provider,
-    operatorAddress: operatorSigner.address,
-  })
 
   const publishTx = await sendContractTxWithPolicy({
     provider,

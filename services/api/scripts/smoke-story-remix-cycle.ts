@@ -85,6 +85,11 @@ function toRequestArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer
 }
 
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", toRequestArrayBuffer(bytes))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
 function makeSilentWavBytes(durationSeconds = 4): Uint8Array {
   const sampleRate = 8000
   const channelCount = 1
@@ -405,6 +410,127 @@ async function completeUniqueHuman(input: {
   })
 }
 
+async function waitForJob(input: {
+  apiBaseUrl: string
+  jobId: string
+  token: string
+}): Promise<void> {
+  const timeoutMs = Number(readEnv("PIRATE_SMOKE_JOB_TIMEOUT_MS", "180000"))
+  const intervalMs = Number(readEnv("PIRATE_SMOKE_JOB_INTERVAL_MS", "3000"))
+  const startedAt = Date.now()
+  let lastStatus = "unknown"
+  while (Date.now() - startedAt <= timeoutMs) {
+    const job = await api<{ id: string; status: string; error_code?: string | null }>({
+      apiBaseUrl: input.apiBaseUrl,
+      method: "GET",
+      path: `/jobs/${encodeURIComponent(input.jobId)}`,
+      token: input.token,
+    })
+    lastStatus = job.status
+    if (job.status === "succeeded") return
+    if (job.status === "failed") {
+      throw new Error(`job ${job.id} failed: ${job.error_code ?? "unknown"}`)
+    }
+    await sleep(intervalMs)
+  }
+
+  throw new Error(`job ${input.jobId} did not finish within ${timeoutMs}ms; last status ${lastStatus}`)
+}
+
+async function createDisposableCommunity(input: {
+  apiBaseUrl: string
+  owner: SmokeSession
+  runId: string
+}): Promise<string> {
+  const created = await api<{
+    community: { id: string; provisioning_state?: string | null }
+    job: { id: string; status: string }
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      display_name: `Story Royalty Allocation Smoke ${input.runId}`,
+      handle_policy: {
+        policy_template: "standard",
+      },
+      membership_mode: "request",
+    },
+    method: "POST",
+    path: "/communities",
+    token: input.owner.accessToken,
+  })
+
+  if (created.job.status !== "succeeded") {
+    await waitForJob({
+      apiBaseUrl: input.apiBaseUrl,
+      jobId: created.job.id,
+      token: input.owner.accessToken,
+    })
+  }
+
+  console.log("[smoke] community", {
+    community: created.community.id,
+    job: created.job.id,
+    provisioning_state: created.community.provisioning_state ?? null,
+  })
+  return created.community.id
+}
+
+async function approveCommunityMembership(input: {
+  apiBaseUrl: string
+  applicant: SmokeSession
+  communityId: string
+  owner: SmokeSession
+}): Promise<void> {
+  const join = await api<{ status: string }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      note: "Story royalty allocation smoke participant",
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/join`,
+    token: input.applicant.accessToken,
+  })
+  if (join.status === "joined") {
+    console.log("[smoke] participant membership", {
+      status: "joined",
+      user: input.applicant.userId,
+    })
+    return
+  }
+  if (join.status !== "requested") {
+    throw new Error(`membership join returned unexpected status ${join.status}`)
+  }
+
+  const requests = await api<{
+    items: Array<{ applicant_user: string; id: string; status: string }>
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "GET",
+    path: `/communities/${encodeURIComponent(input.communityId)}/membership-requests?limit=25`,
+    token: input.owner.accessToken,
+  })
+  const request = requests.items.find((item) => item.applicant_user === input.applicant.userId && item.status === "pending")
+    ?? requests.items.find((item) => item.status === "pending")
+  if (!request) {
+    throw new Error(`pending membership request not found: ${JSON.stringify(requests.items)}`)
+  }
+
+  const approved = await api<{ status: string }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/membership-requests/${encodeURIComponent(request.id)}/approve`,
+    token: input.owner.accessToken,
+  })
+  if (approved.status !== "approved") {
+    throw new Error(`membership approval returned ${approved.status}`)
+  }
+  console.log("[smoke] participant membership", {
+    request: request.id,
+    status: approved.status,
+    user: input.applicant.userId,
+  })
+}
+
 async function uploadSong(input: {
   apiBaseUrl: string
   communityId: string
@@ -513,6 +639,70 @@ async function uploadSongArtifact(input: {
   filename: string
   bytes: Uint8Array
 }): Promise<{ id: string; storage_ref: string }> {
+  if (input.artifactKind === "primary_audio") {
+    const contentHash = `0x${await sha256Hex(input.bytes)}`
+    const upload = await api<{
+      id: string
+      storage_ref?: string | null
+      upload_session?: {
+        id?: string | null
+        upload_id?: string | null
+        total_parts?: number | null
+      } | null
+    }>({
+      apiBaseUrl: input.apiBaseUrl,
+      method: "POST",
+      path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads`,
+      token: input.session.accessToken,
+      body: {
+        upload_mode: "direct_multipart",
+        artifact_kind: input.artifactKind,
+        mime_type: input.mimeType,
+        filename: input.filename,
+        size_bytes: input.bytes.byteLength,
+        content_hash: contentHash,
+      },
+    })
+    const sessionId = upload.upload_session?.id?.trim()
+    const uploadId = upload.upload_session?.upload_id?.trim()
+    const totalParts = Number(upload.upload_session?.total_parts)
+    if (!sessionId || !uploadId || totalParts !== 1) {
+      throw new Error(`unexpected direct multipart upload session: ${JSON.stringify(upload.upload_session)}`)
+    }
+    const signed = await api<{ url?: string | null }>({
+      apiBaseUrl: input.apiBaseUrl,
+      method: "GET",
+      path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/sessions/${encodeURIComponent(sessionId)}/parts/1/signed-url`,
+      token: input.session.accessToken,
+    })
+    const signedUrl = signed.url?.trim()
+    if (!signedUrl) throw new Error("direct multipart signed URL missing")
+    const put = await fetch(signedUrl, {
+      method: "PUT",
+      headers: { "content-type": input.mimeType },
+      body: input.bytes,
+    })
+    const etag = put.headers.get("etag")
+    if (!put.ok || !etag) {
+      throw new Error(`direct multipart part PUT failed: ${put.status}; etag=${etag}; body=${(await put.text()).slice(0, 800)}`)
+    }
+    const completed = await api<{ storage_ref?: string | null }>({
+      apiBaseUrl: input.apiBaseUrl,
+      method: "POST",
+      path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/sessions/${encodeURIComponent(sessionId)}/complete`,
+      token: input.session.accessToken,
+      body: {
+        upload_id: uploadId,
+        parts: [{ part_number: 1, etag }],
+        content_hash: contentHash,
+      },
+    })
+    return {
+      id: upload.id,
+      storage_ref: completed.storage_ref ?? upload.storage_ref ?? "",
+    }
+  }
+
   const upload = await api<{ id: string; storage_ref: string }>({
     apiBaseUrl: input.apiBaseUrl,
     method: "POST",
@@ -616,6 +806,7 @@ async function createSongPost(input: {
   accessMode: "public" | "locked"
   rightsBasis: "original" | "derivative"
   upstreamAssetRefs?: string[] | null
+  royaltyAllocations?: Array<{ recipient_kind: "creator" | "collaborator"; wallet_address: string; share_bps: number }> | null
 }): Promise<{ post: string; asset: string }> {
   const body = await api<{ id: string; asset?: string | null }>({
     apiBaseUrl: input.apiBaseUrl,
@@ -633,6 +824,7 @@ async function createSongPost(input: {
       license_preset: "commercial-remix",
       commercial_rev_share_pct: 10,
       upstream_asset_refs: input.upstreamAssetRefs ?? undefined,
+      royalty_allocations: input.royaltyAllocations ?? undefined,
       song_artifact_bundle: input.bundle,
     },
   })
@@ -882,29 +1074,38 @@ async function main(): Promise<void> {
     ...process.env,
   } as Record<string, string | undefined>
   const apiBaseUrl = normalizeApiBaseUrl(readEnv("PIRATE_SMOKE_API_BASE_URL", "http://127.0.0.1:8787"))
-  const communityId = requireEnv("PIRATE_SMOKE_COMMUNITY_ID").replace(/^com_/, "")
+  let communityId = readEnv("PIRATE_SMOKE_COMMUNITY_ID").replace(/^com_/, "")
+  const shouldCreateCommunity = hasFlag("--create-community") || !communityId
   const accessMode = readSmokeAccessMode()
   const titlePrefix = readEnv("PIRATE_SMOKE_TITLE_PREFIX", "Palestine, Don't Cry")
   const skipVerification = hasFlag("--skip-verification")
   const useLocalSetup = shouldUseLocalMembershipSetup(apiBaseUrl)
   const settlePurchase = hasFlag("--settle-purchase")
   const createDerivativeVideo = hasFlag("--create-derivative-video")
+  const createRoyaltyAllocation = hasFlag("--royalty-allocation")
   if (createDerivativeVideo && accessMode !== "locked") {
     throw new Error("--create-derivative-video requires PIRATE_SMOKE_ACCESS_MODE=locked")
   }
+  if (createRoyaltyAllocation && accessMode !== "locked") {
+    throw new Error("--royalty-allocation requires PIRATE_SMOKE_ACCESS_MODE=locked")
+  }
   const runId = Date.now()
   const authorSubject = readEnv("PIRATE_SMOKE_AUTHOR_SUBJECT", `story-remix-smoke-author-${runId}`)
+  const collaboratorSubject = readEnv("PIRATE_SMOKE_COLLABORATOR_SUBJECT", `story-remix-smoke-collaborator-${runId}`)
   const remixerSubject = readEnv("PIRATE_SMOKE_REMIXER_SUBJECT", `story-remix-smoke-remixer-${runId}`)
   const buyerSubject = readEnv("PIRATE_SMOKE_BUYER_SUBJECT", `story-remix-smoke-buyer-${runId}`)
   console.log("[smoke] config", {
     apiBaseUrl,
-    communityId,
+    communityId: communityId || null,
+    shouldCreateCommunity,
     access_mode: accessMode,
     skipVerification,
     useLocalSetup,
     settlePurchase,
     createDerivativeVideo,
+    createRoyaltyAllocation,
     author_subject: authorSubject,
+    collaborator_subject: createRoyaltyAllocation ? collaboratorSubject : null,
     remixer_subject: remixerSubject,
   })
 
@@ -931,6 +1132,48 @@ async function main(): Promise<void> {
   }
   if (!skipVerification && !useLocalSetup) {
     await completeUniqueHuman({ apiBaseUrl, session: author })
+  }
+  if (shouldCreateCommunity) {
+    communityId = await createDisposableCommunity({
+      apiBaseUrl,
+      owner: author,
+      runId: String(runId),
+    })
+  }
+  const collaborator = createRoyaltyAllocation
+    ? await createSession({
+      apiBaseUrl,
+      env,
+      subject: collaboratorSubject,
+    })
+    : null
+  if (collaborator) {
+    console.log("[smoke] collaborator", {
+      user: collaborator.userId,
+      wallet: collaborator.walletAddress,
+      wallet_attachment: collaborator.walletAttachment,
+    })
+    if (useLocalSetup) {
+      ensureLocalMembership({
+        env,
+        communityId,
+        session: collaborator,
+      })
+      ensureLocalVerification({
+        env,
+        session: collaborator,
+      })
+    } else if (!skipVerification) {
+      await completeUniqueHuman({ apiBaseUrl, session: collaborator })
+    }
+    if (shouldCreateCommunity) {
+      await approveCommunityMembership({
+        apiBaseUrl,
+        applicant: collaborator,
+        communityId,
+        owner: author,
+      })
+    }
   }
 
   const originalTitle = `${titlePrefix} Smoke Original ${new Date().toISOString()}`
@@ -960,6 +1203,12 @@ async function main(): Promise<void> {
     songMode: "original",
     accessMode,
     rightsBasis: "original",
+    royaltyAllocations: collaborator
+      ? [
+        { recipient_kind: "creator", wallet_address: author.walletAddress, share_bps: 9000 },
+        { recipient_kind: "collaborator", wallet_address: collaborator.walletAddress, share_bps: 1000 },
+      ]
+      : null,
   })
   const originalAsset = await waitForAssetReady({
     accessMode,
@@ -978,12 +1227,28 @@ async function main(): Promise<void> {
     story_ip: originalAsset.story_ip ?? null,
     story_license_terms: originalAsset.story_license_terms ?? null,
     story_royalty_registration_status: originalAsset.story_royalty_registration_status ?? null,
+    royalty_allocation_requested: Boolean(collaborator),
+    royalty_allocation_wallets: collaborator
+      ? [
+        { recipient_kind: "creator", wallet: author.walletAddress, share_bps: 9000 },
+        { recipient_kind: "collaborator", wallet: collaborator.walletAddress, share_bps: 1000 },
+      ]
+      : null,
   })
   if (accessMode === "locked" && originalAsset.locked_delivery_status !== "ready") {
     throw new Error(`original locked delivery was not ready: ${JSON.stringify(originalAsset)}`)
   }
   if (originalAsset.story_royalty_registration_status !== "registered") {
     throw new Error(`original asset was not Story registered: ${JSON.stringify(originalAsset)}`)
+  }
+  if (collaborator) {
+    console.log("[smoke] royalty allocation verifier target", {
+      community: communityId,
+      asset: originalPost.asset,
+      expected_status_after_cron: "verified",
+      expected_distribution_status_after_cron: "verified",
+      note: "Poll the community shard for assets.royalty_allocation_status and initial_royalty_allocations.distribution_status.",
+    })
   }
 
   const catalog = await api<{
@@ -1024,6 +1289,14 @@ async function main(): Promise<void> {
     })
   } else if (!skipVerification) {
     await completeUniqueHuman({ apiBaseUrl, session: remixer })
+  }
+  if (shouldCreateCommunity) {
+    await approveCommunityMembership({
+      apiBaseUrl,
+      applicant: remixer,
+      communityId,
+      owner: author,
+    })
   }
 
   const remixTitle = `${titlePrefix} Smoke Remix ${new Date().toISOString()}`
