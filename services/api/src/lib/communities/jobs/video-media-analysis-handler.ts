@@ -75,7 +75,7 @@ const defaultExtractor: VideoAudioSampleExtractor = async (input) => {
     return extractVideoAudioSampleForObject(input)
   }
   const serviceUrl = extractionServiceUrl(input.env)
-  if (!serviceUrl) {
+  if (!serviceUrl && !input.env.SONG_PREVIEW_SERVICE) {
     return { kind: "skipped", reason: "extraction_unavailable" }
   }
   return requestVideoAudioSampleFromService({

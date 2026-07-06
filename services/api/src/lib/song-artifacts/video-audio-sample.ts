@@ -155,23 +155,30 @@ export async function extractVideoAudioSampleForObject(input: {
 }
 
 // Worker-side client: asks the song-preview container (which owns native
-// ffmpeg) for the sample. Shares the service URL + shared secret with the
-// preview flow; only the path differs.
+// ffmpeg) for the sample. Shares the service binding / URL + shared secret
+// with the preview flow; only the path differs. Staging and prod reach the
+// container through the SONG_PREVIEW_SERVICE binding, so a configured URL is
+// optional — the internal hostname is only a routing placeholder then.
 export async function requestVideoAudioSampleFromService(input: {
   env: Env
-  serviceUrl: string
+  serviceUrl: string | null
   objectKey: string
   window: VideoAudioSampleWindow
   timeoutMs: number
 }): Promise<VideoAudioSampleResult> {
-  const url = new URL(input.serviceUrl)
-  url.pathname = "/extract-audio-sample"
+  let url: URL
+  if (input.serviceUrl) {
+    url = new URL(input.serviceUrl)
+    url.pathname = "/extract-audio-sample"
+  } else {
+    url = new URL("https://song-preview-service.internal/extract-audio-sample")
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), input.timeoutMs)
   let response: Response
   try {
-    response = await fetch(url.toString(), {
+    const request = new Request(url.toString(), {
       method: "POST",
       headers: {
         authorization: `Bearer ${trimEnv(input.env.SONG_PREVIEW_SHARED_SECRET)}`,
@@ -184,6 +191,9 @@ export async function requestVideoAudioSampleFromService(input: {
       }),
       signal: controller.signal,
     })
+    response = input.env.SONG_PREVIEW_SERVICE
+      ? await input.env.SONG_PREVIEW_SERVICE.fetch(request)
+      : await fetch(request)
   } catch (error) {
     throw providerUnavailable(
       `Video audio extraction service unreachable: ${error instanceof Error ? error.message : String(error)}`,
