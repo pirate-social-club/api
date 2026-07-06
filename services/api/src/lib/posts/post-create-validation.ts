@@ -4,6 +4,7 @@ import type { CreatePostRequest } from "../../types"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
 type PostEventStatus = NonNullable<NonNullable<CreatePostRequest["event"]>["status"]>
+type AgeGatePolicy = NonNullable<CreatePostRequest["age_gate_policy"]>
 
 export type PostWriteRequest = CreatePostRequest & {
   song_annotations_url?: string | null
@@ -119,6 +120,10 @@ function validatePositiveIntegerField(value: unknown, fieldName: string): void {
 
 function isPostEventStatus(value: unknown): value is PostEventStatus {
   return value === "scheduled" || value === "canceled" || value === "postponed" || value === "ended"
+}
+
+function isAgeGatePolicy(value: unknown): value is AgeGatePolicy {
+  return value === "none" || value === "18_plus"
 }
 
 function validatePostEvent(body: CreatePostRequest): void {
@@ -316,6 +321,9 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   }
   if (body.post_type !== "link" && body.link_url) {
     throw badRequestError("link_url is only allowed for link posts")
+  }
+  if (body.age_gate_policy != null && !isAgeGatePolicy(body.age_gate_policy)) {
+    throw badRequestError("age_gate_policy must be none or 18_plus")
   }
   if (authorshipMode !== "user_agent" && body.agent_id) {
     throw badRequestError("agent_id is only allowed when authorship_mode = user_agent")

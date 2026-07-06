@@ -12308,6 +12308,14 @@ const spec = {
             ],
             "default": "public"
           },
+          "age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ],
+            "nullable": true
+          },
           "access_mode": {
             "type": "string",
             "enum": [
