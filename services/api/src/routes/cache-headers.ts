@@ -4,7 +4,6 @@ export const PUBLIC_READ_CACHE_FRESH_SECONDS = 60
 export const PUBLIC_READ_CACHE_STALE_SECONDS = 300
 export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
 export const PUBLIC_READ_CACHE_CONTROL = `public, max-age=0, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
-const DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES = ["accept"]
 const DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES = ["Accept"]
 
 function appendVaryHeader(c: Context, fields: string[]): void {
@@ -51,34 +50,6 @@ export function isPublicReadCacheRequest(request: Request): boolean {
     || url.pathname.startsWith("/public-comments/")
     || url.pathname.startsWith("/public-communities/")
   )
-}
-
-export function buildPublicReadCacheKey(request: Request): Request {
-  const url = new URL(request.url)
-  for (const headerName of publicReadCacheKeyHeaderNames(request)) {
-    const headerValue = request.headers.get(headerName)
-    if (headerValue) {
-      url.searchParams.set(`__cache_${headerName}`, headerValue)
-    }
-  }
-  url.searchParams.sort()
-  return new Request(url.toString(), { method: "GET" })
-}
-
-export function isPublicReadCacheResponse(response: Response): boolean {
-  return (
-    response.status === 200
-    && response.headers.get("CDN-Cache-Control") === PUBLIC_READ_CDN_CACHE_CONTROL
-    && !response.headers.has("Set-Cookie")
-  )
-}
-
-function publicReadCacheKeyHeaderNames(request: Request): string[] {
-  const url = new URL(request.url)
-  if (url.pathname === "/feed/home" || url.pathname === "/feed/home/public") {
-    return []
-  }
-  return DEFAULT_PUBLIC_READ_CACHE_KEY_HEADER_NAMES
 }
 
 function publicReadVaryHeaders(request: Request): string[] {

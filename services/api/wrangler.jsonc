@@ -17,6 +17,9 @@
   "observability": {
     "enabled": true
   },
+  "cache": {
+    "enabled": false
+  },
   "ratelimits": [
     {
       "name": "LINK_PREVIEW_RATE_LIMITER",
@@ -227,6 +230,23 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "cache": {
+        "enabled": true
+      },
+      "exports": {
+        "default": {
+          "type": "worker",
+          "cache": {
+            "enabled": false
+          }
+        },
+        "CachedPublicReads": {
+          "type": "worker",
+          "cache": {
+            "enabled": true
+          }
+        }
+      },
       "ratelimits": [
         {
           "name": "LINK_PREVIEW_RATE_LIMITER",
@@ -341,6 +361,9 @@
     },
     "production": {
       "name": "api-core",
+      "cache": {
+        "enabled": false
+      },
       "ratelimits": [
         {
           "name": "LINK_PREVIEW_RATE_LIMITER",

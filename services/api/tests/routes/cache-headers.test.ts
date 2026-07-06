@@ -1,55 +1,51 @@
 import { describe, expect, test } from "bun:test"
+import { Hono } from "hono"
 
-import { buildPublicReadCacheKey } from "../../src/routes/cache-headers"
+import {
+  isPublicReadCacheRequest,
+  PUBLIC_READ_CACHE_CONTROL,
+  PUBLIC_READ_CDN_CACHE_CONTROL,
+  setPublicReadCacheHeaders,
+} from "../../src/routes/cache-headers"
 
-function cacheKeyUrl(url: string, headers?: HeadersInit): string {
-  return buildPublicReadCacheKey(new Request(url, { headers })).url
+async function publicReadCacheHeaderResponse(path: string): Promise<Response> {
+  const app = new Hono()
+  app.get("*", (c) => {
+    setPublicReadCacheHeaders(c)
+    return c.text("ok")
+  })
+  return app.request(`https://api.pirate.sc${path}`)
 }
 
-describe("public read cache keys", () => {
-  test("canonicalizes equivalent query parameter ordering", () => {
-    const headers = { Origin: "https://pirate.sc" }
-    const first = cacheKeyUrl("https://api.pirate.sc/feed/home/public?sort=best&locale=en", headers)
-    const second = cacheKeyUrl("https://api.pirate.sc/feed/home/public?locale=en&sort=best", headers)
-
-    expect(second).toBe(first)
-    expect(first).toContain("locale=en")
-    expect(first).toContain("sort=best")
+describe("public read cache headers", () => {
+  test("identifies only cacheable public read GET requests", () => {
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/public"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home", {
+      headers: { Authorization: "Bearer token" },
+    }))).toBe(false)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-posts/pst_1"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-comments/pst_1"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-communities/community-slug"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/posts/pst_1"))).toBe(false)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/public", {
+      method: "POST",
+    }))).toBe(false)
   })
 
-  test("does not vary public feed cache keys by origin", () => {
-    const production = cacheKeyUrl("https://api.pirate.sc/feed/home/public?locale=en&sort=best", {
-      Origin: "https://pirate.sc",
-    })
-    const staging = cacheKeyUrl("https://api.pirate.sc/feed/home/public?locale=en&sort=best", {
-      Origin: "https://staging.pirate.sc",
-    })
+  test("emits cache headers without Vary for public feed responses", async () => {
+    const response = await publicReadCacheHeaderResponse("/feed/home/public?sort=best&locale=en")
 
-    expect(staging).toBe(production)
-    expect(production).not.toContain("__cache_origin=")
+    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("vary")).toBeNull()
   })
 
-  test("varies structured public read cache keys by representation headers, not origin or language", () => {
-    const json = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
-      Accept: "application/json",
-      "Accept-Language": "en-US",
-      Origin: "https://pirate.sc",
-    })
-    const markdown = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
-      Accept: "text/markdown",
-      "Accept-Language": "en-US",
-      Origin: "https://pirate.sc",
-    })
-    const stagingJson = cacheKeyUrl("https://api.pirate.sc/public-posts/pst_1", {
-      Accept: "application/json",
-      "Accept-Language": "fr-FR",
-      Origin: "https://staging.pirate.sc",
-    })
+  test("emits Vary: Accept for structured public read responses", async () => {
+    const response = await publicReadCacheHeaderResponse("/public-posts/pst_1")
 
-    expect(markdown).not.toBe(json)
-    expect(stagingJson).toBe(json)
-    expect(json).toContain("__cache_accept=application%2Fjson")
-    expect(json).not.toContain("__cache_accept-language=")
-    expect(json).not.toContain("__cache_origin=")
+    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("vary")).toBe("Accept")
   })
 })

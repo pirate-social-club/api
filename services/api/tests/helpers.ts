@@ -32,7 +32,6 @@ import {
 import { resetMaterializedPublicHomeFeedForTests } from "../src/lib/feed/materialized-public-feed"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
-import { resetPublicReadCacheDedupeForTests } from "../src/lib/public-read-cache-state"
 
 const encoder = new TextEncoder()
 const ROUTE_TEST_LOCK_PATH = join(tmpdir(), "pirate-api-route-test-lock")
@@ -137,7 +136,6 @@ export function resetMemoryStore(): void {
 export function resetRuntimeCaches(): void {
   resetMemoryStore()
   resetMaterializedPublicHomeFeedForTests()
-  resetPublicReadCacheDedupeForTests()
   setClawkeyProviderForTests(null)
   setSelfProviderForTests(null)
   setVeryProviderForTests(null)
