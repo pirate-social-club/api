@@ -364,7 +364,21 @@
     "production": {
       "name": "api-core",
       "cache": {
-        "enabled": false
+        "enabled": true
+      },
+      "exports": {
+        "default": {
+          "type": "worker",
+          "cache": {
+            "enabled": false
+          }
+        },
+        "CachedPublicReads": {
+          "type": "worker",
+          "cache": {
+            "enabled": true
+          }
+        }
       },
       "ratelimits": [
         {
