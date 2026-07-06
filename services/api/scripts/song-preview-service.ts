@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { generateSongPreviewForBundle } from "../src/lib/song-artifacts/song-artifact-preview-service"
+import { extractVideoAudioSampleForObject } from "../src/lib/song-artifacts/video-audio-sample"
 import type { Env } from "../src/env"
 import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
 
@@ -159,6 +160,84 @@ async function handlePreview(request: Request, context: SongPreviewRequestContex
   return jsonResponse({ storage_ref: storageRef })
 }
 
+type ExtractAudioSampleRequestBody = {
+  object_key: string
+  start_ms: number
+  duration_ms: number
+}
+
+function readExtractAudioSampleRequestBody(value: unknown): ExtractAudioSampleRequestBody | null {
+  if (!isRecord(value)) return null
+  if (typeof value.object_key !== "string" || !value.object_key.trim()) return null
+  const startMs = Number(value.start_ms)
+  const durationMs = Number(value.duration_ms)
+  if (!Number.isInteger(startMs) || startMs < 0) return null
+  if (!Number.isInteger(durationMs) || durationMs <= 0 || durationMs > 120_000) return null
+  return {
+    object_key: value.object_key.trim(),
+    start_ms: startMs,
+    duration_ms: durationMs,
+  }
+}
+
+async function handleExtractAudioSample(request: Request, context: SongPreviewRequestContext): Promise<Response> {
+  const sharedSecret = trimEnv("SONG_PREVIEW_SHARED_SECRET")
+  if (!sharedSecret || !constantTimeEqual(bearerToken(request), sharedSecret)) {
+    logSongPreviewWarning("video_audio_sample.rejected", {
+      request_id: context.requestId,
+      reason: sharedSecret ? "unauthorized" : "not_configured",
+      latency_ms: Date.now() - context.startedAt,
+    })
+    return jsonResponse(
+      sharedSecret
+        ? { code: "unauthorized", message: "Unauthorized" }
+        : { code: "not_configured", message: "Song preview shared secret is not configured" },
+      sharedSecret ? 401 : 503,
+    )
+  }
+
+  const body = readExtractAudioSampleRequestBody(await request.json().catch(() => null))
+  if (!body) {
+    logSongPreviewWarning("video_audio_sample.rejected", {
+      request_id: context.requestId,
+      reason: "bad_request",
+      latency_ms: Date.now() - context.startedAt,
+    })
+    return jsonResponse({ code: "bad_request", message: "Invalid audio sample request" }, 400)
+  }
+
+  logSongPreviewEvent("video_audio_sample.started", {
+    request_id: context.requestId,
+    object_key: body.object_key,
+    start_ms: body.start_ms,
+    duration_ms: body.duration_ms,
+  })
+
+  const result = await extractVideoAudioSampleForObject({
+    env: process.env as Env,
+    objectKey: body.object_key,
+    window: { start_ms: body.start_ms, duration_ms: body.duration_ms },
+  })
+
+  logSongPreviewEvent("video_audio_sample.completed", {
+    request_id: context.requestId,
+    object_key: body.object_key,
+    kind: result.kind,
+    sample_bytes: result.kind === "sample" ? result.bytes.byteLength : 0,
+    latency_ms: Date.now() - context.startedAt,
+  })
+
+  if (result.kind === "sample") {
+    return jsonResponse({
+      kind: "sample",
+      sample_base64: Buffer.from(result.bytes).toString("base64"),
+      sample_mime_type: result.mimeType,
+      byte_length: result.bytes.byteLength,
+    })
+  }
+  return jsonResponse(result.kind === "skipped" ? { kind: "skipped", reason: result.reason } : { kind: result.kind })
+}
+
 const port = numberEnv("SONG_PREVIEW_PORT", numberEnv("PORT", DEFAULT_PORT))
 const hostname = trimEnv("HOST") || "127.0.0.1"
 
@@ -226,6 +305,23 @@ async function handleRequest(request: Request): Promise<Response> {
       return jsonResponse({
         code: "preview_generation_failed",
         message: error instanceof Error ? error.message : "Song preview generation failed",
+      }, 502)
+    })
+  }
+  if (request.method === "POST" && url.pathname === "/extract-audio-sample") {
+    const context = {
+      requestId: makeRequestId(),
+      startedAt: Date.now(),
+    }
+    return handleExtractAudioSample(request, context).catch((error) => {
+      logSongPreviewWarning("video_audio_sample.failed", {
+        request_id: context.requestId,
+        error: error instanceof Error ? error.message : String(error),
+        latency_ms: Date.now() - context.startedAt,
+      })
+      return jsonResponse({
+        code: "audio_sample_extraction_failed",
+        message: error instanceof Error ? error.message : "Video audio sample extraction failed",
       }, 502)
     })
   }

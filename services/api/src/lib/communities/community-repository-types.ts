@@ -7,6 +7,7 @@ import type {
   CommunityRow,
   JobRow,
 } from "../auth/auth-db-rows"
+import type { Post } from "../../types"
 
 export interface CommunityRepositoryLifecycle {
   close?(): void | Promise<void>
@@ -56,7 +57,7 @@ export interface CommunityPostProjectionRepository {
     authorUserId: string | null
     identityMode: "public" | "anonymous"
     postType: "text" | "image" | "video" | "link" | "song" | "crosspost"
-    status: "draft" | "published" | "hidden" | "removed" | "deleted"
+    status: Post["status"]
     visibility: "public" | "members_only"
     sourceCreatedAt: string
     projectedPayloadJson: string

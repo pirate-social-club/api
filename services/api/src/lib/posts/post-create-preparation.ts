@@ -16,6 +16,9 @@ import { mergeAnalysisState, type PostAnalysisProvider } from "./post-analysis"
 import { prepareSongPostAsset, prepareVideoPostAsset } from "./post-create-asset-preparation"
 import { resolveCrosspostSource } from "./post-create-crosspost-source"
 import type { PostWriteRequest } from "./post-create-validation"
+import { decodePublicSongArtifactBundleId } from "../public-ids"
+import { getControlPlaneClient } from "../runtime-deps"
+import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 
 type PostCreatePreparationCommunityRepository =
   & CommunityReadRepository
@@ -30,6 +33,10 @@ export type PreparedPostCreate = {
   analysisProviderResult: Record<string, unknown> | null | undefined
   resolvedSongBundleForAsset: ResolvedSongPostBundle | null
   resolvedVideoAsset: ResolvedVideoPostAsset | null
+}
+
+export function isAsyncSongBundleStatusPublishable(status: string): boolean {
+  return status === "validating" || status === "ready"
 }
 
 function resolveAnonymousScope(input: {
@@ -143,6 +150,64 @@ export async function preparePostCreate(input: {
   }
 
   if (input.body.post_type === "song") {
+    if (input.body.publish_mode === "async") {
+      const songArtifactBundleId = decodePublicSongArtifactBundleId(input.body.song_artifact_bundle || "")
+      const bundle = await getSongArtifactBundle(getControlPlaneClient(input.env), input.communityId, songArtifactBundleId)
+      if (!bundle || bundle.creator_user !== `usr_${input.userId}`) {
+        throw notFoundError("Song artifact bundle not found")
+      }
+      if (!isAsyncSongBundleStatusPublishable(bundle.status)) {
+        throw badRequestError("Song artifact bundle is not available for asynchronous publishing")
+      }
+      const accessMode = input.body.access_mode ?? "public"
+      writeBody = {
+        ...input.body,
+        identity_mode: "public",
+        media_refs: accessMode === "locked"
+          ? bundle.preview_audio?.storage_ref && bundle.preview_audio?.mime_type
+            ? [{
+                storage_ref: bundle.preview_audio.storage_ref,
+                mime_type: bundle.preview_audio.mime_type,
+                size_bytes: bundle.preview_audio.size_bytes ?? null,
+                content_hash: bundle.preview_audio.content_hash ?? null,
+                duration_ms: bundle.preview_audio.duration_ms ?? null,
+                decentralized_storage: bundle.preview_audio.decentralized_storage ?? null,
+              }]
+            : []
+          : bundle.media_refs as NonNullable<Extract<CreatePostRequest, { post_type: "song" }>["media_refs"]>,
+        lyrics: bundle.lyrics,
+        access_mode: accessMode,
+        asset_id: null,
+        song_artifact_bundle: bundle.id,
+        song_annotations_url: bundle.genius_annotations_url ?? null,
+        song_cover_art_ref: bundle.cover_art?.storage_ref ?? null,
+        song_duration_ms: bundle.primary_audio.duration_ms ?? null,
+        song_title: bundle.title,
+      }
+      const postAnalysis = await input.postAnalysisProvider.analyze({
+        env: input.env,
+        community: input.community,
+        body: writeBody,
+      })
+      if (postAnalysis.analysis_state === "blocked") {
+        throw analysisBlocked("Content analysis blocked publication")
+      }
+      return {
+        writeBody,
+        analysisProviderResult: postAnalysis.providerResult,
+        analysisOverride: {
+          analysis_state: postAnalysis.analysis_state,
+          content_safety_state: postAnalysis.content_safety_state,
+          age_gate_policy: input.community.default_age_gate_policy === "18_plus" || postAnalysis.age_gate_policy === "18_plus"
+            ? "18_plus"
+            : "none",
+          status: "processing",
+        },
+        resolvedSongBundleForAsset,
+        resolvedVideoAsset,
+      }
+    }
+
     const preparedSong = await prepareSongPostAsset({
       env: input.env,
       userId: input.userId,

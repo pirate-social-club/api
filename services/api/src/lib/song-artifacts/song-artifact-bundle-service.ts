@@ -237,8 +237,26 @@ export async function createSongArtifactBundle(input: {
       vocalAudio: vocalAudioUpload ? descriptorFromUpload(input.env, vocalAudioUpload) : null,
       lyricsSha256,
       geniusAnnotationsUrl,
+      previewStatus: previewWindow ? "pending" : "completed",
       createdAt,
     }))
+
+    if (input.body.analysis_mode === "deferred") {
+      const deferred = await getSongArtifactBundleForCreator({
+        env: input.env,
+        userId: input.userId,
+        communityId: input.communityId,
+        songArtifactBundleId,
+      })
+      console.info("[song-artifacts] create bundle deferred", {
+        community_id: input.communityId,
+        elapsed_ms: Date.now() - requestStartedAt,
+        song_artifact_bundle: deferred.id,
+        status: deferred.status,
+        user_id: input.userId,
+      })
+      return deferred
+    }
 
     const analysis = await withSongBundleStep("analyze song bundle", {
       community_id: input.communityId,

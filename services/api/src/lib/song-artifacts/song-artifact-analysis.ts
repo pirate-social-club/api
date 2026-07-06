@@ -353,11 +353,6 @@ async function identifyAudioWithAcrCloud(input: {
   }
   const storageObjectKey = input.upload.storage_object_key
 
-  const path = trimEnv(input.env.ACRCLOUD_IDENTIFY_PATH) || "/v1/identify"
-  const endpoint = `https://${host.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`
-  const timestamp = Math.floor(Date.now() / 1000).toString()
-  const stringToSign = ["POST", path.startsWith("/") ? path : `/${path}`, accessKey, "audio", "1", timestamp].join("\n")
-  const signature = await buildAcrCloudSignature(accessSecret, stringToSign)
   const contentResponse = await withSongAnalysisStep("acrcloud load audio sample", {
     content_hash_present: Boolean(input.upload.content_hash),
     filename: input.upload.filename,
@@ -368,11 +363,55 @@ async function identifyAudioWithAcrCloud(input: {
     env: input.env,
     objectKey: storageObjectKey,
   }))
-  const contentType = input.upload.mime_type || "application/octet-stream"
   const content = await withSongAnalysisStep("acrcloud read audio sample", {
     provider: "acrcloud",
     upload: input.upload.id,
   }, () => contentResponse.arrayBuffer())
+
+  return identifyAudioSampleWithAcrCloud({
+    env: input.env,
+    sampleBytes: content,
+    filename: input.upload.filename || "audio.bin",
+    mimeType: input.upload.mime_type || "application/octet-stream",
+    logContext: { upload: input.upload.id },
+  })
+}
+
+// Bytes-based core shared by the song-upload path above and the video
+// soundtrack analysis job (which extracts a short audio sample first and has
+// no SongArtifactUpload row for the sample itself).
+export async function identifyAudioSampleWithAcrCloud(input: {
+  env: Env
+  sampleBytes: ArrayBuffer | Uint8Array
+  filename: string
+  mimeType: string
+  logContext?: Record<string, unknown>
+}): Promise<Record<string, unknown> | null> {
+  const accessKey = trimEnv(input.env.ACRCLOUD_ACCESS_KEY)
+  const accessSecret = trimEnv(input.env.ACRCLOUD_ACCESS_SECRET)
+  const host = trimEnv(input.env.ACRCLOUD_HOST)
+  if (!accessKey || !accessSecret || !host) {
+    console.info("[song-artifacts] ACRCloud identification skipped", {
+      has_access_key: Boolean(accessKey),
+      has_access_secret: Boolean(accessSecret),
+      has_host: Boolean(host),
+      provider: "acrcloud",
+      ...input.logContext,
+    })
+    return {
+      provider: "acrcloud",
+      error: "missing_configuration",
+    }
+  }
+
+  const path = trimEnv(input.env.ACRCLOUD_IDENTIFY_PATH) || "/v1/identify"
+  const endpoint = `https://${host.replace(/^https?:\/\//, "").replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`
+  const timestamp = Math.floor(Date.now() / 1000).toString()
+  const stringToSign = ["POST", path.startsWith("/") ? path : `/${path}`, accessKey, "audio", "1", timestamp].join("\n")
+  const signature = await buildAcrCloudSignature(accessSecret, stringToSign)
+  const content = input.sampleBytes instanceof Uint8Array
+    ? input.sampleBytes.slice().buffer
+    : input.sampleBytes
   const body = new FormData()
   body.set("access_key", accessKey)
   body.set("sample_bytes", String(content.byteLength))
@@ -380,7 +419,7 @@ async function identifyAudioWithAcrCloud(input: {
   body.set("signature", signature)
   body.set("data_type", "audio")
   body.set("signature_version", "1")
-  body.set("sample", new File([content], input.upload.filename || "audio.bin", { type: contentType }))
+  body.set("sample", new File([content], input.filename, { type: input.mimeType }))
 
   const timeoutMs = providerTimeoutMs(input.env.ACRCLOUD_TIMEOUT_MS, DEFAULT_ACRCLOUD_TIMEOUT_MS)
   const controller = new AbortController()
@@ -392,7 +431,7 @@ async function identifyAudioWithAcrCloud(input: {
       provider: "acrcloud",
       sample_bytes: content.byteLength,
       timeout_ms: timeoutMs,
-      upload: input.upload.id,
+      ...input.logContext,
     }, () => fetch(endpoint, {
       method: "POST",
       body,

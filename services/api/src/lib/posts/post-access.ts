@@ -20,6 +20,10 @@ export function isAssetBackedPostMissingAsset(post: Pick<Post, "asset_id" | "ass
     && post.asset_story == null
 }
 
+export function shouldHidePostForMissingAsset(post: Pick<Post, "asset_id" | "asset_story" | "post_type" | "status">): boolean {
+  return post.status === "published" && isAssetBackedPostMissingAsset(post)
+}
+
 export async function requireMemberAccess(
   client: Client,
   communityId: string,

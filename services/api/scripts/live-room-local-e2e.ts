@@ -258,6 +258,7 @@ async function createFastLocalSongArtifactBundle(input: {
       vocalAudio: null,
       lyricsSha256: `0x${await sha256Hex(input.lyrics)}`,
       geniusAnnotationsUrl: null,
+      previewStatus: "completed",
       createdAt,
     })
     const finalized = await finalizeSongArtifactBundle({

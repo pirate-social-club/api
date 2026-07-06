@@ -49,6 +49,7 @@ export type PostProjectionSchema = {
   hasSongAnnotationsUrl: boolean
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
+  hasAsyncPublishColumns: boolean
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
@@ -71,6 +72,11 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
     hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
     hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
     hasSongDurationMs: columnNames.has("song_duration_ms"),
+    hasAsyncPublishColumns: columnNames.has("idempotency_body_hash")
+      && columnNames.has("publish_failure_code")
+      && columnNames.has("publish_failure_message")
+      && columnNames.has("publish_failure_retryable")
+      && columnNames.has("publish_failed_at"),
   }
 }
 
@@ -93,6 +99,9 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const songDurationMsProjection = schema.hasSongDurationMs
     ? "song_duration_ms"
     : "NULL AS song_duration_ms"
+  const asyncPublishProjection = schema.hasAsyncPublishColumns
+    ? "idempotency_body_hash, publish_failure_code, publish_failure_message, publish_failure_retryable, publish_failed_at"
+    : "NULL AS idempotency_body_hash, NULL AS publish_failure_code, NULL AS publish_failure_message, NULL AS publish_failure_retryable, NULL AS publish_failed_at"
   const eventProjection = schema.hasPostEvents
     ? `
   (
@@ -173,7 +182,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
       AND live_rooms.visibility = 'public'
     LIMIT 1
   ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
-  content_safety_state, age_gate_policy, ${assetStoryProjection}, idempotency_key, created_at, updated_at
+  content_safety_state, age_gate_policy, ${assetStoryProjection}, idempotency_key, ${asyncPublishProjection}, created_at, updated_at
 `
 }
 

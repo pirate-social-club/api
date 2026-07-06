@@ -3351,6 +3351,43 @@ const spec = {
         "operationId": "get_communities_by_community_id_posts"
       }
     },
+    "/communities/{community_id}/posts/pending": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "List the caller's pending posts in a community",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/Locale"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_communities_by_community_id_posts_pending"
+      }
+    },
     "/communities/{community_id}/posts/{post_id}/comments": {
       "get": {
         "tags": [
@@ -3474,6 +3511,46 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_remove"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/publish-retry": {
+      "post": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Retry asynchronous post publication",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_publish_retry"
       }
     },
     "/communities/{community_id}/posts/{post_id}/comments-lock": {
@@ -11912,6 +11989,18 @@ const spec = {
           "idempotency_key": {
             "type": "string"
           },
+          "publish_mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "default": "sync"
+          },
+          "listing_draft": {
+            "$ref": "#/components/schemas/CreatePostListingDraft",
+            "nullable": true
+          },
           "authorship_mode": {
             "type": "string",
             "enum": [
@@ -12201,7 +12290,9 @@ const spec = {
             "type": "string",
             "enum": [
               "draft",
+              "processing",
               "published",
+              "failed",
               "hidden",
               "removed",
               "deleted"
@@ -12229,6 +12320,18 @@ const spec = {
               "public",
               "members_only"
             ]
+          },
+          "publish_failure_code": {
+            "$ref": "#/components/schemas/PostPublishFailureCode",
+            "nullable": true
+          },
+          "publish_failure_message": {
+            "type": "string",
+            "nullable": true
+          },
+          "publish_failure_retryable": {
+            "type": "boolean",
+            "nullable": true
           },
           "title": {
             "type": "string",
@@ -13438,6 +13541,14 @@ const spec = {
           },
           "lyrics": {
             "type": "string"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "deferred"
+            ],
+            "default": "sync"
           },
           "genius_annotations_url": {
             "type": "string",
@@ -17187,6 +17298,45 @@ const spec = {
           }
         }
       },
+      "CreatePostListingDraft": {
+        "type": "object",
+        "required": [
+          "price_cents",
+          "regional_pricing_enabled",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "regional_pricing_enabled": {
+            "type": "boolean"
+          },
+          "donation_partner": {
+            "type": "string",
+            "nullable": true
+          },
+          "donation_share_bps": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "vinyl_release_provider": {
+            "type": "string",
+            "enum": [
+              "elasticstage"
+            ],
+            "nullable": true
+          },
+          "vinyl_release_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          }
+        }
+      },
       "AgentActionProof": {
         "type": "object",
         "additionalProperties": false,
@@ -17337,6 +17487,22 @@ const spec = {
             "nullable": true
           }
         }
+      },
+      "PostPublishFailureCode": {
+        "type": "string",
+        "enum": [
+          "song_analysis_blocked",
+          "song_analysis_review_required",
+          "song_rights_reference_required",
+          "song_preview_generation_failed",
+          "text_moderation_blocked",
+          "story_royalty_registration_failed",
+          "story_locked_delivery_failed",
+          "listing_creation_failed",
+          "catalog_sync_failed",
+          "provider_unavailable",
+          "internal_error"
+        ]
       },
       "PostEmbed": {
         "oneOf": [

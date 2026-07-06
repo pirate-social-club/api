@@ -156,3 +156,20 @@ describe("assertPostCreateRequest royalty_allocations", () => {
     } as CreatePostRequest, COMMUNITY_ID)).toThrow(/song and video/)
   })
 })
+
+describe("assertPostCreateRequest listing_draft", () => {
+  test("accepts server-side listing inputs in sync song publish mode", () => {
+    expect(() => assertPostCreateRequest({
+      idempotency_key: "sync-paid-song",
+      post_type: "song",
+      identity_mode: "public",
+      song_artifact_bundle: "sab_1",
+      license_preset: "commercial-use",
+      listing_draft: {
+        price_cents: 499,
+        regional_pricing_enabled: false,
+        status: "active",
+      },
+    } as CreatePostRequest, COMMUNITY_ID)).not.toThrow()
+  })
+})
