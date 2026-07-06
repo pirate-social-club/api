@@ -14,7 +14,7 @@
     "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
-    "deploy": "wrangler deploy",
+    "deploy": "bun run scripts/deploy-with-version.ts",
     "smoke:community-create": "bun run scripts/smoke-staging-community-create.ts",
     "smoke:song-submit": "bun run scripts/smoke-staging-song-submit-ci.ts",
     "smoke:paid-booking": "bun run scripts/smoke-paid-booking.ts",
