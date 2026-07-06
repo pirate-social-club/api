@@ -347,4 +347,56 @@ describe("persistVideoRightsAnalysis", () => {
     const analysisRows = await client.execute("SELECT * FROM media_analysis_results")
     expect(analysisRows.rows).toHaveLength(2)
   })
+
+  test("does not mark ACR checked when analysis never called ACR", async () => {
+    const client = await createTestClient()
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr(),
+      audioTrackPresent: false,
+    })
+    await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_silent_video",
+      assetId: null,
+      decision,
+      acr: acr(),
+      declared: declared(),
+      sampleWindow: null,
+      createdAt: "2026-07-06T14:30:00.000Z",
+    })
+
+    const analysisRows = await client.execute("SELECT policy_reason_code, acrcloud_checked_at FROM media_analysis_results")
+    expect(analysisRows.rows).toHaveLength(1)
+    expect(analysisRows.rows[0]?.policy_reason_code).toBe("no_audio_track")
+    expect(analysisRows.rows[0]?.acrcloud_checked_at).toBeNull()
+  })
+
+  test("marks ACR checked when provider returned a no-match result", async () => {
+    const client = await createTestClient()
+    const providerResult = { status: { code: 1001, msg: "No result" } }
+    const acrResult = acr({ providerResult })
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acrResult,
+      audioTrackPresent: true,
+    })
+    await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_checked_video",
+      assetId: null,
+      decision,
+      acr: acrResult,
+      declared: declared(),
+      sampleWindow: { start_ms: 15_000, duration_ms: 60_000 },
+      createdAt: "2026-07-06T14:31:00.000Z",
+    })
+
+    const analysisRows = await client.execute("SELECT policy_reason_code, acrcloud_checked_at FROM media_analysis_results")
+    expect(analysisRows.rows).toHaveLength(1)
+    expect(analysisRows.rows[0]?.policy_reason_code).toBe("no_match")
+    expect(analysisRows.rows[0]?.acrcloud_checked_at).toBe("2026-07-06T14:31:00.000Z")
+  })
 })

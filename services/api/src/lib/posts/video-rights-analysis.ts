@@ -168,6 +168,7 @@ export async function persistVideoRightsAnalysis(
 ): Promise<{ mediaAnalysisResultId: string; rightsReviewCaseId: string | null }> {
   const createdAt = input.createdAt ?? nowIso()
   const mediaAnalysisResultId = makeId("mar")
+  const acrCheckedAt = input.acr.providerResult ? createdAt : null
 
   await input.client.execute({
     sql: `
@@ -195,7 +196,7 @@ export async function persistVideoRightsAnalysis(
       input.acr.customMatches.length ? JSON.stringify(input.acr.customMatches.map((match) => match.raw)) : null,
       input.acr.missingConfiguration ? "missing_configuration" : input.acr.providerError ? "provider_failed" : null,
       input.acr.providerError,
-      createdAt,
+      acrCheckedAt,
       null,
       JSON.stringify({
         declared_bundle_ids: input.declared.declaredBundleIds,
