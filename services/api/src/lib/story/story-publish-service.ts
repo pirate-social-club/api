@@ -1,4 +1,4 @@
-import { JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
@@ -18,7 +18,10 @@ const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
 
 const ASSET_PUBLISH_COORDINATOR_ABI = [
   "function publishAssetVersion(address publisher, bytes32 assetVersionId, uint32 cdrVaultUuid, bytes32 namespace, bytes32 contentHash, bytes32 storageRefHash, uint256 entitlementTokenId, address readCondition, address writeCondition)",
+  "function publishedAssetVersions(bytes32 assetVersionId) view returns (address publisher, uint32 cdrVaultUuid, bytes32 namespace, bytes32 contentHash, bytes32 storageRefHash, uint256 entitlementTokenId, address readCondition, address writeCondition, bool active, bool exists)",
 ] as const
+
+const ASSET_VERSION_ALREADY_PUBLISHED_SELECTOR = "0xcc747504"
 
 export type StoryAssetPublishResult = {
   entitlementConfiguredTxHash: string
@@ -68,6 +71,14 @@ function normalizePrivateKey(raw: string | null | undefined): string | null {
   if (!value) return null
   const withPrefix = value.startsWith("0x") ? value : `0x${value}`
   return /^0x[a-fA-F0-9]{64}$/.test(withPrefix) ? withPrefix : null
+}
+
+function errorData(error: unknown): string {
+  if (!error || typeof error !== "object") return ""
+  const direct = (error as { data?: unknown }).data
+  if (typeof direct === "string") return direct
+  const nested = (error as { error?: { data?: unknown } }).error?.data
+  return typeof nested === "string" ? nested : ""
 }
 
 export async function publishLockedAssetVersionToStory(input: {
@@ -154,32 +165,69 @@ export async function publishLockedAssetVersionToStory(input: {
     throw new Error("story_entitlement_class_configure_failed")
   }
 
-  const publishTx = await sendContractTxWithPolicy({
-    provider,
-    contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
-    abi: ASSET_PUBLISH_COORDINATOR_ABI,
-    functionName: "publishAssetVersion",
-    args: [
-      getAddress(publisherAddress),
-      input.assetVersionId,
-      input.cdrVaultUuid,
-      input.namespace,
-      input.contentHash,
-      input.storageRefHash,
-      input.entitlementTokenId,
-      getAddress(readConditionAddress),
-      getAddress(writeConditionAddress),
-    ],
-    gasPolicy: gasPolicy.value,
-    signer: operatorSigner,
-  })
-  const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
-  if (!publishReceipt || publishReceipt.status !== 1) {
-    throw new Error("story_publish_asset_version_failed")
+  const publishArgs = [
+    getAddress(publisherAddress),
+    input.assetVersionId,
+    input.cdrVaultUuid,
+    input.namespace,
+    input.contentHash,
+    input.storageRefHash,
+    input.entitlementTokenId,
+    getAddress(readConditionAddress),
+    getAddress(writeConditionAddress),
+  ] as const
+  let publishTx: Awaited<ReturnType<typeof sendContractTxWithPolicy>> | null = null
+  try {
+    publishTx = await sendContractTxWithPolicy({
+      provider,
+      contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      abi: ASSET_PUBLISH_COORDINATOR_ABI,
+      functionName: "publishAssetVersion",
+      args: publishArgs,
+      gasPolicy: gasPolicy.value,
+      signer: operatorSigner,
+    })
+    const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
+    if (!publishReceipt || publishReceipt.status !== 1) {
+      throw new Error("story_publish_asset_version_failed")
+    }
+  } catch (error) {
+    if (!errorData(error).startsWith(ASSET_VERSION_ALREADY_PUBLISHED_SELECTOR)) {
+      throw error
+    }
+    const coordinator = new Contract(
+      STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      ASSET_PUBLISH_COORDINATOR_ABI,
+      provider,
+    )
+    const existing = await coordinator.publishedAssetVersions(input.assetVersionId) as {
+      publisher: string
+      cdrVaultUuid: bigint | number
+      namespace: string
+      contentHash: string
+      storageRefHash: string
+      entitlementTokenId: bigint
+      readCondition: string
+      writeCondition: string
+      active: boolean
+      exists: boolean
+    }
+    const matches = existing.exists === true
+      && getAddress(existing.publisher) === getAddress(publishArgs[0])
+      && Number(existing.cdrVaultUuid) === input.cdrVaultUuid
+      && String(existing.namespace).toLowerCase() === input.namespace.toLowerCase()
+      && String(existing.contentHash).toLowerCase() === input.contentHash.toLowerCase()
+      && String(existing.storageRefHash).toLowerCase() === input.storageRefHash.toLowerCase()
+      && BigInt(existing.entitlementTokenId) === input.entitlementTokenId
+      && getAddress(existing.readCondition) === getAddress(readConditionAddress)
+      && getAddress(existing.writeCondition) === getAddress(writeConditionAddress)
+    if (!matches) {
+      throw error
+    }
   }
 
   return {
     entitlementConfiguredTxHash: String(configureTx.hash || ""),
-    publishTxHash: String(publishTx.hash || ""),
+    publishTxHash: publishTx ? String(publishTx.hash || "") : `already-published:${input.assetVersionId}`,
   }
 }
