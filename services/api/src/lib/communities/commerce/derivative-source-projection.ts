@@ -30,6 +30,10 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
+function derivativeSourceLikePattern(value: string): string {
+  return `%${escapeLikePattern(value.slice(0, 48).toLowerCase())}%`
+}
+
 export async function upsertStoryRegisteredAssetProjection(input: {
   env: Env
   projection: StoryRegisteredAssetProjection
@@ -135,7 +139,7 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   }
   if (query) {
     filters.push(`LOWER(COALESCE(display_title, asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
-    args.push(`%${escapeLikePattern(query.toLowerCase())}%`)
+    args.push(derivativeSourceLikePattern(query))
     nextArg += 1
   }
   args.push(input.limit)

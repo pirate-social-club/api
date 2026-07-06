@@ -54,6 +54,10 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
+function derivativeSourceLikePattern(value: string): string {
+  return `%${escapeLikePattern(value.slice(0, 48).toLowerCase())}%`
+}
+
 function toPurchaseAllocationLegRow(row: unknown): PurchaseAllocationLegRow {
   return {
     purchase_allocation_leg_id: requiredString(row, "purchase_allocation_leg_id"),
@@ -275,7 +279,7 @@ export async function listDerivativeSourceRows(input: {
   }
   if (hasQuery) {
     filters.push(`LOWER(COALESCE(a.display_title, a.asset_id)) LIKE ?${nextArg} ESCAPE '\\'`)
-    args.push(`%${escapeLikePattern(query!.toLowerCase())}%`)
+    args.push(derivativeSourceLikePattern(query!))
     nextArg += 1
   }
   args.push(input.limit)
