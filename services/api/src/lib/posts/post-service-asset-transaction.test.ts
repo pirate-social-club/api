@@ -450,6 +450,7 @@ describe("createPost", () => {
           story_ip_id: null,
           story_ip_nft_contract: null,
           story_ip_nft_token_id: null,
+          ip_royalty_vault: null,
           story_publish_model: "pirate_v1",
           story_license_terms_id: null,
           story_license_template: null,

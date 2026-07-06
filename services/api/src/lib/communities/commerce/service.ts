@@ -269,6 +269,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
   let storyIpId: string | null = asset.story_ip_id
   let storyIpNftContract: string | null = asset.story_ip_nft_contract
   let storyIpNftTokenId: string | null = asset.story_ip_nft_token_id
+  let ipRoyaltyVault: string | null = asset.ip_royalty_vault
   let storyPublishModel: "pirate_v1" | "story_ip_v1" = asset.story_publish_model
   let storyLicenseTermsId: string | null = asset.story_license_terms_id
   let storyLicenseTemplate: string | null = asset.story_license_template
@@ -303,6 +304,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
       storyIpId = reusableOriginalRegistration.story_ip_id
       storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
       storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+      ipRoyaltyVault = reusableOriginalRegistration.ip_royalty_vault
       storyPublishModel = reusableOriginalRegistration.story_publish_model
       storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
       storyLicenseTemplate = reusableOriginalRegistration.story_license_template
@@ -349,6 +351,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
         storyIpId = royaltyRegistration.storyIpId
         storyIpNftContract = royaltyRegistration.storyIpNftContract
         storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+        ipRoyaltyVault = royaltyRegistration.ipRoyaltyVault ?? null
         storyPublishModel = "story_ip_v1"
         storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
         storyLicenseTemplate = royaltyRegistration.storyLicenseTemplate
@@ -432,25 +435,26 @@ async function retryExistingStoryRoyaltyRegistration(input: {
           story_ip_id = ?6,
           story_ip_nft_contract = ?7,
           story_ip_nft_token_id = ?8,
-          story_publish_model = ?9,
-          story_license_terms_id = ?10,
-          story_license_template = ?11,
-          story_royalty_policy = ?12,
-          story_royalty_policy_id = ?13,
-          story_derivative_parent_ip_ids_json = ?14,
-          story_derivative_registered_at = ?15,
-          story_revenue_token = ?16,
-          story_royalty_registration_status = ?17,
-          story_publish_tx_ref = ?18,
-          story_asset_version_id = ?19,
-          story_cdr_vault_uuid = ?20,
-          story_namespace = ?21,
-          story_entitlement_token_id = ?22,
-          story_read_condition = ?23,
-          story_write_condition = ?24,
-          license_preset = ?25,
-          commercial_rev_share_pct = ?26,
-          updated_at = ?27
+          ip_royalty_vault = ?9,
+          story_publish_model = ?10,
+          story_license_terms_id = ?11,
+          story_license_template = ?12,
+          story_royalty_policy = ?13,
+          story_royalty_policy_id = ?14,
+          story_derivative_parent_ip_ids_json = ?15,
+          story_derivative_registered_at = ?16,
+          story_revenue_token = ?17,
+          story_royalty_registration_status = ?18,
+          story_publish_tx_ref = ?19,
+          story_asset_version_id = ?20,
+          story_cdr_vault_uuid = ?21,
+          story_namespace = ?22,
+          story_entitlement_token_id = ?23,
+          story_read_condition = ?24,
+          story_write_condition = ?25,
+          license_preset = ?26,
+          commercial_rev_share_pct = ?27,
+          updated_at = ?28
       WHERE community_id = ?1
         AND asset_id = ?2
     `,
@@ -463,6 +467,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
       storyIpId,
       storyIpNftContract,
       storyIpNftTokenId,
+      ipRoyaltyVault,
       storyPublishModel,
       storyLicenseTermsId,
       storyLicenseTemplate,
@@ -706,6 +711,7 @@ export async function createAssetForPost(input: {
   let storyIpId: string | null = null
   let storyIpNftContract: string | null = null
   let storyIpNftTokenId: string | null = null
+  let ipRoyaltyVault: string | null = null
   let storyPublishModel: "pirate_v1" | "story_ip_v1" = "pirate_v1"
   let storyLicenseTermsId: string | null = null
   let storyLicenseTemplate: string | null = null
@@ -814,6 +820,7 @@ export async function createAssetForPost(input: {
         storyIpId = reusableOriginalRegistration.story_ip_id
         storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
         storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+        ipRoyaltyVault = reusableOriginalRegistration.ip_royalty_vault
         storyPublishModel = reusableOriginalRegistration.story_publish_model
         storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
         storyLicenseTemplate = reusableOriginalRegistration.story_license_template
@@ -865,6 +872,7 @@ export async function createAssetForPost(input: {
         storyIpId = royaltyRegistration.storyIpId
         storyIpNftContract = royaltyRegistration.storyIpNftContract
         storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+        ipRoyaltyVault = royaltyRegistration.ipRoyaltyVault ?? null
         storyPublishModel = "story_ip_v1"
         storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
         storyLicenseTemplate = royaltyRegistration.storyLicenseTemplate
@@ -964,7 +972,7 @@ export async function createAssetForPost(input: {
         rights_basis, access_mode, license_preset, commercial_rev_share_pct,
         primary_content_ref, primary_content_hash, publication_status,
         story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
-        story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
+        ip_royalty_vault, story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
         story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
         story_revenue_token, story_royalty_registration_status, locked_delivery_status, locked_delivery_ref,
         locked_delivery_error, created_at, updated_at, story_publish_tx_ref, story_asset_version_id,
@@ -979,10 +987,10 @@ export async function createAssetForPost(input: {
         ?15, ?16, ?17, ?18, ?19,
         ?20, ?21, ?22, ?23, ?24,
         ?25, ?26, ?27, ?28, ?29,
-        ?30, ?31, ?32, ?32, ?33,
+        ?30, ?31, ?32, ?33, ?33,
         ?34, ?35, ?36, ?37, ?38,
-        ?39, ?40, ?41,
-        ?42, ?43, ?44, ?45
+        ?39, ?40, ?41, ?42,
+        ?43, ?44, ?45, ?46
       )
     `,
     args: [
@@ -1005,6 +1013,7 @@ export async function createAssetForPost(input: {
       storyIpId,
       storyIpNftContract,
       storyIpNftTokenId,
+      ipRoyaltyVault,
       storyPublishModel,
       storyLicenseTermsId,
       storyLicenseTemplate,
@@ -1203,6 +1212,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   let storyIpId: string | null = null
   let storyIpNftContract: string | null = null
   let storyIpNftTokenId: string | null = null
+  let ipRoyaltyVault: string | null = asset.ip_royalty_vault
   let storyPublishModel: "pirate_v1" | "story_ip_v1" = asset.story_publish_model
   let storyLicenseTermsId: string | null = asset.story_license_terms_id
   let storyLicenseTemplate: string | null = asset.story_license_template
@@ -1307,6 +1317,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       storyIpId = reusableOriginalRegistration.story_ip_id
       storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
       storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+      ipRoyaltyVault = reusableOriginalRegistration.ip_royalty_vault
       storyPublishModel = reusableOriginalRegistration.story_publish_model
       storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
       storyLicenseTemplate = reusableOriginalRegistration.story_license_template
@@ -1351,6 +1362,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       storyIpId = royaltyRegistration.storyIpId
       storyIpNftContract = royaltyRegistration.storyIpNftContract
       storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+      ipRoyaltyVault = royaltyRegistration.ipRoyaltyVault ?? null
       storyPublishModel = "story_ip_v1"
       storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
       storyLicenseTemplate = royaltyRegistration.storyLicenseTemplate
@@ -1434,30 +1446,31 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           story_ip_id = ?6,
           story_ip_nft_contract = ?7,
           story_ip_nft_token_id = ?8,
-          story_publish_model = ?9,
-          story_license_terms_id = ?10,
-          story_license_template = ?11,
-          story_royalty_policy = ?12,
-          story_royalty_policy_id = ?13,
-          story_derivative_parent_ip_ids_json = ?14,
-          story_derivative_registered_at = ?15,
-          story_revenue_token = ?16,
-          story_royalty_registration_status = ?17,
-          story_publish_tx_ref = ?18,
-          story_asset_version_id = ?19,
-          story_cdr_vault_uuid = ?20,
-          story_namespace = ?21,
-          story_entitlement_token_id = ?22,
-          story_read_condition = ?23,
-          story_write_condition = ?24,
+          ip_royalty_vault = ?9,
+          story_publish_model = ?10,
+          story_license_terms_id = ?11,
+          story_license_template = ?12,
+          story_royalty_policy = ?13,
+          story_royalty_policy_id = ?14,
+          story_derivative_parent_ip_ids_json = ?15,
+          story_derivative_registered_at = ?16,
+          story_revenue_token = ?17,
+          story_royalty_registration_status = ?18,
+          story_publish_tx_ref = ?19,
+          story_asset_version_id = ?20,
+          story_cdr_vault_uuid = ?21,
+          story_namespace = ?22,
+          story_entitlement_token_id = ?23,
+          story_read_condition = ?24,
+          story_write_condition = ?25,
           locked_delivery_status = 'ready',
-          locked_delivery_ref = ?25,
+          locked_delivery_ref = ?26,
           locked_delivery_error = NULL,
-          locked_delivery_storage_ref = ?26,
-          locked_delivery_secret_json = ?27,
-          license_preset = ?28,
-          commercial_rev_share_pct = ?29,
-          updated_at = ?30
+          locked_delivery_storage_ref = ?27,
+          locked_delivery_secret_json = ?28,
+          license_preset = ?29,
+          commercial_rev_share_pct = ?30,
+          updated_at = ?31
       WHERE community_id = ?1
         AND asset_id = ?2
     `,
@@ -1470,6 +1483,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       storyIpId,
       storyIpNftContract,
       storyIpNftTokenId,
+      ipRoyaltyVault,
       storyPublishModel,
       storyLicenseTermsId,
       storyLicenseTemplate,

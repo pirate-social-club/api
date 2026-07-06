@@ -191,10 +191,10 @@ async function seedControlPlaneCommunityForProjection(input: {
         ?1, ?2, 'Story Royalty Test Community', NULL, NULL, NULL,
         'request', 'active', 'active', 'none',
         NULL, NULL, NULL,
-        NULL, ?3, ?3
+        ?3, ?3
       )
       ON CONFLICT(community_id) DO NOTHING
-    `,
+  `,
     args: [input.communityId, input.userId, input.now],
   })
 }
@@ -372,6 +372,7 @@ describe("story royalty registration service", () => {
     const now = "2026-04-21T00:00:00.000Z"
     const parentIpId = "0x9999999999999999999999999999999999999999"
     const derivativeIpId = "0x3333333333333333333333333333333333333333"
+    const derivativeVault = "0x4444444444444444444444444444444444444444"
     const coverArtRef = "https://media.test/derivative-cover.jpg"
     const derivativeRequests: Array<{
       nft: { recipient: string }
@@ -406,6 +407,12 @@ describe("story royalty registration service", () => {
         async registerPilTermsAndAttach() {
           attachCalls += 1
           throw new Error("derivative outbound license attachment should not run")
+        },
+      },
+      royalty: {
+        async getRoyaltyVaultAddress(ipId) {
+          expect(ipId).toBe(derivativeIpId)
+          return derivativeVault
         },
       },
     }))
@@ -500,6 +507,7 @@ describe("story royalty registration service", () => {
       })
       expect(result).toMatchObject({
         storyIpId: derivativeIpId,
+        ipRoyaltyVault: derivativeVault,
         storyIpNftTokenId: "456",
         storyLicenseTermsId: null,
         storyDerivativeParentIpIds: [parentIpId],
@@ -582,33 +590,48 @@ describe("story royalty registration service", () => {
 
     const configMissingRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-config-missing-"))
     cleanupPaths.push(configMissingRootDir)
-    const configMissingEnv = { LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir } as Env
+    const configMissingControlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
+    const configMissingEnv = {
+      ENVIRONMENT: "test",
+      LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir,
+      CONTROL_PLANE_DATABASE_URL: `file:${configMissingControlPlane.databasePath}`,
+    } as Env
     const configMissingCommunityId = "cmt_story_royalty_config_missing"
     const configMissingUserId = "usr_author_story_config_missing"
-    const configMissing = await createUnavailableAsset({
-      env: configMissingEnv,
-      communityId: configMissingCommunityId,
-      userId: configMissingUserId,
-      title: "Config missing song",
-      assetId: "ast_config_missing_song",
-    })
+    try {
+      await seedControlPlaneCommunityForProjection({
+        client: configMissingControlPlane.client,
+        communityId: configMissingCommunityId,
+        userId: configMissingUserId,
+        now: "2026-04-21T00:00:00.000Z",
+      })
+      const configMissing = await createUnavailableAsset({
+        env: configMissingEnv,
+        communityId: configMissingCommunityId,
+        userId: configMissingUserId,
+        title: "Config missing song",
+        assetId: "ast_config_missing_song",
+      })
 
-    expect(configMissing.asset.story_royalty_registration_status).toBe("failed")
-    expect(configMissing.asset.publication_status).toBe("draft")
-    expect(configMissing.asset.story_status).toBe("none")
-    expect(configMissing.asset.story_error).toContain("story_royalty_config_missing")
+      expect(configMissing.asset.story_royalty_registration_status).toBe("failed")
+      expect(configMissing.asset.publication_status).toBe("draft")
+      expect(configMissing.asset.story_status).toBe("none")
+      expect(configMissing.asset.story_error).toContain("story_royalty_config_missing")
 
-    const configMissingSources = await listCommunityDerivativeSources({
-      env: configMissingEnv,
-      userId: configMissingUserId,
-      communityId: configMissingCommunityId,
-      kind: "song",
-      query: "Config missing",
-      limit: 25,
-      communityRepository: configMissing.repo,
-      profileRepository: buildProfileRepository(),
-    })
-    expect(configMissingSources.items).toEqual([])
+      const configMissingSources = await listCommunityDerivativeSources({
+        env: configMissingEnv,
+        userId: configMissingUserId,
+        communityId: configMissingCommunityId,
+        kind: "song",
+        query: "Config missing",
+        limit: 25,
+        communityRepository: configMissing.repo,
+        profileRepository: buildProfileRepository(),
+      })
+      expect(configMissingSources.items).toEqual([])
+    } finally {
+      await configMissingControlPlane.cleanup()
+    }
 
     const unavailableRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-unavailable-"))
     cleanupPaths.push(unavailableRootDir)
@@ -1048,6 +1071,7 @@ describe("story royalty registration service", () => {
     const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
 
     const env = {
+      ENVIRONMENT: "test",
       LOCAL_COMMUNITY_DB_ROOT: rootDir,
       CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
     } as Env
@@ -1196,14 +1220,26 @@ describe("story royalty registration service", () => {
   test("uses derivative source asset refs to register remix parents without listing unattached derivatives as sources", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-source-"))
     cleanupPaths.push(rootDir)
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
 
-    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const env = {
+      ENVIRONMENT: "test",
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    } as Env
     const repo = buildRepository()
     const communityId = "cmt_story_royalty_remix_source"
     const userId = "usr_author_story_remix_source"
     const now = "2026-04-21T00:00:00.000Z"
     const parentIpId = "0x9999999999999999999999999999999999999999"
     const derivativeIpId = "0x3333333333333333333333333333333333333333"
+    try {
+    await seedControlPlaneCommunityForProjection({
+      client: controlPlane.client,
+      communityId,
+      userId,
+      now,
+    })
     await seedStoryCommunity({ env, repo, communityId, userId })
 
     setStoryRoyaltyRegistrarForTests(async (input) => {
@@ -1356,13 +1392,21 @@ describe("story royalty registration service", () => {
       profileRepository: buildProfileRepository(),
     })
     expect(derivativeSources.items.map((source) => source.asset)).not.toContain(derivativeAssetId)
+    } finally {
+      await controlPlane.cleanup()
+    }
   })
 
   test("uses a remix source Story ref when registering a remix of a remix", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-chain-"))
     cleanupPaths.push(rootDir)
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
 
-    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const env = {
+      ENVIRONMENT: "test",
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    } as Env
     const repo = buildRepository()
     const communityId = "cmt_story_royalty_remix_chain"
     const userId = "usr_author_story_remix_chain"
@@ -1370,6 +1414,13 @@ describe("story royalty registration service", () => {
     const originalIpId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     const firstRemixIpId = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     const secondRemixIpId = "0xcccccccccccccccccccccccccccccccccccccccc"
+    try {
+    await seedControlPlaneCommunityForProjection({
+      client: controlPlane.client,
+      communityId,
+      userId,
+      now,
+    })
     await seedStoryCommunity({ env, repo, communityId, userId })
 
     setStoryRoyaltyRegistrarForTests(async (input) => {
@@ -1559,6 +1610,9 @@ describe("story royalty registration service", () => {
       expect(secondRemix.story_derivative_parent_ip_ids).toEqual([firstRemixIpId])
     } finally {
       db.close()
+    }
+    } finally {
+      await controlPlane.cleanup()
     }
   })
 })
