@@ -438,6 +438,7 @@ export async function prepareLockedAssetDelivery(input: {
     iv_b64: "",
     mime_type: input.mimeType,
   } satisfies LockedDeliverySecret)
+  let lockedDeliveryPayloadUploaded = false
   const storyPublishRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
     ? input.rightsBasis
     : "none"
@@ -482,6 +483,7 @@ export async function prepareLockedAssetDelivery(input: {
         mimeType: "application/octet-stream",
         bytes: ciphertext,
       })
+      lockedDeliveryPayloadUploaded = true
       const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
       if (!writerConfig.ok) {
         throw badRequestError(writerConfig.error)
@@ -580,6 +582,21 @@ export async function prepareLockedAssetDelivery(input: {
       )
     ) {
       console.warn(`[story] local fallback for locked delivery: ${errorMessage}`)
+      if (!lockedDeliveryPayloadUploaded) {
+        const plaintext = await getPlaintext()
+        if (plaintext.byteLength > 50 * 1024 * 1024) {
+          console.warn(`[story] locked asset ${input.assetId} is ${plaintext.byteLength} bytes; chunked encryption should replace whole-payload encryption before raising size caps`)
+        }
+        const { ciphertext, metadata } = await encryptLockedPayload(plaintext)
+        metadata.mime_type = input.mimeType
+        fallbackLockedDeliveryMetadataJson = JSON.stringify(metadata)
+        await uploadFilebaseObject({
+          env: input.env,
+          objectKey,
+          mimeType: "application/octet-stream",
+          bytes: ciphertext,
+        })
+      }
       return {
         storyStatus: "published",
         storyPublishTxRef: hashBytes32FromParts("local-story-publish", assetVersionId),
