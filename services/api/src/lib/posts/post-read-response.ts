@@ -16,7 +16,9 @@ import {
 } from "./post-jobs"
 import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydration"
 import { getPostReadMetrics } from "./community-post-metrics-store"
-import { getPostStreakSummary } from "./post-study-service"
+import { listPostStreakSummaries } from "./post-study-service"
+import { requireMemberAccess } from "./post-access"
+import { HttpError } from "../errors"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
 
@@ -130,18 +132,52 @@ export async function hydrateSongStreakSummariesForResponses(input: {
 }): Promise<void> {
   if (!input.profileRepository || !input.viewerUserId) return
 
-  await Promise.all(input.responses.map(async (response) => {
-    if (response.post.post_type !== "song" || response.post.status !== "published") {
+  const eligibleResponses = input.responses.filter((response) => {
+    if (response.post.post_type !== "song" || response.post.status !== "published" || !response.post.community_id) {
       response.streak_summary = null
-      return
+      return false
     }
-    response.streak_summary = await getPostStreakSummary({
-      client: input.client,
-      postId: response.post.post_id,
-      profileRepository: input.profileRepository!,
-      userId: input.viewerUserId ?? null,
-    })
-  }))
+    return true
+  })
+  if (eligibleResponses.length === 0) return
+
+  const communityIds = Array.from(new Set(eligibleResponses.map((response) => response.post.community_id)))
+  for (const communityId of communityIds) {
+    try {
+      await requireMemberAccess(input.client, communityId, input.viewerUserId)
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        for (const response of eligibleResponses.filter((candidate) => candidate.post.community_id === communityId)) {
+          response.streak_summary = null
+        }
+        continue
+      }
+      throw error
+    }
+
+    try {
+      const responses = eligibleResponses.filter((response) => response.post.community_id === communityId)
+      const summaries = await listPostStreakSummaries({
+        client: input.client,
+        limit: 3,
+        postIds: responses.map((response) => response.post.post_id),
+        profileRepository: input.profileRepository,
+        userId: input.viewerUserId,
+      })
+      for (const response of responses) {
+        response.streak_summary = summaries.get(response.post.post_id) ?? null
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)) {
+        for (const response of eligibleResponses.filter((candidate) => candidate.post.community_id === communityId)) {
+          response.streak_summary = null
+        }
+        continue
+      }
+      throw error
+    }
+  }
 }
 
 export async function hydrateAndEnqueuePostReadResponses(input: {
