@@ -115,6 +115,7 @@ const courtyardWalletInventoryGroupCache = new Map<string, CourtyardWalletInvent
 const DEFAULT_COURTYARD_INVENTORY_CACHE_TTL_MS = 60_000
 const DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS = 30_000
 const DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS = 8_000
+const DEFAULT_COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET = 1_000
 const MAX_COURTYARD_INVENTORY_CACHE_ENTRIES = 1_000
 
 export function setErc721InventoryMatcherForTests(
@@ -459,12 +460,14 @@ export async function listCourtyardWalletInventoryGroups(input: {
   const groups = new Map<string, CourtyardWalletInventoryGroup>()
   const seenTokenKeys = new Set<string>()
   const pageLimit = 100
+  const maxAssetsPerWallet = resolveCourtyardOwnershipMaxAssetsPerWallet(input.env)
 
   try {
     for (const walletAddress of walletAddresses) {
       let offset = 0
-      while (true) {
-        const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit: pageLimit })
+      while (offset < maxAssetsPerWallet) {
+        const limit = Math.min(pageLimit, maxAssetsPerWallet - offset)
+        const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit })
         for (const rawAsset of page.assets) {
           const asset = normalizeCourtyardAsset(rawAsset)
           if (!asset) continue
@@ -482,7 +485,7 @@ export async function listCourtyardWalletInventoryGroups(input: {
           })
         }
         offset += page.assets.length
-        if (page.assets.length === 0 || offset >= page.total) {
+        if (page.assets.length === 0 || offset >= page.total || offset >= maxAssetsPerWallet) {
           break
         }
       }
@@ -523,6 +526,18 @@ function resolveCourtyardOwnershipFetchTimeoutMs(env: Env): number {
     return parsed
   }
   return DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS
+}
+
+function resolveCourtyardOwnershipMaxAssetsPerWallet(env: Env): number {
+  const raw = String(env.COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET || "").trim()
+  if (!raw) {
+    return DEFAULT_COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET
+  }
+  const parsed = Number(raw)
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 5_000) {
+    return parsed
+  }
+  return DEFAULT_COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET
 }
 
 async function fetchCourtyardOwnershipPage(input: {
@@ -568,11 +583,13 @@ async function countCourtyardInventoryMatches(input: {
   let matchedQuantity = 0
   const seenTokenKeys = new Set<string>()
   const pageLimit = 100
+  const maxAssetsPerWallet = resolveCourtyardOwnershipMaxAssetsPerWallet(input.env)
 
   for (const walletAddress of input.walletAddresses) {
     let offset = 0
-    while (true) {
-      const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit: pageLimit })
+    while (offset < maxAssetsPerWallet) {
+      const limit = Math.min(pageLimit, maxAssetsPerWallet - offset)
+      const page = await fetchCourtyardOwnershipPage({ env: input.env, owner: walletAddress, offset, limit })
       for (const rawAsset of page.assets) {
         const asset = normalizeCourtyardAsset(rawAsset)
         if (!asset) continue
@@ -592,7 +609,7 @@ async function countCourtyardInventoryMatches(input: {
         }
       }
       offset += page.assets.length
-      if (page.assets.length === 0 || offset >= page.total) {
+      if (page.assets.length === 0 || offset >= page.total || offset >= maxAssetsPerWallet) {
         break
       }
     }

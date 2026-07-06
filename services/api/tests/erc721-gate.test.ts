@@ -583,6 +583,97 @@ describe("erc721 gate evaluation", () => {
     expect(fetchCount).toBe(2)
   })
 
+  test("caps Courtyard wallet inventory pagination per wallet", async () => {
+    const seenUrls: string[] = []
+    await withMockedFetch(() => async (input) => {
+      seenUrls.push(String(input))
+      return new Response(JSON.stringify({
+        total: 3,
+        assets: [
+          {
+            chain: "polygon",
+            collection: "Watches",
+            contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+            owner: { address: "0x3333333333333333333333333333333333333333" },
+            title: "Rolex Submariner",
+            token_id: "rolex-capped-1",
+            attributes: [
+              { name: "Brand", value: "Rolex" },
+              { name: "Model", value: "Submariner" },
+            ],
+          },
+          {
+            chain: "polygon",
+            collection: "Watches",
+            contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+            owner: { address: "0x3333333333333333333333333333333333333333" },
+            title: "Rolex Daytona",
+            token_id: "rolex-capped-2",
+            attributes: [
+              { name: "Brand", value: "Rolex" },
+              { name: "Model", value: "Daytona" },
+            ],
+          },
+        ],
+      })) as Response
+    }, async () => {
+      const result = await listCourtyardWalletInventoryGroups({
+        env: { COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET: "2" },
+        walletAttachments,
+      })
+
+      expect(result.unavailable).toBe(false)
+      expect(result.groups).toHaveLength(2)
+    })
+
+    expect(seenUrls).toHaveLength(2)
+    for (const seenUrl of seenUrls) {
+      const url = new URL(seenUrl)
+      expect(url.searchParams.get("limit")).toBe("2")
+      expect(url.searchParams.get("offset")).toBe("0")
+    }
+  })
+
+  test("caps Courtyard gate evaluation pagination per wallet", async () => {
+    const rule = makeCourtyardInventoryRule({ min_quantity: 1 })
+    const seenUrls: string[] = []
+    await withMockedFetch(() => async (input) => {
+      seenUrls.push(String(input))
+      return new Response(JSON.stringify({
+        total: 2,
+        assets: [{
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Pikachu",
+          token_id: "non-match-before-cap",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Pikachu" },
+          ],
+        }],
+      })) as Response
+    }, async () => {
+      const evaluation = await evaluateMembershipGateRules({
+        env: { COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET: "1" },
+        user: makeUser(),
+        walletAttachments,
+        rules: [rule],
+      })
+
+      expect(evaluation.satisfied).toBe(false)
+      expect(evaluation.mismatchReasons).toContain("erc721_inventory_match_required")
+    })
+
+    expect(seenUrls).toHaveLength(1)
+    for (const seenUrl of seenUrls) {
+      const url = new URL(seenUrl)
+      expect(url.searchParams.get("limit")).toBe("1")
+      expect(url.searchParams.get("offset")).toBe("0")
+    }
+  })
+
   test("bounds the Courtyard inventory match cache", async () => {
     let matcherCalls = 0
     setErc721InventoryMatcherForTests(async () => {
