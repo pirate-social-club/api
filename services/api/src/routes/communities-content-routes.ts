@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
 import { trackApiEvent } from "../lib/analytics/track"
@@ -16,7 +17,9 @@ import {
   deletePost,
   listCommunityEvents,
   listCommunityPosts,
+  listPendingCommunityPosts,
   removePostAsModerator,
+  retryPostPublish,
   setPostCommentLock,
 } from "../lib/posts/post-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
@@ -48,6 +51,15 @@ type ComposerLinkPreviewResponse = {
   preview: Record<string, unknown> | null
   oembed_html: string | null
   oembed_cache_age: number | null
+}
+
+function getWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
 }
 
 function serializeComposerLinkPreview(preview: ComposerLinkPreviewResult): ComposerLinkPreviewResponse {
@@ -101,6 +113,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userRepository,
       profileRepository,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     }))
     console.info("[create-post-submit] post create:result", {
       ...traceFields,
@@ -139,6 +152,37 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       })
     }
     return c.json(serializePost(result), result.status === "published" ? 201 : 202)
+  })
+
+  communities.get("/:communityId/posts/pending", async (c) => {
+    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await listPendingCommunityPosts({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      locale: c.req.query("locale"),
+      limit: c.req.query("limit"),
+      communityRepository,
+      userRepository,
+      profileRepository,
+    })
+    return c.json({
+      items: result.items.map((item) => serializeLocalizedPostResponse(item)),
+      next_cursor: result.next_cursor,
+    })
+  })
+
+  communities.post("/:communityId/posts/:postId/publish-retry", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await retryPostPublish({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      postId: decodePublicPostId(c.req.param("postId")),
+      communityRepository,
+      waitUntil: getWaitUntil(c),
+    })
+    return c.json(serializePost(result), 202)
   })
 
   communities.post("/:communityId/posts/:postId/link-preview", async (c) => {

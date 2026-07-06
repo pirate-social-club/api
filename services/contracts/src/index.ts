@@ -1460,6 +1460,7 @@ export type CreateSongArtifactBundleRequest = {
   primary_audio: SongArtifactUploadRef;
   title: string;
   lyrics: string;
+  analysis_mode?: "sync" | "deferred";
   genius_annotations_url?: string | null;
   cover_art?: SongArtifactUploadRef | null;
   preview_audio?: SongArtifactUploadRef | null;
@@ -1506,6 +1507,8 @@ export type CreatePostRequest = (((unknown & {
   source_community: string;
 }) & {
   idempotency_key: string;
+  publish_mode?: "sync" | "async";
+  listing_draft?: CreatePostListingDraft | null;
   authorship_mode?: "human_direct" | "user_agent";
   agent?: string | null;
   agent_action_proof?: AgentActionProof | null;
@@ -1716,6 +1719,17 @@ export type CrosspostSource = {
   thumbnail_ref?: string | null;
 };
 
+export type PostPublishFailureCode = "song_analysis_blocked" | "song_analysis_review_required" | "song_rights_reference_required" | "song_preview_generation_failed" | "text_moderation_blocked" | "story_royalty_registration_failed" | "story_locked_delivery_failed" | "listing_creation_failed" | "catalog_sync_failed" | "provider_unavailable" | "internal_error";
+
+export type CreatePostListingDraft = {
+  price_cents: number;
+  regional_pricing_enabled: boolean;
+  donation_partner?: string | null;
+  donation_share_bps?: number | null;
+  vinyl_release_provider?: "elasticstage" | null;
+  vinyl_release_url?: string | null;
+};
+
 export type Post = {
   id: string;
   object: "post";
@@ -1735,12 +1749,15 @@ export type Post = {
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
   label?: string | null;
   post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
-  status: "draft" | "published" | "hidden" | "removed" | "deleted";
+  status: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted";
   comments_locked?: boolean;
   comments_locked_at?: number | null;
   comments_locked_by_user?: string | null;
   comments_lock_reason?: string | null;
   visibility: "public" | "members_only";
+  publish_failure_code?: PostPublishFailureCode | null;
+  publish_failure_message?: string | null;
+  publish_failure_retryable?: boolean | null;
   title?: string | null;
   body?: string | null;
   caption?: string | null;
@@ -3787,8 +3804,10 @@ export const apiRoutes = {
   communityFollow: (communityId: string) => `/communities/${communityId}/follow`,
   communityUnfollow: (communityId: string) => `/communities/${communityId}/unfollow`,
   communityPosts: (communityId: string) => `/communities/${communityId}/posts`,
+  communityPendingPosts: (communityId: string) => `/communities/${communityId}/posts/pending`,
   communityPostComments: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/comments`,
   communityPostReports: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/reports`,
+  communityPostPublishRetry: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/publish-retry`,
   communityCommentReports: (communityId: string, commentId: string) => `/communities/${communityId}/comments/${commentId}/reports`,
   communityModerationCases: (communityId: string) => `/communities/${communityId}/moderation/cases`,
   communityModerationCase: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}`,

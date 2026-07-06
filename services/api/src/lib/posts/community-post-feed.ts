@@ -191,6 +191,47 @@ export async function listPublishedLocalizedPosts(input: {
   return { items: pageItems, nextCursor }
 }
 
+export async function listAuthorPendingLocalizedPosts(input: {
+  client: Client
+  communityId: string
+  authorUserId: string
+  limit: number
+}): Promise<PublishedLocalizedPostFeedItem[]> {
+  const projectionSchema = await resolvePostProjectionSchema(input.client)
+  const result = await input.client.execute({
+    sql: `
+      SELECT ${postSelectColumnsForSchema(projectionSchema)},
+             0 AS upvote_count,
+             0 AS downvote_count,
+             0 AS like_count,
+             (
+               SELECT COUNT(*)
+               FROM comments
+               WHERE thread_root_post_id = posts.post_id
+                 AND status = 'published'
+             ) AS comment_count,
+             NULL AS viewer_vote
+      FROM posts
+      ${postAssetStoryJoinForSchema(projectionSchema)}
+      WHERE community_id = ?1
+        AND author_user_id = ?2
+        AND status IN ('processing', 'failed')
+      ORDER BY created_at DESC, post_id DESC
+      LIMIT ?3
+    `,
+    args: [input.communityId, input.authorUserId, input.limit],
+  })
+
+  return result.rows.map((row) => ({
+    post: serializePost(toPostRow(row)),
+    upvote_count: requiredNumber(row, "upvote_count"),
+    downvote_count: requiredNumber(row, "downvote_count"),
+    comment_count: requiredNumber(row, "comment_count"),
+    like_count: requiredNumber(row, "like_count"),
+    viewer_vote: numberOrNull(rowValue(row, "viewer_vote")) as -1 | 1 | null,
+  }))
+}
+
 export async function listPublishedLocalizedEventPosts(input: {
   client: Client
   communityId: string

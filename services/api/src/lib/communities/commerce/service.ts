@@ -216,6 +216,274 @@ function shouldAttemptStoryRoyaltyRegistration(input: {
   return input.assetKind !== "song_audio" || input.hasSongBundle
 }
 
+function hasCompleteStoryRoyaltyRegistration(asset: AssetRow): boolean {
+  return asset.story_royalty_registration_status === "registered"
+    && Boolean(asset.story_ip_id?.trim())
+    && Boolean(asset.story_license_terms_id?.trim())
+}
+
+async function retryExistingStoryRoyaltyRegistration(input: {
+  env: Env
+  client: Pick<Client, "execute">
+  communityId: string
+  post: Post
+  asset: AssetRow
+  bundle?: SongArtifactBundle | null
+  userRepository: UserRepository
+}): Promise<AssetRow> {
+  const asset = input.asset
+  const resolvedPrimaryContentHash = (asset.primary_content_hash?.trim() || `0x${await sha256Hex(asset.primary_content_ref)}`) as `0x${string}`
+  let storyError: string | null = asset.story_error
+  let storyStatus: Asset["story_status"] = asset.story_status
+  let publicationStatus: Asset["publication_status"] = asset.publication_status
+  let storyIpId: string | null = asset.story_ip_id
+  let storyIpNftContract: string | null = asset.story_ip_nft_contract
+  let storyIpNftTokenId: string | null = asset.story_ip_nft_token_id
+  let storyPublishModel: "pirate_v1" | "story_ip_v1" = asset.story_publish_model
+  let storyLicenseTermsId: string | null = asset.story_license_terms_id
+  let storyLicenseTemplate: string | null = asset.story_license_template
+  let storyRoyaltyPolicy: string | null = asset.story_royalty_policy
+  let storyRoyaltyPolicyId: string | null = asset.story_royalty_policy_id
+  let storyDerivativeParentIpIdsJson: string | null = asset.story_derivative_parent_ip_ids_json
+  let storyDerivativeRegisteredAt: string | null = asset.story_derivative_registered_at
+  let storyRevenueToken: string | null = asset.story_revenue_token
+  let storyRoyaltyRegistrationStatus = asset.story_royalty_registration_status
+  let storyPublishTxRef: string | null = asset.story_publish_tx_ref
+  let storyAssetVersionId: string | null = asset.story_asset_version_id
+  let storyCdrVaultUuid: number | null = asset.story_cdr_vault_uuid
+  let storyNamespace: string | null = asset.story_namespace
+  let storyEntitlementTokenId: string | null = asset.story_entitlement_token_id
+  let storyReadCondition: string | null = asset.story_read_condition
+  let storyWriteCondition: string | null = asset.story_write_condition
+  let effectiveLicensePreset = asset.license_preset as StoryLicensePreset | null
+  let effectiveCommercialRevSharePct = asset.commercial_rev_share_pct
+
+  try {
+    const reusableOriginalRegistration = asset.rights_basis === "original"
+      ? await findReusableRegisteredOriginalStoryAssetByContent({
+          client: input.client,
+          communityId: input.communityId,
+          creatorUserId: asset.creator_user_id,
+          assetKind: asset.asset_kind,
+          primaryContentHash: resolvedPrimaryContentHash,
+        })
+      : null
+
+    if (reusableOriginalRegistration) {
+      storyIpId = reusableOriginalRegistration.story_ip_id
+      storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
+      storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+      storyPublishModel = reusableOriginalRegistration.story_publish_model
+      storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
+      storyLicenseTemplate = reusableOriginalRegistration.story_license_template
+      storyRoyaltyPolicy = reusableOriginalRegistration.story_royalty_policy
+      storyRoyaltyPolicyId = reusableOriginalRegistration.story_royalty_policy_id
+      storyDerivativeParentIpIdsJson = reusableOriginalRegistration.story_derivative_parent_ip_ids_json
+      storyDerivativeRegisteredAt = reusableOriginalRegistration.story_derivative_registered_at
+      storyRevenueToken = reusableOriginalRegistration.story_revenue_token
+      storyRoyaltyRegistrationStatus = "registered"
+      storyStatus = "published"
+      publicationStatus = "story_published"
+      storyError = null
+      storyPublishTxRef = reusableOriginalRegistration.story_publish_tx_ref
+      storyAssetVersionId = reusableOriginalRegistration.story_asset_version_id
+      storyCdrVaultUuid = reusableOriginalRegistration.story_cdr_vault_uuid
+      storyNamespace = reusableOriginalRegistration.story_namespace
+      storyEntitlementTokenId = reusableOriginalRegistration.story_entitlement_token_id
+      storyReadCondition = reusableOriginalRegistration.story_read_condition
+      storyWriteCondition = reusableOriginalRegistration.story_write_condition
+      effectiveLicensePreset = reusableOriginalRegistration.license_preset as StoryLicensePreset | null
+      effectiveCommercialRevSharePct = reusableOriginalRegistration.commercial_rev_share_pct
+    } else {
+      const creatorWalletAddress = await resolvePrimaryWalletAddress({
+        env: input.env,
+        userRepository: input.userRepository,
+        userId: asset.creator_user_id,
+      })
+      const royaltyRegistration = await maybeRegisterStoryRoyaltyForAsset({
+        env: input.env,
+        client: input.client,
+        communityId: input.communityId,
+        assetId: asset.asset_id,
+        creatorWalletAddress,
+        title: input.post.title ?? null,
+        rightsBasis: asset.rights_basis,
+        licensePreset: effectiveLicensePreset,
+        commercialRevSharePct: effectiveCommercialRevSharePct,
+        upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
+        assetKind: asset.asset_kind,
+        bundle: input.bundle ?? null,
+        primaryContentHash: resolvedPrimaryContentHash,
+      })
+      if (royaltyRegistration) {
+        storyIpId = royaltyRegistration.storyIpId
+        storyIpNftContract = royaltyRegistration.storyIpNftContract
+        storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+        storyPublishModel = "story_ip_v1"
+        storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
+        storyLicenseTemplate = royaltyRegistration.storyLicenseTemplate
+        storyRoyaltyPolicy = royaltyRegistration.storyRoyaltyPolicy
+        storyRoyaltyPolicyId = royaltyRegistration.storyRoyaltyPolicy
+        storyDerivativeParentIpIdsJson = royaltyRegistration.storyDerivativeParentIpIds
+          ? JSON.stringify(royaltyRegistration.storyDerivativeParentIpIds)
+          : null
+        storyDerivativeRegisteredAt = royaltyRegistration.storyDerivativeRegisteredAt
+        storyRevenueToken = royaltyRegistration.storyRevenueToken
+        storyRoyaltyRegistrationStatus = royaltyRegistration.storyRoyaltyRegistrationStatus
+        storyStatus = "published"
+        publicationStatus = "story_published"
+        storyError = null
+        if (asset.rights_basis === "derivative" && !royaltyRegistration.storyLicenseTermsId) {
+          effectiveLicensePreset = null
+          effectiveCommercialRevSharePct = null
+        }
+      } else {
+        const registrationError = isStoryRoyaltyRegistrationConfigured(input.env)
+          ? "story_royalty_registration_unavailable"
+          : "story_royalty_config_missing"
+        storyRoyaltyRegistrationStatus = "failed"
+        storyError = `royalty_registration_failed:${registrationError}`
+      }
+    }
+  } catch (error) {
+    const registrationError = error instanceof Error ? error.message : String(error)
+    storyRoyaltyRegistrationStatus = "failed"
+    storyError = `royalty_registration_failed:${registrationError}`
+  }
+
+  if (storyRoyaltyRegistrationStatus === "failed") {
+    const sanitizedStoryError = sanitizeStoryRegistrationFailure(storyError)
+    await input.client.execute({
+      sql: `
+        UPDATE assets
+        SET story_status = 'failed',
+            story_error = ?3,
+            story_royalty_registration_status = 'failed',
+            updated_at = ?4
+        WHERE community_id = ?1
+          AND asset_id = ?2
+      `,
+      args: [input.communityId, asset.asset_id, sanitizedStoryError, nowIso()],
+    })
+    const storyErrorClass = classifyStoryRegistrationFailure(storyError)
+    console.error("[commerce] existing asset required Story registration failed again", {
+      community_id: input.communityId,
+      post_id: input.post.post_id,
+      asset_id: asset.asset_id,
+      asset_kind: asset.asset_kind,
+      rights_basis: asset.rights_basis,
+      story_error_class: storyErrorClass,
+      story_error: sanitizedStoryError,
+    })
+    throw providerUnavailable(
+      storyRegistrationFailureMessage(storyError),
+      {
+        reason: "story_royalty_registration_failed",
+        community_id: input.communityId,
+        post_id: input.post.post_id,
+        asset_id: asset.asset_id,
+        asset_kind: asset.asset_kind,
+        rights_basis: asset.rights_basis,
+        primary_content_hash: resolvedPrimaryContentHash,
+        upstream_asset_ref_count: input.post.upstream_asset_refs?.length ?? 0,
+        story_error_class: storyErrorClass,
+      },
+      isStoryRegistrationFailureRetryable(storyErrorClass),
+    )
+  }
+
+  const updatedAt = nowIso()
+  await input.client.execute({
+    sql: `
+      UPDATE assets
+      SET publication_status = ?3,
+          story_status = ?4,
+          story_error = ?5,
+          story_ip_id = ?6,
+          story_ip_nft_contract = ?7,
+          story_ip_nft_token_id = ?8,
+          story_publish_model = ?9,
+          story_license_terms_id = ?10,
+          story_license_template = ?11,
+          story_royalty_policy = ?12,
+          story_royalty_policy_id = ?13,
+          story_derivative_parent_ip_ids_json = ?14,
+          story_derivative_registered_at = ?15,
+          story_revenue_token = ?16,
+          story_royalty_registration_status = ?17,
+          story_publish_tx_ref = ?18,
+          story_asset_version_id = ?19,
+          story_cdr_vault_uuid = ?20,
+          story_namespace = ?21,
+          story_entitlement_token_id = ?22,
+          story_read_condition = ?23,
+          story_write_condition = ?24,
+          license_preset = ?25,
+          commercial_rev_share_pct = ?26,
+          updated_at = ?27
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [
+      input.communityId,
+      asset.asset_id,
+      publicationStatus,
+      storyStatus,
+      storyError,
+      storyIpId,
+      storyIpNftContract,
+      storyIpNftTokenId,
+      storyPublishModel,
+      storyLicenseTermsId,
+      storyLicenseTemplate,
+      storyRoyaltyPolicy,
+      storyRoyaltyPolicyId,
+      storyDerivativeParentIpIdsJson,
+      storyDerivativeRegisteredAt,
+      storyRevenueToken,
+      storyRoyaltyRegistrationStatus,
+      storyPublishTxRef,
+      storyAssetVersionId,
+      storyCdrVaultUuid,
+      storyNamespace,
+      storyEntitlementTokenId,
+      storyReadCondition,
+      storyWriteCondition,
+      effectiveLicensePreset,
+      effectiveCommercialRevSharePct,
+      updatedAt,
+    ],
+  })
+  return {
+    ...asset,
+    commercial_rev_share_pct: effectiveCommercialRevSharePct,
+    license_preset: effectiveLicensePreset,
+    publication_status: publicationStatus,
+    story_asset_version_id: storyAssetVersionId,
+    story_cdr_vault_uuid: storyCdrVaultUuid,
+    story_derivative_parent_ip_ids_json: storyDerivativeParentIpIdsJson,
+    story_derivative_registered_at: storyDerivativeRegisteredAt,
+    story_entitlement_token_id: storyEntitlementTokenId,
+    story_error: storyError,
+    story_ip_id: storyIpId,
+    story_ip_nft_contract: storyIpNftContract,
+    story_ip_nft_token_id: storyIpNftTokenId,
+    story_license_template: storyLicenseTemplate,
+    story_license_terms_id: storyLicenseTermsId,
+    story_namespace: storyNamespace,
+    story_publish_model: storyPublishModel,
+    story_publish_tx_ref: storyPublishTxRef,
+    story_read_condition: storyReadCondition,
+    story_revenue_token: storyRevenueToken,
+    story_royalty_policy: storyRoyaltyPolicy,
+    story_royalty_policy_id: storyRoyaltyPolicyId,
+    story_royalty_registration_status: storyRoyaltyRegistrationStatus,
+    story_status: storyStatus,
+    story_write_condition: storyWriteCondition,
+    updated_at: updatedAt,
+  }
+}
+
 export function shouldPrepareLockedDeliveryAsync(env: Pick<Env, "ENVIRONMENT" | "STORY_LOCKED_DELIVERY_ASYNC">): boolean {
   return envFlag(env.STORY_LOCKED_DELIVERY_ASYNC, !isLocalEnvironment(env.ENVIRONMENT))
 }
@@ -362,6 +630,27 @@ export async function createAssetForPost(input: {
   }
   const existing = await getAssetRow(input.client, input.communityId, input.post.asset_id)
   if (existing) {
+    const existingRequiresStoryRoyaltyRegistration = shouldAttemptStoryRoyaltyRegistration({
+      assetKind: existing.asset_kind,
+      rightsBasis: existing.rights_basis,
+      hasSongBundle: Boolean(existing.song_artifact_bundle_id),
+    })
+    if (
+      input.requireStoryRoyaltyRegistration
+      && existingRequiresStoryRoyaltyRegistration
+      && !hasCompleteStoryRoyaltyRegistration(existing)
+    ) {
+      const registered = await retryExistingStoryRoyaltyRegistration({
+        env: input.env,
+        client: input.client,
+        communityId: input.communityId,
+        post: input.post,
+        asset: existing,
+        bundle: input.bundle ?? null,
+        userRepository: input.userRepository,
+      })
+      return serializeAsset(registered)
+    }
     if (input.royaltyAllocations && input.royaltyAllocations.length > 0) {
       await assertExistingAssetAllocationMatches({
         client: input.client,

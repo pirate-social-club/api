@@ -18,6 +18,7 @@ import { getProfileRepository } from "../auth/repositories"
 import type { ProfileRepository } from "../auth/repositories"
 import { hydrateCommentAuthorPublicHandles } from "./comment-author-hydration"
 import type { Env } from "../../env"
+import type { Post } from "../../types"
 import type { CommentContext, CommentListResponse, CommentSort } from "./comment-types"
 import {
   getCommentById,
@@ -38,8 +39,8 @@ type CommentReadCommunityRepository =
   & Pick<CommunityCommentProjectionRepository, "getCommunityCommentProjectionByCommentId">
 
 function isPubliclyReadableThreadRoot(input: {
-  status: "draft" | "published" | "hidden" | "removed" | "deleted"
-  visibility: "public" | "members_only"
+  status: Post["status"]
+  visibility: Post["visibility"]
 }): boolean {
   return input.status === "published" && input.visibility === "public"
 }
