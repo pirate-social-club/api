@@ -32,7 +32,6 @@ type BunRuntime = {
     command: string[],
     options: { stdin: "ignore"; stdout: "pipe"; stderr: "pipe" }
   ) => BunSubprocess
-  write: (path: string, data: Response | Uint8Array) => Promise<number>
   file: (path: string) => { size: number }
 }
 
@@ -120,7 +119,7 @@ export async function extractVideoAudioSampleForObject(input: {
 
   const { tmpdir } = await import("node:os")
   const { join } = await import("node:path")
-  const { unlink } = await import("node:fs/promises")
+  const { unlink, writeFile } = await import("node:fs/promises")
   const sourcePath = join(tmpdir(), `video-analysis-${crypto.randomUUID()}.bin`)
 
   try {
@@ -132,7 +131,7 @@ export async function extractVideoAudioSampleForObject(input: {
     if (sourceBytes === "source_too_large") {
       return { kind: "skipped", reason: "source_too_large" }
     }
-    await runtime.write(sourcePath, sourceBytes)
+    await writeFile(sourcePath, sourceBytes)
 
     const ffmpegBin = trimEnv(input.env.SONG_PREVIEW_FFMPEG_BIN) || DEFAULT_FFMPEG_BIN
     const process = runtime.spawn([
