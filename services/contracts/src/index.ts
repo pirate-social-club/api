@@ -1992,6 +1992,66 @@ export type CreateModerationActionRequest = {
   note?: string | null;
 };
 
+export type MediaAnalysisResult = {
+  media_analysis_result_id: string;
+  community_id: string;
+  source_post_id: string | null;
+  source_asset_id: string | null;
+  outcome: "allow" | "allow_with_required_reference" | "review_required" | "blocked";
+  content_safety_state: "pending" | "safe" | "sensitive" | "adult";
+  age_gate_policy: "none" | "18_plus";
+  trigger_sources: unknown | null;
+  acrcloud_music_match: unknown | null;
+  acrcloud_custom_match: unknown | null;
+  acrcloud_error_code: string | null;
+  acrcloud_error_message: string | null;
+  acrcloud_checked_at: string | null;
+  safety_signals: unknown | null;
+  authenticity_signals: unknown | null;
+  policy_reason_code: string | null;
+  policy_reason: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RightsReviewCase = {
+  rights_review_case_id: string;
+  subject_type: "asset" | "post" | "live_room" | "replay_asset";
+  subject_id: string;
+  community_id: string;
+  status: "open" | "under_review" | "resolved" | "blocked";
+  trigger_source: "acrcloud_match" | "declared_reference_mismatch" | "manual_report" | "operator_escalation";
+  analysis_result_ref: string | null;
+  submitted_evidence_refs: unknown | null;
+  resolution: "clear" | "clear_with_upstream_refs" | "block" | "needs_more_evidence" | null;
+  resolver_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+};
+
+export type RightsReviewCaseListItem = (RightsReviewCase & {
+  analysis: MediaAnalysisResult | null;
+  post: ModerationCasePostPreview | null;
+});
+
+export type RightsReviewCaseListResponse = {
+  items: Array<RightsReviewCaseListItem>;
+  next_cursor: string | null;
+};
+
+export type RightsReviewCaseDetail = {
+  case: RightsReviewCase;
+  analysis: MediaAnalysisResult | null;
+  post: Post | null;
+};
+
+export type CreateRightsReviewActionRequest = {
+  action_type: "start_review" | "clear" | "clear_with_upstream_refs" | "needs_more_evidence" | "block";
+  evidence_refs?: Array<string> | null;
+};
+
 export type SongPresentation = {
   title: string | null;
   cover_art_ref: string | null;
@@ -2072,7 +2132,6 @@ export type SongStudyExercise = ({
   line_index: number;
   prompt_text: string;
   reference_text: string;
-  review_session_id?: string;
   translation_text?: string | null;
   max_attempts: number;
 } | {
@@ -2087,7 +2146,6 @@ export type SongStudyExercise = ({
     text: string;
   }>;
   max_attempts: number;
-  review_session_id?: string;
 });
 
 export type SongStudyAttemptRequest = {
@@ -2095,8 +2153,6 @@ export type SongStudyAttemptRequest = {
   exercise_id: string;
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
-  review_session_id?: string;
-  target_language?: string;
   selected_option_id?: string;
   transcript?: string;
 };
@@ -3812,6 +3868,9 @@ export const apiRoutes = {
   communityModerationCases: (communityId: string) => `/communities/${communityId}/moderation/cases`,
   communityModerationCase: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}`,
   communityModerationCaseActions: (communityId: string, moderationCaseId: string) => `/communities/${communityId}/moderation/cases/${moderationCaseId}/actions`,
+  communityRightsReviewCases: (communityId: string) => `/communities/${communityId}/rights-review/cases`,
+  communityRightsReviewCase: (communityId: string, rightsReviewCaseId: string) => `/communities/${communityId}/rights-review/cases/${rightsReviewCaseId}`,
+  communityRightsReviewCaseActions: (communityId: string, rightsReviewCaseId: string) => `/communities/${communityId}/rights-review/cases/${rightsReviewCaseId}/actions`,
   communityPreview: (communityId: string) => `/communities/${communityId}/preview`,
   communityJoinEligibility: (communityId: string) => `/communities/${communityId}/join-eligibility`,
   communityLiveRoomRecordingDraft: (communityId: string, liveRoomId: string) => `/communities/${communityId}/live-rooms/${liveRoomId}/recording-draft`,

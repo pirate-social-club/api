@@ -14,6 +14,7 @@ import { registerCommunityLiveRoomRoutes } from "./communities-live-rooms"
 import { registerCommunityKaraokeSessionRoutes } from "./communities-karaoke-session-routes"
 import { registerCommunityMembershipRoutes } from "./communities-membership-routes"
 import { registerCommunityModerationRoutes } from "./communities-moderation-routes"
+import { registerCommunityRightsReviewRoutes } from "./communities-rights-review-routes"
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
 import { registerCommunitySettingsRoutes } from "./communities-settings-routes"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
@@ -86,6 +87,7 @@ registerCommunityMembershipRoutes(communities)
 registerCommunityHandleRoutes(communities)
 registerCommunityContentRoutes(communities)
 registerCommunityModerationRoutes(communities)
+registerCommunityRightsReviewRoutes(communities)
 registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunityBookingsRoutes(communities)
