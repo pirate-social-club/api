@@ -17,12 +17,21 @@ function envWithPoolStats(stats: { total: number; allocated: number; free: numbe
 }
 
 describe("checkScheduledD1PoolCapacity", () => {
-  test("is a no-op when the shard binding or admin token is missing", async () => {
+  test("is a no-op when the shard binding is missing", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {})
     try {
       await checkScheduledD1PoolCapacity({ SHARD_ADMIN_TOKEN: "admin-token" } as Env)
-      await checkScheduledD1PoolCapacity({ COMMUNITY_D1_SHARD: {} as Env["COMMUNITY_D1_SHARD"] } as Env)
       expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  test("warns when the shard binding exists but the admin token is missing", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await checkScheduledD1PoolCapacity({ COMMUNITY_D1_SHARD: {} as Env["COMMUNITY_D1_SHARD"] } as Env)
+      expect(warn).toHaveBeenCalledWith("[scheduled] pool watchdog misconfigured: shard bound, no admin token")
     } finally {
       warn.mockRestore()
     }
