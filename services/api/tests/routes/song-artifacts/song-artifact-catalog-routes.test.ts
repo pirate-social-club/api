@@ -329,12 +329,13 @@ describe("song artifact catalog routes", () => {
       storyIpId: "0x1111111111111111111111111111111111111111",
       storyLicenseTermsId: "17",
     })
+    const longDerivativeTitle = "Derivative Echo 2026-07-06T21:23:32.025Z exact smoke title"
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       creatorUserId: owner.userId,
       assetId: "ast_derivative_song",
-      title: "Derivative Echo",
+      title: longDerivativeTitle,
       assetKind: "song_audio",
       rightsBasis: "derivative",
       publicationStatus: "story_published",
@@ -396,7 +397,7 @@ describe("song artifact catalog routes", () => {
       "asset_ast_original_song",
     ])
     expect(songSourcesBody.items.map((item) => item.title).sort()).toEqual([
-      "Derivative Echo",
+      longDerivativeTitle,
       "Original Source",
     ])
     expect(songSourcesBody.items.every((item) => item.kind === "song")).toBe(true)
@@ -417,6 +418,20 @@ describe("song artifact catalog routes", () => {
     expect(queriedSources.status).toBe(200)
     const queriedSourcesBody = await json(queriedSources) as DerivativeSourceListBody
     expect(queriedSourcesBody.items.map((item) => item.asset)).toEqual(["asset_ast_derivative_song"])
+
+    const longTitleQuery = encodeURIComponent(longDerivativeTitle)
+    const longQuerySources = await app.request(
+      `http://pirate.test/communities/${communityId}/derivative-sources?kind=song&q=${longTitleQuery}`,
+      {
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(longQuerySources.status).toBe(200)
+    const longQuerySourcesBody = await json(longQuerySources) as DerivativeSourceListBody
+    expect(longQuerySourcesBody.items.map((item) => item.asset)).toEqual(["asset_ast_derivative_song"])
 
     const videoSources = await app.request(
       `http://pirate.test/communities/${communityId}/derivative-sources?kind=video`,
@@ -812,12 +827,13 @@ describe("song artifact catalog routes", () => {
       displayName: "Global Filter Composer Club",
     })
 
+    const longNeedleSongTitle = "Needle Song 2026-07-06T21:23:32.025Z exact smoke title"
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId: sourceCommunityId,
       creatorUserId: sourceOwner.userId,
       assetId: "ast_filter_song",
-      title: "Needle Song",
+      title: longNeedleSongTitle,
       assetKind: "song_audio",
       rightsBasis: "original",
       publicationStatus: "story_published",
@@ -827,7 +843,7 @@ describe("song artifact catalog routes", () => {
       communityId: sourceCommunityId,
       creatorUserId: sourceOwner.userId,
       assetId: "ast_filter_song",
-      title: "Needle Song",
+      title: longNeedleSongTitle,
       assetKind: "song_audio",
     })
     await insertDerivativeSourceAsset({
@@ -883,6 +899,19 @@ describe("song artifact catalog routes", () => {
     expect(songResponse.status).toBe(200)
     const songBody = await json(songResponse) as DerivativeSourceListBody
     expect(songBody.items.map((item) => item.asset)).toEqual(["asset_ast_filter_song"])
+
+    const longSongResponse = await app.request(
+      `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song&q=${encodeURIComponent(longNeedleSongTitle)}`,
+      {
+        headers: {
+          authorization: `Bearer ${viewer.accessToken}`,
+        },
+      },
+      ctx.env,
+    )
+    expect(longSongResponse.status).toBe(200)
+    const longSongBody = await json(longSongResponse) as DerivativeSourceListBody
+    expect(longSongBody.items.map((item) => item.asset)).toEqual(["asset_ast_filter_song"])
 
     const missingResponse = await app.request(
       `http://pirate.test/communities/${composerCommunityId}/derivative-sources?scope=global&kind=song&q=Missing`,
