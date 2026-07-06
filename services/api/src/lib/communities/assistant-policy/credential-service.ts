@@ -29,6 +29,21 @@ export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 
 const OPENROUTER_PROVIDER = "openrouter" as const
 const ELEVENLABS_PROVIDER = "elevenlabs" as const
+const ACTIVE_CREDENTIAL_CACHE_TTL_MS = 60_000
+
+type ActiveCredentialCacheSource = "hit" | "miss"
+
+export type ActiveCredentialPresence = {
+  active: boolean
+  cache: ActiveCredentialCacheSource
+}
+
+type ActiveCredentialCacheEntry = {
+  active: boolean
+  expiresAt: number
+}
+
+const activeCredentialPresenceCache = new Map<string, ActiveCredentialCacheEntry>()
 
 export type CommunityAssistantCredentialResponse =
   | {
@@ -155,6 +170,27 @@ function credentialResponse(
     }
 }
 
+function activeCredentialCacheKey(input: {
+  env: Env
+  communityId: string
+  provider: CommunityAssistantCredentialProvider
+}): string {
+  return [
+    input.env.ENVIRONMENT ?? "",
+    input.env.CONTROL_PLANE_DATABASE_URL ?? "",
+    input.communityId,
+    input.provider,
+  ].join(":")
+}
+
+function clearActiveCredentialPresenceCache(input: {
+  env: Env
+  communityId: string
+  provider: CommunityAssistantCredentialProvider
+}): void {
+  activeCredentialPresenceCache.delete(activeCredentialCacheKey(input))
+}
+
 async function readCredential(input: {
   env: Env
   communityId: string
@@ -183,6 +219,20 @@ async function hasActiveCredential(input: {
   communityId: string
   provider: CommunityAssistantCredentialProvider
 }): Promise<boolean> {
+  return (await getActiveCredentialPresence(input)).active
+}
+
+async function getActiveCredentialPresence(input: {
+  env: Env
+  communityId: string
+  provider: CommunityAssistantCredentialProvider
+}): Promise<ActiveCredentialPresence> {
+  const key = activeCredentialCacheKey(input)
+  const cached = activeCredentialPresenceCache.get(key)
+  const now = Date.now()
+  if (cached && cached.expiresAt > now) {
+    return { active: cached.active, cache: "hit" }
+  }
   const client = getControlPlaneClient(input.env)
   const row = await executeFirst(client, {
     sql: `
@@ -195,7 +245,12 @@ async function hasActiveCredential(input: {
     `,
     args: [input.communityId, input.provider],
   })
-  return Boolean(row)
+  const active = Boolean(row)
+  activeCredentialPresenceCache.set(key, {
+    active,
+    expiresAt: now + ACTIVE_CREDENTIAL_CACHE_TTL_MS,
+  })
+  return { active, cache: "miss" }
 }
 
 export async function getCommunityAssistantCredentialStatus(input: {
@@ -336,6 +391,7 @@ export async function saveCommunityAssistantCredential(input: {
     })
 
   })
+  clearActiveCredentialPresenceCache({ env: input.env, communityId: input.communityId, provider })
 
   console.info("[community-assistant-credential] save:success", {
     communityId: input.communityId,
@@ -409,6 +465,17 @@ export async function hasActiveCommunityElevenLabsCredential(input: {
   })
 }
 
+export async function getActiveCommunityElevenLabsCredentialPresence(input: {
+  env: Env
+  communityId: string
+}): Promise<ActiveCredentialPresence> {
+  return getActiveCredentialPresence({
+    env: input.env,
+    communityId: input.communityId,
+    provider: ELEVENLABS_PROVIDER,
+  })
+}
+
 export async function revokeCommunityAssistantCredential(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
@@ -441,6 +508,7 @@ export async function revokeCommunityAssistantCredential(input: {
     `,
     args: [input.communityId, provider, nowIso()],
   })
+  clearActiveCredentialPresenceCache({ env: input.env, communityId: input.communityId, provider })
 
   console.info("[community-assistant-credential] revoke:success", {
     communityId: input.communityId,

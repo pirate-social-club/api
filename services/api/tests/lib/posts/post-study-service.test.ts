@@ -10,7 +10,7 @@ import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
 import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
-import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
+import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, getSongStudyAttemptTiming, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
 import type { Env, LocalizedPostResponse } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -1482,7 +1482,7 @@ describe("post study service", () => {
         AND post_id = ?2
     `, [LEARNER_ID, POST_ID])
 
-    await submitPostStudyAttempt({
+    const firstReview = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
         attempt_number: 1,
@@ -1495,10 +1495,16 @@ describe("post study service", () => {
       communityRepository: repo,
       env: env({
         SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+        SONG_STUDY_ATTEMPT_TIMING_LOGS: "true",
         SONG_STUDY_STREAK_WRITES_ENABLED: "true",
       }),
       postId: POST_ID,
     })
+    const firstTiming = getSongStudyAttemptTiming(firstReview)
+    expect(firstTiming?.credential_cache).toBe("miss")
+    expect(typeof firstTiming?.credential_probe_ms).toBe("number")
+    expect(typeof firstTiming?.due_review_count_ms).toBe("number")
+    expect(typeof firstTiming?.streak_target_count_ms).toBe("number")
 
     const afterFirst = await client!.execute("SELECT study_attempt_count, study_target_count, qualified FROM song_engagement_days")
     expect(afterFirst.rows.map((row) => ({
@@ -1507,7 +1513,7 @@ describe("post study service", () => {
       study_target_count: Number(row.study_target_count),
     }))).toEqual([{ qualified: 0, study_attempt_count: 1, study_target_count: 2 }])
 
-    await submitPostStudyAttempt({
+    const secondReview = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
         attempt_number: 1,
@@ -1520,10 +1526,16 @@ describe("post study service", () => {
       communityRepository: repo,
       env: env({
         SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+        SONG_STUDY_ATTEMPT_TIMING_LOGS: "true",
         SONG_STUDY_STREAK_WRITES_ENABLED: "true",
       }),
       postId: POST_ID,
     })
+    const secondTiming = getSongStudyAttemptTiming(secondReview)
+    expect(secondTiming?.credential_cache).toBe("hit")
+    expect(typeof secondTiming?.credential_probe_ms).toBe("number")
+    expect(typeof secondTiming?.due_review_count_ms).toBe("number")
+    expect(typeof secondTiming?.streak_target_count_ms).toBe("number")
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
     expect(ledger.rows.map((row) => ({

@@ -13,7 +13,11 @@ import { parseJobPayload } from "../communities/jobs/payload"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
-import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
+import {
+  getActiveCommunityElevenLabsCredentialPresence,
+  hasActiveCommunityElevenLabsCredential,
+  type ActiveCredentialPresence,
+} from "../communities/assistant-policy/credential-service"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
 import { canGenerateStudyTranslations, requestStudyPackGeneration, type StudyGeneratedLine } from "./post-study-generation-provider"
 import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } from "./post-access"
@@ -217,13 +221,17 @@ export type SongStudyAttemptResult = {
 export type SongStudyAttemptTiming = {
   access_read_batch_ms?: number
   close_client_ms?: number
+  credential_cache?: ActiveCredentialPresence["cache"]
+  credential_probe_ms?: number
   community_id: string
+  due_review_count_ms?: number
   exercise_id: string
   exercise_type?: ExerciseType
   open_client_ms?: number
   outcome: string
   parallel_read_batch_ms?: number
   post_id: string
+  streak_target_count_ms?: number
   streak_deferred: boolean
   streak_inline_ms?: number
   streak_writes_enabled: boolean
@@ -2104,15 +2112,29 @@ async function resolveStudyStreakTargetCount(input: {
   sourceLanguage: string | null
   targetLanguage: string
   userId: string
-}): Promise<number> {
+}): Promise<{
+  count: number
+  credentialCache?: ActiveCredentialPresence["cache"]
+  credentialProbeMs?: number
+  dueReviewCountMs?: number
+  totalMs: number
+}> {
+  const startedAt = performance.now()
   if (!input.countDueReviews) {
-    return STREAK_MIN_STUDY_ATTEMPTS
+    return {
+      count: STREAK_MIN_STUDY_ATTEMPTS,
+      totalMs: elapsedMs(startedAt),
+    }
   }
-  const includeSayItBack = await hasActiveCommunityElevenLabsCredential({
+  const credentialProbeStartedAt = performance.now()
+  const credentialPresence = await getActiveCommunityElevenLabsCredentialPresence({
     env: input.env,
     communityId: input.communityId,
   })
+  const credentialProbeMs = elapsedMs(credentialProbeStartedAt)
+  const includeSayItBack = credentialPresence.active
   const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
+  const dueReviewCountStartedAt = performance.now()
   const dueBefore = await countDueReviewExercises({
     client: input.client,
     includeSayItBack,
@@ -2122,7 +2144,14 @@ async function resolveStudyStreakTargetCount(input: {
     targetLanguage: input.targetLanguage,
     userId: input.userId,
   })
-  return studyTargetCountFromDueBefore(dueBefore + (input.additionalDueCount ?? 0))
+  const dueReviewCountMs = elapsedMs(dueReviewCountStartedAt)
+  return {
+    count: studyTargetCountFromDueBefore(dueBefore + (input.additionalDueCount ?? 0)),
+    credentialCache: credentialPresence.cache,
+    credentialProbeMs,
+    dueReviewCountMs,
+    totalMs: elapsedMs(startedAt),
+  }
 }
 
 async function recordStudyStreakMaterialization(input: {
@@ -2176,6 +2205,10 @@ export async function submitPostStudyAttempt(input: {
   let writeTxMs: number | undefined
   let streakInlineMs: number | undefined
   let closeClientMs: number | undefined
+  let credentialCache: ActiveCredentialPresence["cache"] | undefined
+  let credentialProbeMs: number | undefined
+  let dueReviewCountMs: number | undefined
+  let streakTargetCountMs: number | undefined
   let timingOutcome = "error"
   let timingExerciseType: ExerciseType | undefined
   let timingStreakDeferred = false
@@ -2287,7 +2320,7 @@ export async function submitPostStudyAttempt(input: {
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
     const isDueReviewAttempt = Boolean(existingReviewState && isDueReview({ dueAt: existingReviewState.due_at, now }))
-    const studyStreakTargetCount = streakWritesEnabled
+    const studyStreakTarget = streakWritesEnabled
       ? await resolveStudyStreakTargetCount({
         client: db.client,
         communityId: input.communityId,
@@ -2301,6 +2334,10 @@ export async function submitPostStudyAttempt(input: {
         userId: input.actor.userId,
       })
       : null
+    credentialCache = studyStreakTarget?.credentialCache
+    credentialProbeMs = studyStreakTarget?.credentialProbeMs
+    dueReviewCountMs = studyStreakTarget?.dueReviewCountMs
+    streakTargetCountMs = studyStreakTarget?.totalMs
     const writeTxStartedAt = performance.now()
     const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
       const reviewRating = await upsertReviewState({
@@ -2339,14 +2376,14 @@ export async function submitPostStudyAttempt(input: {
           now,
         ],
       })
-      if (streakWritesEnabled && studyStreakTargetCount != null) {
+      if (streakWritesEnabled && studyStreakTarget != null) {
         await upsertStudyEngagementDay({
           client: tx,
           communityId: input.communityId,
           isCorrect: outcome === "correct",
           now,
           postId: input.postId,
-          studyTargetCount: studyStreakTargetCount,
+          studyTargetCount: studyStreakTarget.count,
           userId: input.actor.userId,
         })
       }
@@ -2401,13 +2438,17 @@ export async function submitPostStudyAttempt(input: {
       const timing: SongStudyAttemptTiming = {
         access_read_batch_ms: accessReadBatchMs,
         close_client_ms: closeClientMs,
+        credential_cache: credentialCache,
+        credential_probe_ms: credentialProbeMs,
         community_id: input.communityId,
+        due_review_count_ms: dueReviewCountMs,
         exercise_id: exerciseId,
         exercise_type: timingExerciseType,
         open_client_ms: openClientMs,
         outcome: timingOutcome,
         parallel_read_batch_ms: parallelReadBatchMs,
         post_id: input.postId,
+        streak_target_count_ms: streakTargetCountMs,
         streak_deferred: timingStreakDeferred,
         streak_inline_ms: streakInlineMs,
         streak_writes_enabled: timingStreakWritesEnabled,
