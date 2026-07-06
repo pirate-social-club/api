@@ -48,6 +48,7 @@ import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communit
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
+import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import { checkScheduledD1PoolCapacity } from "./lib/communities/provisioning/pool-capacity-watchdog"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
@@ -490,6 +491,26 @@ async function reconcileScheduledRoyaltyClaims(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledRoyaltyAllocationVerifications(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileStoryRoyaltyAllocationVerifications({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxAssetsPerCommunity: 10,
+    })
+    if (summary.checked > 0 || summary.failed > 0 || summary.failed_communities.length > 0) {
+      console.info("[royalty-allocations] reconciled verification", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[royalty-allocations] verification reconciliation failed", error)
+    captureScheduledError(env, error, "royalty_allocation_verification")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
 async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
@@ -623,6 +644,7 @@ const handler: ExportedHandler<Env> = {
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
+      { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
       { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
     ]
     const rotatedJobs: NamedTask[] = [

@@ -3,6 +3,7 @@
 // atomically with asset creation. On-chain registration/verification are later slices.
 import { sha256Hex } from "../../crypto"
 import { badRequestError, conflictError } from "../../errors"
+import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { resolveStoryChainId } from "../../story/story-runtime-config"
 import type { UserRepository } from "../../auth/repositories"
@@ -54,6 +55,24 @@ export type StoryRoyaltyShareRow = {
   shareBps: number
   percentage: number
 }
+
+export type PendingStoryRoyaltyAllocationAsset = {
+  communityId: string
+  assetId: string
+  storyIpId: string
+  ipRoyaltyVault: string
+}
+
+export type StoryRoyaltyVaultReader = {
+  totalSupply: (vaultAddress: `0x${string}`) => Promise<bigint>
+  decimals: (vaultAddress: `0x${string}`) => Promise<number>
+  balanceOf: (input: { vaultAddress: `0x${string}`; walletAddress: `0x${string}` }) => Promise<bigint>
+}
+
+export type StoryRoyaltyAllocationVerificationResult =
+  | { status: "verified"; assetId: string; checkedRows: number; totalSupply: string; decimals: number }
+  | { status: "pending"; assetId: string; checkedRows: number; reason: string }
+  | { status: "skipped"; assetId: string; reason: string }
 
 export function buildStoryRoyaltySharesFromAllocationRows(rows: Array<{
   walletAddressNormalized: string
@@ -305,4 +324,211 @@ export async function markStoryRoyaltyAllocationRegistrationPendingVerification(
       input.registeredAt,
     ],
   })
+}
+
+function parseEvmAddress(raw: string | null | undefined): `0x${string}` | null {
+  const normalized = String(raw || "").trim().toLowerCase()
+  return /^0x[0-9a-f]{40}$/.test(normalized) ? normalized as `0x${string}` : null
+}
+
+function failureReason(message: string): string {
+  return message.slice(0, 500)
+}
+
+export async function listPendingStoryRoyaltyAllocationAssets(input: {
+  client: Pick<Client, "execute">
+  limit: number
+}): Promise<PendingStoryRoyaltyAllocationAsset[]> {
+  const limit = Number.isInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 100) : 25
+  const result = await input.client.execute({
+    sql: `
+      SELECT community_id, asset_id, story_ip_id, ip_royalty_vault
+      FROM assets
+      WHERE royalty_allocation_status = 'verification_pending'
+        AND story_ip_id IS NOT NULL
+        AND story_ip_id != ''
+        AND ip_royalty_vault IS NOT NULL
+        AND ip_royalty_vault != ''
+      ORDER BY royalty_allocation_registered_at ASC, updated_at ASC, asset_id ASC
+      LIMIT ?1
+    `,
+    args: [limit],
+  })
+
+  return result.rows.map((row) => ({
+    communityId: String(row.community_id || ""),
+    assetId: String(row.asset_id || ""),
+    storyIpId: String(row.story_ip_id || ""),
+    ipRoyaltyVault: String(row.ip_royalty_vault || ""),
+  })).filter((row) => row.communityId && row.assetId && row.storyIpId && row.ipRoyaltyVault)
+}
+
+export async function verifyStoryRoyaltyAllocationForAsset(input: {
+  client: Pick<Client, "execute" | "transaction">
+  communityId: string
+  assetId: string
+  vaultReader: StoryRoyaltyVaultReader
+  checkedAt?: string
+}): Promise<StoryRoyaltyAllocationVerificationResult> {
+  const assetResult = await input.client.execute({
+    sql: `
+      SELECT asset_id, community_id, royalty_allocation_status, ip_royalty_vault
+      FROM assets
+      WHERE community_id = ?1
+        AND asset_id = ?2
+    `,
+    args: [input.communityId, input.assetId],
+  })
+  const asset = assetResult.rows[0]
+  if (!asset) return { status: "skipped", assetId: input.assetId, reason: "asset_not_found" }
+  if (String(asset.royalty_allocation_status || "") === "verified") {
+    return { status: "skipped", assetId: input.assetId, reason: "already_verified" }
+  }
+  if (String(asset.royalty_allocation_status || "") !== "verification_pending") {
+    return { status: "skipped", assetId: input.assetId, reason: "not_verification_pending" }
+  }
+
+  const vaultAddress = parseEvmAddress(String(asset.ip_royalty_vault || ""))
+  if (!vaultAddress) {
+    return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "missing_or_invalid_royalty_vault")
+  }
+
+  const allocationResult = await input.client.execute({
+    sql: `
+      SELECT wallet_address_normalized, share_bps
+      FROM initial_royalty_allocations
+      WHERE community_id = ?1
+        AND asset_id = ?2
+      ORDER BY position ASC
+    `,
+    args: [input.communityId, input.assetId],
+  })
+  if (allocationResult.rows.length === 0) {
+    return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "missing_allocation_rows")
+  }
+
+  const rows = allocationResult.rows.map((row) => ({
+    walletAddress: parseEvmAddress(String(row.wallet_address_normalized || "")),
+    shareBps: Number(row.share_bps),
+  }))
+  const invalidRow = rows.find((row) => !row.walletAddress || !Number.isInteger(row.shareBps) || row.shareBps <= 0)
+  if (invalidRow) {
+    return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "invalid_allocation_row")
+  }
+  const totalBps = rows.reduce((sum, row) => sum + row.shareBps, 0)
+  if (totalBps !== 10_000) {
+    return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "allocation_bps_total_mismatch")
+  }
+
+  const totalSupply = await input.vaultReader.totalSupply(vaultAddress)
+  if (totalSupply <= 0n) {
+    return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "royalty_vault_total_supply_zero")
+  }
+  const decimals = await input.vaultReader.decimals(vaultAddress)
+  const observed: Array<{
+    walletAddress: `0x${string}`
+    expected: bigint
+    actual: bigint
+  }> = []
+  for (const row of rows) {
+    const expectedNumerator = totalSupply * BigInt(row.shareBps)
+    if (expectedNumerator % 10_000n !== 0n) {
+      return await markStoryRoyaltyAllocationVerificationPending(input.client, input.communityId, input.assetId, "royalty_vault_supply_not_divisible_by_bps")
+    }
+    const expected = expectedNumerator / 10_000n
+    const actual = await input.vaultReader.balanceOf({
+      vaultAddress,
+      walletAddress: row.walletAddress as `0x${string}`,
+    })
+    observed.push({
+      walletAddress: row.walletAddress as `0x${string}`,
+      expected,
+      actual,
+    })
+    if (actual !== expected) {
+      return await markStoryRoyaltyAllocationVerificationPending(
+        input.client,
+        input.communityId,
+        input.assetId,
+        `royalty_vault_balance_mismatch:${row.walletAddress}:${actual.toString()}:${expected.toString()}`,
+      )
+    }
+  }
+
+  const checkedAt = input.checkedAt ?? nowIso()
+  await withTransaction(input.client, "write", async (tx) => {
+    for (const row of observed) {
+      await tx.execute({
+        sql: `
+          UPDATE initial_royalty_allocations
+          SET distribution_status = 'verified',
+              expected_rt_units = ?3,
+              verified_rt_units = ?4,
+              failure_reason = NULL
+          WHERE community_id = ?1
+            AND asset_id = ?2
+            AND wallet_address_normalized = ?5
+        `,
+        args: [
+          input.communityId,
+          input.assetId,
+          row.expected.toString(),
+          row.actual.toString(),
+          row.walletAddress,
+        ],
+      })
+    }
+    await tx.execute({
+      sql: `
+        UPDATE assets
+        SET royalty_allocation_status = 'verified',
+            royalty_vault_total_supply = ?3,
+            royalty_vault_decimals = ?4,
+            royalty_allocation_projection_synced = 0,
+            updated_at = ?5
+        WHERE community_id = ?1
+          AND asset_id = ?2
+          AND royalty_allocation_status = 'verification_pending'
+      `,
+      args: [input.communityId, input.assetId, totalSupply.toString(), decimals, checkedAt],
+    })
+  })
+
+  return {
+    status: "verified",
+    assetId: input.assetId,
+    checkedRows: observed.length,
+    totalSupply: totalSupply.toString(),
+    decimals,
+  }
+}
+
+async function markStoryRoyaltyAllocationVerificationPending(
+  client: Pick<Client, "execute">,
+  communityId: string,
+  assetId: string,
+  reason: string,
+): Promise<StoryRoyaltyAllocationVerificationResult> {
+  await client.execute({
+    sql: `
+      UPDATE initial_royalty_allocations
+      SET failure_reason = ?3
+      WHERE community_id = ?1
+        AND asset_id = ?2
+        AND distribution_status = 'pending'
+    `,
+    args: [communityId, assetId, failureReason(reason)],
+  })
+  await client.execute({
+    sql: `
+      UPDATE assets
+      SET royalty_allocation_projection_synced = 0,
+          updated_at = ?3
+      WHERE community_id = ?1
+        AND asset_id = ?2
+        AND royalty_allocation_status = 'verification_pending'
+    `,
+    args: [communityId, assetId, nowIso()],
+  })
+  return { status: "pending", assetId, checkedRows: 0, reason }
 }
