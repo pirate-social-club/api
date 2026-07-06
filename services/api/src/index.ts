@@ -672,7 +672,7 @@ const handler: ExportedHandler<Env> = {
 
 export class CachedPublicReads extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
-    return publicReadApp.fetch(request, this.env, this.ctx)
+    return withRequestControlPlaneClients(async () => publicReadApp.fetch(request, this.env, this.ctx))
   }
 }
 
