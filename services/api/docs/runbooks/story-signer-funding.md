@@ -91,6 +91,16 @@ PR #169) that warns **before** a signer hits its floor. Threshold =
 - A Sentry warning (task `story_runtime_funding_watchdog`, urgency `high` when
   below floor).
 
+Recommended Sentry alert rules:
+
+- Page on any `scheduled_task:story_runtime_funding_watchdog urgency:high`
+  event. A signer is below its enforced floor and dependent transactions are
+  already failing.
+- Notify during working hours on any
+  `scheduled_task:story_runtime_funding_watchdog urgency:low` event. A signer is
+  still above its floor but has fewer than the configured runway transactions
+  left.
+
 When you see it: run step 1 to confirm, then step 2 (and step 3 if the funder is
 also low). It is read-only and fail-soft — it never sends a transaction.
 
