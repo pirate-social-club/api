@@ -2107,7 +2107,6 @@ export async function upsertStudyStreakProgress(input: {
 }
 
 async function resolveStudyStreakTargetCount(input: {
-  additionalDueCount?: number
   client: ReadClient
   communityId: string
   countDueReviews: boolean
@@ -2169,7 +2168,7 @@ async function resolveStudyStreakTargetCount(input: {
   })
   const dueReviewCountMs = elapsedMs(dueReviewCountStartedAt)
   return {
-    count: studyTargetCountFromDueBefore(dueBefore + (input.additionalDueCount ?? 0)),
+    count: studyTargetCountFromDueBefore(dueBefore),
     credentialSource: capability.source,
     credentialProbeMs,
     dueReviewCountMs,
@@ -2351,7 +2350,6 @@ export async function submitPostStudyAttempt(input: {
         client: db.client,
         communityId: input.communityId,
         countDueReviews: isDueReviewAttempt,
-        additionalDueCount: isDueReviewAttempt ? 1 : 0,
         env: input.env,
         now,
         postId: input.postId,
