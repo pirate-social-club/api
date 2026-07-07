@@ -6,7 +6,8 @@ import { sendOpsAlerts } from "./sink"
 import type { OpsAlert, OpsAlertSeverity } from "./types"
 
 const DEFAULT_BUCKET_MS = 60 * 60 * 1000
-const DEDUPE_TTL_SECONDS = 3 * 60 * 60
+const DEFAULT_LOW_SEVERITY_BUCKET_MS = 24 * 60 * 60 * 1000
+const MIN_DEDUPE_TTL_SECONDS = 3 * 60 * 60
 
 function intFromEnv(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10)
@@ -60,6 +61,17 @@ function communityIdsFromExtra(extra: Record<string, unknown> | undefined): stri
   return [...ids].sort()
 }
 
+function bucketMsForScheduledAlert(env: Env, alert: OpsAlert): number {
+  if (alert.severity === "low") {
+    return intFromEnv(env.OPS_ALERT_LOW_BUCKET_MS, DEFAULT_LOW_SEVERITY_BUCKET_MS)
+  }
+  return intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)
+}
+
+function ttlSecondsForBucket(bucketMs: number): number {
+  return Math.max(MIN_DEDUPE_TTL_SECONDS, Math.ceil((bucketMs * 2) / 1000))
+}
+
 async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<void> {
   const kv = env.OPS_ALERT_DEDUPE
   if (!kv) {
@@ -67,9 +79,9 @@ async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<void> {
     return
   }
 
-  const bucketMs = intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)
+  const bucketMs = bucketMsForScheduledAlert(env, alert)
   const bucket = bucketStartMs(Date.now(), bucketMs)
-  const deduper = new KvAlertDeduper(kv, DEDUPE_TTL_SECONDS)
+  const deduper = new KvAlertDeduper(kv, ttlSecondsForBucket(bucketMs))
   if (await deduper.hasSent(alert.key, bucket)) return
 
   const delivery = await sendOpsAlerts(env, [alert])
@@ -100,7 +112,11 @@ export async function captureScheduledWarning(
   extra?: Record<string, unknown>,
   tags?: Record<string, string>,
 ): Promise<void> {
-  const severity: OpsAlertSeverity = tags?.urgency === "high" ? "high" : "medium"
+  const severity: OpsAlertSeverity = tags?.urgency === "high"
+    ? "high"
+    : tags?.urgency === "low"
+      ? "low"
+      : "medium"
   await deliverScheduledAlert(env, {
     key: `scheduled_warning:${task}:${tags?.urgency ?? "normal"}`,
     severity,

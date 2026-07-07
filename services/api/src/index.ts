@@ -455,7 +455,11 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         "community_jobs_post_publish_finalize_reconciliation",
         reconciledPostPublishFinalize,
         {
-          urgency: reconciledPostPublishFinalize.failed_posts > 5 || reconciledPostPublishFinalize.failed_communities.length > 5 ? "high" : "low",
+          urgency: reconciledPostPublishFinalize.failed_posts > 5
+            ? "high"
+            : reconciledPostPublishFinalize.failed_posts > 0
+              ? "medium"
+              : "low",
         },
       )
     }
