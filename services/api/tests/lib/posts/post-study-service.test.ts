@@ -1635,6 +1635,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-streak-review-say-1",
+        target_language: "es",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },
@@ -1695,6 +1696,99 @@ describe("post study service", () => {
       study_attempt_count: 2,
       study_correct_count: 2,
       study_target_count: 2,
+    }])
+
+    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
+  })
+
+  test("freezes a translation-only due review streak target without double-counting the current card", async () => {
+    await seedSongPost()
+    await clearElevenLabsCredential()
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES
+        ('stu_due_1', ?1, 'line_001', 0, 'en', 'Line one', 'Line one', 'ready', 2, 2, ?2, ?2),
+        ('stu_due_2', ?1, 'line_002', 1, 'en', 'Line two', 'Line two', 'ready', 2, 2, ?2, ?2),
+        ('stu_due_3', ?1, 'line_003', 2, 'en', 'Line three', 'Line three', 'ready', 2, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+    for (const [unitId, lineId] of [
+      ["stu_due_1", "line_001"],
+      ["stu_due_2", "line_002"],
+      ["stu_due_3", "line_003"],
+    ] as const) {
+      await exec(`
+        INSERT INTO song_study_unit_localization (
+          id, unit_id, target_language, localization_version, status,
+          question, translation_text, options_json, correct_option_id,
+          explanation_text, max_attempts, generated_at, created_at, updated_at
+        )
+        VALUES (?1, ?2, 'es', 1, 'ready',
+                'Choose the best translation.', ?3, ?4,
+                'opt_a', 'explanation', 1, ?5, ?5, ?5)
+      `, [
+        `sul_${unitId}_es`,
+        unitId,
+        `translation ${lineId}`,
+        JSON.stringify([
+          { id: "opt_a", text: `translation ${lineId}` },
+          { id: "opt_b", text: "wrong answer" },
+          { id: "opt_c", text: "also wrong" },
+        ]),
+        NOW,
+      ])
+      await exec(`
+        INSERT INTO song_study_review_state (
+          user_id, post_id, line_id, exercise_type, target_language,
+          state, stability, difficulty, due_at, last_reviewed_at,
+          reps, lapses, fsrs_params_version, updated_at
+        )
+        VALUES (?1, ?2, ?3, 'translation_choice', 'es',
+                'review', 2.5, 5.0, '2026-06-28T08:00:00.000Z',
+                '2026-06-27T08:00:00.000Z', 1, 0, 1, ?4)
+      `, [LEARNER_ID, POST_ID, lineId, NOW])
+    }
+
+    for (const [index, unitId] of ["stu_due_1", "stu_due_2", "stu_due_3"].entries()) {
+      await submitPostStudyAttempt({
+        actor: learnerActor,
+        body: {
+          attempt_number: 1,
+          exercise_id: `stu:${unitId}:translation_choice:es`,
+          idempotency_key: `study-streak-review-choice-only-${index + 1}`,
+          selected_option_id: "opt_a",
+          target_language: "es",
+          type: "translation_choice",
+        },
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env({
+          SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+          SONG_STUDY_STREAK_WRITES_ENABLED: "true",
+        }),
+        postId: POST_ID,
+      })
+    }
+
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 1,
+      study_attempt_count: 3,
+      study_correct_count: 3,
+      study_target_count: 3,
     }])
 
     const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
