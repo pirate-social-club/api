@@ -105,8 +105,11 @@ function zkPassportLogo(env: Env): string | null {
 }
 
 function zkPassportDevMode(env: Env): boolean {
+  if (isProductionEnv(env)) {
+    return false
+  }
   return truthyEnv((env as Env & { ZKPASSPORT_DEV_MODE?: string }).ZKPASSPORT_DEV_MODE)
-    || (!isProductionEnv(env) && trimEnv(env.ENVIRONMENT) === "test")
+    || trimEnv(env.ENVIRONMENT) === "test"
 }
 
 function zkPassportValiditySeconds(env: Env): number {

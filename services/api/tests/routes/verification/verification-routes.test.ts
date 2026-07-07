@@ -367,6 +367,31 @@ describe("verification routes", () => {
     expect(typeof nullifierRows.rows[0]?.source_user_attestation_id).toBe("string")
   })
 
+  test("zkpassport completion without proofs returns a bad request, not provider unavailable", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "verification-zkpassport-empty-complete-user")
+    const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
+      provider: "zkpassport",
+      requested_capabilities: ["nationality"],
+      verification_requirements: [{ proof_type: "nationality", required_values: ["US"] }],
+    }, ctx.env, session.accessToken)
+    expect(createdVerification.status).toBe(201)
+    const createdBody = await json(createdVerification) as { id: string }
+
+    const completedVerification = await requestJson(
+      `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(completedVerification.status).toBe(400)
+    const body = await json(completedVerification) as { code: string; message: string }
+    expect(body.code).toBe("bad_request")
+    expect(body.message).toBe("ZKPassport completion requires proofs and queryResult")
+  })
+
   test("self launch callback uses the live dev tunnel origin instead of a stale configured origin", async () => {
     const ctx = await createRouteTestContext({
       ENVIRONMENT: "staging",
