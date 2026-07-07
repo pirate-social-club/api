@@ -5,6 +5,20 @@ import type {
 } from "../../types"
 import { unixSeconds } from "../../serializers/time"
 
+type SongArtifactAlignmentReason = NonNullable<SongArtifactBundle["alignment_reason"]>
+
+const SONG_ARTIFACT_ALIGNMENT_REASONS = new Set<string>([
+  "lyrics_missing",
+  "audio_missing",
+  "elevenlabs_key_missing",
+  "elevenlabs_key_invalid",
+  "elevenlabs_rate_limited",
+  "elevenlabs_provider_unavailable",
+  "elevenlabs_timeout",
+  "elevenlabs_invalid_response",
+  "alignment_failed",
+])
+
 export type SongArtifactUploadRow = {
   song_artifact_upload_id: string
   community_id: string
@@ -50,6 +64,7 @@ export type SongArtifactBundleRow = {
   translated_lyrics_json: string | null
   alignment_status: SongArtifactBundle["alignment_status"]
   alignment_error: string | null
+  alignment_reason: SongArtifactAlignmentReason | null
   timed_lyrics_ref: string | null
   timed_lyrics_json: string | null
   moderation_status: SongArtifactBundle["moderation_status"]
@@ -69,6 +84,14 @@ function parseJsonValue<T>(value: string | null, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function parseAlignmentReason(value: unknown): SongArtifactAlignmentReason | null {
+  const reason = stringOrNull(value)
+  if (!reason || !SONG_ARTIFACT_ALIGNMENT_REASONS.has(reason)) {
+    return null
+  }
+  return reason as SongArtifactAlignmentReason
 }
 
 export function toSongArtifactUploadRow(row: unknown): SongArtifactUploadRow {
@@ -143,6 +166,7 @@ export function toSongArtifactBundleRow(row: unknown): SongArtifactBundleRow {
     translated_lyrics_json: stringOrNull(rowValue(row, "translated_lyrics_json")),
     alignment_status: requiredString(row, "alignment_status") as SongArtifactBundle["alignment_status"],
     alignment_error: stringOrNull(rowValue(row, "alignment_error")),
+    alignment_reason: parseAlignmentReason(rowValue(row, "alignment_reason")),
     timed_lyrics_ref: stringOrNull(rowValue(row, "timed_lyrics_ref")),
     timed_lyrics_json: stringOrNull(rowValue(row, "timed_lyrics_json")),
     moderation_status: requiredString(row, "moderation_status") as SongArtifactBundle["moderation_status"],
@@ -194,6 +218,7 @@ export function serializeSongArtifactBundle(row: SongArtifactBundleRow): SongArt
     translated_lyrics: parseJsonValue(row.translated_lyrics_json, null),
     alignment_status: row.alignment_status,
     alignment_error: row.alignment_error,
+    alignment_reason: row.alignment_reason,
     timed_lyrics_ref: row.timed_lyrics_ref,
     timed_lyrics: parseJsonValue(row.timed_lyrics_json, null),
     moderation_status: row.moderation_status,

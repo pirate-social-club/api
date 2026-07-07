@@ -10,7 +10,28 @@ import type { Env } from "../../env"
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
+type SongKaraokeCapability = NonNullable<LocalizedPostResponse["karaoke_capability"]>
+type SongFeatureCapabilityReason = NonNullable<SongKaraokeCapability["reasons"]>[number]
+type SongArtifactAlignmentReason = NonNullable<LocalizedPostResponse["post"]> extends never ? never : (
+  | "lyrics_missing"
+  | "audio_missing"
+  | "elevenlabs_key_missing"
+  | "elevenlabs_key_invalid"
+  | "elevenlabs_rate_limited"
+  | "elevenlabs_provider_unavailable"
+  | "elevenlabs_timeout"
+  | "elevenlabs_invalid_response"
+  | "alignment_failed"
+)
+type SongArtifactPresentation = {
+  alignment_reason: SongArtifactAlignmentReason | null
+  alignment_status: SongPresentationAlignmentStatus
+  downloadable_audio: SongPresentationDownloadableAudio[] | null
+  has_instrumental_audio: boolean
+  has_timed_lyrics: boolean
+}
 type StudyEnabledCache = Map<string, Promise<boolean>>
+type KaraokeEnabledCache = Map<string, Promise<boolean>>
 type StudyElevenLabsCredentialResolver = (communityId: string) => Promise<boolean>
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
@@ -34,6 +55,50 @@ function alignmentStatusValue(value: unknown): SongPresentationAlignmentStatus {
     default:
       return null
   }
+}
+
+function isMissingKaraokeEnabledColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:no such column|unknown column|column .*karaoke_enabled.* does not exist|no column named karaoke_enabled)/iu.test(message)
+}
+
+async function readCommunityKaraokeEnabled(input: {
+  executor: DbExecutor
+  communityId: string
+}): Promise<boolean> {
+  try {
+    const row = await executeFirst(input.executor, {
+      sql: `
+        SELECT karaoke_enabled
+        FROM communities
+        WHERE community_id = ?1
+        LIMIT 1
+      `,
+      args: [input.communityId],
+    }) as Record<string, unknown> | null
+    return Number(row?.karaoke_enabled ?? 0) === 1
+  } catch (error) {
+    if (isMissingKaraokeEnabledColumnError(error)) {
+      return false
+    }
+    throw error
+  }
+}
+
+function getCommunityKaraokeEnabled(input: {
+  cache?: KaraokeEnabledCache
+  executor: DbExecutor
+  communityId: string
+}): Promise<boolean> {
+  let enabled = input.cache?.get(input.communityId)
+  if (!enabled) {
+    enabled = readCommunityKaraokeEnabled({
+      executor: input.executor,
+      communityId: input.communityId,
+    })
+    input.cache?.set(input.communityId, enabled)
+  }
+  return enabled
 }
 
 function parseDecentralizedStorageProof(value: unknown): SongPresentationDownloadableAudio["decentralized_storage"] {
@@ -229,11 +294,7 @@ async function enrichDownloadableAudioWithUploadProofs(input: {
 async function getPublicDownloadableAudio(input: {
   executor: DbExecutor
   post: Post
-}): Promise<{
-  alignment_status: SongPresentationAlignmentStatus
-  downloadable_audio: SongPresentationDownloadableAudio[] | null
-  has_timed_lyrics: boolean
-} | null> {
+}): Promise<SongArtifactPresentation | null> {
   const accessMode = input.post.access_mode ?? "public"
   if (
     input.post.post_type !== "song"
@@ -246,7 +307,7 @@ async function getPublicDownloadableAudio(input: {
   const row = await executeFirst(input.executor, {
     sql: `
       SELECT primary_audio_json, instrumental_audio_json, vocal_audio_json,
-             alignment_status, timed_lyrics_ref, timed_lyrics_json
+             alignment_status, alignment_reason, timed_lyrics_ref, timed_lyrics_json
       FROM song_artifact_bundles
       WHERE community_id = ?1
         AND song_artifact_bundle_id = ?2
@@ -284,8 +345,10 @@ async function getPublicDownloadableAudio(input: {
     : null
 
   return {
+    alignment_reason: alignmentReasonValue(row.alignment_reason),
     alignment_status: alignmentStatusValue(row.alignment_status),
     downloadable_audio: downloadableAudio,
+    has_instrumental_audio: Boolean(instrumental),
     has_timed_lyrics: hasTimedLyrics({
       inline: row.timed_lyrics_json,
       ref: row.timed_lyrics_ref,
@@ -293,12 +356,107 @@ async function getPublicDownloadableAudio(input: {
   }
 }
 
+function alignmentReasonValue(value: unknown): SongArtifactAlignmentReason | null {
+  switch (stringValue(value)) {
+    case "lyrics_missing":
+    case "audio_missing":
+    case "elevenlabs_key_missing":
+    case "elevenlabs_key_invalid":
+    case "elevenlabs_rate_limited":
+    case "elevenlabs_provider_unavailable":
+    case "elevenlabs_timeout":
+    case "elevenlabs_invalid_response":
+    case "alignment_failed":
+      return stringValue(value) as SongArtifactAlignmentReason
+    default:
+      return null
+  }
+}
+
+function karaokeReasonFromAlignment(reason: SongArtifactAlignmentReason | null): SongFeatureCapabilityReason {
+  switch (reason) {
+    case "lyrics_missing":
+      return { code: "lyrics_missing", kind: "content", owner_action: "edit_song" }
+    case "audio_missing":
+      return { code: "alignment_failed", kind: "processing_failure", owner_action: "retry" }
+    case "elevenlabs_key_missing":
+      return { code: "provider_key_missing", kind: "config", owner_action: "manage_integrations" }
+    case "elevenlabs_key_invalid":
+      return { code: "provider_key_invalid", kind: "config", owner_action: "manage_integrations" }
+    case "elevenlabs_rate_limited":
+      return { code: "provider_rate_limited", kind: "processing_failure", owner_action: "retry" }
+    case "elevenlabs_provider_unavailable":
+      return { code: "provider_unavailable", kind: "processing_failure", owner_action: "retry" }
+    case "elevenlabs_timeout":
+      return { code: "provider_timeout", kind: "processing_failure", owner_action: "retry" }
+    case "elevenlabs_invalid_response":
+      return { code: "provider_invalid_response", kind: "processing_failure", owner_action: "retry" }
+    case "alignment_failed":
+    default:
+      return { code: "alignment_failed", kind: "processing_failure", owner_action: "retry" }
+  }
+}
+
+function buildKaraokeCapability(input: {
+  artifactPresentation: SongArtifactPresentation | null
+  canSeeOwnerReasons: boolean
+  communityKaraokeEnabled: boolean
+  post: Post
+  songPresentation: LocalizedPostResponse["song_presentation"]
+}): SongKaraokeCapability | null {
+  if (input.post.post_type !== "song") return null
+  if (!input.communityKaraokeEnabled) {
+    return input.canSeeOwnerReasons
+      ? { status: "unavailable", reasons: [{ code: "karaoke_disabled", kind: "config", owner_action: "enable_karaoke" }] }
+      : null
+  }
+  const accessMode = input.post.access_mode ?? "public"
+  if (accessMode !== "public") {
+    return { status: "locked", ...(input.canSeeOwnerReasons ? { reasons: [{ code: "locked", kind: "entitlement", owner_action: "none" }] } : {}) }
+  }
+  const presentation = input.songPresentation
+  if (!presentation) return null
+  const artifactPresentation = input.artifactPresentation
+  if (!artifactPresentation) return null
+  if (!artifactPresentation.has_instrumental_audio) {
+    return input.canSeeOwnerReasons
+      ? { status: "unavailable", reasons: [{ code: "instrumental_missing", kind: "content", owner_action: "upload_instrumental" }] }
+      : null
+  }
+  switch (presentation.alignment_status) {
+    case "completed":
+      return presentation.has_timed_lyrics
+        ? { status: "ready" }
+        : {
+            status: "unavailable",
+            ...(input.canSeeOwnerReasons
+              ? { reasons: [{ code: "timed_lyrics_missing", kind: "processing_failure", owner_action: "retry" }] }
+              : {}),
+          }
+    case "pending":
+    case "processing":
+      return { status: "processing" }
+    case "failed":
+      return {
+        status: "failed",
+        ...(input.canSeeOwnerReasons
+          ? { reasons: [karaokeReasonFromAlignment(artifactPresentation.alignment_reason ?? null)] }
+          : {}),
+      }
+    default:
+      return null
+  }
+}
+
 async function buildSongPresentation(input: {
   songArtifactExecutor?: DbExecutor | null
   post: Post
-}): Promise<LocalizedPostResponse["song_presentation"]> {
+}): Promise<{
+  artifactPresentation: SongArtifactPresentation | null
+  presentation: LocalizedPostResponse["song_presentation"]
+}> {
   if (input.post.post_type !== "song") {
-    return null
+    return { artifactPresentation: null, presentation: null }
   }
 
   const postTitle = stringValue(input.post.song_title)
@@ -310,7 +468,7 @@ async function buildSongPresentation(input: {
         post: input.post,
       })
     : null
-  return postTitle || postCoverArtRef || postDurationMs !== null || artifactPresentation
+  const presentation = postTitle || postCoverArtRef || postDurationMs !== null || artifactPresentation
     ? {
         title: postTitle,
         cover_art_ref: postCoverArtRef,
@@ -320,6 +478,7 @@ async function buildSongPresentation(input: {
         has_timed_lyrics: artifactPresentation?.has_timed_lyrics ?? null,
       }
     : null
+  return { artifactPresentation, presentation }
 }
 
 function enrichSongPostMediaRefs(input: {
@@ -550,14 +709,16 @@ export async function buildLocalizedPostResponse(input: {
   ageGateViewerState?: "proof_required" | "verified_allowed" | null
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: StudyEnabledCache
+  karaokeEnabledCache?: KaraokeEnabledCache
   viewerUserId?: string | null
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
   const sourceHash = await computePostSourceHash(input.post)
-  const songPresentation = await buildSongPresentation({
+  const songPresentationResult = await buildSongPresentation({
     songArtifactExecutor: input.songArtifactExecutor,
     post: input.post,
   })
+  const songPresentation = songPresentationResult.presentation
   const post = enrichSongPostMediaRefs({
     post: input.post,
     songPresentation,
@@ -569,6 +730,15 @@ export async function buildLocalizedPostResponse(input: {
         labelId: input.post.label_id,
       })
     : null
+  const authorCommunityRole = await getAuthorCommunityRole({
+    executor: input.executor,
+    post: input.post,
+  })
+  const communityKaraokeEnabled = await getCommunityKaraokeEnabled({
+    cache: input.karaokeEnabledCache,
+    executor: input.executor,
+    communityId: input.post.community_id,
+  })
 
   const response: LocalizedPostResponse = {
     post,
@@ -582,10 +752,18 @@ export async function buildLocalizedPostResponse(input: {
       studyEnabledCache: input.studyEnabledCache,
       viewerUserId: input.viewerUserId,
     }),
-    author_community_role: await getAuthorCommunityRole({
-      executor: input.executor,
+    karaoke_capability: buildKaraokeCapability({
+      artifactPresentation: songPresentationResult.artifactPresentation,
+      canSeeOwnerReasons: Boolean(
+        (input.viewerUserId && input.post.author_user_id === input.viewerUserId)
+        || authorCommunityRole === "owner"
+        || authorCommunityRole === "moderator",
+      ),
+      communityKaraokeEnabled,
       post: input.post,
+      songPresentation,
     }),
+    author_community_role: authorCommunityRole,
     thread_snapshot: input.threadSnapshot ?? null,
     comment_count: input.metrics?.comment_count ?? input.threadSnapshot?.comment_count ?? 0,
     label: label ? serializeCommunityPostLabel(label) : null,

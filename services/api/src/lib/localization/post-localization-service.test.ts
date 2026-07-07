@@ -14,6 +14,18 @@ function emptyExecutor(): DbExecutor {
   } as DbExecutor
 }
 
+function karaokeEnabledExecutor(): DbExecutor {
+  return {
+    async execute(query) {
+      const sql = typeof query === "string" ? query : query.sql
+      if (String(sql).includes("SELECT karaoke_enabled") && String(sql).includes("FROM communities")) {
+        return { rows: [{ karaoke_enabled: 1 }] }
+      }
+      return { rows: [] }
+    },
+  } as DbExecutor
+}
+
 function studyEnabledExecutor(input: {
   entitlementRows?: Record<string, unknown>[]
   onEntitlementQuery?: () => void
@@ -131,6 +143,30 @@ function songArtifactExecutor(): DbExecutor {
               text: "hello",
             }],
           },
+        }],
+      }
+    },
+  } as DbExecutor
+}
+
+function failedAlignmentSongArtifactExecutor(): DbExecutor {
+  return {
+    async execute() {
+      return {
+        rows: [{
+          primary_audio_json: {
+            storage_ref: "https://media.test/original.mp3",
+            mime_type: "audio/mpeg",
+          },
+          instrumental_audio_json: {
+            storage_ref: "https://media.test/instrumental.mp3",
+            mime_type: "audio/mpeg",
+          },
+          vocal_audio_json: null,
+          alignment_status: "failed",
+          alignment_reason: "elevenlabs_key_invalid",
+          timed_lyrics_ref: null,
+          timed_lyrics_json: null,
         }],
       }
     },
@@ -288,6 +324,61 @@ describe("buildLocalizedPostResponse", () => {
     })
   })
 
+  test("omits public karaoke capability when karaoke is disabled for the community", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: emptyExecutor(),
+      songArtifactExecutor: songArtifactExecutor(),
+      post: makeSongPost(),
+      viewerUserId: "usr_fan",
+    })
+
+    expect(response.karaoke_capability).toBeNull()
+  })
+
+  test("does not label locked karaoke as a buy action for every access mode", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: karaokeEnabledExecutor(),
+      songArtifactExecutor: songArtifactExecutor(),
+      post: {
+        ...makeSongPost(),
+        access_mode: "locked",
+      },
+      viewerUserId: "usr_artist",
+    })
+
+    expect(response.karaoke_capability).toEqual({
+      status: "locked",
+      reasons: [{ code: "locked", kind: "entitlement", owner_action: "none" }],
+    })
+  })
+
+  test("adds owner-actionable karaoke failure reasons for the song author", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: karaokeEnabledExecutor(),
+      post: makeSongPost(),
+      songArtifactExecutor: failedAlignmentSongArtifactExecutor(),
+      viewerUserId: "usr_artist",
+    })
+
+    expect(response.karaoke_capability).toEqual({
+      status: "failed",
+      reasons: [{ code: "provider_key_invalid", kind: "config", owner_action: "manage_integrations" }],
+    })
+  })
+
+  test("keeps karaoke failure reasons generic for public viewers", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: karaokeEnabledExecutor(),
+      post: makeSongPost(),
+      songArtifactExecutor: failedAlignmentSongArtifactExecutor(),
+      viewerUserId: "usr_fan",
+    })
+
+    expect(response.karaoke_capability).toEqual({
+      status: "failed",
+    })
+  })
+
   test("enriches legacy song audio descriptors from upload IPFS CIDs", async () => {
     const storageRef = "https://api.pirate.sc/communities/cmt_music/song-artifact-uploads/sau_original/content"
     const response = await buildLocalizedPostResponse({
@@ -346,6 +437,7 @@ describe("buildLocalizedPostResponse", () => {
 
     expect(response.study_capability).toEqual({
       status: "unavailable",
+      reasons: [{ code: "provider_key_missing", kind: "config", owner_action: "manage_integrations" }],
       source_language: "en",
       target_language: "en",
     })

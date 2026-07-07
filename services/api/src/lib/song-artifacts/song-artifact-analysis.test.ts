@@ -4,6 +4,7 @@ import { analyzeSongBundle } from "./song-artifact-analysis"
 describe("song artifact analysis", () => {
   test("marks ACR identification as skipped when staging bypass is requested", async () => {
     const result = await analyzeSongBundle({
+      communityId: "com_test",
       env: {},
       lyrics: "",
       primaryAudioUpload: {

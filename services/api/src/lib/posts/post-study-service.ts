@@ -1,6 +1,6 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
-import type { Profile } from "../../types"
+import type { Profile, SongFeatureCapabilityReason } from "../../types"
 import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst, type DbExecutor } from "../db-helpers"
@@ -136,6 +136,7 @@ type StudyCapabilityPost = {
 
 export type PostStudyCapability = {
   exercise_count?: number | null
+  reasons?: SongFeatureCapabilityReason[]
   source_language?: string | null
   status: StudyAccess
   target_language?: string | null
@@ -160,6 +161,18 @@ type StudyAttemptRow = {
   selected_option_id: string | null
   transcript: string | null
   type: ExerciseType
+}
+
+function studyUnavailableReason(reason: StudyUnavailableReason | undefined): SongFeatureCapabilityReason {
+  switch (reason) {
+    case "missing_transcription_provider":
+      return { code: "provider_key_missing", kind: "config", owner_action: "manage_integrations" }
+    case "generation_failed":
+      return { code: "exercise_generation_failed", kind: "processing_failure", owner_action: "retry" }
+    case "no_lyrics":
+    default:
+      return { code: "lyrics_missing", kind: "content", owner_action: "edit_song" }
+  }
 }
 
 type StudyReviewStateRow = {
@@ -794,6 +807,7 @@ export async function resolvePostStudyCapability(input: {
   })) {
     return {
       ...base,
+      reasons: [{ code: "locked", kind: "entitlement", owner_action: "buy" }],
       status: "locked",
     }
   }
@@ -805,6 +819,7 @@ export async function resolvePostStudyCapability(input: {
   if (units.length === 0) {
     return {
       ...base,
+      reasons: [{ code: "lyrics_missing", kind: "content", owner_action: "edit_song" }],
       status: "unavailable",
     }
   }
@@ -821,6 +836,7 @@ export async function resolvePostStudyCapability(input: {
   return {
     ...base,
     ...(availability.exerciseCount > 0 ? { exercise_count: availability.exerciseCount } : {}),
+    ...(availability.access === "unavailable" ? { reasons: [studyUnavailableReason(availability.unavailableReason)] } : {}),
     status: availability.access,
   }
 }

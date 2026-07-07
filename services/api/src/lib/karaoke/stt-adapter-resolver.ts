@@ -1,10 +1,12 @@
 import type { KaraokeScoringPolicy, KaraokeStreamingSttAdapter } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../env"
+import { decryptActiveCommunityElevenLabsKey } from "../communities/assistant-policy/credential-service"
 import { ElevenLabsKaraokeSttAdapter } from "./elevenlabs-stt-adapter"
 import { FakeKaraokeStreamingSttAdapter } from "./fake-stt-adapter"
 
 export interface ResolveKaraokeSttAdapterInput {
+  communityId: string
   env: Env
   policy: KaraokeScoringPolicy
   sessionId: string
@@ -21,11 +23,20 @@ export class KaraokeSttConfigurationError extends Error {
   }
 }
 
-function buildProviderAdapter(env: Env, policy: Extract<KaraokeScoringPolicy, { kind: "enabled" }>): KaraokeStreamingSttAdapter | null {
+async function buildProviderAdapter(input: {
+  communityId: string
+  env: Env
+  policy: Extract<KaraokeScoringPolicy, { kind: "enabled" }>
+}): Promise<KaraokeStreamingSttAdapter | null> {
+  const { communityId, env, policy } = input
   switch (policy.provider) {
     case "elevenlabs": {
-      const apiKey = env.ELEVENLABS_API_KEY?.trim()
-      if (!apiKey) return null
+      const apiKey = await decryptActiveCommunityElevenLabsKey({
+        env,
+        communityId,
+        missingCredentialMessage: "ElevenLabs API key is required before starting karaoke",
+      }).catch(() => null)
+      if (!apiKey?.trim()) return null
       return new ElevenLabsKaraokeSttAdapter({
         apiKey,
         model: env.ELEVENLABS_STT_MODEL?.trim() || policy.model,
@@ -54,13 +65,17 @@ function buildProviderAdapter(env: Env, policy: Extract<KaraokeScoringPolicy, { 
  * speech; in dev/test it falls back to the in-memory fake adapter so local runs
  * and the workerd integration suite work without external STT services.
  */
-export function resolveKaraokeSttAdapter(input: ResolveKaraokeSttAdapterInput): KaraokeStreamingSttAdapter {
+export async function resolveKaraokeSttAdapter(input: ResolveKaraokeSttAdapterInput): Promise<KaraokeStreamingSttAdapter> {
   const { env, policy } = input
   if (policy.kind !== "enabled") {
     return new FakeKaraokeStreamingSttAdapter()
   }
 
-  const adapter = buildProviderAdapter(env, policy)
+  const adapter = await buildProviderAdapter({
+    communityId: input.communityId,
+    env,
+    policy,
+  })
   if (adapter) return adapter
 
   if ((env.ENVIRONMENT ?? "").toLowerCase() === "production") {

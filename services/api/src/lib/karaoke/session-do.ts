@@ -39,6 +39,7 @@ const TRUSTED_GATEWAY_HEADERS = [
 const SESSION_EXPIRED_CLOSE_CODE = 4001;
 
 export interface InitializeRequest {
+  communityId: string;
   sessionId: string;
   attemptId: string;
   subjectUserId: string;
@@ -130,6 +131,7 @@ export class SqliteOutboxStore implements OutboxStore {
 }
 
 interface PersistedRuntimeMeta {
+  communityId: string;
   sessionId: string;
   attemptId: string;
   subjectUserId: string;
@@ -290,6 +292,7 @@ export class KaraokeSessionRuntimeDO {
     const body = (await request.json().catch(() => null)) as InitializeRequest | null;
     if (
       !body
+      || !body.communityId
       || !body.sessionId
       || !body.attemptId
       || !body.subjectUserId
@@ -318,7 +321,7 @@ export class KaraokeSessionRuntimeDO {
     // that silently never recognizes speech.
     let sttAdapter: KaraokeStreamingSttAdapter;
     try {
-      sttAdapter = this.resolveSttAdapter(state);
+      sttAdapter = await this.resolveSttAdapter(state, body.communityId);
     } catch (error) {
       if (error instanceof KaraokeSttConfigurationError) {
         return Response.json({ error: error.code }, { status: 503 });
@@ -328,6 +331,7 @@ export class KaraokeSessionRuntimeDO {
 
     this.meta = {
       attemptId: body.attemptId,
+      communityId: body.communityId,
       sessionExpiresAtMs: body.sessionExpiresAtMs,
       sessionId: body.sessionId,
       subjectUserId: body.subjectUserId,
@@ -468,7 +472,7 @@ export class KaraokeSessionRuntimeDO {
     // fake adapter rather than crash a live session if config has since broken.
     let sttAdapter: KaraokeStreamingSttAdapter;
     try {
-      sttAdapter = this.resolveSttAdapter(restored.state);
+      sttAdapter = await this.resolveSttAdapter(restored.state, stored.runtimeMetadata.communityId);
     } catch (error) {
       if (error instanceof KaraokeSttConfigurationError) {
         console.error("[karaoke-stt] STT config error on restore; degrading to fake", { code: error.code });
@@ -499,9 +503,10 @@ export class KaraokeSessionRuntimeDO {
     await this.host?.drainCommitChain();
   }
 
-  private resolveSttAdapter(state: KaraokeSessionState): KaraokeStreamingSttAdapter {
+  private async resolveSttAdapter(state: KaraokeSessionState, communityId: string): Promise<KaraokeStreamingSttAdapter> {
     return this.options.sttAdapter ?? resolveKaraokeSttAdapter({
       attemptId: state.attemptId,
+      communityId,
       env: this.env,
       policy: state.scoringPolicy,
       sessionId: state.sessionId,

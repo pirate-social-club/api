@@ -113,6 +113,9 @@ const client = {
   }),
 }
 
+const commerceShared = await import("../commerce/shared")
+const { getListingRowByAssetId: getRealListingRowByAssetId } = await import("../commerce/queries")
+
 mock.module("../community-read-access", () => ({
   openCommunityWriteClient: mock(async () => ({
     client,
@@ -221,7 +224,14 @@ mock.module("../commerce/listing-service", () => ({
 }))
 
 mock.module("../commerce/shared", () => ({
-  getListingRowByAssetId: mock(async () => null),
+  ...commerceShared,
+  getListingRowByAssetId: mock(async (...args: Parameters<typeof commerceShared.getListingRowByAssetId>) => {
+    const [, communityId] = args
+    if (communityId === COMMUNITY_ID) {
+      return null
+    }
+    return getRealListingRowByAssetId(...args)
+  }),
 }))
 
 mock.module("../commerce/service", () => ({

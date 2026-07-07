@@ -619,6 +619,11 @@ export type LocalizedPostResponse = {
     exercise_count?: number | null
     source_language?: string | null
     target_language?: string | null
+    reasons?: SongFeatureCapabilityReason[]
+  } | null
+  karaoke_capability?: {
+    status: "ready" | "locked" | "processing" | "failed" | "unavailable"
+    reasons?: SongFeatureCapabilityReason[]
   } | null
   streak_summary?: ContractLocalizedPostResponse["streak_summary"]
   asset_story?: {
@@ -642,6 +647,33 @@ export type LocalizedPostResponse = {
   translated_caption?: string | null
   translated_embeds?: Array<LocalizedPostEmbedTranslation> | null
   source_hash: string
+}
+
+export type SongFeatureCapabilityReason = {
+  code:
+    | "lyrics_missing"
+    | "lyrics_too_short"
+    | "exercise_generation_failed"
+    | "provider_key_missing"
+    | "provider_key_invalid"
+    | "provider_rate_limited"
+    | "provider_unavailable"
+    | "provider_timeout"
+    | "provider_invalid_response"
+    | "instrumental_missing"
+    | "timed_lyrics_missing"
+    | "alignment_failed"
+    | "karaoke_disabled"
+    | "locked"
+  kind: "config" | "content" | "processing_failure" | "entitlement" | "unavailable"
+  owner_action:
+    | "none"
+    | "manage_integrations"
+    | "retry"
+    | "edit_song"
+    | "upload_instrumental"
+    | "enable_karaoke"
+    | "buy"
 }
 
 export type ProfileActivityTab = "overview" | "posts" | "comments"

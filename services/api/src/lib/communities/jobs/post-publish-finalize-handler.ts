@@ -521,6 +521,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           })
         }
         const analysis = await analyzeSongBundle({
+          communityId: input.job.community_id,
           env: input.env,
           lyrics: bundle.lyrics,
           primaryAudioUpload,
@@ -543,6 +544,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           translatedLyrics: null,
           alignmentStatus: analysis.alignmentStatus,
           alignmentError: analysis.alignmentError,
+          alignmentReason: analysis.alignmentReason,
           timedLyricsRef: null,
           timedLyrics: analysis.timedLyrics,
           moderationStatus: analysis.moderationStatus,

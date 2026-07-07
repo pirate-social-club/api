@@ -264,6 +264,7 @@ export async function createSongArtifactBundle(input: {
       primary_audio_upload: primaryAudioUpload.id,
       song_artifact_bundle_id: songArtifactBundleId,
     }, () => analyzeSongBundle({
+      communityId: input.communityId,
       env: input.env,
       lyrics,
       primaryAudioUpload,
@@ -293,6 +294,7 @@ export async function createSongArtifactBundle(input: {
       translatedLyrics: null,
       alignmentStatus: analysis.alignmentStatus,
       alignmentError: analysis.alignmentError,
+      alignmentReason: analysis.alignmentReason,
       timedLyricsRef: null,
       timedLyrics: analysis.timedLyrics,
       moderationStatus: analysis.moderationStatus,

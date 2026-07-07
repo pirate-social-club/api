@@ -1,7 +1,22 @@
 import type { Env } from "../../env"
 import { trimEnv } from "../env-strings"
 import type { Post, SongArtifactUpload } from "../../types"
+import {
+  decryptActiveCommunityElevenLabsKey,
+  hasActiveCommunityElevenLabsCredential,
+} from "../communities/assistant-policy/credential-service"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
+
+export type SongAlignmentReason =
+  | "lyrics_missing"
+  | "audio_missing"
+  | "elevenlabs_key_missing"
+  | "elevenlabs_key_invalid"
+  | "elevenlabs_rate_limited"
+  | "elevenlabs_provider_unavailable"
+  | "elevenlabs_timeout"
+  | "elevenlabs_invalid_response"
+  | "alignment_failed"
 
 export type LyricsModerationOutcome = {
   analysisState: Post["analysis_state"]
@@ -22,6 +37,7 @@ type AudioIdentificationOutcome = {
 type AlignmentOutcome = {
   alignmentStatus: "completed" | "failed"
   alignmentError: string | null
+  alignmentReason: SongAlignmentReason | null
   timedLyrics: Record<string, unknown> | null
 }
 
@@ -40,6 +56,7 @@ export type SongBundleAnalysisResult = {
   moderationResult: Record<string, unknown> | null
   alignmentStatus: "completed" | "failed"
   alignmentError: string | null
+  alignmentReason: SongAlignmentReason | null
   timedLyrics: Record<string, unknown> | null
 }
 
@@ -517,15 +534,14 @@ async function evaluateAudioIdentification(input: {
 }
 
 async function alignLyricsWithElevenLabs(input: {
+  communityId: string
   env: Env
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
-}): Promise<Record<string, unknown> | null> {
-  const apiKey = trimEnv(input.env.ELEVENLABS_API_KEY)
+}): Promise<Record<string, unknown> & { error?: string; reason?: SongAlignmentReason } | null> {
   const url = trimEnv(input.env.ELEVENLABS_FORCE_ALIGNMENT_URL) || "https://api.elevenlabs.io/v1/forced-alignment"
-  if (!apiKey || !url) {
+  if (!url) {
     console.info("[song-artifacts] ElevenLabs forced alignment skipped", {
-      has_api_key: Boolean(apiKey),
       has_url: Boolean(url),
       provider: "elevenlabs",
       upload: input.primaryAudioUpload.id,
@@ -533,8 +549,25 @@ async function alignLyricsWithElevenLabs(input: {
     return {
       provider: "elevenlabs",
       error: "missing_configuration",
+      reason: "alignment_failed",
     }
   }
+  if (!await hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })) {
+    return {
+      provider: "elevenlabs",
+      error: "missing_community_elevenlabs_key",
+      reason: "elevenlabs_key_missing",
+    }
+  }
+
+  const apiKey = await decryptActiveCommunityElevenLabsKey({
+    env: input.env,
+    communityId: input.communityId,
+    missingCredentialMessage: "ElevenLabs API key is required before preparing karaoke",
+  })
 
   const timeoutMs = providerTimeoutMs(input.env.ELEVENLABS_TIMEOUT_MS, DEFAULT_ELEVENLABS_TIMEOUT_MS)
   const controller = new AbortController()
@@ -545,6 +578,7 @@ async function alignLyricsWithElevenLabs(input: {
       return {
         provider: "elevenlabs",
         error: "missing_audio_object",
+        reason: "audio_missing",
       }
     }
     const storageObjectKey = input.primaryAudioUpload.storage_object_key
@@ -588,9 +622,17 @@ async function alignLyricsWithElevenLabs(input: {
       signal: controller.signal,
     }))
     if (!response.ok) {
+      const reason: SongAlignmentReason = response.status === 401 || response.status === 403
+        ? "elevenlabs_key_invalid"
+        : response.status === 429
+          ? "elevenlabs_rate_limited"
+          : response.status >= 500
+            ? "elevenlabs_provider_unavailable"
+            : "alignment_failed"
       return {
         provider: "elevenlabs",
         error: `http_${response.status}`,
+        reason,
       }
     }
     const parsed = await response.json().catch(() => null)
@@ -598,13 +640,21 @@ async function alignLyricsWithElevenLabs(input: {
       return {
         provider: "elevenlabs",
         error: "invalid_response",
+        reason: "elevenlabs_invalid_response",
       }
     }
     return parsed as Record<string, unknown>
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const reason: SongAlignmentReason = error instanceof Error && error.name === "AbortError"
+      ? "elevenlabs_timeout"
+      : /abort|timeout|timed out/iu.test(message)
+        ? "elevenlabs_timeout"
+        : "alignment_failed"
     return {
       provider: "elevenlabs",
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
+      reason,
     }
   } finally {
     if (timer) {
@@ -645,6 +695,7 @@ function normalizeTimedLyrics(result: Record<string, unknown>): Record<string, u
 }
 
 async function evaluateAlignment(input: {
+  communityId: string
   env: Env
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
@@ -653,6 +704,7 @@ async function evaluateAlignment(input: {
     return {
       alignmentStatus: "completed",
       alignmentError: null,
+      alignmentReason: "lyrics_missing",
       timedLyrics: null,
     }
   }
@@ -662,6 +714,7 @@ async function evaluateAlignment(input: {
     return {
       alignmentStatus: "failed",
       alignmentError: String(providerResult.error),
+      alignmentReason: providerResult.reason ?? "alignment_failed",
       timedLyrics: null,
     }
   }
@@ -669,8 +722,18 @@ async function evaluateAlignment(input: {
   return {
     alignmentStatus: "completed",
     alignmentError: null,
+    alignmentReason: null,
     timedLyrics: normalizeTimedLyrics(providerResult ?? {}),
   }
+}
+
+export async function analyzeSongAlignment(input: {
+  communityId: string
+  env: Env
+  lyrics: string
+  primaryAudioUpload: SongArtifactUpload
+}): Promise<AlignmentOutcome> {
+  return evaluateAlignment(input)
 }
 
 function mergeAnalysisStates(
@@ -688,6 +751,7 @@ function mergeAnalysisStates(
 }
 
 export async function analyzeSongBundle(input: {
+  communityId: string
   env: Env
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
@@ -717,6 +781,7 @@ export async function analyzeSongBundle(input: {
     lyrics_length: input.lyrics.length,
     primary_audio_upload: input.primaryAudioUpload.id,
   }, () => evaluateAlignment({
+    communityId: input.communityId,
     env: input.env,
     lyrics: input.lyrics,
     primaryAudioUpload: input.primaryAudioUpload,
@@ -724,6 +789,7 @@ export async function analyzeSongBundle(input: {
   const analysisState = mergeAnalysisStates(lyricsModeration.analysisState, audioIdentification.analysisState)
   console.info("[song-artifacts] song analysis completed", {
     alignment_error: alignment.alignmentError,
+    alignment_reason: alignment.alignmentReason,
     alignment_status: alignment.alignmentStatus,
     analysis_state: analysisState,
     audio_identification_error: audioIdentification.moderationError,
@@ -753,6 +819,7 @@ export async function analyzeSongBundle(input: {
     },
     alignmentStatus: alignment.alignmentStatus,
     alignmentError: alignment.alignmentError,
+    alignmentReason: alignment.alignmentReason,
     timedLyrics: alignment.timedLyrics,
   }
 }
