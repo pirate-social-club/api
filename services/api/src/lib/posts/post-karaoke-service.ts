@@ -629,12 +629,14 @@ export async function getPostKaraokePayload(input: {
   communityRepository: PostReadCommunityRepository
   env: Env
   locale?: string | null
+  postContext?: KaraokePostContext
   postId: string
   profileRepository?: ProfileRepository | null
   recordTiming?: KaraokeTimingRecorder
   userRepository: UserRepository
 }): Promise<SongKaraokePayload> {
-  const postContext = await timedKaraokeStep(input, "post", () => loadAccessiblePost(input))
+  const postContext = input.postContext
+    ?? await timedKaraokeStep(input, "post", () => loadAccessiblePost(input))
   const post = postContext.post
   if (post.community_id !== input.communityId) {
     throw notFoundError("Post not found")
@@ -700,5 +702,36 @@ export async function getPostKaraokePayload(input: {
     instrumental_audio_url: instrumentalAudioUrl,
     karaoke_lines: karaokeLines,
     raw_lines: rawLines,
+  }
+}
+
+export async function loadPublicPostKaraokePayloadCacheContext(input: {
+  communityId: string
+  communityRepository: PostReadCommunityRepository
+  env: Env
+  postId: string
+  recordTiming?: KaraokeTimingRecorder
+  userRepository: UserRepository
+}): Promise<{ cacheable: boolean; postContext: KaraokePostContext }> {
+  const postContext = await timedKaraokeStep(input, "cache_post", () => loadAccessiblePost({
+    ...input,
+    actor: null,
+  }))
+  const post = postContext.post
+  if (post.community_id !== input.communityId) {
+    throw notFoundError("Post not found")
+  }
+  if (!postContext.karaokeEnabled) {
+    throw notFoundError("Karaoke is not available")
+  }
+  if (
+    post.post_type !== "song"
+    || !post.song_artifact_bundle_id
+  ) {
+    throw notFoundError("Karaoke is not available")
+  }
+  return {
+    cacheable: post.access_mode !== "locked",
+    postContext,
   }
 }
