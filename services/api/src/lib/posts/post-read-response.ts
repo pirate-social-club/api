@@ -187,6 +187,7 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   communityRepository?: PostReadResponseCommunityRepository | null
   profileRepository?: ProfileRepository | null
   viewerUserId?: string | null
+  enqueueOnRead?: boolean
 }): Promise<void> {
   if (input.communityRepository) {
     await hydrateCrosspostSourcesForResponses({
@@ -215,6 +216,20 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
     profileRepository: input.profileRepository,
   })
 
+  if (input.enqueueOnRead === false) return
+
+  await enqueuePostReadSideEffects({
+    client: input.client,
+    communityId: input.communityId,
+    responses: input.responses,
+  })
+}
+
+export async function enqueuePostReadSideEffects(input: {
+  client: Client
+  communityId: string
+  responses: LocalizedPostResponse[]
+}): Promise<void> {
   for (const response of input.responses) {
     await enqueuePostTranslationOnReadIfNeeded({
       client: input.client,
