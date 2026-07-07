@@ -8,7 +8,7 @@ const MAX_DETAIL_LENGTH = 900
 export type OpsAlertSendResult = {
   delivered: boolean
   sent: number
-  sink: "none" | "log" | "webhook"
+  sink: "none" | "log" | "email" | "webhook"
 }
 
 function alertDetailsText(alert: OpsAlert): string {
@@ -25,16 +25,6 @@ function alertDetailsText(alert: OpsAlert): string {
 
 export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAlertSendResult> {
   if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none" }
-  const url = env.OPS_ALERT_WEBHOOK_URL?.trim()
-  if (!url) {
-    logPipelineInfo("[ops-alerts] alerts fired without webhook configured", {
-      count: alerts.length,
-      keys: alerts.map((alert) => alert.key),
-      alerts,
-    })
-    return { delivered: true, sent: 0, sink: "log" }
-  }
-
   const environment = env.ENVIRONMENT || "development"
   const text = alerts
     .map((alert) => {
@@ -45,6 +35,49 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
       ].filter(Boolean).join("\n")
     })
     .join("\n")
+  const subject = alerts.length === 1
+    ? `[Pirate ${environment}] ${alerts[0]?.title ?? "Ops alert"}`
+    : `[Pirate ${environment}] ${alerts.length} ops alerts`
+
+  const emailTo = env.OPS_ALERT_EMAIL_TO?.trim()
+  const emailFrom = env.OPS_ALERT_EMAIL_FROM?.trim()
+  if (env.OPS_ALERT_EMAIL && emailTo && emailFrom) {
+    try {
+      const response = await env.OPS_ALERT_EMAIL.send({
+        to: emailTo,
+        from: {
+          email: emailFrom,
+          name: env.OPS_ALERT_EMAIL_FROM_NAME?.trim() || "Pirate Ops",
+        },
+        subject,
+        text,
+        html: `<pre>${escapeHtml(text)}</pre>`,
+      })
+      logPipelineInfo("[ops-alerts] email sent", {
+        count: alerts.length,
+        keys: alerts.map((alert) => alert.key),
+        message_id: response.messageId,
+        to: emailTo,
+        from: emailFrom,
+      })
+      return { delivered: true, sent: alerts.length, sink: "email" }
+    } catch (error) {
+      logPipelineError("[ops-alerts] email send threw", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return { delivered: false, sent: 0, sink: "email" }
+    }
+  }
+
+  const url = env.OPS_ALERT_WEBHOOK_URL?.trim()
+  if (!url) {
+    logPipelineInfo("[ops-alerts] alerts fired without email or webhook configured", {
+      count: alerts.length,
+      keys: alerts.map((alert) => alert.key),
+      alerts,
+    })
+    return { delivered: true, sent: 0, sink: "log" }
+  }
 
   try {
     const response = await fetch(url, {
@@ -64,4 +97,13 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
     })
     return { delivered: false, sent: 0, sink: "webhook" }
   }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
 }

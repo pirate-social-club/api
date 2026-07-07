@@ -27,6 +27,12 @@
       "simple": { "limit": 30, "period": 60 }
     }
   ],
+  "send_email": [
+    {
+      "name": "OPS_ALERT_EMAIL",
+      "allowed_sender_addresses": ["alerts@pirate.sc"]
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -68,6 +74,9 @@
   "vars": {
     // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
     "ENVIRONMENT": "development",
+    "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
+    "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
+    "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
     "JWT_BASED_AUTH_ENABLED": "true",
     "JWT_BASED_AUTH_ISSUERS": "pirate-dev",
     "JWT_BASED_AUTH_AUDIENCE": "pirate-api",
@@ -180,8 +189,17 @@
           "id": "96fb25dcaa7a4778880ede05a04b7884"
         }
       ],
+      "send_email": [
+        {
+          "name": "OPS_ALERT_EMAIL",
+          "allowed_sender_addresses": ["alerts@pirate.sc"]
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "staging",
+        "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
+        "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
+        "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
         "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
@@ -314,8 +332,17 @@
           "id": "96fb25dcaa7a4778880ede05a04b7884"
         }
       ],
+      "send_email": [
+        {
+          "name": "OPS_ALERT_EMAIL",
+          "allowed_sender_addresses": ["alerts@pirate.sc"]
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "staging",
+        "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
+        "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
+        "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
         "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
@@ -452,8 +479,17 @@
           "id": "6643d02d5bd340c5a40b46fe17ef03f5"
         }
       ],
+      "send_email": [
+        {
+          "name": "OPS_ALERT_EMAIL",
+          "allowed_sender_addresses": ["alerts@pirate.sc"]
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "production",
+        "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
+        "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
+        "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
         "JWT_BASED_AUTH_ISSUERS": "pirate-production-upstream",
