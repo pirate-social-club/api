@@ -1552,6 +1552,7 @@ export type CreatePostRequest = (((unknown & {
   promotion_disclosure?: PromotionDisclosureInput | null;
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid";
   visibility?: "public" | "members_only";
+  age_gate_policy?: "none" | "18_plus" | null;
   access_mode?: "public" | "locked" | null;
   asset?: string | null;
   song_artifact_bundle?: string | null;
@@ -1782,6 +1783,7 @@ export type Post = {
   publish_failure_code?: PostPublishFailureCode | null;
   publish_failure_message?: string | null;
   publish_failure_retryable?: boolean | null;
+  publish_failed_at?: number | null;
   title?: string | null;
   body?: string | null;
   caption?: string | null;
@@ -2178,6 +2180,7 @@ export type SongStudyAttemptRequest = {
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
   selected_option_id?: string;
+  target_language?: string;
   transcript?: string;
 };
 
@@ -2193,6 +2196,14 @@ export type SongStudyAttemptResult = {
     extra?: Array<string>;
   };
   next_review_hint?: "again" | "hard" | "good" | "easy";
+  study_progress?: {
+    study_attempt_count: number;
+    study_correct_count: number;
+    study_target_count: number;
+    qualified_today: boolean;
+    current_streak: number;
+    next_due_at?: number;
+  };
 };
 
 export type SongStudyTranscriptionResponse = {
