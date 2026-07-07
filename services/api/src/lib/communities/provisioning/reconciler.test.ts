@@ -204,4 +204,53 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
     ])
     expect(calls).toEqual(["reset"])
   })
+
+  test("records stale-row listing exceptions instead of throwing", async () => {
+    const r = await runReconciliationSweep(
+      deps({
+        findStuckProvisioningBindings: async () => [],
+        findUnclaimedStaleUnloadedPoolBindings: async () => {
+          throw new Error("D1 timeout")
+        },
+      }),
+    )
+    expect(r).toEqual({
+      scanned: 0,
+      advanced: 0,
+      released: 0,
+      orphanReleased: 0,
+      errors: [{ communityId: "unknown", bindingName: "unknown", reason: "listStaleUnloadedPoolRows: exception: D1 timeout" }],
+    })
+  })
+
+  test("records unclaimed stale reset exceptions and continues", async () => {
+    const r = await runReconciliationSweep(
+      deps({
+        findStuckProvisioningBindings: async () => [],
+        findUnclaimedStaleUnloadedPoolBindings: async () => ({
+          ok: true,
+          value: {
+            rows: [
+              {
+                bindingName: "DB_CMTY_TIMEOUT",
+                communityId: "cmt_timeout",
+                allocatedAt: "2026-06-19T00:00:00Z",
+                version: 1,
+              },
+            ],
+          },
+        }),
+        shardReset: async () => {
+          throw new Error("D1 timeout")
+        },
+      }),
+    )
+    expect(r).toEqual({
+      scanned: 1,
+      advanced: 0,
+      released: 0,
+      orphanReleased: 0,
+      errors: [{ communityId: "cmt_timeout", bindingName: "DB_CMTY_TIMEOUT", reason: "orphan reset: exception: D1 timeout" }],
+    })
+  })
 })

@@ -72,24 +72,38 @@ export type ReconcilerResult = {
   errors: Array<{ communityId: string; bindingName: string; reason: string }>
 }
 
+function errorReason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export async function runReconciliationSweep(deps: ReconcilerDeps): Promise<ReconcilerResult> {
   const stuck = await deps.findStuckProvisioningBindings()
   const result: ReconcilerResult = { scanned: stuck.length, advanced: 0, released: 0, orphanReleased: 0, errors: [] }
 
   for (const binding of stuck) {
-    const outcome = await reconcileOne(deps, binding, result.errors)
+    const outcome = await reconcileOne(deps, binding, result.errors).catch((error) => {
+      result.errors.push({ communityId: binding.communityId, bindingName: binding.bindingName, reason: `exception: ${errorReason(error)}` })
+      return "error" as const
+    })
     if (outcome === "advanced") result.advanced++
     else if (outcome === "released") result.released++
   }
 
-  const stale = await deps.findUnclaimedStaleUnloadedPoolBindings()
+  const stale = await deps.findUnclaimedStaleUnloadedPoolBindings().catch((error) => ({
+    ok: false as const,
+    code: "exception",
+    message: errorReason(error),
+  }))
   if (!stale.ok) {
-    result.errors.push({ communityId: "unknown", bindingName: "unknown", reason: `listStaleUnloadedPoolRows: ${stale.code}` })
+    result.errors.push({ communityId: "unknown", bindingName: "unknown", reason: `listStaleUnloadedPoolRows: ${stale.code}: ${stale.message}` })
     return result
   }
   result.scanned += stale.value.rows.length
   for (const binding of stale.value.rows) {
-    const outcome = await reconcileUnclaimedStalePoolBinding(deps, binding, result.errors)
+    const outcome = await reconcileUnclaimedStalePoolBinding(deps, binding, result.errors).catch((error) => {
+      result.errors.push({ communityId: binding.communityId, bindingName: binding.bindingName, reason: `orphan exception: ${errorReason(error)}` })
+      return "error" as const
+    })
     if (outcome === "released") {
       result.released++
       result.orphanReleased++
@@ -148,16 +162,24 @@ async function reconcileUnclaimedStalePoolBinding(
     return "error"
   }
 
-  const reset = await deps.shardReset(binding.bindingName)
+  const reset = await deps.shardReset(binding.bindingName).catch((error) => ({
+    ok: false as const,
+    code: "exception",
+    message: errorReason(error),
+  }))
   if (!reset.ok) {
     if (reset.code === "shard_binding_loaded") {
       return recordError("orphan_pool_binding_loaded_before_reset")
     }
-    return recordError(`orphan reset: ${reset.code}`)
+    return recordError(`orphan reset: ${reset.code}: ${reset.message}`)
   }
 
-  const release = await deps.shardRelease(binding.bindingName)
-  if (!release.ok) return recordError(`orphan release: ${release.code}`)
+  const release = await deps.shardRelease(binding.bindingName).catch((error) => ({
+    ok: false as const,
+    code: "exception",
+    message: errorReason(error),
+  }))
+  if (!release.ok) return recordError(`orphan release: ${release.code}: ${release.message}`)
   if (!release.value.released) return recordError("orphan release: already_free")
 
   return "released"
