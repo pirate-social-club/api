@@ -1080,7 +1080,7 @@ describe("post study service", () => {
       postId: POST_ID,
       waitUntil,
     })
-    await submitPostStudyAttempt({
+    const finalAttempt = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
         attempt_number: 1,
@@ -1096,6 +1096,14 @@ describe("post study service", () => {
       postId: POST_ID,
       waitUntil,
     })
+    expect(finalAttempt.study_progress).toMatchObject({
+      current_streak: 1,
+      qualified_today: true,
+      study_attempt_count: 3,
+      study_correct_count: 3,
+      study_target_count: 3,
+    })
+    expect(typeof finalAttempt.study_progress?.next_due_at).toBe("number")
 
     expect(waitUntilPromises).toHaveLength(3)
     const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
@@ -1684,6 +1692,14 @@ describe("post study service", () => {
     expect(typeof secondTiming?.credential_probe_ms).toBe("number")
     expect(typeof secondTiming?.due_review_count_ms).toBe("number")
     expect(typeof secondTiming?.streak_target_count_ms).toBe("number")
+    expect(secondReview.study_progress).toMatchObject({
+      current_streak: 1,
+      qualified_today: true,
+      study_attempt_count: 2,
+      study_correct_count: 2,
+      study_target_count: 2,
+    })
+    expect(typeof secondReview.study_progress?.next_due_at).toBe("number")
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
     expect(ledger.rows.map((row) => ({

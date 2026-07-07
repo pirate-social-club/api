@@ -13354,6 +13354,37 @@ const spec = {
               "good",
               "easy"
             ]
+          },
+          "study_progress": {
+            "type": "object",
+            "properties": {
+              "study_attempt_count": {
+                "type": "integer"
+              },
+              "study_correct_count": {
+                "type": "integer"
+              },
+              "study_target_count": {
+                "type": "integer"
+              },
+              "qualified_today": {
+                "type": "boolean"
+              },
+              "current_streak": {
+                "type": "integer"
+              },
+              "next_due_at": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "study_attempt_count",
+              "study_correct_count",
+              "study_target_count",
+              "qualified_today",
+              "current_streak"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
