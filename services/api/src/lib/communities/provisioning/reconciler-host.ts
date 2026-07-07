@@ -1,19 +1,21 @@
 import type { Client } from "../../sql-client"
 import type { Env } from "../../../env"
 import { getControlPlaneClient } from "../../runtime-deps"
+import { captureScheduledWarning } from "../../sentry"
 import {
   findStuckD1ProvisioningBindings,
   upsertD1CommunityRoutingRow,
 } from "../community-routing-repository"
 import { getPrimaryCommunityDatabaseBinding } from "../community-read-repository"
 import { persistProvisionedD1Binding } from "./repository"
-import { runReconciliationSweep, type ReconcilerDeps, type StuckBinding } from "./reconciler"
+import { runReconciliationSweep, type ReconcilerDeps, type ReconcilerResult, type StuckBinding } from "./reconciler"
 
 /** Grace window: a 'provisioning' routing row is only reconciled after this long. */
 export const RECONCILER_GRACE_MS = 15 * 60 * 1000
 
 /** Cap on errors logged/returned per sweep so a mass-failure tick doesn't emit a huge payload. */
 const MAX_LOGGED_ERRORS = 20
+const TASK_NAME = "community_d1_provisioning_reconciler"
 
 function shardDatabaseUrl(bindingName: string): string {
   return `d1://shard/${bindingName}`
@@ -109,6 +111,37 @@ export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): R
   }
 }
 
+type ScheduledWarningReporter = typeof captureScheduledWarning
+
+export function reportD1ReconcilerSweepHealth(
+  env: Env,
+  result: ReconcilerResult,
+  reportWarning: ScheduledWarningReporter = captureScheduledWarning,
+): void {
+  // Always emit a one-line summary so the scheduled task is observable in tail
+  // (a silent success is indistinguishable from "never ran" / misconfigured).
+  console.log("[d1-reconciler] sweep", {
+    scanned: result.scanned,
+    advanced: result.advanced,
+    released: result.released,
+    orphanReleased: result.orphanReleased,
+    errorCount: result.errors.length,
+  })
+  if (result.errors.length === 0) return
+
+  const extra = {
+    errorCount: result.errors.length,
+    sample: result.errors.slice(0, MAX_LOGGED_ERRORS),
+  }
+  console.error("[d1-reconciler] sweep errors", extra)
+  reportWarning(
+    env,
+    "Community D1 provisioning reconciler reported errors",
+    TASK_NAME,
+    extra,
+  )
+}
+
 /**
  * Scheduled-task entry for the D1-native reconciler sweep. Mounted in the API's
  * scheduled batch (which holds a DO lease — so this inherits single-flight, no
@@ -128,20 +161,5 @@ export async function reconcileScheduledD1Provisioning(env: Env): Promise<void> 
   const nowIso = new Date().toISOString()
   const deps = buildReconcilerDeps(env, client, nowIso)
   const result = await runReconciliationSweep(deps)
-
-  // Always emit a one-line summary so the scheduled task is observable in tail
-  // (a silent success is indistinguishable from "never ran" / misconfigured).
-  console.log("[d1-reconciler] sweep", {
-    scanned: result.scanned,
-    advanced: result.advanced,
-    released: result.released,
-    orphanReleased: result.orphanReleased,
-    errorCount: result.errors.length,
-  })
-  if (result.errors.length > 0) {
-    console.error("[d1-reconciler] sweep errors", {
-      errorCount: result.errors.length,
-      sample: result.errors.slice(0, MAX_LOGGED_ERRORS),
-    })
-  }
+  reportD1ReconcilerSweepHealth(env, result)
 }
