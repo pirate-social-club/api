@@ -55,6 +55,7 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
+import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
@@ -471,6 +472,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         })),
       }))
     }
+    await runOpsAlerts({ env, communityRepository, nowMs: Date.now() })
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
     captureScheduledError(env, error, "community_jobs")

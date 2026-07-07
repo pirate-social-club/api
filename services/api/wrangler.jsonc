@@ -175,6 +175,12 @@
           "service": "pirate-song-preview-container-staging"
         }
       ],
+      "kv_namespaces": [
+        {
+          "binding": "OPS_ALERT_DEDUPE",
+          "id": "96fb25dcaa7a4778880ede05a04b7884"
+        }
+      ],
       "vars": {
         "ENVIRONMENT": "staging",
         "SENTRY_DSN": "https://0e27176cffcca727ff2c1a10e334f831@o4511308510265344.ingest.us.sentry.io/4511308511379456",
@@ -302,6 +308,12 @@
         {
           "binding": "SONG_PREVIEW_SERVICE",
           "service": "pirate-song-preview-container-staging"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "OPS_ALERT_DEDUPE",
+          "id": "96fb25dcaa7a4778880ede05a04b7884"
         }
       ],
       "vars": {
@@ -435,6 +447,12 @@
         {
           "binding": "SONG_PREVIEW_SERVICE",
           "service": "song-preview-container"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "OPS_ALERT_DEDUPE",
+          "id": "6643d02d5bd340c5a40b46fe17ef03f5"
         }
       ],
       "vars": {
