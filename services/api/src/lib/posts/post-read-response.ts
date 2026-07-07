@@ -59,6 +59,7 @@ export async function buildLocalizedPostFeedResponses(input: {
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
 }): Promise<LocalizedPostResponse[]> {
   const studyEnabledCache = new Map<string, Promise<boolean>>()
+  const karaokeEnabledCache = new Map<string, Promise<boolean>>()
   const studyElevenLabsCredentialResolver = input.studyElevenLabsCredentialResolver
     ?? createStudyElevenLabsCredentialResolver({ env: input.env })
   return Promise.all(input.feedItems.map(async (item) => {
@@ -81,6 +82,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       ageGateViewerState,
       studyElevenLabsCredentialResolver,
       studyEnabledCache,
+      karaokeEnabledCache,
       viewerUserId: input.viewerUserId,
     })
   }))
@@ -358,6 +360,7 @@ export function buildDeletedPostStubResponse(input: {
     translated_embeds: null,
     song_presentation: null,
     study_capability: null,
+    karaoke_capability: null,
     derivative_sources: null,
     source_hash: "",
   }

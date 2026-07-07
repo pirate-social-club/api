@@ -1570,6 +1570,29 @@ const spec = {
         "operationId": "post_profiles_me"
       }
     },
+    "/profiles/me/courtyard-inventory": {
+      "get": {
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "List Courtyard inventory facets from the current user's linked wallets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourtyardWalletInventoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "get_profiles_me_courtyard_inventory"
+      }
+    },
     "/profiles/me/xmtp-inbox": {
       "post": {
         "tags": [
@@ -9136,6 +9159,24 @@ const spec = {
           }
         }
       },
+      "CourtyardWalletInventoryResponse": {
+        "type": "object",
+        "required": [
+          "groups",
+          "unavailable"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourtyardWalletInventoryGroup"
+            }
+          },
+          "unavailable": {
+            "type": "boolean"
+          }
+        }
+      },
       "GlobalHandle": {
         "type": "object",
         "required": [
@@ -12537,6 +12578,11 @@ const spec = {
             "type": "boolean",
             "nullable": true
           },
+          "publish_failed_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
           "title": {
             "type": "string",
             "nullable": true
@@ -14067,6 +14113,21 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "alignment_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "lyrics_missing",
+              "audio_missing",
+              "elevenlabs_key_missing",
+              "elevenlabs_key_invalid",
+              "elevenlabs_rate_limited",
+              "elevenlabs_provider_unavailable",
+              "elevenlabs_timeout",
+              "elevenlabs_invalid_response",
+              "alignment_failed"
+            ]
+          },
           "timed_lyrics_ref": {
             "type": "string",
             "nullable": true
@@ -14872,6 +14933,10 @@ const spec = {
           },
           "study_capability": {
             "$ref": "#/components/schemas/SongStudyCapability",
+            "nullable": true
+          },
+          "karaoke_capability": {
+            "$ref": "#/components/schemas/SongKaraokeCapability",
             "nullable": true
           },
           "streak_summary": {
@@ -15866,6 +15931,76 @@ const spec = {
           },
           "wallet_score": {
             "$ref": "#/components/schemas/WalletScoreCapabilityState"
+          }
+        }
+      },
+      "CourtyardWalletInventoryGroup": {
+        "type": "object",
+        "required": [
+          "category",
+          "chain_namespace",
+          "contract_address",
+          "display_label",
+          "display_detail",
+          "count"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "trading_card",
+              "watch"
+            ]
+          },
+          "chain_namespace": {
+            "type": "string",
+            "enum": [
+              "eip155:1",
+              "eip155:137"
+            ]
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "franchise": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "set": {
+            "type": "string"
+          },
+          "year": {
+            "type": "string"
+          },
+          "grader": {
+            "type": "string"
+          },
+          "grade": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "display_label": {
+            "type": "string"
+          },
+          "display_detail": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },
@@ -19175,6 +19310,37 @@ const spec = {
           "target_language": {
             "type": "string",
             "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongFeatureCapabilityReason"
+            }
+          }
+        }
+      },
+      "SongKaraokeCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "locked",
+              "processing",
+              "failed",
+              "unavailable"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongFeatureCapabilityReason"
+            }
           }
         }
       },
@@ -21652,6 +21818,58 @@ const spec = {
           "snapshot_at": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "SongFeatureCapabilityReason": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "kind",
+          "owner_action"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "lyrics_missing",
+              "lyrics_too_short",
+              "exercise_generation_failed",
+              "provider_key_missing",
+              "provider_key_invalid",
+              "provider_rate_limited",
+              "provider_unavailable",
+              "provider_timeout",
+              "provider_invalid_response",
+              "instrumental_missing",
+              "timed_lyrics_missing",
+              "alignment_failed",
+              "karaoke_disabled",
+              "locked"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "config",
+              "content",
+              "processing_failure",
+              "entitlement",
+              "unavailable"
+            ]
+          },
+          "owner_action": {
+            "type": "string",
+            "enum": [
+              "none",
+              "manage_integrations",
+              "retry",
+              "edit_song",
+              "upload_instrumental",
+              "enable_karaoke",
+              "buy"
+            ]
           }
         }
       },

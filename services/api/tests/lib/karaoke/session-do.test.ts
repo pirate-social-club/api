@@ -220,6 +220,7 @@ const LINES: ScorableKaraokeLine[] = [
 function initRequest() {
   return {
     attemptId: "attempt-1",
+    communityId: "community-1",
     lines: LINES,
     scoringPolicy: ENABLED_POLICY,
     sessionExpiresAtMs: Date.now() + 60 * 60 * 1000,

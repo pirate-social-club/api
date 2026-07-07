@@ -175,5 +175,8 @@ describe("createKaraokeSession", () => {
     })
 
     expect(calls).toEqual(["claim", "loadPayload"])
+    expect(testDeps.initializeRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      communityId: KEY.communityId,
+    }))
   })
 })

@@ -23,6 +23,7 @@ import {
 import { attachPrimaryWallet, createOpenSongCommunity, uploadSongArtifact } from "./song-artifact-locked-test-helpers"
 
 const testWithTimeout = test as unknown as (name: string, fn: () => Promise<void>, timeout: number) => void
+const VALID_WRAP_KEY = "0".repeat(64)
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -939,6 +940,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
       ELEVENLABS_API_KEY: "test-elevenlabs-key",
       ELEVENLABS_FORCE_ALIGNMENT_URL: "https://elevenlabs.test/forced-alignment",
+      CREDENTIAL_WRAP_KEY: VALID_WRAP_KEY,
+      CREDENTIAL_WRAP_KEY_VERSION: "1",
     })
     cleanup = ctx.cleanup
 
@@ -966,6 +969,14 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       }
     }
     const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const elevenLabsCredential = await requestJson(
+      `http://pirate.test/communities/${communityId}/assistant-credential/elevenlabs`,
+      { ["api" + "_key"]: "x".repeat(24) },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(elevenLabsCredential.status).toBe(200)
 
     const uploadIntentBody = await uploadSongArtifact({
       env: ctx.env,

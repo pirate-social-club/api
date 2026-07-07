@@ -1,13 +1,15 @@
-import { describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, mock, test } from "bun:test"
 import type { KaraokeScoringPolicy } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../../src/env"
 import { ElevenLabsKaraokeSttAdapter } from "../../../src/lib/karaoke/elevenlabs-stt-adapter"
 import { FakeKaraokeStreamingSttAdapter } from "../../../src/lib/karaoke/fake-stt-adapter"
-import {
-  KaraokeSttConfigurationError,
-  resolveKaraokeSttAdapter,
-} from "../../../src/lib/karaoke/stt-adapter-resolver"
+
+const decryptActiveCommunityElevenLabsKeyMock = mock(async () => "secret-key")
+
+mock.module("../../../src/lib/communities/assistant-policy/credential-service", () => ({
+  decryptActiveCommunityElevenLabsKey: decryptActiveCommunityElevenLabsKeyMock,
+}))
 
 const ENABLED: KaraokeScoringPolicy = {
   kind: "enabled",
@@ -16,9 +18,11 @@ const ENABLED: KaraokeScoringPolicy = {
   retention: "not_stored",
 }
 
-function resolve(env: Partial<Env>, policy: KaraokeScoringPolicy = ENABLED) {
+async function resolve(env: Partial<Env>, policy: KaraokeScoringPolicy = ENABLED) {
+  const { resolveKaraokeSttAdapter } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
   return resolveKaraokeSttAdapter({
     attemptId: "attempt-1",
+    communityId: "com_1",
     env: env as Env,
     policy,
     sessionId: "session-1",
@@ -26,43 +30,49 @@ function resolve(env: Partial<Env>, policy: KaraokeScoringPolicy = ENABLED) {
 }
 
 describe("resolveKaraokeSttAdapter", () => {
-  test("returns the ElevenLabs adapter when the provider is elevenlabs and a key is configured", () => {
-    const adapter = resolve({ ELEVENLABS_API_KEY: "secret-key" })
+  beforeEach(() => {
+    decryptActiveCommunityElevenLabsKeyMock.mockReset()
+    decryptActiveCommunityElevenLabsKeyMock.mockResolvedValue("secret-key")
+  })
+
+  test("returns the ElevenLabs adapter when the community ElevenLabs key is configured", async () => {
+    const adapter = await resolve({})
     expect(adapter).toBeInstanceOf(ElevenLabsKaraokeSttAdapter)
   })
 
-  test("falls back to the fake adapter when the ElevenLabs key is absent", () => {
-    const adapter = resolve({})
+  test("falls back to the fake adapter when the community ElevenLabs key is absent", async () => {
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new Error("missing"))
+    const adapter = await resolve({})
     expect(adapter).toBeInstanceOf(FakeKaraokeStreamingSttAdapter)
   })
 
-  test("falls back to the fake adapter for providers without an implementation", () => {
+  test("falls back to the fake adapter for providers without an implementation", async () => {
     for (const provider of ["openai", "mistral", "assistant"] as const) {
-      const adapter = resolve(
-        { ELEVENLABS_API_KEY: "secret-key", OPENAI_API_KEY: "secret-key" },
-        { ...ENABLED, provider },
-      )
+      const adapter = await resolve({ OPENAI_API_KEY: "secret-key" }, { ...ENABLED, provider })
       expect(adapter).toBeInstanceOf(FakeKaraokeStreamingSttAdapter)
     }
   })
 
-  test("falls back to the fake adapter when scoring is disabled", () => {
-    const adapter = resolve({ ELEVENLABS_API_KEY: "secret-key" }, { kind: "disabled" })
+  test("falls back to the fake adapter when scoring is disabled", async () => {
+    const adapter = await resolve({}, { kind: "disabled" })
     expect(adapter).toBeInstanceOf(FakeKaraokeStreamingSttAdapter)
   })
 
-  test("in production, returns the real adapter when configured", () => {
-    const adapter = resolve({ ELEVENLABS_API_KEY: "secret-key", ENVIRONMENT: "production" })
+  test("in production, returns the real adapter when the community key is configured", async () => {
+    const adapter = await resolve({ ENVIRONMENT: "production" })
     expect(adapter).toBeInstanceOf(ElevenLabsKaraokeSttAdapter)
   })
 
-  test("in production, throws instead of silently faking when the key is missing", () => {
-    expect(() => resolve({ ENVIRONMENT: "production" })).toThrow(KaraokeSttConfigurationError)
+  test("in production, throws instead of silently faking when the community key is missing", async () => {
+    const { KaraokeSttConfigurationError } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new Error("missing"))
+    await expect(resolve({ ENVIRONMENT: "production" })).rejects.toBeInstanceOf(KaraokeSttConfigurationError)
   })
 
-  test("in production, throws for a provider without an implementation", () => {
-    expect(() =>
+  test("in production, throws for a provider without an implementation", async () => {
+    const { KaraokeSttConfigurationError } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
+    await expect(
       resolve({ ENVIRONMENT: "production", OPENAI_API_KEY: "secret-key" }, { ...ENABLED, provider: "openai" }),
-    ).toThrow(KaraokeSttConfigurationError)
+    ).rejects.toBeInstanceOf(KaraokeSttConfigurationError)
   })
 })

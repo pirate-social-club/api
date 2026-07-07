@@ -272,6 +272,7 @@ async function createFastLocalSongArtifactBundle(input: {
       translatedLyrics: null,
       alignmentStatus: "completed",
       alignmentError: null,
+      alignmentReason: null,
       timedLyricsRef: null,
       timedLyrics: null,
       moderationStatus: "completed",

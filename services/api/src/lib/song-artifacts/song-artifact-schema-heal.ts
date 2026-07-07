@@ -20,7 +20,7 @@ function isMissingColumnError(error: unknown, columnName: string): boolean {
 
 export async function hasReadableSongArtifactBundleColumn(
   client: Client,
-  columnName: "genius_annotations_url" | "title",
+  columnName: "alignment_reason" | "genius_annotations_url" | "title",
 ): Promise<boolean> {
   try {
     await client.execute(`SELECT ${columnName} FROM song_artifact_bundles LIMIT 0`)

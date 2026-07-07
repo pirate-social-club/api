@@ -68,6 +68,7 @@ export interface KaraokeSessionCreationDependencies {
     now: string
   }): Promise<KaraokeSessionCreationRecord>
   initializeRuntime(input: {
+    communityId: string
     sessionId: string
     attemptId: string
     subjectUserId: string
@@ -306,6 +307,7 @@ export async function createKaraokeSession(input: {
       await input.deps.issueToken({ claims })
       const runtime = await input.deps.initializeRuntime({
         attemptId,
+        communityId: input.communityId,
         lines,
         scoringPolicy,
         sessionExpiresAtMs,

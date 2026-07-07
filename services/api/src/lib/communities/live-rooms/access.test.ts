@@ -132,7 +132,7 @@ function fakeClient(state: FakeAccessState = {}) {
             : [],
         }
       }
-      if (/FROM listings/i.test(sql) && /asset_id = \?2/i.test(sql)) {
+      if (/FROM\s+listings/i.test(sql) && args[1]) {
         const assetId = String(args[1] ?? "")
         return {
           rows: [{
