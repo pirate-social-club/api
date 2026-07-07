@@ -43,6 +43,7 @@ import type { Env } from "../env"
 import type { LocalizedPostResponse } from "../types"
 import { decodePublicPostId, publicCommunityId, publicPostId } from "../lib/public-ids"
 import { setPublicReadCacheHeaders } from "./cache-headers"
+import { createServerTimingRecorder } from "./server-timing"
 
 const publicPosts = new Hono<{ Bindings: Env }>()
 
@@ -216,22 +217,25 @@ publicPosts.get("/:postId/top-comments", async (c) => {
 })
 
 publicPosts.get("/:postId/thread", async (c) => {
+  const timing = createServerTimingRecorder(c)
   const communityRepository = getCommunityRepository(c.env)
   const rawPostId = decodePublicPostId(c.req.param("postId"))
-  const projection = await communityRepository.getCommunityPostProjectionByPostId(rawPostId)
+  const projection = await timing.time("projection", () => communityRepository.getCommunityPostProjectionByPostId(rawPostId))
   if (!projection) {
     throw notFoundError("Post not found")
   }
-  const communityRow = await communityRepository.getCommunityById(projection.community_id)
+  const [communityRow, policy] = await Promise.all([
+    timing.time("community_row", () => communityRepository.getCommunityById(projection.community_id)),
+    timing.time("policy", () => resolveEffectiveCommunityMachineAccessPolicy({
+      env: c.env,
+      communityRepository,
+      communityId: projection.community_id,
+    })),
+  ])
   if (!isCommunityLive(communityRow)) {
     throw notFoundError("Post not found")
   }
 
-  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
-    env: c.env,
-    communityRepository,
-    communityId: projection.community_id,
-  })
   if (!policy.included_surfaces.thread_cards) {
     const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
     throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
@@ -242,10 +246,10 @@ publicPosts.get("/:postId/thread", async (c) => {
     })
   }
 
-  const db = await openCommunityWriteClient(c.env, communityRepository, projection.community_id)
+  const db = await timing.time("open_community_db", () => openCommunityWriteClient(c.env, communityRepository, projection.community_id))
   try {
     const locale = c.req.query("locale") ?? null
-    const post = await getPublicPostFromCommunityDb({
+    const post = await timing.time("post", () => getPublicPostFromCommunityDb({
       client: db.client,
       songArtifactExecutor: getControlPlaneClient(c.env),
       env: c.env,
@@ -255,15 +259,15 @@ publicPosts.get("/:postId/thread", async (c) => {
       locale,
       postId: rawPostId,
       waitUntil: getWaitUntil(c),
-    })
-    const community = await getPublicCommunityPreviewFromCommunityDb({
+    }))
+    const community = await timing.time("community_preview", () => getPublicCommunityPreviewFromCommunityDb({
       env: c.env,
       client: db.client,
       communityId: projection.community_id,
       locale,
       communityRepository,
-    })
-    const comments = await listPublicPostCommentsFromCommunityDb({
+    }))
+    const comments = await timing.time("comments", () => listPublicPostCommentsFromCommunityDb({
       client: db.client,
       communityId: projection.community_id,
       threadRootPostId: rawPostId,
@@ -272,7 +276,7 @@ publicPosts.get("/:postId/thread", async (c) => {
       cursor: c.req.query("cursor") ?? null,
       limit: c.req.query("limit") ?? null,
       profileRepository: getProfileRepository(c.env),
-    })
+    }))
     const links = publicPostLinks({
       apiOrigin: configuredApiOrigin(c.env, c.req.url),
       webOrigin: configuredWebOrigin(c.env, c.req.url),
@@ -294,6 +298,7 @@ publicPosts.get("/:postId/thread", async (c) => {
       links,
     }
     setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    timing.writeHeader()
     c.header("Link", serializeLinkHeader(links))
     return c.json(responseBody, 200)
   } finally {
@@ -302,21 +307,29 @@ publicPosts.get("/:postId/thread", async (c) => {
 })
 
 publicPosts.get("/:postId", async (c) => {
+  const timing = createServerTimingRecorder(c)
   const communityRepository = getCommunityRepository(c.env)
   const rawPostId = decodePublicPostId(c.req.param("postId"))
-  const projection = await communityRepository.getCommunityPostProjectionByPostId(rawPostId)
+  const projection = await timing.time("projection", () => communityRepository.getCommunityPostProjectionByPostId(rawPostId))
   if (!projection) {
     throw notFoundError("Post not found")
   }
-  const communityRow = await communityRepository.getCommunityById(projection.community_id)
+  const [communityRow, policy] = await Promise.all([
+    timing.time("community_row", () => communityRepository.getCommunityById(projection.community_id)),
+    timing.time("policy", () => resolveEffectiveCommunityMachineAccessPolicy({
+      env: c.env,
+      communityRepository,
+      communityId: projection.community_id,
+    })),
+  ])
   if (!isCommunityLive(communityRow)) {
     throw notFoundError("Post not found")
   }
 
-  const db = await openCommunityWriteClient(c.env, communityRepository, projection.community_id)
+  const db = await timing.time("open_community_db", () => openCommunityWriteClient(c.env, communityRepository, projection.community_id))
   try {
     const locale = c.req.query("locale") ?? null
-    const result = await getPublicPostFromCommunityDb({
+    const result = await timing.time("post", () => getPublicPostFromCommunityDb({
       client: db.client,
       songArtifactExecutor: getControlPlaneClient(c.env),
       env: c.env,
@@ -326,21 +339,14 @@ publicPosts.get("/:postId", async (c) => {
       locale,
       postId: rawPostId,
       waitUntil: getWaitUntil(c),
-    })
-    const [policy, community] = await Promise.all([
-      resolveEffectiveCommunityMachineAccessPolicy({
-        env: c.env,
-        communityRepository,
-        communityId: result.post.community_id,
-      }),
-      getPublicCommunityPreviewFromCommunityDb({
-        env: c.env,
-        client: db.client,
-        communityId: result.post.community_id,
-        locale,
-        communityRepository,
-      }),
-    ])
+    }))
+    const community = await timing.time("community_preview", () => getPublicCommunityPreviewFromCommunityDb({
+      env: c.env,
+      client: db.client,
+      communityId: projection.community_id,
+      locale,
+      communityRepository,
+    }))
     if (!policy.included_surfaces.thread_cards) {
       const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
       throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
@@ -372,6 +378,7 @@ publicPosts.get("/:postId", async (c) => {
     }
     if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
       setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+      timing.writeHeader()
       return markdownResponse(postMarkdown({
         response: markdownBody,
         links,
@@ -379,6 +386,7 @@ publicPosts.get("/:postId", async (c) => {
       }), links)
     }
     setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    timing.writeHeader()
     c.header("Link", serializeLinkHeader(links))
     return c.json(responseBody, 200)
   } finally {

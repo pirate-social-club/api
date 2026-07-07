@@ -88,8 +88,8 @@ describe("feed routes", () => {
 
     const response = await app.request("http://pirate.test/feed/home?sort=new&time_range=all", {}, ctx.env)
     expect(response.status).toBe(200)
-    expect(response.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
     expect(response.headers.get("server-timing")).toContain("viewer;dur=")
     expect(response.headers.get("vary")).toContain("Authorization")
@@ -439,8 +439,8 @@ describe("feed routes", () => {
       },
     }, ctx.env)
     expect(response.status).toBe(200)
-    expect(response.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(response.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
     expect(response.headers.get("server-timing")).toContain("viewer;dur=")
     expect(response.headers.get("vary") ?? "").not.toContain("Authorization")

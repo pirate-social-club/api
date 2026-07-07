@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import {
+  PUBLIC_READ_CACHE_CONTROL,
+  PUBLIC_READ_CDN_CACHE_CONTROL,
+} from "../../../src/routes/cache-headers"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   addCommunityMember,
@@ -246,8 +250,8 @@ describe("comment read routes", () => {
       ctx.env,
     )
     expect(publicTopLevel.status).toBe(200)
-    expect(publicTopLevel.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(publicTopLevel.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(publicTopLevel.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(publicTopLevel.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     const publicTopLevelBody = await json(publicTopLevel) as {
       items: Array<{
         comment: { id: string }
@@ -269,8 +273,8 @@ describe("comment read routes", () => {
       ctx.env,
     )
     expect(publicReplies.status).toBe(200)
-    expect(publicReplies.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(publicReplies.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(publicReplies.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(publicReplies.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     const publicRepliesBody = await json(publicReplies) as {
       items: Array<{
         comment: { id: string }

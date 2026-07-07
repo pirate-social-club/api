@@ -16,7 +16,9 @@ import { createKaraokeSession } from "../lib/karaoke/session-creation-service"
 import { getPostKaraokePayload } from "../lib/posts/post-karaoke-service"
 import { decodePublicPostId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { setPublicReadCacheHeaders } from "./cache-headers"
 import { getResolvedCommunityRouteContext } from "./communities-route-helpers"
+import { createServerTimingRecorder } from "./server-timing"
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 
@@ -52,23 +54,27 @@ function websocketBaseUrl(requestUrl: string, sessionId: string): string {
 
 export function registerCommunityKaraokeSessionRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/posts/:postId/karaoke", async (c) => {
+    const timing = createServerTimingRecorder(c)
     const communityRepository = getCommunityRepository(c.env)
-    const communityId = await resolveCommunityIdentifier(
+    const communityId = await timing.time("resolve_community", () => resolveCommunityIdentifier(
       communityRepository,
       c.req.param("communityId")?.trim() ?? "",
-    )
+    ))
     if (!communityId) {
       throw notFoundError("Post not found")
     }
-    const payload = await getPostKaraokePayload({
+    const payload = await timing.time("karaoke_payload", () => getPostKaraokePayload({
       communityId,
       communityRepository,
       env: c.env,
       locale: c.req.query("locale") ?? null,
       postId: decodePublicPostId(c.req.param("postId")),
       profileRepository: getProfileRepository(c.env),
+      recordTiming: timing.record,
       userRepository: getUserRepository(c.env),
-    })
+    }))
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    timing.writeHeader()
     return c.json(payload, 200)
   })
 

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import {
+  PUBLIC_READ_CACHE_CONTROL,
+  PUBLIC_READ_CDN_CACHE_CONTROL,
+} from "../../../src/routes/cache-headers"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeAgeOver18Verification,
@@ -614,8 +618,8 @@ describe("community routes", () => {
     expect(previewBody.namespace_verification).toBe(namespaceVerificationId)
     expect(previewBody.route_slug).toBe(communityCreateBody.community.route_slug)
     expect(preview.headers.get("link")).toContain("/public-communities/")
-    expect(preview.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(preview.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(preview.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(preview.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     expect(preview.headers.get("vary")).toContain("Accept")
     expect(previewBody.omitted_surfaces).toEqual([])
     expect(previewBody.links.canonical.href).toBe(`https://staging.pirate.sc/c/${communityCreateBody.community.route_slug}`)
@@ -630,7 +634,7 @@ describe("community routes", () => {
     )
     expect(previewMarkdown.status).toBe(200)
     expect(previewMarkdown.headers.get("content-type")).toContain("text/markdown")
-    expect(previewMarkdown.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(previewMarkdown.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
     expect(await previewMarkdown.text()).toContain("# Public Community Club")
 
     const posts = await app.request(
@@ -639,8 +643,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(posts.status).toBe(200)
-    expect(posts.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(posts.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(posts.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(posts.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     const postsBody = await json(posts) as {
       items: Array<{
         post: { id: string; title: string | null }
@@ -690,8 +694,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(publicPost.status).toBe(200)
-    expect(publicPost.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(publicPost.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(publicPost.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(publicPost.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     const publicPostBody = await json(publicPost) as {
       post: { id: string; title: string | null }
       community: {
@@ -742,8 +746,8 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(topComments.status).toBe(200)
-    expect(topComments.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(topComments.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(topComments.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(topComments.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     const topCommentsBody = await json(topComments) as {
       items: unknown[]
       top_comments_limit: number
@@ -767,7 +771,7 @@ describe("community routes", () => {
       ctx.env,
     )
     expect(publicThread.status).toBe(200)
-    expect(publicThread.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
+    expect(publicThread.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
     const publicThreadBody = await json(publicThread) as {
       post: { post: { id: string; title: string | null }; resolved_locale: string }
       community: { id: string; display_name: string }
@@ -993,8 +997,8 @@ describe("community routes", () => {
     expect(previewBody.omitted_surfaces).toEqual([])
     expect(previewBody.links.self.href).toBe(`http://pirate.test/public-communities/${communityCreateBody.community.id}`)
     expect(previewBody.links.canonical.href).toBe(`https://staging.pirate.sc/c/${communityCreateBody.community.id}`)
-    expect(preview.headers.get("cdn-cache-control")).toBe("public, s-maxage=60, stale-while-revalidate=300")
-    expect(preview.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=60, stale-while-revalidate=300")
+    expect(preview.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(preview.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
   })
 
   test("community reads expose localized text overlays and enqueue one batch translation job per locale", async () => {
