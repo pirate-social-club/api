@@ -181,7 +181,7 @@ export type ShardAdminResetRequest = {
 }
 
 export type ShardAdminResetResponse = {
-  /** Number of user tables dropped from the community D1. */
+  /** Number of user tables dropped from the community D1. Currently zero; non-empty D1s are refused. */
   tablesDropped: number
 }
 
@@ -238,6 +238,7 @@ export type ShardErrorCode =
   | "shard_binding_not_allocated"
   | "shard_admin_unauthorized"
   | "shard_binding_loaded"
+  | "shard_binding_not_empty"
 
 export type ShardError = {
   ok: false
@@ -340,4 +341,11 @@ export const SHARD_READ_ERROR = {
    * via a separate deliberate path, never the reconciler's reset.
    */
   BINDING_LOADED: "shard_binding_loaded",
+  /**
+   * communityD1Reset refused: the target D1 contains resettable user/community
+   * tables even though pool metadata says it was never loaded. This is a
+   * metadata-corruption/data-safety guard; the reconciler must not release or
+   * advance the binding automatically.
+   */
+  BINDING_NOT_EMPTY: "shard_binding_not_empty",
 } as const

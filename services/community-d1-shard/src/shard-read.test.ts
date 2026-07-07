@@ -1031,16 +1031,25 @@ describe("communityD1Reset (step 5)", () => {
     ]) as unknown as D1Database
   }
 
-  test("drops only user tables in a never-loaded community D1", async () => {
+  test("REFUSES to reset a never-loaded community D1 that contains user tables", async () => {
     const community = resetCommunityFake(["_cf_KV", "schema_migrations", "sqlite_schema", "posts", "comments", "votes"])
     const env = adminEnv({ DB_CMTY_1: community as unknown as D1Database, D1_POOL: unloadedPool() })
     const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
-    expect(r).toEqual({ ok: true, value: { tablesDropped: 3 } })
-    expect((community as any).dropped).toEqual([
-      'DROP TABLE IF EXISTS "posts"',
-      'DROP TABLE IF EXISTS "comments"',
-      'DROP TABLE IF EXISTS "votes"',
-    ])
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.code).toBe("shard_binding_not_empty")
+      expect(r.message).toContain("contains user tables")
+    }
+    expect((community as any).dropped).toHaveLength(0)
+  })
+
+  test("is a no-op (tablesDropped: 0) on an internal-table-only never-loaded community D1", async () => {
+    const env = adminEnv({
+      DB_CMTY_1: resetCommunityFake(["_cf_KV", "schema_migrations", "sqlite_schema"]) as unknown as D1Database,
+      D1_POOL: unloadedPool(),
+    })
+    const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
+    expect(r).toEqual({ ok: true, value: { tablesDropped: 0 } })
   })
 
   test("is a no-op (tablesDropped: 0) on an empty never-loaded community D1", async () => {
