@@ -1,5 +1,6 @@
 import type {
   ShardAdminGetPoolRowResponse,
+  ShardAdminListStaleUnloadedPoolRowsResponse,
   ShardAdminReleaseResponse,
   ShardAdminResetResponse,
   ShardResult,
@@ -36,11 +37,19 @@ export type StuckBinding = {
   region: string
 }
 
+export type StaleUnloadedPoolBinding = {
+  communityId: string
+  bindingName: string
+  allocatedAt: string
+}
+
 export type ReconcilerDeps = {
   /** ISO timestamp for this sweep (stamped on writes; passed in for determinism). */
   now: string
   /** Control-plane read: routing rows at provisioning_state='provisioning' past the grace window. */
   findStuckProvisioningBindings(): Promise<StuckBinding[]>
+  /** Shard admin RPC + control-plane filter: stale allocated pool rows with no active routing owner. */
+  findUnclaimedStaleUnloadedPoolBindings(): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>>
   /** Shard admin RPC: read the pool row (keyed off lastLoadedAt). */
   shardGetPoolRow(bindingName: string): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
   /** Shard admin RPC: drop a never-loaded community's tables (refuses if loaded). */
@@ -59,17 +68,32 @@ export type ReconcilerResult = {
   scanned: number
   advanced: number
   released: number
+  orphanReleased: number
   errors: Array<{ communityId: string; bindingName: string; reason: string }>
 }
 
 export async function runReconciliationSweep(deps: ReconcilerDeps): Promise<ReconcilerResult> {
   const stuck = await deps.findStuckProvisioningBindings()
-  const result: ReconcilerResult = { scanned: stuck.length, advanced: 0, released: 0, errors: [] }
+  const result: ReconcilerResult = { scanned: stuck.length, advanced: 0, released: 0, orphanReleased: 0, errors: [] }
 
   for (const binding of stuck) {
     const outcome = await reconcileOne(deps, binding, result.errors)
     if (outcome === "advanced") result.advanced++
     else if (outcome === "released") result.released++
+  }
+
+  const stale = await deps.findUnclaimedStaleUnloadedPoolBindings()
+  if (!stale.ok) {
+    result.errors.push({ communityId: "unknown", bindingName: "unknown", reason: `listStaleUnloadedPoolRows: ${stale.code}` })
+    return result
+  }
+  result.scanned += stale.value.rows.length
+  for (const binding of stale.value.rows) {
+    const outcome = await reconcileUnclaimedStalePoolBinding(deps, binding, result.errors)
+    if (outcome === "released") {
+      result.released++
+      result.orphanReleased++
+    }
   }
 
   return result
@@ -111,5 +135,30 @@ async function reconcileOne(
   if (!release.ok) return recordError(`release: ${release.code}`)
 
   await deps.markRoutingDegraded(binding, "d1_native provisioning stranded; binding released for re-provision")
+  return "released"
+}
+
+async function reconcileUnclaimedStalePoolBinding(
+  deps: ReconcilerDeps,
+  binding: StaleUnloadedPoolBinding,
+  errors: ReconcilerResult["errors"],
+): Promise<ReconcilerOutcome> {
+  const recordError = (reason: string): ReconcilerOutcome => {
+    errors.push({ communityId: binding.communityId, bindingName: binding.bindingName, reason })
+    return "error"
+  }
+
+  const reset = await deps.shardReset(binding.bindingName)
+  if (!reset.ok) {
+    if (reset.code === "shard_binding_loaded") {
+      return recordError("orphan_pool_binding_loaded_before_reset")
+    }
+    return recordError(`orphan reset: ${reset.code}`)
+  }
+
+  const release = await deps.shardRelease(binding.bindingName)
+  if (!release.ok) return recordError(`orphan release: ${release.code}`)
+  if (!release.value.released) return recordError("orphan release: already_free")
+
   return "released"
 }

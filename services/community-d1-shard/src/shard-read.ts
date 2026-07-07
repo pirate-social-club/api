@@ -17,6 +17,8 @@ import {
   type ShardWriteRequest,
   type ShardAdminGetPoolRowRequest,
   type ShardAdminGetPoolRowResponse,
+  type ShardAdminListStaleUnloadedPoolRowsRequest,
+  type ShardAdminListStaleUnloadedPoolRowsResponse,
   type ShardAdminPoolStatsRequest,
   type ShardAdminPoolStatsResponse,
   type ShardAdminResetRequest,
@@ -664,6 +666,49 @@ export async function runShardGetPoolRow(
         releasedAt: r["released_at"] == null ? null : String(r["released_at"]),
         version: Number(r["version"] ?? 0),
       },
+    },
+  }
+}
+
+/** Admin: list allocated pool rows that never completed snapshot load. */
+export async function runShardListStaleUnloadedPoolRows(
+  env: ShardEnv,
+  input: ShardAdminListStaleUnloadedPoolRowsRequest,
+): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+
+  const limit = Number.isInteger(input.limit) && input.limit != null
+    ? Math.min(Math.max(input.limit, 1), 100)
+    : 25
+  const result = await pool
+    .prepare(
+      "SELECT binding_name, community_id, allocated_at, version " +
+        "FROM d1_pool " +
+        "WHERE community_id IS NOT NULL " +
+        "AND allocated_at IS NOT NULL " +
+        "AND allocated_at < ?1 " +
+        "AND last_loaded_at IS NULL " +
+        "ORDER BY allocated_at ASC, binding_name ASC " +
+        "LIMIT ?2",
+    )
+    .bind(input.allocatedBefore, limit)
+    .all()
+
+  return {
+    ok: true,
+    value: {
+      rows: (result.results ?? []).map((row) => {
+        const r = row as Record<string, unknown>
+        return {
+          bindingName: String(r["binding_name"]),
+          communityId: String(r["community_id"]),
+          allocatedAt: String(r["allocated_at"]),
+          version: Number(r["version"] ?? 0),
+        }
+      }),
     },
   }
 }

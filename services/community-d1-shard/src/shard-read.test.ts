@@ -9,6 +9,7 @@ import {
   runShardBatch,
   runShardBind,
   runShardGetPoolRow,
+  runShardListStaleUnloadedPoolRows,
   runShardLoadSnapshot,
   runShardPoolStats,
   runShardRead,
@@ -861,6 +862,30 @@ function adminPoolFake(rows: FakePoolRow[]) {
         const binding = s._args[0] as string
         return rows.find((r) => r.binding_name === binding) ?? null
       },
+      async all() {
+        if (/last_loaded_at IS NULL/i.test(sql) && /ORDER BY allocated_at ASC/i.test(sql)) {
+          const [allocatedBefore, limit] = s._args as [string, number]
+          return {
+            results: rows
+              .filter((row) =>
+                row.community_id !== null
+                && row.allocated_at !== null
+                && row.allocated_at < allocatedBefore
+                && row.last_loaded_at === null
+              )
+              .sort((a, b) =>
+                a.allocated_at! < b.allocated_at!
+                  ? -1
+                  : a.allocated_at! > b.allocated_at!
+                    ? 1
+                    : a.binding_name.localeCompare(b.binding_name),
+              )
+              .slice(0, limit),
+            success: true,
+          }
+        }
+        return { results: [], success: true }
+      },
       async run() {
         // release: free the row + stamp released_at, only if currently allocated
         const [binding, now] = s._args as [string, string]
@@ -955,6 +980,38 @@ describe("communityD1GetPoolRow (step 5)", () => {
     const env = adminEnv({ D1_POOL: adminPoolFake([]) as unknown as D1Database })
     const r = await runShardGetPoolRow(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_NONE" })
     expect(r).toEqual({ ok: true, value: { row: null } })
+  })
+})
+
+describe("communityD1ListStaleUnloadedPoolRows", () => {
+  test("lists only allocated rows older than the cutoff that have never loaded", async () => {
+    const rows: FakePoolRow[] = [
+      { binding_name: "DB_CMTY_STALE", community_id: "cmt_stale", allocated_at: "2026-01-01T00:00:00Z", last_loaded_at: null, last_error: null, released_at: null, version: 3 },
+      { binding_name: "DB_CMTY_LOADED", community_id: "cmt_loaded", allocated_at: "2026-01-01T00:00:00Z", last_loaded_at: "2026-01-01T00:01:00Z", last_error: null, released_at: null, version: 4 },
+      { binding_name: "DB_CMTY_FRESH", community_id: "cmt_fresh", allocated_at: "2026-01-03T00:00:00Z", last_loaded_at: null, last_error: null, released_at: null, version: 5 },
+      { binding_name: "DB_CMTY_FREE", community_id: null, allocated_at: null, last_loaded_at: null, last_error: null, released_at: null, version: 6 },
+    ]
+    const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
+
+    const r = await runShardListStaleUnloadedPoolRows(env, {
+      adminToken: ADMIN_TOKEN,
+      allocatedBefore: "2026-01-02T00:00:00Z",
+      limit: 10,
+    })
+
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        rows: [
+          {
+            bindingName: "DB_CMTY_STALE",
+            communityId: "cmt_stale",
+            allocatedAt: "2026-01-01T00:00:00Z",
+            version: 3,
+          },
+        ],
+      },
+    })
   })
 })
 

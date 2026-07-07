@@ -19,6 +19,22 @@ function shardDatabaseUrl(bindingName: string): string {
   return `d1://shard/${bindingName}`
 }
 
+async function findActivelyClaimedBindingNames(client: Client, bindingNames: string[]): Promise<Set<string>> {
+  if (bindingNames.length === 0) return new Set()
+  const placeholders = bindingNames.map((_, i) => `?${i + 1}`).join(", ")
+  const result = await client.execute({
+    sql: `
+      SELECT binding_name
+      FROM community_database_routing
+      WHERE binding_name IN (${placeholders})
+        AND provisioning_state IN ('provisioning', 'ready')
+        AND decommissioned_at IS NULL
+    `,
+    args: bindingNames,
+  })
+  return new Set((result.rows ?? []).map((row) => String((row as { binding_name?: unknown }).binding_name || "")))
+}
+
 /**
  * Wire the pure reconciler orchestrator to its three real surfaces.
  *
@@ -38,6 +54,25 @@ export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): R
   return {
     now: nowIso,
     findStuckProvisioningBindings: () => findStuckD1ProvisioningBindings(client, cutoffIso),
+    findUnclaimedStaleUnloadedPoolBindings: async () => {
+      const listed = await shard.communityD1ListStaleUnloadedPoolRows({
+        adminToken,
+        allocatedBefore: cutoffIso,
+        limit: 50,
+      })
+      if (!listed.ok) return listed
+
+      const claimed = await findActivelyClaimedBindingNames(
+        client,
+        listed.value.rows.map((row) => row.bindingName),
+      )
+      return {
+        ok: true,
+        value: {
+          rows: listed.value.rows.filter((row) => !claimed.has(row.bindingName)),
+        },
+      }
+    },
     shardGetPoolRow: (bindingName) => shard.communityD1GetPoolRow({ adminToken, bindingName }),
     shardReset: (bindingName) => shard.communityD1Reset({ adminToken, bindingName }),
     shardRelease: (bindingName) => shard.communityD1Release({ adminToken, bindingName, now: nowIso }),
@@ -100,6 +135,7 @@ export async function reconcileScheduledD1Provisioning(env: Env): Promise<void> 
     scanned: result.scanned,
     advanced: result.advanced,
     released: result.released,
+    orphanReleased: result.orphanReleased,
     errorCount: result.errors.length,
   })
   if (result.errors.length > 0) {
