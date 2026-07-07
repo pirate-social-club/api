@@ -1,15 +1,17 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
-import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
+import { resolvePostStudyCapability } from "../posts/post-study-service"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
+import type { Env } from "../../env"
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
 type StudyEnabledCache = Map<string, Promise<boolean>>
+type StudyElevenLabsCredentialResolver = (communityId: string) => Promise<boolean>
 
 const DEFAULT_IPFS_GATEWAY_URL = "https://dweb.link/ipfs"
 
@@ -390,30 +392,12 @@ async function getAuthorCommunityRole(input: {
   return null
 }
 
-async function canStudyLockedSongPost(input: {
-  executor: DbExecutor
-  post: Post
-  viewerUserId: string | null | undefined
-}): Promise<boolean> {
-  if (input.post.author_user_id && input.viewerUserId === input.post.author_user_id) {
-    return true
-  }
-  if (!input.viewerUserId || !input.post.asset_id) {
-    return false
-  }
-  const entitlement = await getActiveEntitlementForBuyer(
-    input.executor,
-    input.post.community_id,
-    input.viewerUserId,
-    input.post.asset_id,
-    "asset_access",
-  )
-  return Boolean(entitlement)
-}
-
 async function buildStudyCapability(input: {
   executor: DbExecutor
+  env?: Env | null
   post: Post
+  resolvedLocale: string
+  studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: StudyEnabledCache
   viewerUserId: string | null | undefined
 }): Promise<LocalizedPostResponse["study_capability"]> {
@@ -433,31 +417,14 @@ async function buildStudyCapability(input: {
     return null
   }
 
-  const sourceLyrics = String(input.post.lyrics ?? "").trim()
-  const base = {
-    source_language: stringValue(input.post.source_language),
-    target_language: null,
-  }
-
-  if (!sourceLyrics) {
-    return {
-      ...base,
-      status: "unavailable",
-    }
-  }
-
-  if ((input.post.access_mode ?? "public") === "locked") {
-    const entitled = await canStudyLockedSongPost(input)
-    return {
-      ...base,
-      status: entitled ? "ready" : "locked",
-    }
-  }
-
-  return {
-    ...base,
-    status: "ready",
-  }
+  return resolvePostStudyCapability({
+    client: input.executor,
+    env: input.env,
+    hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
+    post: input.post,
+    targetLanguage: input.resolvedLocale,
+    viewerUserId: input.viewerUserId,
+  })
 }
 
 type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {
@@ -574,12 +541,14 @@ async function getLocalizedMarketEmbedTranslations(input: {
 
 export async function buildLocalizedPostResponse(input: {
   executor: DbExecutor
+  env?: Env | null
   songArtifactExecutor?: DbExecutor | null
   post: Post
   locale?: string | null
   metrics?: Partial<PostReadMetrics>
   threadSnapshot?: CommentThreadSnapshot | null
   ageGateViewerState?: "proof_required" | "verified_allowed" | null
+  studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: StudyEnabledCache
   viewerUserId?: string | null
 }): Promise<LocalizedPostResponse> {
@@ -606,7 +575,10 @@ export async function buildLocalizedPostResponse(input: {
     song_presentation: songPresentation,
     study_capability: await buildStudyCapability({
       executor: input.executor,
+      env: input.env,
       post: input.post,
+      resolvedLocale,
+      studyElevenLabsCredentialResolver: input.studyElevenLabsCredentialResolver,
       studyEnabledCache: input.studyEnabledCache,
       viewerUserId: input.viewerUserId,
     }),

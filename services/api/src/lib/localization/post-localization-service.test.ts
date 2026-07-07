@@ -226,6 +226,9 @@ function makeFeedItem(post: Post): PublishedLocalizedPostFeedItem {
   }
 }
 
+const activeElevenLabsCredential = async () => true
+const inactiveElevenLabsCredential = async () => false
+
 describe("buildLocalizedPostResponse", () => {
   test("maps object-valued song audio descriptors into downloadable audio", async () => {
     const response = await buildLocalizedPostResponse({
@@ -319,12 +322,32 @@ describe("buildLocalizedPostResponse", () => {
         lyrics: "Line one\nLine two",
         source_language: "en",
       },
+      studyElevenLabsCredentialResolver: activeElevenLabsCredential,
     })
 
     expect(response.study_capability).toEqual({
       status: "ready",
+      exercise_count: 2,
       source_language: "en",
-      target_language: null,
+      target_language: "en",
+    })
+  })
+
+  test("marks same-language study unavailable without a say-it-back provider", async () => {
+    const response = await buildLocalizedPostResponse({
+      executor: studyEnabledExecutor(),
+      post: {
+        ...makeSongPost(),
+        lyrics: "Line one\nLine two",
+        source_language: "en",
+      },
+      studyElevenLabsCredentialResolver: inactiveElevenLabsCredential,
+    })
+
+    expect(response.study_capability).toEqual({
+      status: "unavailable",
+      source_language: "en",
+      target_language: "en",
     })
   })
 
@@ -339,6 +362,7 @@ describe("buildLocalizedPostResponse", () => {
       ],
       viewerUserId: "usr_fan",
       ageGateState: null,
+      studyElevenLabsCredentialResolver: activeElevenLabsCredential,
     })
 
     expect(responses.map((response) => response.study_capability)).toEqual([null, null])
@@ -366,6 +390,7 @@ describe("buildLocalizedPostResponse", () => {
       ],
       viewerUserId: "usr_fan",
       ageGateState: null,
+      studyElevenLabsCredentialResolver: activeElevenLabsCredential,
     })
 
     expect(responses.map((response) => response.study_capability?.status)).toEqual(["ready", "ready"])
@@ -396,6 +421,7 @@ describe("buildLocalizedPostResponse", () => {
         asset_id: "ast_song",
         lyrics: "Line one",
       },
+      studyElevenLabsCredentialResolver: activeElevenLabsCredential,
       viewerUserId: "usr_fan",
     })
 
