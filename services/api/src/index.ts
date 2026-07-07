@@ -446,13 +446,16 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     })
     if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
+      const postPublishFinalizeMessage = reconciledPostPublishFinalize.failed_posts > 0
+        ? "Post publish finalize reconciliation marked stuck posts failed"
+        : "Post publish finalize reconciliation had community routing failures"
       await captureScheduledWarning(
         env,
-        "Post publish finalize reconciliation marked stuck posts failed",
+        postPublishFinalizeMessage,
         "community_jobs_post_publish_finalize_reconciliation",
         reconciledPostPublishFinalize,
         {
-          urgency: reconciledPostPublishFinalize.failed_posts > 5 ? "high" : "low",
+          urgency: reconciledPostPublishFinalize.failed_posts > 5 || reconciledPostPublishFinalize.failed_communities.length > 5 ? "high" : "low",
         },
       )
     }

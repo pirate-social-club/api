@@ -1,0 +1,42 @@
+import { describe, expect, test } from "bun:test"
+import type { Env } from "../../env"
+import { captureScheduledWarning } from "./scheduled"
+
+describe("captureScheduledWarning", () => {
+  test("derives count and community ids from scheduled summary details", async () => {
+    const sent: Array<{ text?: string; subject?: string }> = []
+    const env = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string; subject?: string }) => {
+          sent.push(message)
+          return { messageId: "msg_test" }
+        },
+      },
+    } as unknown as Env
+
+    await captureScheduledWarning(
+      env,
+      "Post publish finalize reconciliation had community routing failures",
+      "community_jobs_post_publish_finalize_reconciliation",
+      {
+        checked_communities: 78,
+        failed_posts: 0,
+        failed_communities: [
+          { community_id: "cmt_b", error: "Community has no database routing entry" },
+          { community_id: "cmt_a", error: "Community has no database routing entry" },
+        ],
+      },
+      { urgency: "high" },
+    )
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.subject).toBe("[Pirate staging] Post publish finalize reconciliation had community routing failures")
+    expect(sent[0]?.text).toContain("Count: 2")
+    expect(sent[0]?.text).toContain("Communities: 2")
+    expect(sent[0]?.text).toContain("- cmt_a: Community has no database routing entry")
+    expect(sent[0]?.text).toContain("- cmt_b: Community has no database routing entry")
+  })
+})

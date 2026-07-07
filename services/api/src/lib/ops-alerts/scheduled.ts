@@ -24,6 +24,42 @@ function detailsFromError(error: unknown): Record<string, unknown> {
   }
 }
 
+function numberFromExtra(extra: Record<string, unknown> | undefined, key: string): number | null {
+  const value = extra?.[key]
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function arrayLengthFromExtra(extra: Record<string, unknown> | undefined, key: string): number | null {
+  const value = extra?.[key]
+  return Array.isArray(value) && value.length > 0 ? value.length : null
+}
+
+function scheduledWarningCount(extra: Record<string, unknown> | undefined): number {
+  return numberFromExtra(extra, "failed_posts")
+    ?? numberFromExtra(extra, "enqueued_jobs")
+    ?? numberFromExtra(extra, "failed")
+    ?? numberFromExtra(extra, "errors")
+    ?? arrayLengthFromExtra(extra, "failed_communities")
+    ?? arrayLengthFromExtra(extra, "communities")
+    ?? 1
+}
+
+function communityIdsFromExtra(extra: Record<string, unknown> | undefined): string[] {
+  const ids = new Set<string>()
+  for (const key of ["communities", "failed_communities"]) {
+    const value = extra?.[key]
+    if (!Array.isArray(value)) continue
+    for (const item of value) {
+      if (!item || typeof item !== "object") continue
+      const communityId = (item as { community_id?: unknown }).community_id
+      if (typeof communityId === "string" && communityId.trim()) {
+        ids.add(communityId)
+      }
+    }
+  }
+  return [...ids].sort()
+}
+
 async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<void> {
   const kv = env.OPS_ALERT_DEDUPE
   if (!kv) {
@@ -69,8 +105,8 @@ export async function captureScheduledWarning(
     key: `scheduled_warning:${task}:${tags?.urgency ?? "normal"}`,
     severity,
     title: message,
-    count: 1,
-    community_ids: [],
+    count: scheduledWarningCount(extra),
+    community_ids: communityIdsFromExtra(extra),
     details: {
       task,
       ...extra,
