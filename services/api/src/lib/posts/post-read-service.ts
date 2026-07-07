@@ -20,6 +20,7 @@ import {
   buildDeletedPostStubResponse,
   buildLocalizedPostFeedResponses,
   buildLocalizedPostReadResponse,
+  enqueuePostReadSideEffects,
   hydrateAndEnqueuePostReadResponses,
 } from "./post-read-response"
 import {
@@ -171,6 +172,7 @@ export async function getPublicPost(input: {
   locale?: string | null
   communityRepository: PostReadCommunityRepository
   profileRepository?: ProfileRepository | null
+  waitUntil?: ((promise: Promise<void>) => void) | null
 }): Promise<LocalizedPostResponse> {
   const db = await openProjectedPostCommunityDb({
     env: input.env,
@@ -187,6 +189,8 @@ export async function getPublicPost(input: {
       profileRepository: input.profileRepository,
       locale: input.locale,
       postId: input.postId,
+      env: input.env,
+      waitUntil: input.waitUntil,
     })
   } finally {
     db.close()
@@ -196,11 +200,13 @@ export async function getPublicPost(input: {
 export async function getPublicPostFromCommunityDb(input: {
   client: Client
   songArtifactExecutor?: Client | null
+  env?: Env
   communityId: string
   communityRepository?: PostReadCommunityRepository
   profileRepository?: ProfileRepository | null
   postId: string
   locale?: string | null
+  waitUntil?: ((promise: Promise<void>) => void) | null
 }): Promise<LocalizedPostResponse> {
   const post = await getPostById(input.client, input.postId)
   if (
@@ -220,6 +226,7 @@ export async function getPublicPostFromCommunityDb(input: {
     ageGateViewerState,
     viewerUserId: null,
   })
+  const canEnqueueInBackground = Boolean(input.waitUntil && input.env && input.communityRepository)
   await hydrateAndEnqueuePostReadResponses({
     client: input.client,
     communityId: input.communityId,
@@ -227,8 +234,39 @@ export async function getPublicPostFromCommunityDb(input: {
     communityRepository: input.communityRepository,
     profileRepository: input.profileRepository,
     viewerUserId: null,
+    enqueueOnRead: !canEnqueueInBackground,
   })
+  if (input.waitUntil && input.env && input.communityRepository) {
+    input.waitUntil(enqueuePublicPostReadSideEffects({
+      env: input.env,
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      response,
+    }))
+  }
   return response
+}
+
+async function enqueuePublicPostReadSideEffects(input: {
+  env: Env
+  communityId: string
+  communityRepository: PostReadCommunityRepository
+  response: LocalizedPostResponse
+}): Promise<void> {
+  const db = await openLiveCommunityDbForPostRead({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  try {
+    await enqueuePostReadSideEffects({
+      client: db.client,
+      communityId: input.communityId,
+      responses: [input.response],
+    })
+  } finally {
+    db.close()
+  }
 }
 
 export async function listCommunityPosts(input: {

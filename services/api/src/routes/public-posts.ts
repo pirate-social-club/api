@@ -1,10 +1,10 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import { getProfileRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { isCommunityLive } from "../lib/communities/community-status"
 import {
-  getPublicCommunityPreview,
   getPublicCommunityPreviewFromCommunityDb,
 } from "../lib/communities/community-preview-service"
 import {
@@ -45,6 +45,15 @@ import { decodePublicPostId, publicCommunityId, publicPostId } from "../lib/publ
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicPosts = new Hono<{ Bindings: Env }>()
+
+function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 function publicPostLinks(input: {
   apiOrigin: string
@@ -135,6 +144,7 @@ publicPosts.get("/:postId/top-comments", async (c) => {
     locale: c.req.query("locale") ?? null,
     communityRepository,
     profileRepository: getProfileRepository(c.env),
+    waitUntil: getWaitUntil(c),
   })
   const policy = await resolveEffectiveCommunityMachineAccessPolicy({
     env: c.env,
@@ -238,11 +248,13 @@ publicPosts.get("/:postId/thread", async (c) => {
     const post = await getPublicPostFromCommunityDb({
       client: db.client,
       songArtifactExecutor: getControlPlaneClient(c.env),
+      env: c.env,
       communityId: projection.community_id,
       communityRepository,
       profileRepository: getProfileRepository(c.env),
       locale,
       postId: rawPostId,
+      waitUntil: getWaitUntil(c),
     })
     const community = await getPublicCommunityPreviewFromCommunityDb({
       env: c.env,
@@ -292,64 +304,86 @@ publicPosts.get("/:postId/thread", async (c) => {
 publicPosts.get("/:postId", async (c) => {
   const communityRepository = getCommunityRepository(c.env)
   const rawPostId = decodePublicPostId(c.req.param("postId"))
-  const result = await getPublicPost({
-    env: c.env,
-    postId: rawPostId,
-    locale: c.req.query("locale") ?? null,
-    communityRepository,
-    profileRepository: getProfileRepository(c.env),
-  })
-  const policy = await resolveEffectiveCommunityMachineAccessPolicy({
-    env: c.env,
-    communityRepository,
-    communityId: result.post.community_id,
-  })
-  if (!policy.included_surfaces.thread_cards) {
-    const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
-    throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
-      community: publicCommunityId(result.post.community_id),
-      post: publicPostId(result.post.post_id),
-      surface: "thread_cards",
-      reason: omittedSurface?.reason ?? "community_opt_out",
+  const projection = await communityRepository.getCommunityPostProjectionByPostId(rawPostId)
+  if (!projection) {
+    throw notFoundError("Post not found")
+  }
+  const communityRow = await communityRepository.getCommunityById(projection.community_id)
+  if (!isCommunityLive(communityRow)) {
+    throw notFoundError("Post not found")
+  }
+
+  const db = await openCommunityWriteClient(c.env, communityRepository, projection.community_id)
+  try {
+    const locale = c.req.query("locale") ?? null
+    const result = await getPublicPostFromCommunityDb({
+      client: db.client,
+      songArtifactExecutor: getControlPlaneClient(c.env),
+      env: c.env,
+      communityId: projection.community_id,
+      communityRepository,
+      profileRepository: getProfileRepository(c.env),
+      locale,
+      postId: rawPostId,
+      waitUntil: getWaitUntil(c),
     })
-  }
-  const links = publicPostLinks({
-    apiOrigin: configuredApiOrigin(c.env, c.req.url),
-    webOrigin: configuredWebOrigin(c.env, c.req.url),
-    postId: publicPostId(result.post.post_id),
-    communityId: publicCommunityId(result.post.community_id),
-    includeTopComments: policy.included_surfaces.top_comments,
-  })
-  const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats", "thread_bodies", "top_comments"])
-  const markdownBody = policy.included_surfaces.thread_bodies ? result : omitThreadBody(result)
-  const community = await getPublicCommunityPreview({
-    env: c.env,
-    communityId: result.post.community_id,
-    locale: c.req.query("locale") ?? null,
-    communityRepository,
-  })
-  const serializedCommunity = serializeCommunityPreview(community)
-  const responseBody = {
-    ...(policy.included_surfaces.thread_bodies
-      ? serializeLocalizedPostResponse(result)
-      : serializeLocalizedPostResponse(omitThreadBody(result))),
-    community: policy.included_surfaces.community_stats
-      ? serializedCommunity
-      : omitCommunityStats(serializedCommunity),
-    omitted_surfaces: omittedSurfaces,
-    links,
-  }
-  if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
-    return markdownResponse(postMarkdown({
-      response: markdownBody,
+    const [policy, community] = await Promise.all([
+      resolveEffectiveCommunityMachineAccessPolicy({
+        env: c.env,
+        communityRepository,
+        communityId: result.post.community_id,
+      }),
+      getPublicCommunityPreviewFromCommunityDb({
+        env: c.env,
+        client: db.client,
+        communityId: result.post.community_id,
+        locale,
+        communityRepository,
+      }),
+    ])
+    if (!policy.included_surfaces.thread_cards) {
+      const omittedSurface = omittedSurfaceForPolicy(policy, "thread_cards")
+      throw structuredSurfaceDisabled("Thread cards are not available for structured access", {
+        community: publicCommunityId(result.post.community_id),
+        post: publicPostId(result.post.post_id),
+        surface: "thread_cards",
+        reason: omittedSurface?.reason ?? "community_opt_out",
+      })
+    }
+    const links = publicPostLinks({
+      apiOrigin: configuredApiOrigin(c.env, c.req.url),
+      webOrigin: configuredWebOrigin(c.env, c.req.url),
+      postId: publicPostId(result.post.post_id),
+      communityId: publicCommunityId(result.post.community_id),
+      includeTopComments: policy.included_surfaces.top_comments,
+    })
+    const omittedSurfaces = omittedSurfacesForPolicy(policy, ["community_stats", "thread_bodies", "top_comments"])
+    const markdownBody = policy.included_surfaces.thread_bodies ? result : omitThreadBody(result)
+    const serializedCommunity = serializeCommunityPreview(community)
+    const responseBody = {
+      ...(policy.included_surfaces.thread_bodies
+        ? serializeLocalizedPostResponse(result)
+        : serializeLocalizedPostResponse(omitThreadBody(result))),
+      community: policy.included_surfaces.community_stats
+        ? serializedCommunity
+        : omitCommunityStats(serializedCommunity),
+      omitted_surfaces: omittedSurfaces,
       links,
-      omittedSurfaces,
-    }), links)
+    }
+    if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
+      setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+      return markdownResponse(postMarkdown({
+        response: markdownBody,
+        links,
+        omittedSurfaces,
+      }), links)
+    }
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    c.header("Link", serializeLinkHeader(links))
+    return c.json(responseBody, 200)
+  } finally {
+    db.close()
   }
-  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
-  c.header("Link", serializeLinkHeader(links))
-  return c.json(responseBody, 200)
 })
 
 export default publicPosts
