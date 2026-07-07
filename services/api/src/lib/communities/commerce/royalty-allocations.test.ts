@@ -336,7 +336,7 @@ describe("assertExistingAssetAllocationMatches (idempotent retry)", () => {
 })
 
 describe("Story royalty token share registration", () => {
-  test("loads persisted bps as Story whole-percent royalty shares", async () => {
+  test("loads persisted bps as exact Story percentage shares", async () => {
     const client = freshDb()
     await createTables(client)
     await insertAllocationAsset(client, "ast_story_shares")
@@ -353,7 +353,7 @@ describe("Story royalty token share registration", () => {
     ])
   })
 
-  test("rejects sub-percent shares because Story royaltyShares are whole percentages", async () => {
+  test("loads sub-percent bps shares as decimal Story percentages", async () => {
     const client = freshDb()
     await createTables(client)
     await insertAllocationAsset(client, "ast_fractional", [
@@ -365,7 +365,10 @@ describe("Story royalty token share registration", () => {
       client: appClient(client),
       communityId: "com_1",
       assetId: "ast_fractional",
-    })).rejects.toThrow(/whole-percent/)
+    })).resolves.toEqual([
+      { walletAddressNormalized: CREATOR, shareBps: 6667, percentage: 66.67 },
+      { walletAddressNormalized: COLLAB, shareBps: 3333, percentage: 33.33 },
+    ])
   })
 
   test("records Story distribution tx and leaves allocations pending verification", async () => {
@@ -384,7 +387,7 @@ describe("Story royalty token share registration", () => {
 
     const asset = await client.execute({
       sql: `
-        SELECT royalty_allocation_status, royalty_allocation_tx_hash, ip_royalty_vault,
+        SELECT royalty_allocation_status, royalty_allocation_effect_key, royalty_allocation_tx_hash, ip_royalty_vault,
                royalty_allocation_projection_synced
         FROM assets
         WHERE asset_id = ?1
@@ -393,6 +396,7 @@ describe("Story royalty token share registration", () => {
     })
     expect(asset.rows[0]).toMatchObject({
       royalty_allocation_status: "verification_pending",
+      royalty_allocation_effect_key: `ast_registered:${await fingerprintForRequest(split(), AENEID)}`,
       royalty_allocation_tx_hash: "0xtx",
       ip_royalty_vault: "0xcccccccccccccccccccccccccccccccccccccccc",
       royalty_allocation_projection_synced: 0,
@@ -622,7 +626,7 @@ describe("story royalty allocation vault verification", () => {
     }])
   })
 
-  test("marks allocation rows and asset verified when vault balances match expected shares", async () => {
+  test("marks allocation rows and asset verified when vault balances meet expected shares", async () => {
     const client = freshDb()
     await createTables(client)
     await registeredPendingAsset(client)
@@ -635,7 +639,7 @@ describe("story royalty allocation vault verification", () => {
       vaultReader: vaultReader({
         totalSupply: 1_000_000n,
         balances: {
-          [CREATOR]: 900_000n,
+          [CREATOR]: 900_001n,
           [COLLAB]: 100_000n,
         },
       }),
@@ -678,7 +682,7 @@ describe("story royalty allocation vault verification", () => {
         wallet_address_normalized: CREATOR,
         distribution_status: "verified",
         expected_rt_units: "900000",
-        verified_rt_units: "900000",
+        verified_rt_units: "900001",
         failure_reason: null,
       },
       {

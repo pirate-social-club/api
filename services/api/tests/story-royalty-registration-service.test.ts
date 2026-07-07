@@ -530,6 +530,96 @@ describe("story royalty registration service", () => {
     }
   })
 
+  test("original registration records txHash when royalty shares are folded into the mint tx", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-original-shares-"))
+    cleanupPaths.push(rootDir)
+
+    const env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+      STORY_OPERATOR_PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000001",
+    } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_original_shares"
+    const userId = "usr_author_story_original_shares"
+    const originalIpId = "0x3333333333333333333333333333333333333333"
+    const originalVault = "0x4444444444444444444444444444444444444444"
+    const originalTx = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    const originalRequests: Array<{
+      nft: { recipient: string }
+      royaltyShares?: Array<{ recipient: string; percentage: number }>
+    }> = []
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryJsonMetadataPublisherForTests(async (input) => ({
+      uri: `ipfs://metadata/${input.path}`,
+      hash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+    }))
+    setStoryRoyaltySdkClientFactoryForTests(() => ({
+      ipAsset: {
+        async registerDerivativeIpAsset() {
+          throw new Error("derivative registration should not run")
+        },
+        async registerIpAsset(request) {
+          originalRequests.push(request)
+          return {
+            ipId: originalIpId,
+            tokenId: 123n,
+            txHash: originalTx,
+            ipRoyaltyVault: originalVault,
+            licenseTermsIds: [17n],
+          }
+        },
+      },
+      royalty: {
+        async getRoyaltyVaultAddress(ipId) {
+          expect(ipId).toBe(originalIpId)
+          return originalVault
+        },
+      },
+    }))
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const result = await maybeRegisterStoryRoyaltyForAsset({
+        env,
+        client: db.client,
+        communityId,
+        assetId: "ast_original_shares",
+        creatorWalletAddress: testWallet,
+        title: "Original shares",
+        rightsBasis: "original",
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10,
+        upstreamAssetRefs: null,
+        assetKind: "song_audio",
+        bundle: buildBundle({ id: "sab_original_shares", title: "Original shares" }),
+        primaryContentHash: "0xabc123",
+        royaltyShares: [
+          { walletAddressNormalized: testWallet, shareBps: 6667, percentage: 66.67 },
+          { walletAddressNormalized: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", shareBps: 3333, percentage: 33.33 },
+        ],
+      })
+
+      expect(originalRequests).toHaveLength(1)
+      expect(originalRequests[0]?.nft.recipient).toBe(testWallet)
+      expect(originalRequests[0]?.royaltyShares).toEqual([
+        { recipient: testWallet, percentage: 66.67 },
+        { recipient: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", percentage: 33.33 },
+      ])
+      expect(result).toMatchObject({
+        storyIpId: originalIpId,
+        ipRoyaltyVault: originalVault,
+        royaltyDistributionTxHash: originalTx,
+        storyLicenseTermsId: "17",
+        storyRoyaltyRegistrationStatus: "registered",
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   test("marks royalty-enabled assets failed instead of leaving pending when registration is unavailable", async () => {
     async function createUnavailableAsset(input: {
       env: Env
