@@ -1,6 +1,7 @@
-// Initial royalty allocation persistence (spec: core/specs/domain/royalty-allocation.md).
-// PR1 scope: validate + snapshot + persist the declared split as a `draft` agreement,
-// atomically with asset creation. On-chain registration/verification are later slices.
+// Initial royalty allocation persistence and Story RT distribution verification
+// (spec: core/specs/domain/royalty-allocation.md). Asset creation snapshots the
+// declared split, Story registration distributes RTs, and the scheduled verifier
+// marks allocations verified once vault balances match the frozen split.
 import { sha256Hex } from "../../crypto"
 import { badRequestError, conflictError } from "../../errors"
 import { nowIso } from "../../helpers"
