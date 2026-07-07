@@ -321,6 +321,7 @@ export type Env = {
   ACRCLOUD_PERSONAL_ACCESS_TOKEN?: string
   ACRCLOUD_BUCKET_ID?: string
   ACRCLOUD_CONSOLE_BASE_URL?: string
+  SONG_ACR_BYPASS_COMMUNITY_IDS?: string
 
   // Namespace verifiers
   SPACES_VERIFIER_BASE_URL?: string
