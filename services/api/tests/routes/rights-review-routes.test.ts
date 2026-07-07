@@ -143,6 +143,44 @@ async function seedRightsReviewCase(input: {
   }
 }
 
+async function seedSourceSongAsset(input: {
+  communityDbRoot: string
+  communityId: string
+  sourcePostId: string
+  assetId: string
+  songArtifactBundleId: string
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        INSERT INTO assets (
+          asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind, rights_basis,
+          access_mode, primary_content_ref, publication_status, story_status,
+          locked_delivery_status, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, 'usr_rights_owner', 'song_audio', 'original',
+          'locked', ?5, 'story_published', 'published',
+          'ready', ?6, ?6
+        )
+      `,
+      args: [
+        input.assetId,
+        input.communityId,
+        input.sourcePostId,
+        input.songArtifactBundleId,
+        `song:${input.assetId}`,
+        now,
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function readPostRightsMetadata(input: {
   communityDbRoot: string
   communityId: string
@@ -205,6 +243,27 @@ describe("rights review routes", () => {
     expect(createdPost.status).toBe(201)
     const postBody = await json(createdPost) as { id: string }
     const rawPostId = decodePublicPostId(postBody.id)
+    const sourcePost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Catalog source song",
+        body: "Represents the matched source song post",
+        idempotency_key: "rights-review-source-post-1",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(sourcePost.status).toBe(201)
+    const sourcePostBody = await json(sourcePost) as { id: string }
+    const rawSourcePostId = decodePublicPostId(sourcePostBody.id)
+    await seedSourceSongAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      sourcePostId: rawSourcePostId,
+      assetId: "ast_source_song",
+      songArtifactBundleId: "sab_catalog_song",
+    })
     const seeded = await seedRightsReviewCase({
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
@@ -263,7 +322,7 @@ describe("rights review routes", () => {
       `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
       {
         action_type: "clear_with_upstream_refs",
-        evidence_refs: ["asset:ast_source_song"],
+        evidence_refs: [`song-bundle:${community.communityId}:sab_catalog_song`],
       },
       ctx.env,
       owner.accessToken,
@@ -284,7 +343,7 @@ describe("rights review routes", () => {
     expect(actionBody.case.resolution).toBe("clear_with_upstream_refs")
     expect(actionBody.case.resolver_user_id).toBe(owner.userId)
     expect(typeof actionBody.case.resolved_at).toBe("string")
-    expect(actionBody.case.submitted_evidence_refs).toEqual(["asset:ast_source_song"])
+    expect(actionBody.case.submitted_evidence_refs).toEqual([`song-bundle:${community.communityId}:sab_catalog_song`])
     expect(typeof actionBody.analysis?.resolved_at).toBe("string")
     expect(actionBody.post?.upstream_asset_refs).toEqual(["story:asset:ast_source_song"])
 

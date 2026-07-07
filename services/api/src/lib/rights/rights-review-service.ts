@@ -75,7 +75,16 @@ function normalizeEvidenceRefs(value: string[] | null | undefined): string[] | n
   return refs.length ? refs : null
 }
 
-function normalizeUpstreamAssetEvidenceRef(ref: string): { upstreamRef: string; localAssetId: string | null } | null {
+type NormalizedUpstreamAssetEvidenceRef = {
+  upstreamRef: string
+  localAssetId: string | null
+}
+
+function normalizePublicId(value: string, prefix: string): string {
+  return value.trim().replace(new RegExp(`^${prefix}_`), "")
+}
+
+function normalizeDirectUpstreamAssetEvidenceRef(ref: string): NormalizedUpstreamAssetEvidenceRef | null {
   const trimmed = ref.trim()
   if (!trimmed) return null
   if (trimmed.startsWith("story:asset:")) {
@@ -92,12 +101,58 @@ function normalizeUpstreamAssetEvidenceRef(ref: string): { upstreamRef: string; 
   return { upstreamRef: trimmed, localAssetId: null }
 }
 
-function normalizeUpstreamAssetEvidenceRefs(refs: string[] | null): Array<{ upstreamRef: string; localAssetId: string | null }> {
+async function resolveSongBundleEvidenceRef(input: {
+  env: Env
+  communityRepository: CommunityDatabaseBindingRepository
+  ref: string
+}): Promise<NormalizedUpstreamAssetEvidenceRef | null> {
+  const trimmed = input.ref.trim()
+  if (!trimmed.startsWith("song-bundle:")) return null
+  const [, communityRef, bundleRef] = trimmed.split(":")
+  if (!communityRef?.trim() || !bundleRef?.trim()) return null
+  const sourceCommunityId = normalizePublicId(communityRef, "com")
+  const sourceBundleId = bundleRef.trim()
+  const alternateSourceBundleId = normalizePublicId(sourceBundleId, "sab")
+  const db = await openCommunityReadClient(input.env, input.communityRepository, sourceCommunityId)
+  try {
+    const result = await db.client.execute({
+      sql: `
+        SELECT asset_id
+        FROM assets
+        WHERE community_id = ?1
+          AND song_artifact_bundle_id IN (?2, ?3)
+          AND asset_kind = 'song_audio'
+        ORDER BY updated_at DESC, asset_id DESC
+        LIMIT 1
+      `,
+      args: [sourceCommunityId, sourceBundleId, alternateSourceBundleId],
+    })
+    const assetId = result.rows[0]?.asset_id
+    return typeof assetId === "string" && assetId.trim()
+      ? { upstreamRef: `story:asset:${assetId.trim()}`, localAssetId: assetId.trim() }
+      : null
+  } finally {
+    db.close()
+  }
+}
+
+async function normalizeUpstreamAssetEvidenceRefs(input: {
+  env: Env
+  communityRepository: CommunityDatabaseBindingRepository
+  refs: string[] | null
+}): Promise<NormalizedUpstreamAssetEvidenceRef[]> {
+  const refs = input.refs
   if (!refs?.length) return []
   const seen = new Set<string>()
-  const normalized: Array<{ upstreamRef: string; localAssetId: string | null }> = []
+  const normalized: NormalizedUpstreamAssetEvidenceRef[] = []
   for (const ref of refs) {
-    const item = normalizeUpstreamAssetEvidenceRef(ref)
+    const item = ref.trim().startsWith("song-bundle:")
+      ? await resolveSongBundleEvidenceRef({
+          env: input.env,
+          communityRepository: input.communityRepository,
+          ref,
+        })
+      : normalizeDirectUpstreamAssetEvidenceRef(ref)
     if (!item || seen.has(item.upstreamRef)) continue
     seen.add(item.upstreamRef)
     normalized.push(item)
@@ -124,12 +179,18 @@ function actionPlan(actionType: RightsReviewActionType): {
 }
 
 async function attachUpstreamRefsForRightsReviewResolution(input: {
+  env: Env
+  communityRepository: CommunityDatabaseBindingRepository
   dbClient: Parameters<typeof getPostById>[0]
   caseRow: RightsReviewCase
   evidenceRefs: string[] | null
   now: string
 }): Promise<void> {
-  const refs = normalizeUpstreamAssetEvidenceRefs(input.evidenceRefs)
+  const refs = await normalizeUpstreamAssetEvidenceRefs({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    refs: input.evidenceRefs,
+  })
   if (!refs.length) return
 
   const analysis = input.caseRow.analysis_result_ref
@@ -290,6 +351,8 @@ export async function applyRightsReviewCaseAction(input: {
     const now = nowIso()
     if (actionType === "clear_with_upstream_refs") {
       await attachUpstreamRefsForRightsReviewResolution({
+        env: input.env,
+        communityRepository: input.communityRepository,
         dbClient: db.client,
         caseRow,
         evidenceRefs,
