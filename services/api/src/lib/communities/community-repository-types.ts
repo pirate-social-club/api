@@ -19,6 +19,7 @@ export interface CommunityReadRepository {
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
   listActiveCommunities(input?: {
     limit?: number
+    requireReadyRouting?: boolean
   }): Promise<CommunityRow[]>
   searchActiveCommunities(input: {
     query: string

@@ -52,7 +52,7 @@ export async function runOpsAlerts(input: {
   const maxCommunities = intFromEnv(env.OPS_ALERT_MAX_COMMUNITIES, DEFAULT_MAX_COMMUNITIES)
   const lookbackMs = intFromEnv(env.OPS_ALERT_LOOKBACK_MS, DEFAULT_LOOKBACK_MS)
   const since = new Date(input.nowMs - lookbackMs).toISOString()
-  const activeCommunities = await input.communityRepository.listActiveCommunities()
+  const activeCommunities = await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const scanSelection = selectCommunityIdsForOpsAlertScan({
     communityIds: activeCommunities.map((community) => community.community_id),
     maxCommunities,

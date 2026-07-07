@@ -22,6 +22,16 @@ const COMMUNITY_ROW_COLUMNS = `
   follower_count, created_at, updated_at
 `
 
+function communityRowColumns(tableAlias?: string): string {
+  if (!tableAlias) {
+    return COMMUNITY_ROW_COLUMNS
+  }
+  return COMMUNITY_ROW_COLUMNS
+    .split(",")
+    .map((column) => `${tableAlias}.${column.trim()}`)
+    .join(", ")
+}
+
 async function firstCommunityRow(
   executor: DbExecutor,
   buildSql: (columns: string) => string,
@@ -154,16 +164,24 @@ export async function listActiveCommunityRows(
   executor: DbExecutor,
   input?: {
     limit?: number
+    requireReadyRouting?: boolean
   },
 ): Promise<CommunityRow[]> {
   return listCommunityRows(
     executor,
-    (columns) => `
-      SELECT ${columns}
-      FROM communities
-      WHERE status = 'active'
-        AND provisioning_state = 'active'
-      ORDER BY created_at ASC, community_id ASC
+    () => `
+      SELECT ${communityRowColumns(input?.requireReadyRouting ? "c" : undefined)}
+      FROM communities${input?.requireReadyRouting ? " c" : ""}
+      ${input?.requireReadyRouting
+        ? `
+      INNER JOIN community_database_routing r
+        ON r.community_id = c.community_id
+       AND r.provisioning_state = 'ready'
+       AND r.decommissioned_at IS NULL`
+        : ""}
+      WHERE ${input?.requireReadyRouting ? "c." : ""}status = 'active'
+        AND ${input?.requireReadyRouting ? "c." : ""}provisioning_state = 'active'
+      ORDER BY ${input?.requireReadyRouting ? "c." : ""}created_at ASC, ${input?.requireReadyRouting ? "c." : ""}community_id ASC
       ${input?.limit === undefined ? "" : "LIMIT ?1"}
     `,
     input?.limit === undefined ? [] : [input.limit],

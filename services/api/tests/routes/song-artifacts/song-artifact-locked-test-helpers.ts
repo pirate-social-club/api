@@ -234,7 +234,29 @@ export async function createOpenSongCommunity(env: Env, accessToken: string, dis
       id: string
     }
   }
-  return communityCreateBody.community.id.replace(/^com_/, "")
+  const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+  const control = getControlPlaneClient(env)
+  try {
+    const now = new Date().toISOString()
+    await control.execute({
+      sql: `
+        INSERT INTO community_database_routing
+          (community_id, provisioning_state, shard_worker_id, binding_name, region, created_at, updated_at)
+        VALUES (?1, 'ready', 'community-d1-shard-test', 'DB_CMTY_TEST', 'enam', ?2, ?2)
+        ON CONFLICT (community_id) DO UPDATE SET
+          provisioning_state = 'ready',
+          decommissioned_at = NULL,
+          shard_worker_id = 'community-d1-shard-test',
+          binding_name = 'DB_CMTY_TEST',
+          region = 'enam',
+          updated_at = ?2
+      `,
+      args: [communityId, now],
+    })
+  } finally {
+    control.close?.()
+  }
+  return communityId
 }
 
 export async function uploadSongArtifact(input: {

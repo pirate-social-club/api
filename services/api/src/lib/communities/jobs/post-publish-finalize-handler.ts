@@ -317,7 +317,7 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
 }): Promise<PostPublishFinalizeReconcileSummary> {
   const communityIds = (input.communityIds?.length
     ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
+    : (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).map((community) => community.community_id))
     .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
   const maxPostsPerCommunity = Math.max(1, Math.trunc(input.maxPostsPerCommunity ?? 25))
   const now = input.now ?? nowIso()
