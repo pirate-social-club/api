@@ -72,6 +72,7 @@ async function seedRightsReviewCase(input: {
   postId: string
   caseId?: string
   analysisId?: string
+  subjectAssetId?: string
 }): Promise<{ caseId: string; analysisId: string }> {
   const client = createClient({
     url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
@@ -116,7 +117,59 @@ async function seedRightsReviewCase(input: {
       `,
       args: [caseId, input.postId, input.communityId, analysisId, now],
     })
+    if (input.subjectAssetId) {
+      await client.execute({
+        sql: `
+          INSERT INTO assets (
+            asset_id, community_id, source_post_id, creator_user_id, asset_kind, rights_basis,
+            access_mode, primary_content_ref, publication_status, story_status,
+            locked_delivery_status, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, 'usr_rights_owner', 'video_file', 'original',
+            'public', ?4, 'story_published', 'published',
+            'none', ?5, ?5
+          )
+        `,
+        args: [input.subjectAssetId, input.communityId, input.postId, `video:${input.subjectAssetId}`, now],
+      })
+      await client.execute({
+        sql: "UPDATE posts SET asset_id = ?2, updated_at = ?3 WHERE post_id = ?1",
+        args: [input.postId, input.subjectAssetId, now],
+      })
+    }
     return { caseId, analysisId }
+  } finally {
+    client.close()
+  }
+}
+
+async function readPostRightsMetadata(input: {
+  communityDbRoot: string
+  communityId: string
+  postId: string
+}): Promise<{ upstreamAssetRefsJson: string | null; derivativeLinks: Array<{ asset_id: string; upstream_asset_id: string }> }> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const post = await client.execute({
+      sql: "SELECT upstream_asset_refs_json FROM posts WHERE post_id = ?1",
+      args: [input.postId],
+    })
+    const links = await client.execute(`
+      SELECT asset_id, upstream_asset_id
+      FROM asset_derivative_links
+      ORDER BY asset_id, upstream_asset_id
+    `)
+    return {
+      upstreamAssetRefsJson: typeof post.rows[0]?.upstream_asset_refs_json === "string"
+        ? post.rows[0].upstream_asset_refs_json
+        : null,
+      derivativeLinks: links.rows.map((row) => ({
+        asset_id: String(row.asset_id),
+        upstream_asset_id: String(row.upstream_asset_id),
+      })),
+    }
   } finally {
     client.close()
   }
@@ -156,6 +209,7 @@ describe("rights review routes", () => {
       communityDbRoot: ctx.communityDbRoot,
       communityId: community.communityId,
       postId: rawPostId,
+      subjectAssetId: "ast_review_video",
     })
 
     const cases = await app.request(
@@ -224,6 +278,7 @@ describe("rights review routes", () => {
         submitted_evidence_refs: unknown
       }
       analysis: { resolved_at: string | null } | null
+      post: { upstream_asset_refs: string[] | null } | null
     }
     expect(actionBody.case.status).toBe("resolved")
     expect(actionBody.case.resolution).toBe("clear_with_upstream_refs")
@@ -231,6 +286,18 @@ describe("rights review routes", () => {
     expect(typeof actionBody.case.resolved_at).toBe("string")
     expect(actionBody.case.submitted_evidence_refs).toEqual(["asset:ast_source_song"])
     expect(typeof actionBody.analysis?.resolved_at).toBe("string")
+    expect(actionBody.post?.upstream_asset_refs).toEqual(["story:asset:ast_source_song"])
+
+    const rightsMetadata = await readPostRightsMetadata({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      postId: rawPostId,
+    })
+    expect(JSON.parse(rightsMetadata.upstreamAssetRefsJson ?? "[]")).toEqual(["story:asset:ast_source_song"])
+    expect(rightsMetadata.derivativeLinks).toEqual([{
+      asset_id: "ast_review_video",
+      upstream_asset_id: "ast_source_song",
+    }])
 
     const activeAfterResolve = await app.request(
       `http://pirate.test/communities/${community.communityId}/rights-review/cases`,
