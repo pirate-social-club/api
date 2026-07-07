@@ -41,6 +41,7 @@ const FSRS_PARAMS_VERSION = 1
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const DEFAULT_STUDY_GENERATION_CHUNK_SIZE = 10
 const STREAK_MIN_STUDY_ATTEMPTS = 10
+const STUDY_SESSION_EXERCISE_LIMIT = 15
 const STREAK_LEADERBOARD_DEFAULT_LIMIT = 50
 const STREAK_LEADERBOARD_MAX_LIMIT = 100
 const STREAK_LEADERBOARD_OVERFETCH = 25
@@ -1687,7 +1688,7 @@ export async function getPostStudyPayload(input: {
     const now = nowIso()
     const reServeDueReviews = dueReviewServingEnabled(input.env)
     const canonicalExerciseRows = availability.canonicalExerciseRows
-    const exerciseRows = await listExercises({
+    const eligibleExerciseRows = await listExercises({
       client: db.client,
       dueReviewServing: reServeDueReviews,
       includeSayItBack,
@@ -1697,6 +1698,7 @@ export async function getPostStudyPayload(input: {
       targetLanguage,
       userId: input.actor.userId,
     })
+    const exerciseRows = eligibleExerciseRows.slice(0, STUDY_SESSION_EXERCISE_LIMIT)
     const exercises = exerciseRows.map((row) => toExercise(row, input.actor.userId))
     const nextDueAt = exercises.length === 0 && canonicalExerciseRows.length > 0
       ? await getNextDueAt({
@@ -1711,7 +1713,7 @@ export async function getPostStudyPayload(input: {
       : null
     const nextDueAtSeconds = toUnixSeconds(nextDueAt)
     const session: SongStudySessionSummary = {
-      due_count: exerciseRows.length,
+      due_count: eligibleExerciseRows.length,
       served_count: exercises.length,
       total_units: canonicalExerciseRows.length,
       ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),

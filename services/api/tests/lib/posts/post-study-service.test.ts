@@ -366,6 +366,44 @@ async function seedReadyPack(): Promise<void> {
   ])
 }
 
+async function seedLongReadyPack(lineCount = 20): Promise<void> {
+  for (let index = 0; index < lineCount; index += 1) {
+    const lineNumber = index + 1
+    const lineId = `line_${String(lineNumber).padStart(3, "0")}`
+    const unitId = `stu_long_${lineNumber}`
+    const prompt = `Study line ${lineNumber}`
+    const translation = `Linea de estudio ${lineNumber}`
+    const correctOptionId = `long_opt_${lineNumber}_a`
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 'en', ?5, ?5, 'ready', 2, 2, ?6, ?6)
+    `, [unitId, POST_ID, lineId, index, prompt, NOW])
+    await exec(`
+      INSERT INTO song_study_unit_localization (
+        id, unit_id, target_language, localization_version, status,
+        question, translation_text, options_json, correct_option_id,
+        explanation_text, max_attempts, generated_at, created_at, updated_at
+      )
+      VALUES (?1, ?2, 'es', 1, 'ready', 'Choose the best translation.', ?3, ?4, ?5, NULL, 1, ?6, ?6, ?6)
+    `, [
+      `sul_long_${lineNumber}_es`,
+      unitId,
+      translation,
+      JSON.stringify([
+        { id: correctOptionId, text: translation },
+        { id: `long_opt_${lineNumber}_b`, text: `Distractor ${lineNumber} B` },
+        { id: `long_opt_${lineNumber}_c`, text: `Distractor ${lineNumber} C` },
+      ]),
+      correctOptionId,
+      NOW,
+    ])
+  }
+}
+
 async function seedActiveAssetEntitlement(userId: string, assetId = "ast_song"): Promise<void> {
   await exec(`
     INSERT INTO purchases (
@@ -545,6 +583,95 @@ describe("post study service", () => {
     const serialized = JSON.stringify(payload)
     expect(serialized).toContain("opt_a")
     expect(serialized).not.toContain("correct_option_id")
+  })
+
+  test("caps long first-learn study sessions while reporting total eligible exercises", async () => {
+    await seedSongPost()
+    await seedLongReadyPack()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(15)
+    expect(payload.exercises).toHaveLength(15)
+    expect(payload.session).toEqual({
+      due_count: 40,
+      served_count: 15,
+      total_units: 40,
+    })
+    expect(payload.exercises.map((exercise) => `${exercise.line_id}:${exercise.type}`)).toEqual([
+      "line_001:say_it_back",
+      "line_001:translation_choice",
+      "line_002:say_it_back",
+      "line_002:translation_choice",
+      "line_003:say_it_back",
+      "line_003:translation_choice",
+      "line_004:say_it_back",
+      "line_004:translation_choice",
+      "line_005:say_it_back",
+      "line_005:translation_choice",
+      "line_006:say_it_back",
+      "line_006:translation_choice",
+      "line_007:say_it_back",
+      "line_007:translation_choice",
+      "line_008:say_it_back",
+    ])
+  })
+
+  test("caps due-review study sessions while keeping the due count uncapped", async () => {
+    await seedSongPost()
+    await seedLongReadyPack()
+    await exec(`
+      INSERT INTO song_study_review_state (
+        user_id, post_id, line_id, exercise_type, target_language,
+        state, stability, difficulty, due_at, last_reviewed_at,
+        reps, lapses, fsrs_params_version, updated_at
+      )
+      SELECT ?1, u.post_id, u.line_id, 'say_it_back', COALESCE(u.source_language, 'source'),
+             'review', 1, 5, '2026-06-28T08:00:00.000Z', '2026-06-27T08:00:00.000Z',
+             1, 0, 1, ?2
+      FROM song_study_unit u
+      WHERE u.post_id = ?3
+    `, [LEARNER_ID, NOW, POST_ID])
+    await exec(`
+      INSERT INTO song_study_review_state (
+        user_id, post_id, line_id, exercise_type, target_language,
+        state, stability, difficulty, due_at, last_reviewed_at,
+        reps, lapses, fsrs_params_version, updated_at
+      )
+      SELECT ?1, u.post_id, u.line_id, 'translation_choice', l.target_language,
+             'review', 1, 5, '2026-06-28T08:00:00.000Z', '2026-06-27T08:00:00.000Z',
+             1, 0, 1, ?2
+      FROM song_study_unit u
+      JOIN song_study_unit_localization l ON l.unit_id = u.id
+      WHERE u.post_id = ?3
+        AND l.target_language = 'es'
+    `, [LEARNER_ID, NOW, POST_ID])
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(15)
+    expect(payload.exercises).toHaveLength(15)
+    expect(payload.session).toEqual({
+      due_count: 40,
+      served_count: 15,
+      total_units: 40,
+    })
   })
 
   test("omits say-it-back exercises without an active ElevenLabs credential", async () => {
