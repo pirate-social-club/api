@@ -2,7 +2,10 @@ import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { normalizeDirectSignerPrivateKey } from "./story-direct-signer"
-import { STORY_DELIVERY_CONTRACTS } from "./story-runtime-config"
+import {
+  STORY_DELIVERY_CONTRACTS,
+  resolveStoryTxWaitTimeoutMs,
+} from "./story-runtime-config"
 
 const PUBLISH_COORDINATOR_ABI = [
   "function isPublishOperator(address operator) view returns (bool)",
@@ -55,6 +58,7 @@ async function ensureOwnerAuthorizedCall(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
   >
   provider: JsonRpcProvider
   contractAddress: string
@@ -68,6 +72,7 @@ async function ensureOwnerAuthorizedCall(params: {
   }
   const gasPolicy = resolveGasPolicy(params.env)
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
+  const txWaitTimeoutMs = resolveStoryTxWaitTimeoutMs(params.env)
   const ownerSigner = new Wallet(ownerPrivateKey, params.provider)
   const tx = await sendContractTxWithPolicy({
     provider: params.provider,
@@ -77,8 +82,13 @@ async function ensureOwnerAuthorizedCall(params: {
     functionName: params.functionName,
     args: params.args,
     gasPolicy: gasPolicy.value,
+    defaultWaitTimeoutMs: txWaitTimeoutMs,
   })
-  const receipt = await tx.wait()
+  const receipt = await params.provider.waitForTransaction(
+    String(tx.hash || ""),
+    1,
+    txWaitTimeoutMs,
+  )
   if (!receipt || receipt.status !== 1) {
     throw new Error(`story_runtime_authorization_failed:${params.functionName}`)
   }
@@ -92,6 +102,7 @@ export async function ensureStoryPublishOperatorAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
   >
   provider: JsonRpcProvider
   operatorAddress: string
@@ -118,6 +129,7 @@ export async function ensureStorySettlementOperatorAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
   >
   provider: JsonRpcProvider
   operatorAddress: string
@@ -144,6 +156,7 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
   >
   provider: JsonRpcProvider
   minterAddress: string
@@ -174,6 +187,7 @@ export async function ensureStoryAccessSignerAuthorized(params: {
     | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
     | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
     | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
   >
   provider: JsonRpcProvider
   signerAddress: string

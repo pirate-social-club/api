@@ -1,4 +1,5 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
+import type { TransactionResponse } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
@@ -81,6 +82,18 @@ function errorData(error: unknown): string {
   return typeof nested === "string" ? nested : ""
 }
 
+async function waitForStoryTxReceipt(input: {
+  provider: JsonRpcProvider
+  tx: TransactionResponse
+  timeoutMs: number
+  failureCode: string
+}): Promise<void> {
+  const receipt = await input.provider.waitForTransaction(String(input.tx.hash || ""), 1, input.timeoutMs)
+  if (!receipt || receipt.status !== 1) {
+    throw new Error(input.failureCode)
+  }
+}
+
 export async function publishLockedAssetVersionToStory(input: {
   env: Env
   publisherAddress: string
@@ -159,11 +172,14 @@ export async function publishLockedAssetVersionToStory(input: {
       true,
     ],
     gasPolicy: gasPolicy.value,
+    defaultWaitTimeoutMs: txWaitTimeoutMs,
   })
-  const configureReceipt = await configureTx.wait()
-  if (!configureReceipt || configureReceipt.status !== 1) {
-    throw new Error("story_entitlement_class_configure_failed")
-  }
+  await waitForStoryTxReceipt({
+    provider,
+    tx: configureTx,
+    timeoutMs: txWaitTimeoutMs,
+    failureCode: "story_entitlement_class_configure_failed",
+  })
 
   const publishArgs = [
     getAddress(publisherAddress),
@@ -185,12 +201,15 @@ export async function publishLockedAssetVersionToStory(input: {
       functionName: "publishAssetVersion",
       args: publishArgs,
       gasPolicy: gasPolicy.value,
+      defaultWaitTimeoutMs: txWaitTimeoutMs,
       signer: operatorSigner,
     })
-    const publishReceipt = await provider.waitForTransaction(String(publishTx.hash || ""), 1, txWaitTimeoutMs)
-    if (!publishReceipt || publishReceipt.status !== 1) {
-      throw new Error("story_publish_asset_version_failed")
-    }
+    await waitForStoryTxReceipt({
+      provider,
+      tx: publishTx,
+      timeoutMs: txWaitTimeoutMs,
+      failureCode: "story_publish_asset_version_failed",
+    })
   } catch (error) {
     if (!errorData(error).startsWith(ASSET_VERSION_ALREADY_PUBLISHED_SELECTOR)) {
       throw error

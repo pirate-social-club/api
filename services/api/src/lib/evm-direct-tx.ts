@@ -151,6 +151,7 @@ export async function sendContractTxWithPolicy(params: {
   args: readonly unknown[]
   gasPolicy: DirectTxGasPolicy
   value?: bigint
+  defaultWaitTimeoutMs?: number
 }): Promise<TransactionResponse> {
   const to = getAddress(params.contractAddress)
   const iface = new Interface(params.abi)
@@ -180,7 +181,7 @@ export async function sendContractTxWithPolicy(params: {
     return {
       hash: alreadyKnownTxHash,
       wait: async (confirms?: number, timeout?: number) => {
-        return await params.provider.waitForTransaction(alreadyKnownTxHash, confirms, timeout)
+        return await params.provider.waitForTransaction(alreadyKnownTxHash, confirms, timeout ?? params.defaultWaitTimeoutMs)
       },
     } as TransactionResponse
   }

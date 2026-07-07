@@ -3,7 +3,13 @@ import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "../src/lib/communities/jobs/locked-asset-delivery-handler"
 import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
-import { processAvailableCommunityJobs, processNextCommunityJob, runCommunityJobWorkerLoop } from "../src/lib/communities/jobs/runner"
+import {
+  CommunityJobAttemptTimeoutError,
+  processAvailableCommunityJobs,
+  processNextCommunityJob,
+  runCommunityJobWorkerLoop,
+  withCommunityJobAttemptTimeout,
+} from "../src/lib/communities/jobs/runner"
 import type { CommunityJobRepository } from "../src/lib/communities/jobs/runner-types"
 import type { CommunityRow } from "../src/lib/auth/auth-db-rows"
 import { createComment } from "../src/lib/comments/comment-service"
@@ -33,6 +39,11 @@ afterEach(async () => {
 })
 
 describe("community-job-runner", () => {
+  test("bounds individual job attempts with a wall-clock timeout", async () => {
+    await expect(withCommunityJobAttemptTimeout(new Promise<never>(() => {}), 5))
+      .rejects.toBeInstanceOf(CommunityJobAttemptTimeoutError)
+  })
+
   test("configures local community sqlite connections for concurrent worker access", async () => {
     const rootDir = await createCommunityJobRunnerRoot("pirate-community-job-sqlite-config-")
     const communityId = "cmt_job_sqlite_config"
