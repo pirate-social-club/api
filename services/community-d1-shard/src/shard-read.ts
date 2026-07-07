@@ -634,6 +634,10 @@ function requirePoolDb(env: ShardEnv): D1Database | ShardError {
   return pool
 }
 
+function isResettableUserTable(name: string): boolean {
+  return !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "schema_migrations"
+}
+
 /** Admin: read a single pool row (reconciler introspection — keys off last_loaded_at). */
 export async function runShardGetPoolRow(
   env: ShardEnv,
@@ -749,9 +753,11 @@ export async function runShardReset(
   if ("ok" in db) return db
 
   const tables = await db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all()
-  const names = (tables.results ?? []).map((t) => String((t as { name: unknown }).name))
+  const names = (tables.results ?? [])
+    .map((t) => String((t as { name: unknown }).name))
+    .filter(isResettableUserTable)
   if (names.length === 0) return { ok: true, value: { tablesDropped: 0 } }
 
   // DROP each table. D1 batch is atomic; identifiers can't be bound, but the
