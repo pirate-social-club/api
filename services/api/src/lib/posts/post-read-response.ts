@@ -5,6 +5,7 @@ import type {
 } from "../communities/db-community-repository"
 import type { ProfileRepository } from "../auth/repositories"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
+import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import type { AgeGateViewerState } from "./age-gate-viewer-state"
@@ -19,25 +20,51 @@ import { getPostReadMetrics } from "./community-post-metrics-store"
 import { getPostStreakSummary } from "./post-study-service"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
+import type { Env } from "../../env"
 
 type PostReadResponseCommunityRepository =
   & CommunityReadRepository
   & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId">
 
+export type StudyElevenLabsCredentialResolver = (communityId: string) => Promise<boolean>
+
+export function createStudyElevenLabsCredentialResolver(input: {
+  env?: Env | null
+}): StudyElevenLabsCredentialResolver | undefined {
+  if (!input.env) return undefined
+  const cache = new Map<string, Promise<boolean>>()
+  return (communityId) => {
+    let result = cache.get(communityId)
+    if (!result) {
+      result = hasActiveCommunityElevenLabsCredential({
+        env: input.env!,
+        communityId,
+      })
+      cache.set(communityId, result)
+    }
+    return result
+  }
+}
+
 export async function buildLocalizedPostFeedResponses(input: {
   client: Client
+  env?: Env | null
   songArtifactExecutor?: Client | null
   feedItems: readonly PublishedLocalizedPostFeedItem[]
   locale?: string | null
   viewerUserId: string | null
   ageGateState: AgeGateViewerState | null
+  studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
 }): Promise<LocalizedPostResponse[]> {
   const studyEnabledCache = new Map<string, Promise<boolean>>()
+  const studyElevenLabsCredentialResolver = input.studyElevenLabsCredentialResolver
+    ?? createStudyElevenLabsCredentialResolver({ env: input.env })
   return Promise.all(input.feedItems.map(async (item) => {
     const ageGateViewerState = item.post.age_gate_policy === "18_plus" ? input.ageGateState : null
     const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, item.post.post_id)
     return buildLocalizedPostResponse({
       executor: input.client,
+      env: input.env,
       songArtifactExecutor: input.songArtifactExecutor,
       post: item.post,
       locale: input.locale ?? undefined,
@@ -50,6 +77,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       },
       threadSnapshot,
       ageGateViewerState,
+      studyElevenLabsCredentialResolver,
       studyEnabledCache,
       viewerUserId: input.viewerUserId,
     })
@@ -58,6 +86,7 @@ export async function buildLocalizedPostFeedResponses(input: {
 
 export async function buildLocalizedPostReadResponse(input: {
   client: Client
+  env?: Env | null
   songArtifactExecutor?: Client | null
   post: Post
   locale?: string | null
@@ -72,12 +101,14 @@ export async function buildLocalizedPostReadResponse(input: {
   })
   return buildLocalizedPostResponse({
     executor: input.client,
+    env: input.env,
     songArtifactExecutor: input.songArtifactExecutor,
     post: input.post,
     locale: input.locale ?? undefined,
     metrics,
     threadSnapshot,
     ageGateViewerState: input.ageGateViewerState,
+    studyElevenLabsCredentialResolver: createStudyElevenLabsCredentialResolver({ env: input.env }),
     viewerUserId: input.viewerUserId,
   })
 }

@@ -86,6 +86,7 @@ export async function cancelPostEvent(input: {
 
     return await buildLocalizedPostReadResponse({
       client: db.client,
+      env: input.env,
       post: updatedPost,
       viewerUserId: input.userId,
       ageGateViewerState: await resolveAgeGateViewerState({

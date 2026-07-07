@@ -556,6 +556,25 @@ describe("post study service", () => {
     expect(payload.unavailable_reason).toBe("missing_transcription_provider")
   })
 
+  test("reports a missing transcription provider for same-language study without ElevenLabs", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
+    expect(payload.unavailable_reason).toBe("missing_transcription_provider")
+  })
+
   test("reports processing when translations can generate but say-it-back is gated by missing ElevenLabs", async () => {
     await clearElevenLabsCredential()
     await seedSongPost()
