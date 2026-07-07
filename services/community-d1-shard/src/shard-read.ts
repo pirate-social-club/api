@@ -718,8 +718,7 @@ export async function runShardListStaleUnloadedPoolRows(
 }
 
 /**
- * Admin: drop all user tables in a community's D1 (a half-loaded community
- * before release).
+ * Admin: reset a never-loaded community D1 before releasing its pool binding.
  *
  * SERVER-SIDE SAFETY GATE: refuses unless the binding's `d1_pool` row exists AND
  * `last_loaded_at IS NULL`. This makes the destructive drop safe-by-construction
@@ -728,6 +727,10 @@ export async function runShardListStaleUnloadedPoolRows(
  * provision() retry can set `last_loaded_at` between the reconciler's GetPoolRow
  * read and this call, so we re-check here at drop time. A loaded community is
  * decommissioned via a separate deliberate path, never here.
+ *
+ * DATA-SAFETY GATE: also refuses if the target D1 contains any resettable
+ * user/community tables. `last_loaded_at` is metadata; the table check is the
+ * independent guard against migration-seeded or otherwise metadata-corrupt rows.
  */
 export async function runShardReset(
   env: ShardEnv,
@@ -760,10 +763,10 @@ export async function runShardReset(
     .filter(isResettableUserTable)
   if (names.length === 0) return { ok: true, value: { tablesDropped: 0 } }
 
-  // DROP each table. D1 batch is atomic; identifiers can't be bound, but the
-  // names come from sqlite_master (not user input), so interpolation is safe here.
-  await db.batch(names.map((name) => db.prepare(`DROP TABLE IF EXISTS "${name}"`)))
-  return { ok: true, value: { tablesDropped: names.length } }
+  return err(
+    SHARD_READ_ERROR.BINDING_NOT_EMPTY,
+    `refusing to reset ${input.bindingName}: target D1 contains user tables`,
+  )
 }
 
 /** Admin: free a pool binding (sets community_id NULL + released_at for the §5 quarantine). */

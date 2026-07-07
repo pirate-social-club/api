@@ -19,8 +19,9 @@ import type {
  * successful snapshot load — §4.2), NOT a table-count heuristic:
  *   - lastLoadedAt set  → the load finished; the crash was on the final routing
  *                         flip. ADVANCE the routing row to 'ready'.
- *   - lastLoadedAt null → never fully loaded. RESET the community D1 + RELEASE
- *                         the pool binding (back into the §5 quarantine), and
+ *   - lastLoadedAt null → never fully loaded. Ask the shard to RESET; the shard
+ *                         now refuses non-empty D1s, so only empty/internal-only
+ *                         bindings can be RELEASED back into quarantine. Then
  *                         mark the routing row 'degraded' so a later provision()
  *                         retry re-advances it with a fresh binding.
  *
@@ -52,7 +53,7 @@ export type ReconcilerDeps = {
   findUnclaimedStaleUnloadedPoolBindings(): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>>
   /** Shard admin RPC: read the pool row (keyed off lastLoadedAt). */
   shardGetPoolRow(bindingName: string): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
-  /** Shard admin RPC: drop a never-loaded community's tables (refuses if loaded). */
+  /** Shard admin RPC: verify/reset a never-loaded D1 (refuses if loaded or non-empty). */
   shardReset(bindingName: string): Promise<ShardResult<ShardAdminResetResponse>>
   /** Shard admin RPC: free a pool binding (starts the quarantine). */
   shardRelease(bindingName: string): Promise<ShardResult<ShardAdminReleaseResponse>>
