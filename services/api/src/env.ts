@@ -14,6 +14,11 @@ export type Env = {
   MATERIALIZED_PUBLIC_HOME_FEED_LOCALES?: string
   PIRATE_ADMIN_TOKEN?: string
   SENTRY_DSN?: string
+  OPS_ALERT_DEDUPE?: KVNamespace
+  OPS_ALERT_WEBHOOK_URL?: string
+  OPS_ALERT_MAX_COMMUNITIES?: string
+  OPS_ALERT_LOOKBACK_MS?: string
+  OPS_ALERT_BUCKET_MS?: string
 
   // Analytics
   ANALYTICS_ENABLED?: string
