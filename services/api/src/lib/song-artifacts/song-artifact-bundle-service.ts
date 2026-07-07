@@ -5,6 +5,7 @@ import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { sha256Hex } from "../crypto"
 import { analyzeSongBundle } from "./song-artifact-analysis"
+import { shouldSkipSongAcr } from "./song-acr-bypass"
 import {
   createSongArtifactBundleDraft,
   finalizeSongArtifactBundle,
@@ -266,6 +267,10 @@ export async function createSongArtifactBundle(input: {
       env: input.env,
       lyrics,
       primaryAudioUpload,
+      skipAcrIdentification: shouldSkipSongAcr({
+        env: input.env,
+        communityId: input.communityId,
+      }),
     }))
     const finalized = await withSongBundleStep("finalize bundle", {
       alignment_status: analysis.alignmentStatus,

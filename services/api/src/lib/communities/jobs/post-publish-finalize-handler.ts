@@ -21,6 +21,7 @@ import { logPipelineError, logPipelineInfo } from "../../observability/pipeline-
 import { getControlPlaneClient } from "../../runtime-deps"
 import { requiredString } from "../../sql-row"
 import { analyzeSongBundle } from "../../song-artifacts/song-artifact-analysis"
+import { shouldSkipSongAcr } from "../../song-artifacts/song-acr-bypass"
 import { consumeSongPostBundle } from "../../song-artifacts/song-artifact-post-resolution-service"
 import {
   finalizeSongArtifactBundle,
@@ -522,6 +523,10 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           env: input.env,
           lyrics: bundle.lyrics,
           primaryAudioUpload,
+          skipAcrIdentification: shouldSkipSongAcr({
+            env: input.env,
+            communityId: input.job.community_id,
+          }),
         })
         bundle = await finalizeSongArtifactBundle({
           client: controlClient,
