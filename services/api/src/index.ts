@@ -631,11 +631,12 @@ const handler: ExportedHandler<Env> = {
     // jobs — see runner docs / overlap caveat).
     const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
     const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
-    // Money-path recovery must not sit behind the rotating best-effort maintenance tail. A live
-    // prod tick showed the deadline deferring reconcile_booking_settlements after slower feed /
-    // community work, so keep this first while leaving the lower-priority jobs rotated.
+    // Recovery jobs must not sit behind the rotating best-effort maintenance tail. Live ticks
+    // have shown the deadline deferring both settlement and D1 provisioning recovery after
+    // slower community/feed work, so keep them first while lower-priority jobs rotate.
     const priorityJobs: NamedTask[] = [
       { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
+      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
     ]
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
@@ -648,7 +649,6 @@ const handler: ExportedHandler<Env> = {
       { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
     ]
     const rotatedJobs: NamedTask[] = [
-      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
       ...(reconcilerOnly ? [] : generalJobs),
     ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
     // Rotate the start order each minute so a deadline-trimmed tail never starves
