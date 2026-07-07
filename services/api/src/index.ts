@@ -1,6 +1,5 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
-import { captureException, withSentry } from "@sentry/cloudflare"
 import { WorkerEntrypoint } from "cloudflare:workers"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
@@ -56,7 +55,8 @@ import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
-import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
+import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
+import { logPipelineError } from "./lib/observability/pipeline-log"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
@@ -236,11 +236,18 @@ app.route("/telegram", telegram)
 app.route("/wallet-identities", walletIdentities)
 app.route("/", verification)
 
-app.get("/__debug/sentry-error", (c) => {
+app.post("/__debug/ops-alert", async (c) => {
   if (c.env.ENVIRONMENT === "production") {
     return c.json({ error: "not_found" }, 404)
   }
-  throw new Error("Sentry smoke test: intentional 500")
+  await captureScheduledWarning(
+    c.env,
+    "Ops alert smoke test",
+    "ops_alert_smoke_test",
+    { source: "__debug/ops-alert" },
+    { urgency: "high" },
+  )
+  return c.json({ ok: true })
 })
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
@@ -248,28 +255,22 @@ app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 app.onError((error, c) => {
   if (!(error instanceof HttpError) || error.status >= 500) {
     console.error("[api-worker]", error)
-    if (c.env.SENTRY_DSN) {
-      const details = error instanceof HttpError ? error.details : null
-      const causeDetails = details?.cause_details && typeof details.cause_details === "object"
-        ? details.cause_details as Record<string, unknown>
-        : null
-      captureException(error, {
-        tags: {
-          route: c.req.path,
-          method: c.req.method,
-          status: error instanceof HttpError ? String(error.status) : "500",
-          ...(typeof details?.community_id === "string" ? { community_id: details.community_id } : {}),
-          ...(typeof details?.job_id === "string" ? { job_id: details.job_id } : {}),
-          ...(typeof causeDetails?.operator_error_code === "string" ? { operator_error_code: causeDetails.operator_error_code } : {}),
-          ...(typeof causeDetails?.operator_request_id === "string" ? { operator_request_id: causeDetails.operator_request_id } : {}),
-          ...(typeof causeDetails?.operator_step === "string" ? { operator_step: causeDetails.operator_step } : {}),
-        },
-        extra: {
-          ...(details ? { details } : {}),
-          ...(typeof causeDetails?.operator_message === "string" ? { operator_message: causeDetails.operator_message } : {}),
-        },
-      })
-    }
+    const details = error instanceof HttpError ? error.details : null
+    const causeDetails = details?.cause_details && typeof details.cause_details === "object"
+      ? details.cause_details as Record<string, unknown>
+      : null
+    logPipelineError("[api-worker] unhandled request error", {
+      route: c.req.path,
+      method: c.req.method,
+      status: error instanceof HttpError ? String(error.status) : "500",
+      ...(typeof details?.community_id === "string" ? { community_id: details.community_id } : {}),
+      ...(typeof details?.job_id === "string" ? { job_id: details.job_id } : {}),
+      ...(typeof causeDetails?.operator_error_code === "string" ? { operator_error_code: causeDetails.operator_error_code } : {}),
+      ...(typeof causeDetails?.operator_request_id === "string" ? { operator_request_id: causeDetails.operator_request_id } : {}),
+      ...(typeof causeDetails?.operator_step === "string" ? { operator_step: causeDetails.operator_step } : {}),
+      ...(typeof causeDetails?.operator_message === "string" ? { operator_message: causeDetails.operator_message } : {}),
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
   const response = errorResponse(error)
   return new Response(JSON.stringify(response.body), {
@@ -363,7 +364,7 @@ async function flushScheduledAnalytics(env: Env): Promise<void> {
     await flushAnalyticsOutbox(env, db)
   } catch (error) {
     console.error("[analytics] scheduled flush failed", error)
-    captureScheduledError(env, error, "analytics_flush")
+    await captureScheduledError(env, error, "analytics_flush")
   } finally {
     db.close?.()
   }
@@ -377,7 +378,7 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
   if (!env.TINYBIRD_READ_TOKEN) {
     const error = new Error("TINYBIRD_READ_TOKEN is required to sync community health counts")
     console.error("[analytics] scheduled community health sync failed", error)
-    captureScheduledError(env, error, "community_health_sync")
+    await captureScheduledError(env, error, "community_health_sync")
     return
   }
 
@@ -389,7 +390,7 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[analytics] scheduled community health sync failed", error)
-    captureScheduledError(env, error, "community_health_sync")
+    await captureScheduledError(env, error, "community_health_sync")
   } finally {
     db.close?.()
   }
@@ -410,7 +411,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     })
     if (reconciledLockedDelivery.enqueued_jobs > 0 || reconciledLockedDelivery.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
-      captureScheduledWarning(
+      await captureScheduledWarning(
         env,
         "Locked delivery reconciliation enqueued orphaned jobs",
         "community_jobs_locked_delivery_reconciliation",
@@ -427,7 +428,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     })
     if (reconciledUploadSessions.enqueued_jobs > 0 || reconciledUploadSessions.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stale song artifact upload sessions", JSON.stringify(reconciledUploadSessions))
-      captureScheduledWarning(
+      await captureScheduledWarning(
         env,
         "Song artifact upload session reaper jobs enqueued",
         "community_jobs_song_artifact_session_reaper",
@@ -445,7 +446,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     })
     if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
-      captureScheduledWarning(
+      await captureScheduledWarning(
         env,
         "Post publish finalize reconciliation marked stuck posts failed",
         "community_jobs_post_publish_finalize_reconciliation",
@@ -475,7 +476,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     await runOpsAlerts({ env, communityRepository, nowMs: Date.now() })
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
-    captureScheduledError(env, error, "community_jobs")
+    await captureScheduledError(env, error, "community_jobs")
   } finally {
     await communityRepository.close?.()
   }
@@ -489,7 +490,7 @@ async function reconcileScheduledRoyaltyClaims(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[royalties] claim reconciliation failed", error)
-    captureScheduledError(env, error, "royalty_reconciliation")
+    await captureScheduledError(env, error, "royalty_reconciliation")
   }
 }
 
@@ -507,7 +508,7 @@ async function reconcileScheduledRoyaltyAllocationVerifications(env: Env): Promi
     }
   } catch (error) {
     console.error("[royalty-allocations] verification reconciliation failed", error)
-    captureScheduledError(env, error, "royalty_allocation_verification")
+    await captureScheduledError(env, error, "royalty_allocation_verification")
   } finally {
     await communityRepository.close?.()
   }
@@ -527,7 +528,7 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
     }
   } catch (error) {
     console.error("[purchase-settlements] reconciliation failed", error)
-    captureScheduledError(env, error, "purchase_settlement_reconciliation")
+    await captureScheduledError(env, error, "purchase_settlement_reconciliation")
   } finally {
     await communityRepository.close?.()
   }
@@ -546,14 +547,14 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
       summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
     }
     // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
-    // generic marker (no raw message/object reaches Sentry from coordinator/RPC paths).
-    if (globalSummary.fatal) captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
-    if (summary.fatal) captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
+    // generic marker (no raw message/object reaches alert sinks from coordinator/RPC paths).
+    if (globalSummary.fatal) await captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
+    if (summary.fatal) await captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
   } catch (error) {
     // Defense: an unexpected throw past the sweep still yields a fatal summary (no raw error logged).
     summary.errors += 1
     summary.fatal = true
-    captureScheduledError(env, error, "booking_settlement_reconciliation")
+    await captureScheduledError(env, error, "booking_settlement_reconciliation")
   } finally {
     // One structured summary for EVERY enabled run — including zero-work AND fatal runs.
     console.info("[global-booking-settlements] swept", JSON.stringify(globalSummary))
@@ -581,7 +582,7 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
     }
   } catch (error) {
     console.error("[community-membership-projections] reconciliation failed", error)
-    captureScheduledError(env, error, "membership_projection_reconciliation")
+    await captureScheduledError(env, error, "membership_projection_reconciliation")
   } finally {
     await communityRepository.close?.()
   }
@@ -670,7 +671,7 @@ const handler: ExportedHandler<Env> = {
     if (!env.SCHEDULED_CRON_LOCK) {
       const error = new Error("SCHEDULED_CRON_LOCK durable object binding is missing; refusing to run the scheduled batch without overlap protection")
       console.error("[scheduled]", error.message)
-      captureScheduledError(env, error, "scheduled_cron_lock_binding_missing")
+      ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
       return
     }
     // A DO lease guarantees only ONE batch runs cluster-wide: if a prior
@@ -701,4 +702,4 @@ export class CachedPublicReads extends WorkerEntrypoint<Env> {
 }
 
 export { app }
-export default withSentry(makeSentryOptions, handler)
+export default handler

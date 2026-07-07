@@ -1,4 +1,3 @@
-import { captureException } from "@sentry/cloudflare"
 import { logPipelineError } from "./observability/pipeline-log"
 import type { Client, Transaction } from "./sql-client"
 
@@ -37,14 +36,7 @@ export async function safeRollback(tx: Pick<Transaction, "rollback">, message: s
     logPipelineError(message, {
       level: "error",
       error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-    })
-    captureException(rollbackError, {
-      tags: {
-        rollback_failed: "true",
-      },
-      extra: {
-        rollback_message: message,
-      },
+      rollback_failed: "true",
     })
   }
 }

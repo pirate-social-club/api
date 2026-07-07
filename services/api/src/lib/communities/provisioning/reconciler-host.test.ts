@@ -4,7 +4,7 @@ import type { Client } from "../../sql-client"
 import { buildReconcilerDeps, reportD1ReconcilerSweepHealth } from "./reconciler-host"
 
 function captureWarningCalls(into: unknown[][]) {
-  return (
+  return async (
     env: Env,
     message: string,
     task: string,
@@ -82,12 +82,12 @@ describe("buildReconcilerDeps", () => {
 })
 
 describe("reportD1ReconcilerSweepHealth", () => {
-  test("logs a summary without reporting when the sweep has no errors", () => {
+  test("logs a summary without reporting when the sweep has no errors", async () => {
     const log = spyOn(console, "log").mockImplementation(() => {})
     const error = spyOn(console, "error").mockImplementation(() => {})
     const warnings: unknown[][] = []
     try {
-      reportD1ReconcilerSweepHealth(
+      await reportD1ReconcilerSweepHealth(
         {} as Env,
         { scanned: 0, advanced: 0, released: 0, orphanReleased: 0, errors: [] },
         captureWarningCalls(warnings),
@@ -108,17 +108,17 @@ describe("reportD1ReconcilerSweepHealth", () => {
     }
   })
 
-  test("logs and reports one grouped warning when the sweep has errors", () => {
+  test("logs and reports one grouped warning when the sweep has errors", async () => {
     const log = spyOn(console, "log").mockImplementation(() => {})
     const error = spyOn(console, "error").mockImplementation(() => {})
-    const env = { SENTRY_DSN: "https://example.invalid/1" } as Env
+    const env = {} as Env
     const warnings: unknown[][] = []
     const errors = [
       { communityId: "cmt_1", bindingName: "DB_CMTY_0001", reason: "reset: shard_binding_not_empty" },
       { communityId: "cmt_2", bindingName: "DB_CMTY_0002", reason: "release: shard_admin_unauthorized" },
     ]
     try {
-      reportD1ReconcilerSweepHealth(
+      await reportD1ReconcilerSweepHealth(
         env,
         { scanned: 2, advanced: 0, released: 0, orphanReleased: 0, errors },
         captureWarningCalls(warnings),

@@ -8,7 +8,7 @@ Current route surface:
 
 - `GET /health`
 - `GET /__version`
-- non-production `GET /__debug/sentry-error`
+- non-production `POST /__debug/ops-alert`
 - discovery routes mounted at `/`
   `GET /.well-known/jwks.json`, `GET /.well-known/oauth-protected-resource`
 - OAuth device-code routes under `/oauth`

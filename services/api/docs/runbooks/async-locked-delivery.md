@@ -23,7 +23,7 @@ stay blocked until the asset reaches `locked_delivery_status = "ready"`.
 
 ## Alerts
 
-The scheduled reconciliation path sends a Sentry warning when it enqueues any
+The scheduled reconciliation path sends an ops alert when it enqueues any
 orphaned locked-delivery jobs.
 
 - `urgency=low`: `enqueued_jobs` is 1-5. Triage during working hours unless it
@@ -31,11 +31,10 @@ orphaned locked-delivery jobs.
 - `urgency=high`: `enqueued_jobs > 5` in one tick. Treat as a broken enqueue or
   job-runner path.
 
-Recommended Sentry alert rules:
+Recommended ops alert rules:
 
 - Notify on any
-  `scheduled_task=community_jobs_locked_delivery_reconciliation` event where
-  `urgency=high`.
+  `scheduled_warning:community_jobs_locked_delivery_reconciliation:high` alert.
 - Notify if more than three low-urgency reconciliation events occur in 30
   minutes.
 - Track failed `locked_asset_delivery_prepare` community jobs separately from

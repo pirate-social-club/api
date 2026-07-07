@@ -88,16 +88,15 @@ PR #169) that warns **before** a signer hits its floor. Threshold =
 - A greppable worker log line: `[story_runtime_funding_watchdog] BELOW FLOOR {…}`
   (or `low runway`), with `balance_ip`, `enforced_floor_ip`, `warn_threshold_ip`,
   `worst_case_tx_ip`, `balance_minus_floor_ip`, `tx_headroom`.
-- A Sentry warning (task `story_runtime_funding_watchdog`, urgency `high` when
-  below floor).
+- An ops alert through the API Worker alert sink (task
+  `story_runtime_funding_watchdog`, urgency `high` when below floor).
 
-Recommended Sentry alert rules:
+Recommended ops alert handling:
 
-- Page on any `scheduled_task:story_runtime_funding_watchdog urgency:high`
-  event. A signer is below its enforced floor and dependent transactions are
+- Page on any high-urgency `scheduled_warning:story_runtime_funding_watchdog:*`
+  alert. A signer is below its enforced floor and dependent transactions are
   already failing.
-- Notify during working hours on any
-  `scheduled_task:story_runtime_funding_watchdog urgency:low` event. A signer is
+- Notify during working hours on medium-urgency watchdog alerts. A signer is
   still above its floor but has fewer than the configured runway transactions
   left.
 

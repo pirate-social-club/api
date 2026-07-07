@@ -1,4 +1,3 @@
-import { captureException } from "@sentry/cloudflare"
 import type { Env } from "../../../env"
 import type { DbExecutor } from "../../db-helpers"
 import { logPipelineError, sanitizeLogText, summarizeReference } from "../../observability/pipeline-log"
@@ -37,22 +36,6 @@ export async function recordCommunityJobFailure(input: {
     attempt_count: input.job.attempt_count,
     error: sanitizeLogText(message),
   })
-  if (input.env.SENTRY_DSN) {
-    captureException(input.error, {
-      tags: {
-        pipeline: "community_jobs",
-        job_id: input.job.job_id,
-        job_type: input.job.job_type,
-        community_id: input.job.community_id,
-      },
-      extra: {
-        subject_type: input.job.subject_type,
-        subject_id: input.job.subject_id,
-        attempt_count: input.job.attempt_count,
-        error: message,
-      },
-    })
-  }
   return await markCommunityJobFailed({
     client: input.client,
     jobId: input.job.job_id,

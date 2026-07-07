@@ -3,11 +3,24 @@ import { logPipelineError, logPipelineInfo } from "../observability/pipeline-log
 import type { OpsAlert } from "./types"
 
 const OPS_ALERT_WEBHOOK_TIMEOUT_MS = 5_000
+const MAX_DETAIL_LENGTH = 900
 
 export type OpsAlertSendResult = {
   delivered: boolean
   sent: number
   sink: "none" | "log" | "webhook"
+}
+
+function alertDetailsText(alert: OpsAlert): string {
+  if (!alert.details) return ""
+  try {
+    const serialized = JSON.stringify(alert.details)
+    return serialized.length > MAX_DETAIL_LENGTH
+      ? `${serialized.slice(0, MAX_DETAIL_LENGTH)}...`
+      : serialized
+  } catch {
+    return "[unserializable details]"
+  }
 }
 
 export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAlertSendResult> {
@@ -17,15 +30,20 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
     logPipelineInfo("[ops-alerts] alerts fired without webhook configured", {
       count: alerts.length,
       keys: alerts.map((alert) => alert.key),
+      alerts,
     })
     return { delivered: true, sent: 0, sink: "log" }
   }
 
   const environment = env.ENVIRONMENT || "development"
   const text = alerts
-    .map((alert) =>
-      `[${alert.severity.toUpperCase()}][${environment}] ${alert.title} - ${alert.count} across ${alert.community_ids.length} community(ies)`,
-    )
+    .map((alert) => {
+      const details = alertDetailsText(alert)
+      return [
+        `[${alert.severity.toUpperCase()}][${environment}] ${alert.title} - ${alert.count} across ${alert.community_ids.length} community(ies)`,
+        details ? `details: ${details}` : "",
+      ].filter(Boolean).join("\n")
+    })
     .join("\n")
 
   try {
