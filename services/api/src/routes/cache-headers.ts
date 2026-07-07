@@ -26,10 +26,24 @@ function appendVaryHeader(c: Context, fields: string[]): void {
   }
 }
 
-export function setPublicReadCacheHeaders(c: Context, options?: { vary?: string[] }): void {
+function normalizeCacheTag(tag: string): string | null {
+  const normalized = tag.trim()
+  if (!normalized) {
+    return null
+  }
+  return normalized.replace(/[^A-Za-z0-9_:-]/gu, "_").slice(0, 128)
+}
+
+export function setPublicReadCacheHeaders(c: Context, options?: { vary?: string[]; cacheTags?: string[] }): void {
   c.header("Cloudflare-CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
   c.header("CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
   c.header("Cache-Control", PUBLIC_READ_CACHE_CONTROL)
+  const cacheTags = (options?.cacheTags ?? [])
+    .map(normalizeCacheTag)
+    .filter((tag): tag is string => tag !== null)
+  if (cacheTags.length > 0) {
+    c.header("Cache-Tag", [...new Set(cacheTags)].join(","))
+  }
   appendVaryHeader(c, [...publicReadVaryHeaders(c.req.raw), ...(options?.vary ?? [])])
 }
 

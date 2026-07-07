@@ -52,6 +52,7 @@ import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
 import type { Asset, CreatePostRequest, Post } from "../../types"
 import type { AltchaProofInput } from "../verification/altcha-provider"
+import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 import { preparePostCreate } from "./post-create-preparation"
 import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
@@ -460,6 +461,12 @@ export async function createPost(input: {
         actorUserId: input.userId,
         createdAt,
       })
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.communityId,
+        postId: post.post_id,
+        waitUntil: input.waitUntil,
+      })
       return post
     }
 
@@ -599,6 +606,12 @@ export async function createPost(input: {
       projectedPayloadJson: JSON.stringify(post),
       actorUserId: input.userId,
       createdAt,
+    })
+    schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: input.communityId,
+      postId: post.post_id,
+      waitUntil: input.waitUntil,
     })
 
     if (post.post_type === "song" && post.song_artifact_bundle_id) {

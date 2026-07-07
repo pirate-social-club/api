@@ -199,6 +199,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       communityId,
       postId,
       body,
+      waitUntil: getWaitUntil(c),
     })
     await writeAuditEventForEnv(c.env, {
       action: "community.admin_link_preview_updated",
@@ -255,6 +256,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       communityId,
       postId,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     if (!result.alreadyDeleted) {
       await writeAuditEventForEnv(c.env, {
@@ -308,6 +310,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       locked: body.locked !== false,
       reason: body.reason ?? null,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     await writeAuditEventForEnv(c.env, {
       action: result.comments_locked ? "community.thread_locked_by_moderator" : "community.thread_unlocked_by_moderator",
@@ -435,6 +438,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userRepository,
       profileRepository,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     await trackApiEvent(c.env, c.req, {
       eventName: "comment_created",

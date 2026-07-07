@@ -14,6 +14,7 @@ import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/de
 import { getPostById } from "../posts/community-post-query-store"
 import { getCommentById } from "../comments/community-comment-store"
 import type { Env } from "../../env"
+import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 import {
   createModerationAction,
   createModerationCase,
@@ -355,6 +356,7 @@ type ModerationActionMutation = {
   nextStatus?: string | null
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
+  publicReadPostId?: string | null
 }
 
 type ModerationActionPlan = {
@@ -387,21 +389,21 @@ async function planModerationAction(input: {
         if (post.status === "draft") {
           throw badRequestError("Held draft posts must be approved, hidden, or removed")
         }
-        return { mutation: {}, applyWrites: noWrites }
+        return { mutation: { publicReadPostId: postId }, applyWrites: noWrites }
       case "hide":
         return {
-          mutation: { previousStatus: post.status, nextStatus: "hidden" },
+          mutation: { previousStatus: post.status, nextStatus: "hidden", publicReadPostId: postId },
           applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "hidden", now: input.now }),
         }
       case "remove":
         return {
-          mutation: { previousStatus: post.status, nextStatus: "removed" },
+          mutation: { previousStatus: post.status, nextStatus: "removed", publicReadPostId: postId },
           applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "removed", now: input.now }),
         }
       case "restore": {
         const useApprove = post.status === "draft" && post.analysis_state === "review_required"
         return {
-          mutation: { previousStatus: post.status, nextStatus: "published" },
+          mutation: { previousStatus: post.status, nextStatus: "published", publicReadPostId: postId },
           applyWrites: (executor) => useApprove
             ? approveReviewHeldPost({ executor, postId, now: input.now })
             : setPostModerationStatus({ executor, postId, status: "published", now: input.now }),
@@ -409,7 +411,7 @@ async function planModerationAction(input: {
       }
       case "age_gate":
         return {
-          mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus" },
+          mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus", publicReadPostId: postId },
           applyWrites: (executor) => setPostAgeGatePolicy({ executor, postId, ageGatePolicy: "18_plus", now: input.now }),
         }
       default:
@@ -429,20 +431,20 @@ async function planModerationAction(input: {
 
   switch (input.body.action_type) {
     case "dismiss":
-      return { mutation: {}, applyWrites: noWrites }
+      return { mutation: { publicReadPostId: comment.thread_root_post_id }, applyWrites: noWrites }
     case "hide":
       return {
-        mutation: { previousStatus: comment.status, nextStatus: "hidden" },
+        mutation: { previousStatus: comment.status, nextStatus: "hidden", publicReadPostId: comment.thread_root_post_id },
         applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "hidden", now: input.now }),
       }
     case "remove":
       return {
-        mutation: { previousStatus: comment.status, nextStatus: "removed" },
+        mutation: { previousStatus: comment.status, nextStatus: "removed", publicReadPostId: comment.thread_root_post_id },
         applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "removed", now: input.now }),
       }
     case "restore":
       return {
-        mutation: { previousStatus: comment.status, nextStatus: "published" },
+        mutation: { previousStatus: comment.status, nextStatus: "published", publicReadPostId: comment.thread_root_post_id },
         applyWrites: (executor) => setCommentModerationStatus({ executor, commentId, status: "published", now: input.now }),
       }
     case "age_gate":
@@ -460,6 +462,7 @@ export async function resolveModerationCaseWithAction(input: {
   body: CreateModerationActionRequest
   userRepository: UserRepository
   communityRepository: ModerationCommunityRepository
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<ModerationCaseDetail> {
   assertCreateModerationActionRequest(input.body)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
@@ -526,6 +529,17 @@ export async function resolveModerationCaseWithAction(input: {
         postId: caseRow.post_id,
         status: nextStatus,
         updatedAt: now,
+      })
+    }
+    if (
+      mutation.publicReadPostId
+      && (mutation.nextStatus || mutation.nextAgeGatePolicy)
+    ) {
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.communityId,
+        postId: mutation.publicReadPostId,
+        waitUntil: input.waitUntil,
       })
     }
 

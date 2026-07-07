@@ -23,6 +23,7 @@ import { requiredString } from "../../sql-row"
 import { analyzeSongBundle } from "../../song-artifacts/song-artifact-analysis"
 import { shouldSkipSongAcr } from "../../song-artifacts/song-acr-bypass"
 import { consumeSongPostBundle } from "../../song-artifacts/song-artifact-post-resolution-service"
+import { schedulePublicPostCachePurge } from "../../public-read-cache-invalidation"
 import {
   finalizeSongArtifactBundle,
   findUploadedSongArtifactByStorageRef,
@@ -761,6 +762,11 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
       postId: post.post_id,
       projectedPayloadJson: JSON.stringify(published),
       updatedAt: projectionUpdatedAt,
+    })
+    await schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: input.job.community_id,
+      postId: post.post_id,
     })
     return post.post_id
   } finally {

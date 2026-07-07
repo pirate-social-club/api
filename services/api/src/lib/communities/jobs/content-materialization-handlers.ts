@@ -8,6 +8,7 @@ import {
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
 import { getPostById } from "../../posts/community-post-query-store"
 import { materializePostLabel } from "../../posts/post-label-materializer"
+import { schedulePublicPostCachePurge } from "../../public-read-cache-invalidation"
 import { loadCommunityProjection } from "../create/service"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
@@ -32,6 +33,14 @@ type CommunityTextTranslationPayload = {
   locale?: string | null
 }
 
+function translationResultMutatedPublicRead(result: string | null): boolean {
+  if (!result) {
+    return false
+  }
+  return !result.startsWith("cached:")
+    && !result.startsWith("skipped:")
+}
+
 export async function runPostTranslationMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
@@ -42,12 +51,20 @@ export async function runPostTranslationMaterialize(input: CommunityJobHandlerIn
     if (!post) {
       throw internalError("Post is missing for translation materialize")
     }
-    return await materializePostTranslation({
+    const result = await materializePostTranslation({
       executor: db.client,
       env: input.env,
       post,
       locale,
     })
+    if (translationResultMutatedPublicRead(result)) {
+      await schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.job.community_id,
+        postId,
+      })
+    }
+    return result
   } finally {
     db.close()
   }
@@ -95,12 +112,20 @@ export async function runCommentTranslationMaterialize(input: CommunityJobHandle
     if (!comment) {
       throw internalError("Comment is missing for translation materialize")
     }
-    return await materializeCommentTranslation({
+    const result = await materializeCommentTranslation({
       executor: db.client,
       env: input.env,
       comment,
       locale,
     })
+    if (translationResultMutatedPublicRead(result)) {
+      await schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.job.community_id,
+        postId: comment.thread_root_post_id,
+      })
+    }
+    return result
   } finally {
     db.close()
   }

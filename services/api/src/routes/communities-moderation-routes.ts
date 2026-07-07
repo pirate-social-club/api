@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getModerationCaseDetail,
@@ -13,6 +14,15 @@ import {
   requireJsonBody,
 } from "./communities-route-helpers"
 import { decodePublicCommentId, decodePublicModerationCaseId, decodePublicPostId } from "../lib/public-ids"
+
+function getWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 export function registerCommunityModerationRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/posts/:postId/reports", async (c) => {
@@ -80,6 +90,7 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       body,
       userRepository,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     return c.json(result, 200)
   })
