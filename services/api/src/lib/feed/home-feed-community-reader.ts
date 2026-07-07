@@ -13,7 +13,7 @@ import { getMembershipGatePolicy } from "../communities/membership/gate-policy-s
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
-import { hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
+import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
@@ -414,6 +414,8 @@ export async function readHomeFeedCommunityItems(input: {
     })
     const votesMs = elapsedMs(votesStartedAt)
     const postReadJobs: HomeFeedPostReadJob[] = []
+    const studyEnabledCache = new Map<string, Promise<boolean>>()
+    const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
     let localizeMs = 0
     for (const row of input.rows) {
       const post = postsById.get(row.source_post_id) ?? null
@@ -428,6 +430,7 @@ export async function readHomeFeedCommunityItems(input: {
       const localizeStartedAt = performance.now()
       const response = await buildLocalizedPostResponse({
         executor: db.client,
+        env: input.env,
         songArtifactExecutor: getControlPlaneClient(input.env),
         post,
         locale: input.locale ?? undefined,
@@ -440,6 +443,8 @@ export async function readHomeFeedCommunityItems(input: {
           viewer_vote: viewerVote,
         },
         ageGateViewerState: post.age_gate_policy === "18_plus" ? input.ageGateState ?? "proof_required" : null,
+        studyElevenLabsCredentialResolver,
+        studyEnabledCache,
         viewerUserId: input.userId,
       })
       localizeMs += elapsedMs(localizeStartedAt)

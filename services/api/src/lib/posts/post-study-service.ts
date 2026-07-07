@@ -3,7 +3,7 @@ import type { Env } from "../../env"
 import type { Profile } from "../../types"
 import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
-import { executeFirst } from "../db-helpers"
+import { executeFirst, type DbExecutor } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
 import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
@@ -15,6 +15,7 @@ import type { CommunityDatabaseBindingRepository } from "../communities/communit
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import {
   getCommunityElevenLabsStudyCapability,
+  hasActiveCommunityElevenLabsCredential,
   type CommunityElevenLabsStudyCapability,
 } from "../communities/assistant-policy/credential-service"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
@@ -26,7 +27,7 @@ import { logPipelineError } from "../observability/pipeline-log"
 import { sameLanguageLocale } from "../localization/content-locale"
 import { rowValue } from "../sql-row"
 
-type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
+export type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
 type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
@@ -116,6 +117,37 @@ type StudyUnitRow = {
   say_it_back_status: "ready" | "unavailable"
   source_language: string | null
   unit_version: number
+}
+
+type StudyCapabilityPost = {
+  access_mode?: "public" | "locked" | null
+  asset_id?: string | null
+  author_user_id?: string | null
+  community_id: string
+  lyrics?: string | null
+  post_id: string
+  post_type: string
+  song_cover_art_ref?: string | null
+  song_title?: string | null
+  source_language?: string | null
+  title?: string | null
+}
+
+export type PostStudyCapability = {
+  exercise_count?: number | null
+  source_language?: string | null
+  status: StudyAccess
+  target_language?: string | null
+}
+
+type StudyExerciseAvailability = {
+  access: Exclude<StudyAccess, "locked">
+  canonicalExerciseRows: StudyExerciseRow[]
+  exerciseCount: number
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  pack: StudyPack | null
+  unavailableReason?: StudyUnavailableReason
 }
 
 type StudyAttemptRow = {
@@ -587,8 +619,213 @@ async function canStudyPost(input: {
   return Boolean(entitlement)
 }
 
+async function canStudyCapabilityPost(input: {
+  client: DbExecutor
+  post: StudyCapabilityPost
+  viewerUserId?: string | null
+}): Promise<boolean> {
+  if (input.post.access_mode !== "locked") return true
+  if (input.post.author_user_id && input.viewerUserId === input.post.author_user_id) return true
+  if (!input.viewerUserId || !input.post.asset_id) return false
+  const entitlement = await getActiveEntitlementForBuyer(
+    input.client,
+    input.post.community_id,
+    input.viewerUserId,
+    input.post.asset_id,
+    "asset_access",
+  )
+  return Boolean(entitlement)
+}
+
+function virtualStudyUnitsFromLyrics(post: StudyCapabilityPost): StudyUnitRow[] {
+  return splitLyricsForStudy(post.lyrics ?? null).map((line) => ({
+    id: `virtual:${post.post_id}:${line.lineId}`,
+    line_id: line.lineId,
+    line_index: line.lineIndex,
+    max_attempts: 2,
+    prompt_text: line.text,
+    reference_text: line.text,
+    say_it_back_status: "ready",
+    source_language: post.source_language ?? null,
+    unit_version: STUDY_UNIT_GENERATION_VERSION,
+  }))
+}
+
+async function resolveCapabilityStudyUnits(input: {
+  client: DbExecutor
+  post: StudyCapabilityPost
+}): Promise<{ persisted: boolean; units: StudyUnitRow[] }> {
+  const existing = await selectStudyUnits(input.client, input.post.post_id)
+  if (existing.length > 0 && existing.every((unit) => unit.unit_version >= STUDY_UNIT_GENERATION_VERSION)) {
+    return { persisted: true, units: existing }
+  }
+  return {
+    persisted: false,
+    units: virtualStudyUnitsFromLyrics(input.post),
+  }
+}
+
+async function resolveHasActiveElevenLabsCredential(input: {
+  communityId: string
+  env?: Env | null
+  hasActiveElevenLabsCredential?: ((communityId: string) => Promise<boolean>)
+}): Promise<boolean> {
+  if (input.hasActiveElevenLabsCredential) {
+    return input.hasActiveElevenLabsCredential(input.communityId)
+  }
+  if (!input.env) return false
+  return hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })
+}
+
+async function resolveStudyExerciseAvailability(input: {
+  client: DbExecutor
+  env?: Env | null
+  hasActiveElevenLabsCredential?: ((communityId: string) => Promise<boolean>)
+  post: StudyCapabilityPost
+  targetLanguage: string
+  units: StudyUnitRow[]
+  unitsPersisted: boolean
+}): Promise<StudyExerciseAvailability> {
+  const includeTranslation = !isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)
+  const includeSayItBack = await resolveHasActiveElevenLabsCredential({
+    communityId: input.post.community_id,
+    env: input.env,
+    hasActiveElevenLabsCredential: input.hasActiveElevenLabsCredential,
+  })
+  const pack = input.unitsPersisted
+    ? await getLatestPack({
+      client: input.client,
+      postId: input.post.post_id,
+      targetLanguage: input.targetLanguage,
+    })
+    : null
+  if (includeTranslation && pack?.status === "unavailable") {
+    return {
+      access: "unavailable",
+      canonicalExerciseRows: [],
+      exerciseCount: 0,
+      includeSayItBack,
+      includeTranslation,
+      pack,
+      unavailableReason: pack.unavailable_reason ?? "generation_failed",
+    }
+  }
+
+  const canonicalExerciseRows = input.unitsPersisted
+    ? await listExercises({
+      client: input.client,
+      dueReviewServing: false,
+      includeSayItBack,
+      includeTranslation,
+      now: nowIso(),
+      postId: input.post.post_id,
+      targetLanguage: input.targetLanguage,
+    })
+    : []
+  const virtualSayItBackCount = !input.unitsPersisted && includeSayItBack
+    ? input.units.length
+    : 0
+  const exerciseCount = canonicalExerciseRows.length + virtualSayItBackCount
+  if (exerciseCount > 0) {
+    return {
+      access: "ready",
+      canonicalExerciseRows,
+      exerciseCount,
+      includeSayItBack,
+      includeTranslation,
+      pack,
+    }
+  }
+
+  if (!includeSayItBack && includeTranslation && input.env && canGenerateStudyTranslations(input.env)) {
+    return {
+      access: "processing",
+      canonicalExerciseRows,
+      exerciseCount: 0,
+      includeSayItBack,
+      includeTranslation,
+      pack,
+    }
+  }
+
+  return {
+    access: "unavailable",
+    canonicalExerciseRows,
+    exerciseCount: 0,
+    includeSayItBack,
+    includeTranslation,
+    pack,
+    unavailableReason: includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
+  }
+}
+
+export async function resolvePostStudyCapability(input: {
+  client: DbExecutor
+  env?: Env | null
+  hasActiveElevenLabsCredential?: ((communityId: string) => Promise<boolean>)
+  post: StudyCapabilityPost
+  targetLanguage?: string | null
+  viewerUserId?: string | null
+}): Promise<PostStudyCapability | null> {
+  if (input.post.post_type !== "song") return null
+  let targetLanguage: string
+  try {
+    targetLanguage = normalizeStudyTargetLanguage(input.targetLanguage)
+  } catch {
+    return {
+      source_language: input.post.source_language,
+      status: "unavailable",
+      target_language: null,
+    }
+  }
+  const base = {
+    source_language: input.post.source_language,
+    target_language: targetLanguage,
+  }
+
+  if (!await canStudyCapabilityPost({
+    client: input.client,
+    post: input.post,
+    viewerUserId: input.viewerUserId,
+  })) {
+    return {
+      ...base,
+      status: "locked",
+    }
+  }
+
+  const { persisted, units } = await resolveCapabilityStudyUnits({
+    client: input.client,
+    post: input.post,
+  })
+  if (units.length === 0) {
+    return {
+      ...base,
+      status: "unavailable",
+    }
+  }
+
+  const availability = await resolveStudyExerciseAvailability({
+    client: input.client,
+    env: input.env,
+    hasActiveElevenLabsCredential: input.hasActiveElevenLabsCredential,
+    post: input.post,
+    targetLanguage,
+    units,
+    unitsPersisted: persisted,
+  })
+  return {
+    ...base,
+    ...(availability.exerciseCount > 0 ? { exercise_count: availability.exerciseCount } : {}),
+    status: availability.access,
+  }
+}
+
 async function getLatestPack(input: {
-  client: ReadClient
+  client: DbExecutor
   postId: string
   targetLanguage: string
 }): Promise<StudyPack | null> {
@@ -695,7 +932,7 @@ function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExerci
 }
 
 async function listExercises(input: {
-  client: ReadClient
+  client: DbExecutor
   dueReviewServing: boolean
   includeSayItBack: boolean
   includeTranslation: boolean
@@ -989,7 +1226,7 @@ function mapStudyUnitRow(row: Record<string, unknown>): StudyUnitRow {
   }
 }
 
-async function selectStudyUnits(client: ReadClient, postId: string): Promise<StudyUnitRow[]> {
+async function selectStudyUnits(client: DbExecutor, postId: string): Promise<StudyUnitRow[]> {
   const result = await client.execute({
     sql: `
       SELECT id, line_id, line_index, source_language, prompt_text, reference_text,
@@ -1418,10 +1655,6 @@ export async function getPostStudyPayload(input: {
         unavailable_reason: "no_lyrics",
       }
     }
-    // Suppress translation_choice entirely when the learner's target language matches
-    // the song's source language — the read path must exclude already-generated rows,
-    // not just stop future enqueues (existing en localizations would otherwise serve).
-    const includeTranslation = !isSameLanguageStudyPair(post.source_language, targetLanguage)
     await enqueueStudyGenerationIfNeeded({
       client: db.client,
       communityId: input.communityId,
@@ -1432,31 +1665,28 @@ export async function getPostStudyPayload(input: {
       units,
     })
 
-    const pack = await getLatestPack({ client: db.client, postId: input.postId, targetLanguage })
-    if (includeTranslation && pack?.status === "unavailable") {
+    const availability = await resolveStudyExerciseAvailability({
+      client: db.client,
+      env: input.env,
+      post,
+      targetLanguage,
+      units,
+      unitsPersisted: true,
+    })
+    const pack = availability.pack
+    if (availability.access === "unavailable" && availability.unavailableReason === "generation_failed") {
       return {
-        ...basePayload({ access: "unavailable", post, targetLanguage: pack.target_language }),
-        source_language: pack.source_language ?? post.source_language,
-        unavailable_reason: pack.unavailable_reason ?? "generation_failed",
+        ...basePayload({ access: "unavailable", post, targetLanguage: pack?.target_language ?? targetLanguage }),
+        source_language: pack?.source_language ?? post.source_language,
+        unavailable_reason: availability.unavailableReason,
       }
     }
 
-    const includeSayItBack = (await getCommunityElevenLabsStudyCapability({
-      client: db.client,
-      env: input.env,
-      communityId: input.communityId,
-    })).active
+    const includeSayItBack = availability.includeSayItBack
+    const includeTranslation = availability.includeTranslation
     const now = nowIso()
     const reServeDueReviews = dueReviewServingEnabled(input.env)
-    const canonicalExerciseRows = await listExercises({
-      client: db.client,
-      dueReviewServing: true,
-      includeSayItBack,
-      includeTranslation,
-      now,
-      postId: input.postId,
-      targetLanguage,
-    })
+    const canonicalExerciseRows = availability.canonicalExerciseRows
     const exerciseRows = await listExercises({
       client: db.client,
       dueReviewServing: reServeDueReviews,
@@ -1496,10 +1726,7 @@ export async function getPostStudyPayload(input: {
           study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
         }
       }
-      // Only report "processing" (translations still generating) when translations are
-      // actually expected. For a same-language pair nothing will ever generate, so an
-      // empty pack means say-it-back is the only possible type and its provider is missing.
-      if (!includeSayItBack && includeTranslation && canGenerateStudyTranslations(input.env)) {
+      if (availability.access === "processing") {
         return {
           ...basePayload({ access: "processing", post, targetLanguage }),
           source_language: pack?.source_language ?? post.source_language,
@@ -1508,7 +1735,7 @@ export async function getPostStudyPayload(input: {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage }),
         source_language: pack?.source_language ?? post.source_language,
-        unavailable_reason: includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
+        unavailable_reason: availability.unavailableReason ?? (includeSayItBack ? "no_lyrics" : "missing_transcription_provider"),
       }
     }
     return {

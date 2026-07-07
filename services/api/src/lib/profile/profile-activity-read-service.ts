@@ -13,6 +13,7 @@ import { buildLocalizedPostResponse } from "../localization/post-localization-se
 import { getPostReadMetrics } from "../posts/community-post-metrics-store"
 import { getPostById } from "../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../posts/post-access"
+import { createStudyElevenLabsCredentialResolver, type StudyElevenLabsCredentialResolver } from "../posts/post-read-response"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
 import type { Env } from "../../env"
@@ -298,6 +299,8 @@ async function hydratePostRows(input: {
         locale: input.locale,
         communityRepository: input.repository,
       })
+      const studyEnabledCache = new Map<string, Promise<boolean>>()
+      const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
       for (const row of rows) {
         const post = parseProjectedPost(row)
         if (!post || post.identity_mode !== "public" || !isPubliclyReadablePost(post)) {
@@ -310,11 +313,14 @@ async function hydratePostRows(input: {
         })
         const response = await buildLocalizedPostResponse({
           executor: db.client,
+          env: input.env,
           post,
           locale: input.locale,
           metrics,
           threadSnapshot: null,
           ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
+          studyElevenLabsCredentialResolver,
+          studyEnabledCache,
           viewerUserId: input.viewerUserId,
         })
         response.community = preview
@@ -334,7 +340,10 @@ async function hydratePostRows(input: {
 
 async function buildThreadRootPost(input: {
   client: DbExecutor
+  env: Env
   postId: string
+  studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
+  studyEnabledCache?: Map<string, Promise<boolean>>
   viewerUserId: string | null
   locale?: string | null
 }): Promise<LocalizedPostResponse | null> {
@@ -349,11 +358,14 @@ async function buildThreadRootPost(input: {
   })
   return await buildLocalizedPostResponse({
     executor: input.client,
+    env: input.env,
     post,
     locale: input.locale,
     metrics,
     threadSnapshot: null,
     ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
+    studyElevenLabsCredentialResolver: input.studyElevenLabsCredentialResolver,
+    studyEnabledCache: input.studyEnabledCache,
     viewerUserId: input.viewerUserId,
   })
 }
@@ -382,6 +394,8 @@ async function hydrateCommentRows(input: {
         locale: input.locale,
         communityRepository: input.repository,
       })
+      const studyEnabledCache = new Map<string, Promise<boolean>>()
+      const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
       const threadRoots = new Map<string, LocalizedPostResponse | null>()
       for (const row of rows) {
         if (seenCommentIds.has(row.source_comment_id)) {
@@ -396,7 +410,10 @@ async function hydrateCommentRows(input: {
           ? threadRoots.get(row.thread_root_post_id) ?? null
           : await buildThreadRootPost({
               client: db.client,
+              env: input.env,
               postId: row.thread_root_post_id,
+              studyElevenLabsCredentialResolver,
+              studyEnabledCache,
               viewerUserId: input.viewerUserId,
               locale: input.locale,
             })
