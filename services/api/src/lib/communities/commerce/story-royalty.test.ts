@@ -29,6 +29,25 @@ describe("assertAssetReadyForStoryRoyaltyCommerce", () => {
     }, productionEnv)).toThrow("Asset royalty allocation is not verified")
   })
 
+  test("local Story fallback still requires allocation verification", () => {
+    const localFallbackAsset = {
+      ...readyAsset,
+      story_ip_id: null,
+      story_royalty_registration_status: "pending" as const,
+      royalty_allocation_status: "none" as const,
+    }
+
+    expect(() => assertAssetReadyForStoryRoyaltyCommerce(
+      localFallbackAsset,
+      { ENVIRONMENT: "test" },
+    )).not.toThrow()
+
+    expect(() => assertAssetReadyForStoryRoyaltyCommerce({
+      ...localFallbackAsset,
+      royalty_allocation_status: "verification_pending" as const,
+    }, { ENVIRONMENT: "test" })).toThrow("Asset royalty allocation is not verified")
+  })
+
   test("still rejects missing Story royalty registration", () => {
     expect(() => assertAssetReadyForStoryRoyaltyCommerce({
       ...readyAsset,
