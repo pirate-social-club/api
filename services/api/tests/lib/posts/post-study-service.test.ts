@@ -1034,6 +1034,140 @@ describe("post study service", () => {
     }])
   })
 
+  test("near-missed say-it-back attempts stay in short recovery and can qualify the streak", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const attemptEnv = env({
+      SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
+      SONG_STUDY_STREAK_WRITES_ENABLED: "true",
+    })
+
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-nearmiss-recovery-correct-say",
+        target_language: "es",
+        transcript: "I was lost in the midnight waves",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      postId: POST_ID,
+    })
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:translation_choice:es",
+        idempotency_key: "study-nearmiss-recovery-correct-choice",
+        selected_option_id: "opt_a",
+        type: "translation_choice",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      postId: POST_ID,
+    })
+
+    const nearMiss = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-nearmiss-recovery-near-miss",
+        target_language: "es",
+        transcript: "Hold me close until the dawn",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      postId: POST_ID,
+    })
+
+    expect(nearMiss.outcome).toBe("incorrect")
+    expect(nearMiss.next_review_hint).toBe("again")
+    let ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 0,
+      study_attempt_count: 3,
+      study_correct_count: 2,
+      study_target_count: 3,
+    }])
+
+    const review = await client!.execute({
+      sql: `
+        SELECT due_at, last_reviewed_at, state
+        FROM song_study_review_state
+        WHERE user_id = ?1
+          AND post_id = ?2
+          AND line_id = 'line_002'
+          AND exercise_type = 'say_it_back'
+          AND target_language = 'en'
+      `,
+      args: [LEARNER_ID, POST_ID],
+    })
+    const dueAt = String(review.rows[0]?.due_at ?? "")
+    const lastReviewedAt = String(review.rows[0]?.last_reviewed_at ?? "")
+    expect(review.rows[0]?.state).toBe("learning")
+    expect(Date.parse(dueAt) - Date.parse(lastReviewedAt)).toBe(10 * 60 * 1000)
+
+    await exec(`
+      UPDATE song_study_review_state
+      SET due_at = '2026-06-29T07:59:00.000Z'
+      WHERE user_id = ?1
+        AND post_id = ?2
+        AND line_id = 'line_002'
+        AND exercise_type = 'say_it_back'
+        AND target_language = 'en'
+    `, [LEARNER_ID, POST_ID])
+
+    const recovered = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "study-nearmiss-recovery-corrected",
+        target_language: "es",
+        transcript: "Hold me close until the morning",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      postId: POST_ID,
+    })
+
+    expect(recovered.outcome).toBe("correct")
+    expect(recovered.study_progress).toMatchObject({
+      current_streak: 1,
+      qualified_today: true,
+      study_attempt_count: 4,
+      study_correct_count: 3,
+      study_target_count: 3,
+    })
+    ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 1,
+      study_attempt_count: 4,
+      study_correct_count: 3,
+      study_target_count: 3,
+    }])
+  })
+
   test("does not qualify a short-pack streak from wrong attempts alone", async () => {
     await seedSongPost()
     await seedReadyPack()
@@ -2016,13 +2150,13 @@ describe("post study service", () => {
     })
 
     expect(result.outcome).toBe("incorrect")
-    expect(result.next_review_hint).toBe("hard")
+    expect(result.next_review_hint).toBe("again")
     expect(result.feedback?.missing).toContain("lost")
 
     const row = await client!.execute("SELECT transcript FROM song_study_attempt LIMIT 1")
     expect(row.rows[0]?.transcript).toBe("I was in the midnight waves")
     const state = await client!.execute("SELECT state, lapses FROM song_study_review_state LIMIT 1")
-    expect(state.rows[0]).toMatchObject({ lapses: 0, state: "review" })
+    expect(state.rows[0]).toMatchObject({ lapses: 1, state: "learning" })
   })
 
   test("say-it-back accepts common article and plural recall variants", async () => {
@@ -2112,7 +2246,7 @@ describe("post study service", () => {
     })
 
     expect(result.outcome).toBe("incorrect")
-    expect(result.next_review_hint).toBe("hard")
+    expect(result.next_review_hint).toBe("again")
     expect(result.feedback).toMatchObject({
       extra: ["ola"],
       missing: ["olas"],

@@ -2006,14 +2006,11 @@ function gradeSayItBack(input: {
 }): { correct: boolean; feedback: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
   const referenceTokens = recallTokensForSourceLanguage(input.reference, input.sourceLanguage)
   const transcriptTokens = recallTokensForSourceLanguage(input.transcript, input.sourceLanguage)
-  const distance = tokenEditDistance(referenceTokens, transcriptTokens)
-  const maxLength = Math.max(referenceTokens.length, transcriptTokens.length, 1)
-  const nearMiss = distance > 0 && distance <= Math.max(1, Math.floor(maxLength * 0.25))
-  const correct = distance === 0
+  const correct = tokenEditDistance(referenceTokens, transcriptTokens) === 0
   return {
     correct,
     feedback: tokenDiff(input.reference, input.transcript, input.sourceLanguage),
-    rating: correct ? fsrsRatingFor("correct", input.attemptNumber) : nearMiss ? "hard" : "again",
+    rating: correct ? fsrsRatingFor("correct", input.attemptNumber) : "again",
   }
 }
 
