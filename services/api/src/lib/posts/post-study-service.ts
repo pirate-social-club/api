@@ -539,10 +539,36 @@ function isDueReview(input: { dueAt: string; now: string }): boolean {
   const nowMs = Date.parse(input.now)
   return Number.isFinite(dueAtMs) && Number.isFinite(nowMs) && dueAtMs <= nowMs
 }
+// Cloudflare exposes the client's IANA timezone on `request.cf.timezone`. A US
+// learner studying at 21:00 local writes their streak day in their own calendar,
+// not the UTC calendar — so activity_date and streak continuation are computed in
+// this timezone. Falls back to UTC when cf is unavailable (local dev, tests).
+const STUDY_FALLBACK_TIMEZONE = "UTC"
 
-function studyTargetCountFromDueBefore(dueBefore: number): number {
-  return dueBefore > 0 ? Math.min(STREAK_MIN_STUDY_ATTEMPTS, dueBefore) : STREAK_MIN_STUDY_ATTEMPTS
+export function resolveStudyTimezone(cf: Request["cf"] | undefined): string {
+  const tz = typeof cf?.timezone === "string" ? cf.timezone.trim() : ""
+  if (!tz) return STUDY_FALLBACK_TIMEZONE
+  try {
+    // Validate the IANA zone by formatting; invalid zones throw RangeError.
+    new Intl.DateTimeFormat("en-CA", { timeZone: tz })
+    return tz
+  } catch {
+    return STUDY_FALLBACK_TIMEZONE
+  }
 }
+
+// en-CA formats calendar dates as YYYY-MM-DD — the exact shape activity_date and
+// last_qualified_date store. Computing the date in the study timezone (not UTC)
+// is what keeps a late-night session on a single streak day.
+function studyActivityDate(nowIsoValue: string, timezone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: timezone,
+    year: "numeric",
+  }).format(new Date(nowIsoValue))
+}
+
 
 function studyTargetCountFromServeableExerciseCount(exerciseCount: number): number {
   return Math.max(1, Math.min(STREAK_MIN_STUDY_ATTEMPTS, exerciseCount))
@@ -949,7 +975,8 @@ async function listExercises(input: {
              NULL AS question, u.reference_text, NULL AS translation_text,
              NULL AS options_json, NULL AS correct_option_id, u.max_attempts,
              COALESCE(u.source_language, 'source') AS review_language, u.unit_version AS study_pack_version,
-             0 AS sort_order
+             0 AS sort_order,
+             CASE WHEN ?6 = 1 AND s.user_id IS NOT NULL AND s.due_at <= ?7 THEN 0 ELSE 1 END AS due_rank
       FROM song_study_unit u
       LEFT JOIN song_study_review_state s
         ON s.user_id = ?5
@@ -972,7 +999,8 @@ async function listExercises(input: {
              l.options_json, l.correct_option_id, l.max_attempts,
              l.target_language AS review_language,
              l.localization_version AS study_pack_version,
-             1 AS sort_order
+             1 AS sort_order,
+             CASE WHEN ?6 = 1 AND s.user_id IS NOT NULL AND s.due_at <= ?7 THEN 0 ELSE 1 END AS due_rank
       FROM song_study_unit u
       JOIN song_study_unit_localization l ON l.unit_id = u.id
       LEFT JOIN song_study_review_state s
@@ -993,7 +1021,7 @@ async function listExercises(input: {
           OR s.user_id IS NULL
           OR (?6 = 1 AND s.due_at <= ?7)
         )
-      ORDER BY line_index ASC, sort_order ASC, id ASC
+      ORDER BY due_rank ASC, line_index ASC, sort_order ASC, id ASC
     `,
     args: [
       input.postId,
@@ -1022,63 +1050,6 @@ async function listExercises(input: {
   }))
 }
 
-async function countDueReviewExercises(input: {
-  client: ReadClient
-  includeSayItBack: boolean
-  includeTranslation: boolean
-  now: string
-  postId: string
-  targetLanguage: string
-  userId: string
-}): Promise<number> {
-  const row = await executeFirst(input.client, {
-    sql: `
-      SELECT COUNT(*) AS count
-      FROM (
-        SELECT s.due_at
-        FROM song_study_review_state s
-        JOIN song_study_unit u
-          ON u.post_id = s.post_id
-         AND u.line_id = s.line_id
-        WHERE s.user_id = ?1
-          AND s.post_id = ?2
-          AND s.exercise_type = 'say_it_back'
-          AND s.target_language = COALESCE(u.source_language, 'source')
-          AND s.due_at <= ?4
-          AND u.say_it_back_status = 'ready'
-          AND ?5 = 1
-        UNION ALL
-        SELECT s.due_at
-        FROM song_study_review_state s
-        JOIN song_study_unit u
-          ON u.post_id = s.post_id
-         AND u.line_id = s.line_id
-        JOIN song_study_unit_localization l
-          ON l.unit_id = u.id
-         AND l.target_language = s.target_language
-        WHERE s.user_id = ?1
-          AND s.post_id = ?2
-          AND s.exercise_type = 'translation_choice'
-          AND s.target_language = ?3
-          AND s.due_at <= ?4
-          AND ?6 = 1
-          AND l.status = 'ready'
-          AND l.translation_text IS NOT NULL
-          AND l.options_json IS NOT NULL
-          AND l.correct_option_id IS NOT NULL
-      )
-    `,
-    args: [
-      input.userId,
-      input.postId,
-      input.targetLanguage,
-      input.now,
-      input.includeSayItBack ? 1 : 0,
-      input.includeTranslation ? 1 : 0,
-    ],
-  }) as Record<string, unknown> | null
-  return Number(row?.count ?? 0)
-}
 
 async function getNextDueAt(input: {
   client: ReadClient
@@ -2252,9 +2223,10 @@ export async function upsertStudyEngagementDay(input: {
   now: string
   postId: string
   studyTargetCount: number
+  studyTimezone?: string
   userId: string
 }): Promise<void> {
-  const today = input.now.slice(0, 10)
+  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   const isCorrect = input.isCorrect ? 1 : 0
   await input.client.execute({
     sql: `
@@ -2297,6 +2269,7 @@ async function projectStudyStreakCount(input: {
   engagement: StudyEngagementProgress
   now: string
   postId: string
+  studyTimezone?: string
   userId: string
 }): Promise<number> {
   const row = await executeFirst(input.client, {
@@ -2310,7 +2283,7 @@ async function projectStudyStreakCount(input: {
   }) as Record<string, unknown> | null
   const current = Number(row?.current_streak ?? 0)
   if (!input.engagement.qualifiedToday) return current
-  const today = input.now.slice(0, 10)
+  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   const lastQualifiedDate = readString(row?.last_qualified_date)
   if (!lastQualifiedDate) return 1
   if (lastQualifiedDate >= today) return current
@@ -2325,9 +2298,10 @@ async function getStudyAttemptProgressSnapshot(input: {
   now: string
   postId: string
   targetLanguage: string
+  studyTimezone?: string
   userId: string
 }): Promise<SongStudyAttemptProgress | undefined> {
-  const today = input.now.slice(0, 10)
+  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   const row = await executeFirst(input.client, {
     sql: `
       SELECT study_attempt_count, study_correct_count, study_target_count, qualified
@@ -2351,6 +2325,7 @@ async function getStudyAttemptProgressSnapshot(input: {
       engagement,
       now: input.now,
       postId: input.postId,
+      studyTimezone: input.studyTimezone,
       userId: input.userId,
     }),
     getNextDueAt({
@@ -2378,9 +2353,10 @@ export async function materializeStudyStreak(input: {
   client: ReadClient
   now: string
   postId: string
+  studyTimezone?: string
   userId: string
 }): Promise<void> {
-  const today = input.now.slice(0, 10)
+  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   await input.client.execute({
     sql: `
       INSERT INTO song_streaks (
@@ -2431,6 +2407,7 @@ export async function upsertStudyStreakProgress(input: {
   now: string
   postId: string
   studyTargetCount: number
+  studyTimezone?: string
   userId: string
 }): Promise<void> {
   await upsertStudyEngagementDay(input)
@@ -2440,7 +2417,6 @@ export async function upsertStudyStreakProgress(input: {
 async function resolveStudyStreakTargetCount(input: {
   client: ReadClient
   communityId: string
-  countDueReviews: boolean
   env: Env
   now: string
   postId: string
@@ -2466,44 +2442,32 @@ async function resolveStudyStreakTargetCount(input: {
   const credentialProbeMs = elapsedMs(credentialProbeStartedAt)
   const includeSayItBack = capability.active
   const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
-  if (!input.countDueReviews) {
-    const exerciseCountStartedAt = performance.now()
-    const exerciseCount = (await listExercises({
-      client: input.client,
-      dueReviewServing: false,
-      includeSayItBack,
-      includeTranslation,
-      now: input.now,
-      postId: input.postId,
-      targetLanguage: input.targetLanguage,
-      userId: null,
-    })).length
-    const dueReviewCountMs = elapsedMs(exerciseCountStartedAt)
-    return {
-      // Freeze the day's Study target on first write. If async generation has only
-      // produced a smaller ready set, that smaller pack is the bar for this pilot day.
-      count: studyTargetCountFromServeableExerciseCount(exerciseCount),
-      credentialSource: capability.source,
-      credentialProbeMs,
-      dueReviewCountMs,
-      includeSayItBack,
-      includeTranslation,
-      totalMs: elapsedMs(startedAt),
-    }
-  }
-  const dueReviewCountStartedAt = performance.now()
-  const dueBefore = await countDueReviewExercises({
+  // The streak target must be the SAME eligible set GET serves (due reviews +
+  // unattempted new cards for this user, with due-review serving honored), so the
+  // bar is deterministic regardless of which card the learner grades first. The
+  // old branch made the target swing between min(10, due) and min(10, serveable)
+  // depending on the first graded attempt's path; that nondeterminism is what
+  // froze an unpredictable bar on the day's first write.
+  const exerciseCountStartedAt = performance.now()
+  const reServeDueReviews = dueReviewServingEnabled(input.env)
+  const exerciseCount = (await listExercises({
     client: input.client,
+    dueReviewServing: reServeDueReviews,
     includeSayItBack,
     includeTranslation,
     now: input.now,
     postId: input.postId,
     targetLanguage: input.targetLanguage,
     userId: input.userId,
-  })
-  const dueReviewCountMs = elapsedMs(dueReviewCountStartedAt)
+  })).length
+  const dueReviewCountMs = elapsedMs(exerciseCountStartedAt)
+  // If async generation has only produced a smaller ready set, that smaller pack
+  // is the bar for this pilot day. study_target_count is frozen on the first
+  // engagement-day INSERT (the ON CONFLICT path never updates it), so computing
+  // it from the full eligible set — not a per-attempt subset — is what makes the
+  // streak bar predictable across a mixed due+new session.
   return {
-    count: studyTargetCountFromDueBefore(dueBefore),
+    count: studyTargetCountFromServeableExerciseCount(exerciseCount),
     credentialSource: capability.source,
     credentialProbeMs,
     dueReviewCountMs,
@@ -2519,6 +2483,7 @@ async function recordStudyStreakMaterialization(input: {
   env: Env
   now: string
   postId: string
+  studyTimezone?: string
   userId: string
 }): Promise<void> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
@@ -2528,6 +2493,7 @@ async function recordStudyStreakMaterialization(input: {
         client: tx,
         now: input.now,
         postId: input.postId,
+        studyTimezone: input.studyTimezone,
         userId: input.userId,
       })
     })
@@ -2543,6 +2509,7 @@ export async function submitPostStudyAttempt(input: {
   communityRepository: CommunityDatabaseBindingRepository
   env: Env
   postId: string
+  studyTimezone?: string
   testHooks?: {
     beforeDeferredStreakMaterialization?: () => Promise<void>
   }
@@ -2682,12 +2649,10 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
-    const isDueReviewAttempt = Boolean(existingReviewState && isDueReview({ dueAt: existingReviewState.due_at, now }))
     const studyStreakTarget = streakWritesEnabled
       ? await resolveStudyStreakTargetCount({
         client: db.client,
         communityId: input.communityId,
-        countDueReviews: isDueReviewAttempt,
         env: input.env,
         now,
         postId: input.postId,
@@ -2746,6 +2711,7 @@ export async function submitPostStudyAttempt(input: {
           now,
           postId: input.postId,
           studyTargetCount: studyStreakTarget.count,
+          studyTimezone: input.studyTimezone,
           userId: input.actor.userId,
         })
       }
@@ -2760,6 +2726,7 @@ export async function submitPostStudyAttempt(input: {
         now,
         postId: input.postId,
         targetLanguage: streakTargetLanguage,
+        studyTimezone: input.studyTimezone,
         userId: input.actor.userId,
       })
     }
@@ -2772,6 +2739,7 @@ export async function submitPostStudyAttempt(input: {
           env: input.env,
           now,
           postId: input.postId,
+          studyTimezone: input.studyTimezone,
           userId: input.actor.userId,
         })
       }
@@ -2858,10 +2826,6 @@ type SongStreakDayRow = {
   study_target_count?: unknown
 }
 
-function utcDateFromIso(value: string): string {
-  return value.slice(0, 10)
-}
-
 function addUtcDays(date: string, days: number): string {
   const parsed = new Date(`${date}T00:00:00.000Z`)
   parsed.setUTCDate(parsed.getUTCDate() + days)
@@ -2929,9 +2893,10 @@ async function readSongStreakSummary(input: {
   limit: number
   postId: string
   profileRepository: ProfileRepository
+  studyTimezone?: string
   userId: string
 }): Promise<{ date: string; summary: SongStreakSummary }> {
-  const today = utcDateFromIso(nowIso())
+  const today = studyActivityDate(nowIso(), input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   const yesterday = addUtcDays(today, -1)
   const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
     input.client.execute({
@@ -3014,13 +2979,14 @@ export async function listPostStreakSummaries(input: {
   limit?: number | null
   postIds: string[]
   profileRepository: ProfileRepository
+  studyTimezone?: string
   userId: string
 }): Promise<Map<string, SongStreakSummary>> {
   const postIds = Array.from(new Set(input.postIds.map((postId) => postId.trim()).filter(Boolean)))
   if (postIds.length === 0) return new Map()
 
   const limit = clampStreakLeaderboardLimit(input.limit ?? 3)
-  const today = utcDateFromIso(nowIso())
+  const today = studyActivityDate(nowIso(), input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   const yesterday = addUtcDays(today, -1)
   const postIdPlaceholders = placeholders(postIds.length)
   const activeDateIndex = postIds.length + 1
@@ -3162,6 +3128,7 @@ export async function getPostStreakSummary(input: {
   client: Client
   postId: string
   profileRepository: ProfileRepository
+  studyTimezone?: string
   userId: string | null
 }): Promise<SongStreakSummary | null> {
   if (!input.userId) return null
@@ -3180,6 +3147,7 @@ export async function getPostStreakSummary(input: {
       limit: 3,
       postId: input.postId,
       profileRepository: input.profileRepository,
+      studyTimezone: input.studyTimezone,
       userId: input.userId,
     })).summary
   } catch (error) {
@@ -3196,6 +3164,7 @@ export async function getPostStreakLeaderboard(input: {
   limit?: number | null
   postId: string
   profileRepository: ProfileRepository
+  studyTimezone?: string
 }): Promise<SongStreakLeaderboard> {
   const limit = clampStreakLeaderboardLimit(input.limit)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
@@ -3212,6 +3181,7 @@ export async function getPostStreakLeaderboard(input: {
       limit,
       postId: input.postId,
       profileRepository: input.profileRepository,
+      studyTimezone: input.studyTimezone,
       userId: input.actor.userId,
     })
 
