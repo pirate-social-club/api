@@ -318,6 +318,16 @@ describe("rights review routes", () => {
     expect(detailBody.analysis?.policy_reason_code).toBe("undeclared_catalog_match")
     expect(detailBody.post?.post_id).toBe(rawPostId)
 
+    const invalidClear = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      {
+        action_type: "clear_with_upstream_refs",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(invalidClear.status).toBe(400)
+
     const action = await requestJson(
       `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
       {
