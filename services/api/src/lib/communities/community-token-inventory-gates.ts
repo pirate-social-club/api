@@ -139,15 +139,12 @@ export function normalizeInventoryText(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-function listAttachedWalletAddressesForChain(
-  walletAttachments: WalletAttachmentSummary[],
-  chainNamespace: Erc721InventoryMatchConfig["chainNamespace"],
-): string[] {
+function listAttachedEvmWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
   for (const attachment of walletAttachments) {
-    if (attachment.chain_namespace !== chainNamespace) {
+    if (!attachment.chain_namespace.startsWith("eip155:")) {
       continue
     }
     const normalized = normalizeEthereumAddress(attachment.wallet_address)
@@ -683,7 +680,7 @@ export async function evaluateErc721InventoryMatch(input: {
   walletAttachments: WalletAttachmentSummary[]
   config: Erc721InventoryMatchConfig
 }): Promise<{ matchedQuantity: number; unavailable: boolean }> {
-  const walletAddresses = listAttachedWalletAddressesForChain(input.walletAttachments, input.config.chainNamespace)
+  const walletAddresses = listAttachedEvmWalletAddresses(input.walletAttachments)
   if (walletAddresses.length === 0) {
     return { matchedQuantity: 0, unavailable: false }
   }
