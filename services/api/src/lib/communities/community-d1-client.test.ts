@@ -37,6 +37,10 @@ function fakeShard() {
       calls.push({ m: "communityD1GetPoolRow", input })
       return { ok: true as const, value: { row: null } }
     },
+    communityD1ListStaleUnloadedPoolRows: async (input: any) => {
+      calls.push({ m: "communityD1ListStaleUnloadedPoolRows", input })
+      return { ok: true as const, value: { rows: [] } }
+    },
     communityD1Reset: async (input: any) => {
       calls.push({ m: "communityD1Reset", input })
       return { ok: true as const, value: { tablesDropped: 0 } }

@@ -158,6 +158,23 @@ export type ShardAdminGetPoolRowResponse = {
   } | null
 }
 
+export type ShardAdminListStaleUnloadedPoolRowsRequest = {
+  adminToken: string
+  /** Rows allocated before this timestamp are stale enough for reconciliation. */
+  allocatedBefore: string
+  /** Bounded server-side; defaults to a conservative page size. */
+  limit?: number
+}
+
+export type ShardAdminListStaleUnloadedPoolRowsResponse = {
+  rows: Array<{
+    bindingName: string
+    communityId: string
+    allocatedAt: string
+    version: number
+  }>
+}
+
 export type ShardAdminResetRequest = {
   adminToken: string
   bindingName: string
@@ -193,6 +210,7 @@ export type ShardAdminPoolStatsResponse = {
 
 export interface ShardAdminRpc {
   communityD1GetPoolRow(input: ShardAdminGetPoolRowRequest): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
+  communityD1ListStaleUnloadedPoolRows(input: ShardAdminListStaleUnloadedPoolRowsRequest): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>>
   communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>>
   communityD1Release(input: ShardAdminReleaseRequest): Promise<ShardResult<ShardAdminReleaseResponse>>
   communityD1PoolStats(input: ShardAdminPoolStatsRequest): Promise<ShardResult<ShardAdminPoolStatsResponse>>

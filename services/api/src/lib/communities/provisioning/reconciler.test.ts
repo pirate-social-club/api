@@ -17,6 +17,7 @@ function deps(over: Partial<ReconcilerDeps> & { calls?: string[] } = {}): Reconc
   const base: ReconcilerDeps = {
     now: "2026-06-20T00:00:00Z",
     findStuckProvisioningBindings: async () => [BINDING],
+    findUnclaimedStaleUnloadedPoolBindings: async () => ({ ok: true, value: { rows: [] } }),
     shardGetPoolRow: async () => ({ ok: true, value: { row: poolRow({ lastLoadedAt: null }) } }),
     shardReset: async () => {
       calls.push("reset")
@@ -57,14 +58,14 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
         shardGetPoolRow: async () => ({ ok: true, value: { row: poolRow({ lastLoadedAt: "t1" }) } }),
       }),
     )
-    expect(r).toEqual({ scanned: 1, advanced: 1, released: 0, errors: [] })
+    expect(r).toEqual({ scanned: 1, advanced: 1, released: 0, orphanReleased: 0, errors: [] })
     expect(calls).toEqual(["advance"])
   })
 
   test("resets + releases a never-loaded binding and marks routing degraded", async () => {
     const calls: string[] = []
     const r = await runReconciliationSweep(deps({ calls }))
-    expect(r).toEqual({ scanned: 1, advanced: 0, released: 1, errors: [] })
+    expect(r).toEqual({ scanned: 1, advanced: 0, released: 1, orphanReleased: 0, errors: [] })
     expect(calls).toEqual(["reset", "release", "degraded"])
   })
 
@@ -79,7 +80,7 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
         },
       }),
     )
-    expect(r).toEqual({ scanned: 1, advanced: 1, released: 0, errors: [] })
+    expect(r).toEqual({ scanned: 1, advanced: 1, released: 0, orphanReleased: 0, errors: [] })
     // reset was attempted, refused, then advance — NO release.
     expect(calls).toEqual(["reset", "advance"])
   })
@@ -143,6 +144,64 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
 
   test("empty sweep is a clean no-op", async () => {
     const r = await runReconciliationSweep(deps({ findStuckProvisioningBindings: async () => [] }))
-    expect(r).toEqual({ scanned: 0, advanced: 0, released: 0, errors: [] })
+    expect(r).toEqual({ scanned: 0, advanced: 0, released: 0, orphanReleased: 0, errors: [] })
+  })
+
+  test("resets + releases unclaimed stale unloaded pool rows", async () => {
+    const calls: string[] = []
+    const r = await runReconciliationSweep(
+      deps({
+        calls,
+        findStuckProvisioningBindings: async () => [],
+        findUnclaimedStaleUnloadedPoolBindings: async () => ({
+          ok: true,
+          value: {
+            rows: [
+              {
+                bindingName: "DB_CMTY_ORPHAN",
+                communityId: "cmt_orphan",
+                allocatedAt: "2026-06-19T00:00:00Z",
+                version: 1,
+              },
+            ],
+          },
+        }),
+      }),
+    )
+    expect(r).toEqual({ scanned: 1, advanced: 0, released: 1, orphanReleased: 1, errors: [] })
+    expect(calls).toEqual(["reset", "release"])
+  })
+
+  test("does not release an unclaimed stale row if reset observes a completed load", async () => {
+    const calls: string[] = []
+    const r = await runReconciliationSweep(
+      deps({
+        calls,
+        findStuckProvisioningBindings: async () => [],
+        findUnclaimedStaleUnloadedPoolBindings: async () => ({
+          ok: true,
+          value: {
+            rows: [
+              {
+                bindingName: "DB_CMTY_RACE",
+                communityId: "cmt_race",
+                allocatedAt: "2026-06-19T00:00:00Z",
+                version: 1,
+              },
+            ],
+          },
+        }),
+        shardReset: async () => {
+          calls.push("reset")
+          return { ok: false, code: "shard_binding_loaded", message: "loaded mid-sweep" }
+        },
+      }),
+    )
+    expect(r.released).toBe(0)
+    expect(r.orphanReleased).toBe(0)
+    expect(r.errors).toEqual([
+      { communityId: "cmt_race", bindingName: "DB_CMTY_RACE", reason: "orphan_pool_binding_loaded_before_reset" },
+    ])
+    expect(calls).toEqual(["reset"])
   })
 })
