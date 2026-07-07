@@ -209,6 +209,7 @@ describe("erc721 gate evaluation", () => {
   test("returns erc721_inventory_match_required when attached wallets do not hold enough matching assets", async () => {
     setErc721InventoryMatcherForTests(async ({ walletAddresses }) => {
       expect(walletAddresses).toEqual([
+        "0x2222222222222222222222222222222222222222",
         "0x3333333333333333333333333333333333333333",
       ])
       return { matchedQuantity: 2 }
@@ -232,6 +233,7 @@ describe("erc721 gate evaluation", () => {
       expect(config.contractAddress.toLowerCase()).toBe("0xd4ac3ce8e1e14cd60666d49ac34ff2d2937cf6fa")
       expect(walletAddresses).toEqual([
         "0x2222222222222222222222222222222222222222",
+        "0x3333333333333333333333333333333333333333",
       ])
       return { matchedQuantity: 1 }
     })
@@ -242,6 +244,32 @@ describe("erc721 gate evaluation", () => {
         min_quantity: 1,
         match: { category: "watch", brand: "Rolex" },
       }, "eip155:1")],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("evaluates Polygon Courtyard inventory gates against attached EVM wallets", async () => {
+    setErc721InventoryMatcherForTests(async ({ walletAddresses, config }) => {
+      expect(config.chainNamespace).toBe("eip155:137")
+      expect(config.contractAddress.toLowerCase()).toBe("0x251be3a17af4892035c37ebf5890f4a4d889dcad")
+      expect(walletAddresses).toEqual([
+        "0x2222222222222222222222222222222222222222",
+        "0x3333333333333333333333333333333333333333",
+      ])
+      return { matchedQuantity: 1 }
+    })
+
+    const result = await evaluateMembershipGateRules({
+      env: {},
+      rules: [makeCourtyardInventoryRule({
+        contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        min_quantity: 1,
+        match: { category: "watch", brand: "Rolex" },
+      }, "eip155:137")],
       user: makeUser(),
       walletAttachments,
     })
@@ -301,7 +329,7 @@ describe("erc721 gate evaluation", () => {
     expect(warnCalls[0]?.[1]).toEqual({
       error_name: "Error",
       error_message: "courtyard down",
-      wallet_count: 1,
+      wallet_count: 2,
       contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
     })
   })
@@ -343,7 +371,7 @@ describe("erc721 gate evaluation", () => {
     expect(String(warnCalls[0]?.[0])).toContain("courtyard-inventory-gate")
     expect(warnCalls[0]?.[1]).toMatchObject({
       error_message: "Courtyard ownership lookup timed out",
-      wallet_count: 1,
+      wallet_count: 2,
       contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
     })
   })
@@ -453,7 +481,7 @@ describe("erc721 gate evaluation", () => {
       expect(result.satisfied).toBe(false)
       expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
     })
-    expect(fetchCount).toBe(2)
+    expect(fetchCount).toBe(3)
   })
 
   test("caches successful Courtyard inventory matches briefly", async () => {
@@ -666,7 +694,7 @@ describe("erc721 gate evaluation", () => {
       expect(evaluation.mismatchReasons).toContain("erc721_inventory_match_required")
     })
 
-    expect(seenUrls).toHaveLength(1)
+    expect(seenUrls).toHaveLength(2)
     for (const seenUrl of seenUrls) {
       const url = new URL(seenUrl)
       expect(url.searchParams.get("limit")).toBe("1")
