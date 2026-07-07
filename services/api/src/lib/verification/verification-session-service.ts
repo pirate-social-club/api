@@ -1,5 +1,5 @@
 import type { Client, InStatement } from "../sql-client"
-import { badRequestError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
+import { badRequestError, eligibilityFailed, HttpError, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import {
@@ -842,6 +842,9 @@ async function completeZkPassportSession(
       providerPayloadRef: input.providerPayloadRef ?? input.proof ?? null,
     })
   } catch (error) {
+    if (error instanceof HttpError) {
+      throw error
+    }
     const details = providerErrorDetails(error)
     throw providerUnavailable(
       error instanceof Error ? error.message : "ZKPassport provider is unavailable",
