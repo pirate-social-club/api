@@ -1,4 +1,6 @@
 import type { Env } from "../env"
+import { sendOpsAlerts } from "./ops-alerts/sink"
+import type { OpsAlert } from "./ops-alerts/types"
 import { publicCommunityId, publicPostId } from "./public-ids"
 
 type WaitUntil = (promise: Promise<void>) => void
@@ -96,6 +98,14 @@ async function capturePublicReadCachePurgeFailure(input: {
     error: input.error instanceof Error ? input.error.message : String(input.error),
   })
 
+  await sendPublicReadCachePurgeFailureOpsAlert({
+    env: input.env,
+    error: input.error,
+    postId: input.postId,
+    communityId: input.communityId,
+    tags: input.tags,
+  })
+
   const sentryDsn = (input.env as { SENTRY_DSN?: string }).SENTRY_DSN
   if (!sentryDsn) {
     return
@@ -186,6 +196,38 @@ async function sendSentryPurgeFailureEvent(input: {
   if (response && !response.ok) {
     console.error("[public-read-cache] Sentry purge failure report was rejected", {
       status: response.status,
+    })
+  }
+}
+
+async function sendPublicReadCachePurgeFailureOpsAlert(input: {
+  env: Env
+  error: unknown
+  postId: string
+  communityId?: string | null
+  tags: string[]
+}): Promise<void> {
+  const alert: OpsAlert = {
+    key: "public_read_cache:purge_failed",
+    severity: "high",
+    title: "Public read cache purge failed",
+    count: 1,
+    community_ids: input.communityId ? [input.communityId] : [],
+    details: {
+      post_id: input.postId,
+      community_id: input.communityId ?? null,
+      cache_tags: input.tags,
+      error: input.error instanceof Error ? input.error.message : String(input.error),
+    },
+  }
+
+  const delivery = await sendOpsAlerts(input.env, [alert]).catch((error) => {
+    console.error("[public-read-cache] failed to send purge failure ops alert", error)
+    return null
+  })
+  if (delivery && !delivery.delivered) {
+    console.error("[public-read-cache] purge failure ops alert was not delivered", {
+      sink: delivery.sink,
     })
   }
 }
