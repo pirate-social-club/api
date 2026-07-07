@@ -256,13 +256,6 @@ export async function createKaraokeSession(input: {
   postId: string
   subjectUserId: string
 }): Promise<KaraokeSessionCreateResponse> {
-  const payload = await input.deps.loadPayload()
-  const lines = toScorableLines(payload)
-  const scoringPolicy = await input.deps.resolveScoringPolicy()
-  if (scoringPolicy.kind !== "enabled") {
-    throw karaokeError(409, "karaoke_scoring_disabled", "Karaoke scoring is disabled")
-  }
-
   const nowMs = input.deps.nowMs()
   const key: KaraokeSessionCreationKey = {
     communityId: input.communityId,
@@ -284,6 +277,13 @@ export async function createKaraokeSession(input: {
 
   let failureCode = "karaoke_runtime_initialization_failed"
   try {
+    const payload = await input.deps.loadPayload()
+    const lines = toScorableLines(payload)
+    const scoringPolicy = await input.deps.resolveScoringPolicy()
+    if (scoringPolicy.kind !== "enabled") {
+      throw karaokeError(409, "karaoke_scoring_disabled", "Karaoke scoring is disabled")
+    }
+
     const nowSeconds = Math.floor(nowMs / 1000)
     const sessionExpiresAtMs = nowMs + KARAOKE_SESSION_TTL_SECONDS * 1000
     const scoringPolicyJson = JSON.stringify(serializeKaraokeScoringPolicy(scoringPolicy))
