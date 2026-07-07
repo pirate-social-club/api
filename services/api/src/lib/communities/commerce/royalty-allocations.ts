@@ -89,9 +89,6 @@ export function buildStoryRoyaltySharesFromAllocationRows(rows: Array<{
     if (!Number.isInteger(shareBps) || shareBps <= 0 || shareBps > 10_000) {
       throw badRequestError("royalty_allocations share snapshot is invalid")
     }
-    if (shareBps % 100 !== 0) {
-      throw badRequestError("royalty_allocations on Story require whole-percent shares")
-    }
     return {
       walletAddressNormalized: wallet as `0x${string}`,
       shareBps,
@@ -306,12 +303,12 @@ export async function markStoryRoyaltyAllocationRegistrationPendingVerification(
     sql: `
       UPDATE assets
       SET royalty_allocation_status = 'verification_pending',
-          royalty_allocation_effect_key = ?3,
-          royalty_allocation_tx_hash = ?4,
-          ip_royalty_vault = COALESCE(?5, ip_royalty_vault),
-          royalty_allocation_registered_at = ?6,
+          royalty_allocation_effect_key = asset_id || ':' || royalty_allocation_fingerprint,
+          royalty_allocation_tx_hash = ?3,
+          ip_royalty_vault = COALESCE(?4, ip_royalty_vault),
+          royalty_allocation_registered_at = ?5,
           royalty_allocation_projection_synced = 0,
-          updated_at = ?6
+          updated_at = ?5
       WHERE community_id = ?1
         AND asset_id = ?2
         AND royalty_allocation_status <> 'none'
@@ -319,7 +316,6 @@ export async function markStoryRoyaltyAllocationRegistrationPendingVerification(
     args: [
       input.communityId,
       input.assetId,
-      `story-rt:${input.assetId}`,
       input.distributionTxHash,
       input.ipRoyaltyVault,
       input.registeredAt,
@@ -446,7 +442,7 @@ export async function verifyStoryRoyaltyAllocationForAsset(input: {
       expected,
       actual,
     })
-    if (actual !== expected) {
+    if (actual < expected) {
       return await markStoryRoyaltyAllocationVerificationPending(
         input.client,
         input.communityId,
