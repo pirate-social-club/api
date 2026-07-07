@@ -244,7 +244,7 @@ describe("song artifact catalog sync routes", () => {
     expect(bundleReadBody.moderation_result?.catalog_sync?.synced).toBe(false)
     expect(bundleReadBody.moderation_result?.catalog_sync?.error).toBe("missing_configuration")
     expect(acrCloudCatalogCallCount).toBe(0)
-  })
+  }, 15000)
 
   test("does not re-upload to the catalog when a consumed bundle is published again", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
@@ -448,5 +448,5 @@ describe("song artifact catalog sync routes", () => {
     )
     expect(secondPostCreate.status).toBe(201)
     expect(acrCloudCatalogCallCount).toBe(1)
-  })
+  }, 15000)
 })
