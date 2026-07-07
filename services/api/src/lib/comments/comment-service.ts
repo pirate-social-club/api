@@ -48,6 +48,7 @@ import type { Comment, CommentAnonymousScope, CreateCommentRequest } from "./com
 import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
 import { verifyAndConsumeAltchaProof, type AltchaProofInput, type VerifiedAltchaProof } from "../verification/altcha-provider"
+import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 
 export {
   getCommentContext,
@@ -62,6 +63,8 @@ type CommentServiceCommunityRepository =
   & CommunityDatabaseBindingRepository
   & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
   & CommunityCommentProjectionRepository
+
+type WaitUntil = (promise: Promise<void>) => void
 
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
@@ -201,6 +204,7 @@ export async function createComment(input: {
   userRepository: UserRepository
   profileRepository?: ProfileRepository
   communityRepository: CommentServiceCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Comment> {
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
   if (!isCommunityLive(communityRow)) {
@@ -453,6 +457,12 @@ export async function createComment(input: {
         threadRootPostId: createdComment.thread_root_post_id,
         updatedAt: createdAt,
       })
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: createdComment.community_id,
+        postId: createdComment.thread_root_post_id,
+        waitUntil: input.waitUntil,
+      })
 
       try {
         const notifiedUserIds = new Set<string>()
@@ -574,6 +584,7 @@ export async function deleteComment(input: {
   commentId: string
   userRepository: UserRepository
   communityRepository: CommentServiceCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Comment> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -636,6 +647,12 @@ export async function deleteComment(input: {
         threadRootPostId: deleted.thread_root_post_id,
         updatedAt,
       })
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: deleted.community_id,
+        postId: deleted.thread_root_post_id,
+        waitUntil: input.waitUntil,
+      })
 
       return deleted
     } catch (error) {
@@ -654,6 +671,7 @@ export async function removeCommentAsModerator(input: {
   userId: string
   commentId: string
   communityRepository: CommentServiceCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Comment> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -720,6 +738,12 @@ export async function removeCommentAsModerator(input: {
         threadRootPostId: removed.thread_root_post_id,
         updatedAt,
       })
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: removed.community_id,
+        postId: removed.thread_root_post_id,
+        waitUntil: input.waitUntil,
+      })
 
       return removed
     } catch (error) {
@@ -740,6 +764,7 @@ export async function setCommentReplyLock(input: {
   locked: boolean
   reason?: string | null
   communityRepository: CommentServiceCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Comment> {
   const projection = await input.communityRepository.getCommunityCommentProjectionByCommentId(input.commentId)
   if (!projection) {
@@ -769,6 +794,12 @@ export async function setCommentReplyLock(input: {
       actorUserId: input.userId,
       reason: input.reason?.trim() || null,
       now: updatedAt,
+    })
+    schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: updated.community_id,
+      postId: updated.thread_root_post_id,
+      waitUntil: input.waitUntil,
     })
 
     return updated

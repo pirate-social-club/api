@@ -6,6 +6,7 @@ import { detectSourceLanguageFromText } from "../localization/content-locale"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Env } from "../../env"
 import type { Post } from "../../types"
+import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 import { updatePostLinkPreviewMetadata } from "./community-post-link-preview-store"
 import { getPostById } from "./community-post-query-store"
 import { upsertLinkEnrichment } from "./link-enrichment/repository"
@@ -85,6 +86,7 @@ export async function applyAdminLinkPreviewOverride(input: {
   communityId: string
   postId: string
   body: LinkPreviewOverrideRequest
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<AdminLinkPreviewOverrideResult> {
   const title = requirePreviewTitle(input.body.title)
   const imageUrl = requireHttpsImageUrl(input.body.image_url)
@@ -147,6 +149,12 @@ export async function applyAdminLinkPreviewOverride(input: {
     if (!updated) {
       throw notFoundError("Post not found")
     }
+    schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: input.communityId,
+      postId: input.postId,
+      waitUntil: input.waitUntil,
+    })
     return { post: updated, title, imageUrl }
   } finally {
     db.close()

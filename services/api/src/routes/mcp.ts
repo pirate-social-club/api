@@ -112,6 +112,15 @@ type McpBoardCapabilitiesArguments = {
 const mcp = new Hono<{ Bindings: Env }>()
 type McpContext = Context<{ Bindings: Env }>
 
+function getWaitUntil(c: McpContext): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
+
 function publicNamespaceVerificationId(namespaceVerificationId?: string | null): string | null {
   if (!namespaceVerificationId) {
     return null
@@ -671,6 +680,7 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
       userRepository: getUserRepository(c.env),
       profileRepository: getProfileRepository(c.env),
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     const comment = serializeComment(result)
     const postLinks = mcpPostLinks(c, {
@@ -727,6 +737,7 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),
     communityRepository,
+    waitUntil: getWaitUntil(c),
   })
   const comment = serializeComment(result)
   const postLinks = mcpPostLinks(c, {

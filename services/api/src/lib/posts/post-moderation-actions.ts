@@ -11,6 +11,7 @@ import { logPipelineInfo } from "../observability/pipeline-log"
 import type { Env } from "../../env"
 import type { Post } from "../../types"
 import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
+import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 import {
   markPostDeleted,
   setPostCommentsLocked,
@@ -27,6 +28,8 @@ type PostModerationActionCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
   & Pick<CommunityPostProjectionRepository, "getCommunityPostProjectionByPostId" | "updateCommunityPostProjectionStatus">
+
+type WaitUntil = (promise: Promise<void>) => void
 
 async function updateDerivativeSourceProjectionStatus(input: {
   env: Env
@@ -66,6 +69,7 @@ export async function deletePost(input: {
   communityId: string
   postId: string
   communityRepository: PostModerationActionCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<DeletePostResult> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection || projection.community_id !== input.communityId) {
@@ -119,6 +123,12 @@ export async function deletePost(input: {
         status: "deleted",
         updatedAt: deletedAt,
       })
+      schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.communityId,
+        postId: input.postId,
+        waitUntil: input.waitUntil,
+      })
 
       // Response is deterministic from the write (status/updated_at are exactly
       // what markPostDeleted set) — no in-tx readback needed.
@@ -148,6 +158,7 @@ export async function removePostAsModerator(input: {
   communityId: string
   postId: string
   communityRepository: PostModerationActionCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Post> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection || projection.community_id !== input.communityId) {
@@ -190,6 +201,12 @@ export async function removePostAsModerator(input: {
       status: "removed",
       updatedAt,
     })
+    schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: input.communityId,
+      postId: input.postId,
+      waitUntil: input.waitUntil,
+    })
     return updated
   } finally {
     db.close()
@@ -204,6 +221,7 @@ export async function setPostCommentLock(input: {
   locked: boolean
   reason?: string | null
   communityRepository: PostModerationActionCommunityRepository
+  waitUntil?: WaitUntil
 }): Promise<Post> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection || projection.community_id !== input.communityId) {
@@ -224,7 +242,7 @@ export async function setPostCommentLock(input: {
       throw badRequestError("Cannot lock comments on a post that is not published")
     }
 
-    return await setPostCommentsLocked({
+    const updated = await setPostCommentsLocked({
       executor: db.client,
       postId: input.postId,
       locked: input.locked,
@@ -232,6 +250,13 @@ export async function setPostCommentLock(input: {
       reason: input.reason?.trim() || null,
       now: nowIso(),
     })
+    schedulePublicPostCachePurge({
+      env: input.env,
+      communityId: input.communityId,
+      postId: input.postId,
+      waitUntil: input.waitUntil,
+    })
+    return updated
   } finally {
     db.close()
   }

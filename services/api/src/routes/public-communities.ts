@@ -40,6 +40,7 @@ import {
   publicCommunityId,
   publicPostId,
 } from "../lib/public-ids"
+import { publicPostCacheTags } from "../lib/public-read-cache-invalidation"
 import {
   absoluteUrl,
   configuredApiOrigin,
@@ -548,7 +549,10 @@ publicCommunities.get("/:communityId", async (c) => {
       omitted_surfaces: [],
       links,
     }
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    setPublicReadCacheHeaders(c, {
+      vary: ["Accept"],
+      cacheTags: [`community:${publicCommunityId(communityId)}`],
+    })
     c.header("Link", serializeLinkHeader(links))
     return c.json(responseBody, 200)
   }
@@ -584,7 +588,10 @@ publicCommunities.get("/:communityId", async (c) => {
       c.header("Cache-Control", "no-store")
       c.header("CDN-Cache-Control", "no-store")
     } else {
-      setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+      setPublicReadCacheHeaders(c, {
+        vary: ["Accept"],
+        cacheTags: [`community:${publicCommunityId(communityId)}`],
+      })
     }
     return markdownResponse(communityMarkdown({
       preview: responseBody,
@@ -596,7 +603,10 @@ publicCommunities.get("/:communityId", async (c) => {
     c.header("Cache-Control", "no-store")
     c.header("CDN-Cache-Control", "no-store")
   } else {
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    setPublicReadCacheHeaders(c, {
+      vary: ["Accept"],
+      cacheTags: [`community:${publicCommunityId(communityId)}`],
+    })
   }
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
@@ -611,7 +621,10 @@ publicCommunities.get("/:communityId/capabilities", async (c) => {
     locale: c.req.query("locale") ?? null,
     communityRepository,
   })
-  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  setPublicReadCacheHeaders(c, {
+    vary: ["Accept"],
+    cacheTags: [`community:${publicCommunityId(communityId)}`],
+  })
   return c.json(buildCommunityActionMatrix(preview), 200)
 })
 
@@ -741,7 +754,16 @@ publicCommunities.get("/:communityId/posts", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    setPublicReadCacheHeaders(c, {
+      vary: ["Accept"],
+      cacheTags: [
+        `community:${publicCommunityId(communityId)}`,
+        ...result.items.flatMap((item) => publicPostCacheTags({
+          communityId: item.post.community_id,
+          postId: item.post.post_id,
+        })),
+      ],
+    })
     return markdownResponse(postListMarkdown({
       communityId,
       items,
@@ -749,7 +771,16 @@ publicCommunities.get("/:communityId/posts", async (c) => {
       omittedSurfaces,
     }), links)
   }
-  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  setPublicReadCacheHeaders(c, {
+    vary: ["Accept"],
+    cacheTags: [
+      `community:${publicCommunityId(communityId)}`,
+      ...result.items.flatMap((item) => publicPostCacheTags({
+        communityId: item.post.community_id,
+        postId: item.post.post_id,
+      })),
+    ],
+  })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })

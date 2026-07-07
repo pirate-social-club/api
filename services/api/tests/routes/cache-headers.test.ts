@@ -8,10 +8,13 @@ import {
   setPublicReadCacheHeaders,
 } from "../../src/routes/cache-headers"
 
-async function publicReadCacheHeaderResponse(path: string): Promise<Response> {
+async function publicReadCacheHeaderResponse(
+  path: string,
+  options?: Parameters<typeof setPublicReadCacheHeaders>[1],
+): Promise<Response> {
   const app = new Hono()
   app.get("*", (c) => {
-    setPublicReadCacheHeaders(c)
+    setPublicReadCacheHeaders(c, options)
     return c.text("ok")
   })
   return app.request(`https://api.pirate.sc${path}`)
@@ -51,5 +54,13 @@ describe("public read cache headers", () => {
     expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
     expect(response.headers.get("cdn-cache-control")).not.toContain("s-maxage")
     expect(response.headers.get("vary")).toBe("Accept")
+  })
+
+  test("emits normalized cache tags when provided", async () => {
+    const response = await publicReadCacheHeaderResponse("/public-posts/post_pst_1", {
+      cacheTags: ["post:post_pst_1", "community:com_cmt_1", "post:post_pst_1", "bad tag/value"],
+    })
+
+    expect(response.headers.get("cache-tag")).toBe("post:post_pst_1,community:com_cmt_1,bad_tag_value")
   })
 })

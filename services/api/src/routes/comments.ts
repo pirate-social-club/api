@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
@@ -28,6 +29,15 @@ import { decodePublicCommentId } from "../lib/public-ids"
 import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
 
 const comments = new Hono<AuthenticatedEnv>()
+
+function getWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 comments.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname
@@ -77,6 +87,7 @@ comments.post("/:commentId/replies", async (c) => {
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),
     communityRepository,
+    waitUntil: getWaitUntil(c),
   })
   await trackApiEvent(c.env, c.req, {
     eventName: "comment_created",
@@ -178,6 +189,7 @@ comments.post("/:commentId/remove", async (c) => {
     userId: actor.userId,
     commentId,
     communityRepository: getCommunityRepository(c.env),
+    waitUntil: getWaitUntil(c),
   })
   await writeAuditEventForEnv(c.env, {
     action: "community.comment_removed_by_moderator",
@@ -202,6 +214,7 @@ comments.post("/:commentId/delete", async (c) => {
     commentId,
     userRepository: getUserRepository(c.env),
     communityRepository: getCommunityRepository(c.env),
+    waitUntil: getWaitUntil(c),
   })
   await writeAuditEventForEnv(c.env, {
     action: "community.comment_deleted_by_author",
@@ -231,6 +244,7 @@ comments.post("/:commentId/replies-lock", async (c) => {
     locked: body.locked !== false,
     reason: body.reason ?? null,
     communityRepository: getCommunityRepository(c.env),
+    waitUntil: getWaitUntil(c),
   })
   await writeAuditEventForEnv(c.env, {
     action: result.replies_locked ? "community.comment_replies_locked_by_moderator" : "community.comment_replies_unlocked_by_moderator",

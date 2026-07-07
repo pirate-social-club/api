@@ -19,6 +19,10 @@ export type Env = {
   OPS_ALERT_MAX_COMMUNITIES?: string
   OPS_ALERT_LOOKBACK_MS?: string
   OPS_ALERT_BUCKET_MS?: string
+  CLOUDFLARE_CACHE_PURGE_ZONE_ID?: string
+  CLOUDFLARE_CACHE_PURGE_API_TOKEN?: string
+  CLOUDFLARE_ZONE_ID?: string
+  CLOUDFLARE_API_TOKEN?: string
 
   // Analytics
   ANALYTICS_ENABLED?: string
