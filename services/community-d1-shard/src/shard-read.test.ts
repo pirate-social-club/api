@@ -1043,13 +1043,14 @@ describe("communityD1Reset (step 5)", () => {
     expect((community as any).dropped).toHaveLength(0)
   })
 
-  test("is a no-op (tablesDropped: 0) on an internal-table-only never-loaded community D1", async () => {
+  test("drops schema_migrations on an internal-table-only never-loaded community D1", async () => {
     const env = adminEnv({
       DB_CMTY_1: resetCommunityFake(["_cf_KV", "schema_migrations", "sqlite_schema"]) as unknown as D1Database,
       D1_POOL: unloadedPool(),
     })
     const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
-    expect(r).toEqual({ ok: true, value: { tablesDropped: 0 } })
+    expect(r).toEqual({ ok: true, value: { tablesDropped: 1 } })
+    expect((env.DB_CMTY_1 as any).dropped).toEqual(['DROP TABLE IF EXISTS "schema_migrations"'])
   })
 
   test("is a no-op (tablesDropped: 0) on an empty never-loaded community D1", async () => {

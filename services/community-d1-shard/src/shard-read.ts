@@ -638,6 +638,14 @@ function isResettableUserTable(name: string): boolean {
   return !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "schema_migrations"
 }
 
+function isResettableMetadataTable(name: string): boolean {
+  return name === "schema_migrations"
+}
+
+function quoteSqlIdentifier(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`
+}
+
 /** Admin: read a single pool row (reconciler introspection — keys off last_loaded_at). */
 export async function runShardGetPoolRow(
   env: ShardEnv,
@@ -758,15 +766,21 @@ export async function runShardReset(
   const tables = await db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all()
-  const names = (tables.results ?? [])
+  const tableNames = (tables.results ?? [])
     .map((t) => String((t as { name: unknown }).name))
-    .filter(isResettableUserTable)
-  if (names.length === 0) return { ok: true, value: { tablesDropped: 0 } }
+  const userTableNames = tableNames.filter(isResettableUserTable)
+  if (userTableNames.length > 0) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_EMPTY,
+      `refusing to reset ${input.bindingName}: target D1 contains user tables`,
+    )
+  }
 
-  return err(
-    SHARD_READ_ERROR.BINDING_NOT_EMPTY,
-    `refusing to reset ${input.bindingName}: target D1 contains user tables`,
-  )
+  const metadataTableNames = tableNames.filter(isResettableMetadataTable)
+  if (metadataTableNames.length === 0) return { ok: true, value: { tablesDropped: 0 } }
+
+  await db.batch(metadataTableNames.map((name) => db.prepare(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(name)}`)))
+  return { ok: true, value: { tablesDropped: metadataTableNames.length } }
 }
 
 /** Admin: free a pool binding (sets community_id NULL + released_at for the §5 quarantine). */
