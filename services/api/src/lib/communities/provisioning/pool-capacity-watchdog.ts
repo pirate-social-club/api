@@ -1,5 +1,5 @@
 import type { Env } from "../../../env"
-import { captureScheduledError, captureScheduledWarning } from "../../sentry"
+import { captureScheduledError, captureScheduledWarning } from "../../ops-alerts/scheduled"
 
 const DEFAULT_FREE_ALERT_THRESHOLD = 2
 const TASK_NAME = "community_d1_pool_capacity"
@@ -22,7 +22,7 @@ export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
   if (!result.ok) {
     const error = new Error(`Community D1 pool stats unavailable: ${result.code}`)
     console.error("[scheduled] community D1 pool capacity check failed", result)
-    captureScheduledError(env, error, TASK_NAME)
+    await captureScheduledError(env, error, TASK_NAME)
     return
   }
 
@@ -32,7 +32,7 @@ export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
   const urgency = stats.free === 0 ? "high" : "low"
   const extra = { ...stats, threshold, urgency }
   console.warn("[scheduled] community D1 pool low capacity", JSON.stringify(extra))
-  captureScheduledWarning(
+  await captureScheduledWarning(
     env,
     "Community D1 pool free capacity is low",
     TASK_NAME,

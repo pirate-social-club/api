@@ -17,6 +17,7 @@ export type OpsAlert = {
   title: string
   count: number
   community_ids: string[]
+  details?: Record<string, unknown>
 }
 
 export const OPS_ACTIONABLE_FAILURE_CODES = new Set([

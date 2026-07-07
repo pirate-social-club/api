@@ -1,7 +1,7 @@
 import type { Client } from "../../sql-client"
 import type { Env } from "../../../env"
 import { getControlPlaneClient } from "../../runtime-deps"
-import { captureScheduledWarning } from "../../sentry"
+import { captureScheduledWarning } from "../../ops-alerts/scheduled"
 import {
   findStuckD1ProvisioningBindings,
   upsertD1CommunityRoutingRow,
@@ -113,11 +113,11 @@ export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): R
 
 type ScheduledWarningReporter = typeof captureScheduledWarning
 
-export function reportD1ReconcilerSweepHealth(
+export async function reportD1ReconcilerSweepHealth(
   env: Env,
   result: ReconcilerResult,
   reportWarning: ScheduledWarningReporter = captureScheduledWarning,
-): void {
+): Promise<void> {
   // Always emit a one-line summary so the scheduled task is observable in tail
   // (a silent success is indistinguishable from "never ran" / misconfigured).
   console.log("[d1-reconciler] sweep", {
@@ -134,7 +134,7 @@ export function reportD1ReconcilerSweepHealth(
     sample: result.errors.slice(0, MAX_LOGGED_ERRORS),
   }
   console.error("[d1-reconciler] sweep errors", extra)
-  reportWarning(
+  await reportWarning(
     env,
     "Community D1 provisioning reconciler reported errors",
     TASK_NAME,
@@ -161,5 +161,5 @@ export async function reconcileScheduledD1Provisioning(env: Env): Promise<void> 
   const nowIso = new Date().toISOString()
   const deps = buildReconcilerDeps(env, client, nowIso)
   const result = await runReconciliationSweep(deps)
-  reportD1ReconcilerSweepHealth(env, result)
+  await reportD1ReconcilerSweepHealth(env, result)
 }
