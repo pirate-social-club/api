@@ -9,7 +9,7 @@ export type CommunityPublishAlertSignals = {
   terminal_failed_finalize_jobs: number
 }
 
-export type OpsAlertSeverity = "high" | "medium"
+export type OpsAlertSeverity = "high" | "medium" | "low"
 
 export type OpsAlert = {
   key: string

@@ -39,4 +39,54 @@ describe("captureScheduledWarning", () => {
     expect(sent[0]?.text).toContain("- cmt_a: Community has no database routing entry")
     expect(sent[0]?.text).toContain("- cmt_b: Community has no database routing entry")
   })
+
+  test("treats low urgency as low severity and dedupes it with the low bucket", async () => {
+    const sent: Array<{ text?: string; subject?: string }> = []
+    const kv = new Map<string, string>()
+    const env = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_LOW_BUCKET_MS: String(24 * 60 * 60 * 1000),
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_DEDUPE: {
+        get: async (key: string) => kv.get(key) ?? null,
+        put: async (key: string, value: string) => {
+          kv.set(key, value)
+        },
+      },
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string; subject?: string }) => {
+          sent.push(message)
+          return { messageId: "msg_test" }
+        },
+      },
+    } as unknown as Env
+
+    const extra = {
+      checked_communities: 84,
+      failed_posts: 0,
+      failed_communities: [
+        { community_id: "cmt_a", error: "Community has no database routing entry" },
+      ],
+    }
+
+    await captureScheduledWarning(
+      env,
+      "Post publish finalize reconciliation had community routing failures",
+      "community_jobs_post_publish_finalize_reconciliation",
+      extra,
+      { urgency: "low" },
+    )
+    await captureScheduledWarning(
+      env,
+      "Post publish finalize reconciliation had community routing failures",
+      "community_jobs_post_publish_finalize_reconciliation",
+      extra,
+      { urgency: "low" },
+    )
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.text).toContain("[LOW][staging] Post publish finalize reconciliation had community routing failures")
+    expect([...kv.keys()][0]).toContain("scheduled_warning:community_jobs_post_publish_finalize_reconciliation:low")
+  })
 })
