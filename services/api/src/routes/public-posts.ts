@@ -43,6 +43,7 @@ import type { Env } from "../env"
 import type { LocalizedPostResponse } from "../types"
 import { decodePublicPostId, publicCommunityId, publicPostId } from "../lib/public-ids"
 import { publicPostCacheTags } from "../lib/public-read-cache-invalidation"
+import { handlePublicPostKaraokePayloadRequest } from "./communities-karaoke-session-routes"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 import { createServerTimingRecorder } from "./server-timing"
 
@@ -323,6 +324,13 @@ publicPosts.get("/:postId/thread", async (c) => {
   } finally {
     db.close()
   }
+})
+
+publicPosts.get("/:postId/karaoke", async (c) => {
+  const rawPostId = decodePublicPostId(c.req.param("postId"))
+  return await handlePublicPostKaraokePayloadRequest(c, {
+    postId: rawPostId,
+  })
 })
 
 publicPosts.get("/:postId", async (c) => {
