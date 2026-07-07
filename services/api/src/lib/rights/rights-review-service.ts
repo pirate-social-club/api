@@ -329,6 +329,9 @@ export async function applyRightsReviewCaseAction(input: {
 }): Promise<RightsReviewCaseDetail> {
   const actionType = assertRightsReviewAction(input.body)
   const evidenceRefs = normalizeEvidenceRefs(input.body.evidence_refs)
+  if (actionType === "clear_with_upstream_refs" && !evidenceRefs) {
+    throw badRequestError("clear_with_upstream_refs requires evidence_refs")
+  }
   const plan = actionPlan(actionType)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
