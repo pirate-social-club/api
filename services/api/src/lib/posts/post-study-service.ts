@@ -216,6 +216,16 @@ export type SongStudyAttemptResult = {
   next_review_hint?: FsrsRating
   object: "song_study_attempt_result"
   outcome: AttemptOutcome
+  study_progress?: SongStudyAttemptProgress
+}
+
+export type SongStudyAttemptProgress = {
+  current_streak: number
+  next_due_at?: number
+  qualified_today: boolean
+  study_attempt_count: number
+  study_correct_count: number
+  study_target_count: number
 }
 
 export type SongStudyAttemptTiming = {
@@ -2002,6 +2012,13 @@ async function upsertReviewState(input: {
   return input.rating
 }
 
+type StudyEngagementProgress = {
+  qualifiedToday: boolean
+  studyAttemptCount: number
+  studyCorrectCount: number
+  studyTargetCount: number
+}
+
 export async function upsertStudyEngagementDay(input: {
   client: ReadClient
   communityId: string
@@ -2041,6 +2058,94 @@ export async function upsertStudyEngagementDay(input: {
       input.now,
     ],
   })
+}
+
+function previousDateString(date: string): string {
+  const ms = Date.parse(`${date}T00:00:00.000Z`)
+  if (!Number.isFinite(ms)) return date
+  return new Date(ms - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+async function projectStudyStreakCount(input: {
+  client: ReadClient
+  engagement: StudyEngagementProgress
+  now: string
+  postId: string
+  userId: string
+}): Promise<number> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT current_streak, last_qualified_date
+      FROM song_streaks
+      WHERE user_id = ?1
+        AND post_id = ?2
+    `,
+    args: [input.userId, input.postId],
+  }) as Record<string, unknown> | null
+  const current = Number(row?.current_streak ?? 0)
+  if (!input.engagement.qualifiedToday) return current
+  const today = input.now.slice(0, 10)
+  const lastQualifiedDate = readString(row?.last_qualified_date)
+  if (!lastQualifiedDate) return 1
+  if (lastQualifiedDate >= today) return current
+  if (lastQualifiedDate === previousDateString(today)) return current + 1
+  return 1
+}
+
+async function getStudyAttemptProgressSnapshot(input: {
+  client: ReadClient
+  includeSayItBack: boolean
+  includeTranslation: boolean
+  now: string
+  postId: string
+  targetLanguage: string
+  userId: string
+}): Promise<SongStudyAttemptProgress | undefined> {
+  const today = input.now.slice(0, 10)
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT study_attempt_count, study_correct_count, study_target_count, qualified
+      FROM song_engagement_days
+      WHERE user_id = ?1
+        AND post_id = ?2
+        AND activity_date = ?3
+    `,
+    args: [input.userId, input.postId, today],
+  }) as Record<string, unknown> | null
+  if (!row) return undefined
+  const engagement: StudyEngagementProgress = {
+    qualifiedToday: Number(row.qualified ?? 0) === 1,
+    studyAttemptCount: Number(row.study_attempt_count ?? 0),
+    studyCorrectCount: Number(row.study_correct_count ?? 0),
+    studyTargetCount: Number(row.study_target_count ?? 0),
+  }
+  const [currentStreak, nextDueAt] = await Promise.all([
+    projectStudyStreakCount({
+      client: input.client,
+      engagement,
+      now: input.now,
+      postId: input.postId,
+      userId: input.userId,
+    }),
+    getNextDueAt({
+      client: input.client,
+      includeSayItBack: input.includeSayItBack,
+      includeTranslation: input.includeTranslation,
+      now: input.now,
+      postId: input.postId,
+      targetLanguage: input.targetLanguage,
+      userId: input.userId,
+    }),
+  ])
+  const nextDueAtSeconds = toUnixSeconds(nextDueAt)
+  return {
+    current_streak: currentStreak,
+    ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),
+    qualified_today: engagement.qualifiedToday,
+    study_attempt_count: engagement.studyAttemptCount,
+    study_correct_count: engagement.studyCorrectCount,
+    study_target_count: engagement.studyTargetCount,
+  }
 }
 
 export async function materializeStudyStreak(input: {
@@ -2121,6 +2226,8 @@ async function resolveStudyStreakTargetCount(input: {
   credentialSource?: CommunityElevenLabsStudyCapability["source"]
   credentialProbeMs?: number
   dueReviewCountMs?: number
+  includeSayItBack: boolean
+  includeTranslation: boolean
   totalMs: number
 }> {
   const startedAt = performance.now()
@@ -2153,6 +2260,8 @@ async function resolveStudyStreakTargetCount(input: {
       credentialSource: capability.source,
       credentialProbeMs,
       dueReviewCountMs,
+      includeSayItBack,
+      includeTranslation,
       totalMs: elapsedMs(startedAt),
     }
   }
@@ -2172,6 +2281,8 @@ async function resolveStudyStreakTargetCount(input: {
     credentialSource: capability.source,
     credentialProbeMs,
     dueReviewCountMs,
+    includeSayItBack,
+    includeTranslation,
     totalMs: elapsedMs(startedAt),
   }
 }
@@ -2236,6 +2347,7 @@ export async function submitPostStudyAttempt(input: {
   let timingStreakDeferred = false
   let timingStreakWritesEnabled = false
   let resultForTiming: SongStudyAttemptResult | undefined
+  let studyProgress: SongStudyAttemptProgress | undefined
   const openClientStartedAt = performance.now()
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   openClientMs = elapsedMs(openClientStartedAt)
@@ -2414,6 +2526,17 @@ export async function submitPostStudyAttempt(input: {
       return reviewRating
     })
     writeTxMs = elapsedMs(writeTxStartedAt)
+    if (streakWritesEnabled && studyStreakTarget != null) {
+      studyProgress = await getStudyAttemptProgressSnapshot({
+        client: db.client,
+        includeSayItBack: studyStreakTarget.includeSayItBack,
+        includeTranslation: studyStreakTarget.includeTranslation,
+        now,
+        postId: input.postId,
+        targetLanguage: streakTargetLanguage,
+        userId: input.actor.userId,
+      })
+    }
     if (streakWritesEnabled) {
       const recordStreak = async () => {
         await input.testHooks?.beforeDeferredStreakMaterialization?.()
@@ -2452,6 +2575,7 @@ export async function submitPostStudyAttempt(input: {
       next_review_hint: fsrsRating,
       object: "song_study_attempt_result",
       outcome,
+      ...(studyProgress ? { study_progress: studyProgress } : {}),
     }
     return resultForTiming
   } finally {
