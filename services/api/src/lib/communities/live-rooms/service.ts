@@ -386,13 +386,13 @@ export async function createLiveRoomInTransaction(input: {
       INSERT INTO live_rooms (
         live_room_id, community_id, anchor_post_id, host_user_id, guest_user_id,
         room_kind, status, access_mode, visibility, title, description, cover_ref,
-        event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
+        store_url, store_label, audience_gate_json, event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
         recording_enabled, replay_status, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-        ?13, NULL, NULL, NULL, NULL,
-        ?14, 'none', ?15, ?15
+        ?13, ?14, ?15, ?16, NULL, NULL, NULL, NULL,
+        ?17, 'none', ?18, ?18
       )
     `,
     args: [
@@ -408,6 +408,9 @@ export async function createLiveRoomInTransaction(input: {
       input.prepared.title,
       input.prepared.description,
       input.prepared.coverRef,
+      input.prepared.storeUrl,
+      input.prepared.storeLabel,
+      input.prepared.audienceGate ? JSON.stringify(input.prepared.audienceGate) : null,
       input.prepared.eventStartAt,
       input.prepared.recordingEnabled === true ? 1 : 0,
       now,
@@ -1625,7 +1628,7 @@ export async function viewerAttachLiveRoom(input: {
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
-      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason, gate: serializedAccess.gate })
     }
     let runtime: LiveRoomRuntimeViewerAttachResponse | null = null
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1687,7 +1690,7 @@ export async function viewerRenewLiveRoom(input: {
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
-      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason, gate: serializedAccess.gate })
     }
     await assertLiveRoomViewerSessionUid(db.client, {
       communityId: input.communityId,
@@ -1762,7 +1765,7 @@ export async function publicViewerAttachLiveRoom(input: {
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
-      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason, gate: serializedAccess.gate })
     }
     let runtime: LiveRoomRuntimeViewerAttachResponse | null = null
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1822,7 +1825,7 @@ export async function publicViewerRenewLiveRoom(input: {
       if (access.decisionReason === "unlisted") {
         throw notFoundError("Live room not found")
       }
-      throw conflictError("Live room is not available", { decision_reason: access.decisionReason })
+      throw conflictError("Live room is not available", { decision_reason: access.decisionReason, gate: serializedAccess.gate })
     }
     await assertPublicLiveRoomViewerSessionUid(db.client, {
       communityId: input.communityId,

@@ -24,9 +24,12 @@ function recordingExecutor() {
 const PREPARED: PreparedLiveRoomCreate = {
   title: "Live",
   description: null,
+  storeUrl: null,
+  storeLabel: null,
   roomKind: "solo",
   accessMode: "free",
   visibility: "public",
+  audienceGate: null,
   guestUserId: null,
   eventStartAt: null,
   coverRef: null,
@@ -54,6 +57,6 @@ describe("createLiveRoomInTransaction (buffer-safe)", () => {
     expect(sqls.some((s) => /^\s*select\b/i.test(s) || /pragma/i.test(s))).toBe(false)
     // The core writes happened.
     expect(sqls.some((s) => /insert\s+into\s+posts/i.test(s))).toBe(true)
-    expect(sqls.some((s) => /insert\s+into\s+live_rooms/i.test(s))).toBe(true)
+    expect(sqls.some((s) => /insert\s+into\s+live_rooms/i.test(s) && /store_url/i.test(s) && /store_label/i.test(s) && /audience_gate_json/i.test(s))).toBe(true)
   })
 })

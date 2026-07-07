@@ -8,9 +8,26 @@ export type LiveRoomSetlistStatus = "draft" | "ready" | "locked"
 export type LiveRoomRightsBasis = "original" | "licensed" | "cover" | "public_domain" | "unknown"
 export type LiveRoomRightsStatus = "pending" | "ready" | "blocked"
 
+export type LiveRoomAudienceGateSegment =
+  | { type: "community_members" }
+  | {
+    type: "purchase_entitlement"
+    entitlement_kind: "asset_access"
+    target_refs: string[]
+  }
+
+export type LiveRoomAudienceGate = {
+  version: 1
+  segments: LiveRoomAudienceGateSegment[]
+  match: "any"
+}
+
 export type CreateLiveRoomRequest = {
   title?: string | null
   description?: string | null
+  store_url?: string | null
+  store_label?: string | null
+  audience_gate?: LiveRoomAudienceGate | null
   room_kind?: LiveRoomKind | null
   access_mode?: LiveRoomAccessMode | null
   visibility?: LiveRoomVisibility | null
@@ -54,8 +71,11 @@ export type LiveRoom = {
   status: LiveRoomStatus
   access_mode: LiveRoomAccessMode
   visibility: LiveRoomVisibility
+  audience_gate: LiveRoomAudienceGate | null
   title: string
   description: string | null
+  store_url: string | null
+  store_label: string | null
   cover_ref: string | null
   event_start_at: number | null
   live_started_at: number | null

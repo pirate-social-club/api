@@ -61,9 +61,12 @@ function makeGuardedFakeShard() {
 const PREPARED_ROOM: PreparedLiveRoomCreate = {
   title: "Paid Live",
   description: null,
+  storeUrl: null,
+  storeLabel: null,
   roomKind: "solo",
   accessMode: "paid",
   visibility: "public",
+  audienceGate: null,
   guestUserId: null,
   eventStartAt: null,
   coverRef: null,

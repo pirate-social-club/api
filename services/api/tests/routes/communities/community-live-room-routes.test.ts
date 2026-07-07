@@ -1513,25 +1513,40 @@ describe("community live-room routes", () => {
     )
     expect(publicAccess.status).toBe(200)
     const publicAccessBody = await json(publicAccess) as {
-      access: { allowed: boolean; decision_reason: string | null; access_mode: string }
+      access: { allowed: boolean; decision_reason: string | null; access_mode: string; gate: unknown }
     }
     expect(publicAccessBody.access.allowed).toBe(false)
-    expect(publicAccessBody.access.decision_reason).toBe("membership_required")
+    expect(publicAccessBody.access.decision_reason).toBe("gate_unsatisfied")
     expect(publicAccessBody.access.access_mode).toBe("gated")
+    expect(publicAccessBody.access.gate).toEqual({ failed_segments: [{ type: "community_members" }] })
 
     const publicAttach = await app.request(
       `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       { method: "POST" },
       ctx.env,
     )
-    expect(publicAttach.status).toBe(401)
+    expect(publicAttach.status).toBe(409)
+    await expect(json(publicAttach)).resolves.toMatchObject({
+      code: "conflict",
+      details: {
+        decision_reason: "gate_unsatisfied",
+        gate: { failed_segments: [{ type: "community_members" }] },
+      },
+    })
 
     const publicRenew = await requestJson(
       `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_renew`,
       { uid: 1234 },
       ctx.env,
     )
-    expect(publicRenew.status).toBe(401)
+    expect(publicRenew.status).toBe(409)
+    await expect(json(publicRenew)).resolves.toMatchObject({
+      code: "conflict",
+      details: {
+        decision_reason: "gate_unsatisfied",
+        gate: { failed_segments: [{ type: "community_members" }] },
+      },
+    })
 
     const memberAttach = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,

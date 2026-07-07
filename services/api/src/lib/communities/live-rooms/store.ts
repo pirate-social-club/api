@@ -6,6 +6,7 @@ import { requiredString, rowValue, stringOrNull, numberOrNull } from "../../sql-
 import type {
   LiveRoom,
   LiveRoomAccessMode,
+  LiveRoomAudienceGate,
   LiveRoomKind,
   LiveRoomRightsBasis,
   LiveRoomRightsStatus,
@@ -28,6 +29,9 @@ export type LiveRoomRow = {
   visibility: LiveRoomVisibility
   title: string
   description: string | null
+  store_url: string | null
+  store_label: string | null
+  audience_gate_json: string | null
   cover_ref: string | null
   event_start_at: number | null
   live_started_at: number | null
@@ -76,7 +80,7 @@ export async function getLiveRoomRow(
     sql: `
       SELECT live_room_id, community_id, anchor_post_id, host_user_id, guest_user_id,
              room_kind, status, access_mode, visibility, title, description, cover_ref,
-             event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
+             store_url, store_label, audience_gate_json, event_start_at, live_started_at, ended_at, canceled_at, broadcast_ref,
              recording_enabled, replay_asset_id, replay_listing_id, replay_status, created_at, updated_at
       FROM live_rooms
       WHERE community_id = ?1 AND live_room_id = ?2
@@ -144,8 +148,14 @@ export async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRo
     status: room.status,
     access_mode: room.access_mode,
     visibility: room.visibility,
+    audience_gate: parseStoredAudienceGate(room.audience_gate_json, {
+      communityId: room.community_id,
+      liveRoomId: room.live_room_id,
+    }),
     title: room.title,
     description: room.description,
+    store_url: room.store_url,
+    store_label: room.store_label,
     cover_ref: room.cover_ref,
     event_start_at: room.event_start_at,
     live_started_at: room.live_started_at,
@@ -190,6 +200,7 @@ export function serializeLiveRoom(room: LiveRoom): LiveRoom {
     ...room,
     host_user: publicId(room.host_user, "usr"),
     guest_user: room.guest_user ? publicId(room.guest_user, "usr") : null,
+    audience_gate: serializeAudienceGate(room.audience_gate),
     performer_allocations: room.performer_allocations.map((allocation) => ({
       ...allocation,
       user: publicId(allocation.user, "usr"),
@@ -203,6 +214,22 @@ export function serializeLiveRoom(room: LiveRoom): LiveRoom {
           : null,
       })),
     },
+  }
+}
+
+function serializeAudienceGate(gate: LiveRoomAudienceGate | null): LiveRoomAudienceGate | null {
+  if (!gate) return null
+  return {
+    version: 1,
+    match: "any",
+    segments: gate.segments.map((segment) => {
+      if (segment.type === "community_members") return segment
+      return {
+        type: "purchase_entitlement",
+        entitlement_kind: segment.entitlement_kind,
+        target_refs: segment.target_refs.map((targetRef) => publicId(targetRef, "asset")),
+      }
+    }),
   }
 }
 
@@ -224,6 +251,9 @@ function rowToLiveRoom(row: QueryResultRow): LiveRoomRow {
     visibility: requiredString(row, "visibility") as LiveRoomVisibility,
     title: requiredString(row, "title"),
     description: stringOrNull(rowValue(row, "description")),
+    store_url: stringOrNull(rowValue(row, "store_url")),
+    store_label: stringOrNull(rowValue(row, "store_label")),
+    audience_gate_json: stringOrNull(rowValue(row, "audience_gate_json")),
     cover_ref: stringOrNull(rowValue(row, "cover_ref")),
     event_start_at: numberOrNull(rowValue(row, "event_start_at")),
     live_started_at: numberOrNull(rowValue(row, "live_started_at")),
@@ -237,6 +267,86 @@ function rowToLiveRoom(row: QueryResultRow): LiveRoomRow {
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
+}
+
+const FAIL_CLOSED_AUDIENCE_GATE: LiveRoomAudienceGate = {
+  version: 1,
+  match: "any",
+  segments: [],
+}
+
+type AudienceGateParseFailureReason = "json_parse" | "shape_invalid"
+
+const audienceGateParseFailureLogTimes = new Map<string, number>()
+const AUDIENCE_GATE_PARSE_FAILURE_LOG_WINDOW_MS = 5 * 60 * 1000
+
+export function parseStoredAudienceGate(
+  value: string | null,
+  context?: {
+    communityId?: string | null
+    liveRoomId?: string | null
+    nowMs?: number
+  },
+): LiveRoomAudienceGate | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    if (isStoredAudienceGate(parsed)) return parsed
+    reportAudienceGateParseFailure("shape_invalid", context)
+    return FAIL_CLOSED_AUDIENCE_GATE
+  } catch {
+    reportAudienceGateParseFailure("json_parse", context)
+    return FAIL_CLOSED_AUDIENCE_GATE
+  }
+}
+
+export function resetAudienceGateParseFailureLogDedupeForTests(): void {
+  audienceGateParseFailureLogTimes.clear()
+}
+
+function reportAudienceGateParseFailure(
+  reason: AudienceGateParseFailureReason,
+  context?: {
+    communityId?: string | null
+    liveRoomId?: string | null
+    nowMs?: number
+  },
+): void {
+  const communityId = context?.communityId?.trim() || "unknown"
+  const liveRoomId = context?.liveRoomId?.trim() || "unknown"
+  const nowMs = context?.nowMs ?? Date.now()
+  const dedupeKey = `${communityId}:${liveRoomId}:${reason}`
+  const lastLoggedAt = audienceGateParseFailureLogTimes.get(dedupeKey)
+  if (typeof lastLoggedAt === "number" && nowMs - lastLoggedAt < AUDIENCE_GATE_PARSE_FAILURE_LOG_WINDOW_MS) {
+    return
+  }
+  audienceGateParseFailureLogTimes.set(dedupeKey, nowMs)
+  console.warn("[live-rooms] audience gate parse failed", {
+    metric: "audience_gate_parse_failed",
+    community_id: communityId,
+    live_room_id: liveRoomId,
+    reason,
+  })
+}
+
+function isStoredAudienceGate(value: unknown): value is LiveRoomAudienceGate {
+  if (!value || typeof value !== "object") return false
+  const gate = value as Partial<LiveRoomAudienceGate>
+  return gate.version === 1
+    && gate.match === "any"
+    && Array.isArray(gate.segments)
+    && gate.segments.every(isStoredAudienceGateSegment)
+}
+
+function isStoredAudienceGateSegment(value: unknown): value is LiveRoomAudienceGate["segments"][number] {
+  if (!value || typeof value !== "object") return false
+  const segment = value as Partial<LiveRoomAudienceGate["segments"][number]>
+  if (segment.type === "community_members") return true
+  if (segment.type !== "purchase_entitlement") return false
+  return segment.entitlement_kind === "asset_access"
+    && Array.isArray(segment.target_refs)
+    && segment.target_refs.length > 0
+    && segment.target_refs.every((targetRef) => typeof targetRef === "string" && targetRef.startsWith("ast_"))
 }
 
 function booleanFromSql(value: unknown): boolean {
