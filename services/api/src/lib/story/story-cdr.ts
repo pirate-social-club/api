@@ -346,6 +346,7 @@ export async function uploadCdrEncryptedDataKey(params: {
     ],
     gasPolicy: gasPolicy.value,
     value: allocateFee,
+    defaultWaitTimeoutMs: txWaitTimeoutMs,
   })
   const allocateReceipt = await provider.waitForTransaction(String(allocateTx.hash || ""), 1, txWaitTimeoutMs)
   if (!allocateReceipt || allocateReceipt.status !== 1) {
@@ -388,6 +389,7 @@ export async function uploadCdrEncryptedDataKey(params: {
     ],
     gasPolicy: gasPolicy.value,
     value: writeFee,
+    defaultWaitTimeoutMs: txWaitTimeoutMs,
   })
   const writeReceipt = await provider.waitForTransaction(String(writeTx.hash || ""), 1, txWaitTimeoutMs)
   if (!writeReceipt || writeReceipt.status !== 1) {

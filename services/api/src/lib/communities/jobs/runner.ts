@@ -23,6 +23,7 @@ async function sleep(ms: number): Promise<void> {
 }
 
 const STALE_RUNNING_JOB_TIMEOUT_MS = 15 * 60 * 1000
+const DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000
 
 type CommunityJobCommunityProcessingSummary = {
   community_id: string
@@ -39,6 +40,38 @@ type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
   failed_communities: CommunityJobCommunityFailureSummary[]
+}
+
+export class CommunityJobAttemptTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`community_job_attempt_timeout:${timeoutMs}`)
+    this.name = "CommunityJobAttemptTimeoutError"
+  }
+}
+
+export function resolveCommunityJobAttemptTimeoutMs(env: Pick<Env, "COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS">): number {
+  const raw = String(env.COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS || "").trim()
+  const parsed = raw ? Number(raw) : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
+  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= STALE_RUNNING_JOB_TIMEOUT_MS
+    ? parsed
+    : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
+}
+
+export async function withCommunityJobAttemptTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new CommunityJobAttemptTimeoutError(timeoutMs)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 function createdAtMs(community: { created_at?: string | null }): number {
@@ -106,11 +139,14 @@ export async function processCommunityJobById(input: {
     }
 
     try {
-      const resultRef = await runCommunityJob({
-        job: running,
-        env: input.env,
-        communityRepository: input.communityRepository,
-      })
+      const resultRef = await withCommunityJobAttemptTimeout(
+        runCommunityJob({
+          job: running,
+          env: input.env,
+          communityRepository: input.communityRepository,
+        }),
+        resolveCommunityJobAttemptTimeoutMs(input.env),
+      )
 
       logPipelineInfo("[community-job] completed", {
         job_id: running.job_id,

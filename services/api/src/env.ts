@@ -197,6 +197,7 @@ export type Env = {
   COMMUNITY_JOB_WORKER_INTERVAL_MS?: string
   COMMUNITY_JOB_WORKER_MAX_JOBS_PER_COMMUNITY?: string
   COMMUNITY_JOB_WORKER_MAX_COMMUNITIES_PER_TICK?: string
+  COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS?: string
   // Defaults to async outside local/test. Set false as a production kill switch; set true in tests to opt into the async path.
   STORY_LOCKED_DELIVERY_ASYNC?: string
   SONG_PREVIEW_SERVICE?: Fetcher

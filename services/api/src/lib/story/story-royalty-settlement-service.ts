@@ -211,6 +211,7 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
       input.purchaseRef,
     ],
     gasPolicy: gasPolicy.value,
+    defaultWaitTimeoutMs: resolveStoryTxWaitTimeoutMs(input.env),
   })
   const entitlementReceipt = await provider.waitForTransaction(
     String(entitlementTx.hash || ""),
