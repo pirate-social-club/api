@@ -1,9 +1,9 @@
 import type { Context } from "hono"
 
-export const PUBLIC_READ_CACHE_FRESH_SECONDS = 60
-export const PUBLIC_READ_CACHE_STALE_SECONDS = 300
-export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
-export const PUBLIC_READ_CACHE_CONTROL = `public, max-age=0, s-maxage=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
+export const PUBLIC_READ_CACHE_FRESH_SECONDS = 600
+export const PUBLIC_READ_CACHE_STALE_SECONDS = 3600
+export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, max-age=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
+export const PUBLIC_READ_CACHE_CONTROL = "public, max-age=0"
 const DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES = ["Accept"]
 
 function appendVaryHeader(c: Context, fields: string[]): void {
@@ -27,6 +27,7 @@ function appendVaryHeader(c: Context, fields: string[]): void {
 }
 
 export function setPublicReadCacheHeaders(c: Context, options?: { vary?: string[] }): void {
+  c.header("Cloudflare-CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
   c.header("CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
   c.header("Cache-Control", PUBLIC_READ_CACHE_CONTROL)
   appendVaryHeader(c, [...publicReadVaryHeaders(c.req.raw), ...(options?.vary ?? [])])

@@ -37,7 +37,9 @@ describe("public read cache headers", () => {
     const response = await publicReadCacheHeaderResponse("/feed/home/public?sort=best&locale=en")
 
     expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
     expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("cdn-cache-control")).not.toContain("s-maxage")
     expect(response.headers.get("vary")).toBeNull()
   })
 
@@ -45,7 +47,9 @@ describe("public read cache headers", () => {
     const response = await publicReadCacheHeaderResponse("/public-posts/pst_1")
 
     expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
     expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(response.headers.get("cdn-cache-control")).not.toContain("s-maxage")
     expect(response.headers.get("vary")).toBe("Accept")
   })
 })
