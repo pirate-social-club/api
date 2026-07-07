@@ -6,6 +6,16 @@ export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, max-age=${PUBLIC_READ_CACH
 export const PUBLIC_READ_CACHE_CONTROL = "public, max-age=0"
 const DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES = ["Accept"]
 
+// Operational endpoints (health, version) must never be cached at any tier — a cached
+// response makes deploy/health verification report stale or wrong data. Cloudflare
+// prioritizes Cloudflare-CDN-Cache-Control > CDN-Cache-Control > Cache-Control, so a
+// browser-tier `no-store` alone does not stop the CDN from serving a stale entry.
+export const NO_STORE_CACHE_HEADERS = {
+  "cache-control": "no-store",
+  "cdn-cache-control": "no-store",
+  "cloudflare-cdn-cache-control": "no-store",
+} as const
+
 function appendVaryHeader(c: Context, fields: string[]): void {
   const existingFields = (c.res.headers.get("Vary") ?? "")
     .split(",")
