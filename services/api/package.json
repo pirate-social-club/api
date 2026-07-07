@@ -20,6 +20,7 @@
     "smoke:paid-booking": "bun run scripts/smoke-paid-booking.ts",
     "smoke:booking-review": "bun run scripts/smoke-booking-settlement-review.ts",
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
+    "smoke:public-read-cache": "bun run scripts/smoke-public-read-cache.ts",
     "zkpassport:verifier": "bun run scripts/zkpassport-verifier-service.ts",
     "check:community-schema-guards": "bun run scripts/check-community-schema-guards.ts",
     "check:community-schema-snapshot": "bun run scripts/generate-community-schema-snapshot.ts --check",

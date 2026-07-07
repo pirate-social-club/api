@@ -108,4 +108,84 @@ describe("public read cache invalidation", () => {
       },
     })
   })
+
+  test("sends configured ops alert when a scheduled purge fails", async () => {
+    const sent: Array<{ subject?: string; text?: string }> = []
+    let scheduled: Promise<void> | null = null
+    const originalConsoleError = console.error
+    console.error = () => {}
+    try {
+      await schedulePublicPostCachePurge({
+        env: {
+          CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+          CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+          ENVIRONMENT: "production",
+          OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+          OPS_ALERT_EMAIL_TO: "ops@example.com",
+          OPS_ALERT_EMAIL: {
+            send: async (message: { subject?: string; text?: string }) => {
+              sent.push(message)
+              return { messageId: "msg_test" }
+            },
+          },
+        } as unknown as Env,
+        postId: "pst_1",
+        communityId: "cmt_1",
+        waitUntil: (promise) => {
+          scheduled = promise
+        },
+        fetcher: (async () => new Response(JSON.stringify({ success: false }), { status: 200 })) as typeof fetch,
+      })
+      await scheduled
+    } finally {
+      console.error = originalConsoleError
+    }
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.subject).toBe("[Pirate production] Public read cache purge failed")
+    expect(sent[0]?.text).toContain("[HIGH][production] Public read cache purge failed")
+    expect(sent[0]?.text).toContain("\"post_id\":\"pst_1\"")
+    expect(sent[0]?.text).toContain("\"community_id\":\"cmt_1\"")
+  })
+
+  test("sends a Sentry envelope when no captureException hook is provided", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    let scheduled: Promise<void> | null = null
+    const originalConsoleError = console.error
+    console.error = () => {}
+    try {
+      await schedulePublicPostCachePurge({
+        env: {
+          CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+          CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+          ENVIRONMENT: "production",
+          SENTRY_DSN: "https://public@example.invalid/42",
+        } as Env,
+        postId: "pst_1",
+        communityId: "cmt_1",
+        waitUntil: (promise) => {
+          scheduled = promise
+        },
+        fetcher: (async (url, init) => {
+          calls.push({ url: String(url), init })
+          if (String(url).includes("/purge_cache")) {
+            return new Response(JSON.stringify({ success: false }), { status: 200 })
+          }
+          return new Response("", { status: 200 })
+        }) as typeof fetch,
+      })
+      await scheduled
+    } finally {
+      console.error = originalConsoleError
+    }
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.url).toBe("https://api.cloudflare.com/client/v4/zones/zone_123/purge_cache")
+    expect(calls[1]?.url).toBe("https://example.invalid/api/42/envelope/")
+    expect((calls[1]?.init?.headers as Record<string, string>)["Content-Type"]).toBe("application/x-sentry-envelope")
+    const envelope = String(calls[1]?.init?.body)
+    expect(envelope).toContain("Public read cache purge failed")
+    expect(envelope).toContain("\"post_id\":\"pst_1\"")
+    expect(envelope).toContain("\"community_id\":\"cmt_1\"")
+  })
 })
