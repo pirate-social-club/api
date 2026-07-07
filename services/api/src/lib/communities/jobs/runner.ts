@@ -235,7 +235,7 @@ export async function processAvailableCommunityJobs(input: {
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
     : selectScheduledCommunityJobPollIds(
-      await input.communityRepository.listActiveCommunities(),
+      await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
       maxCommunities,
     )
 

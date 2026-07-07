@@ -113,7 +113,10 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
 }): Promise<RoyaltyAllocationVerificationSummary> {
   const summary = emptySummary()
   const vaultReader = input.vaultReader ?? createStoryRoyaltyVaultReader(input.env)
-  const communities = await input.communityRepository.listActiveCommunities({ limit: input.maxCommunities })
+  const communities = await input.communityRepository.listActiveCommunities({
+    limit: input.maxCommunities,
+    requireReadyRouting: true,
+  })
 
   for (const community of communities) {
     const communitySummary = {

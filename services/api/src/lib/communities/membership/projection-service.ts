@@ -111,7 +111,7 @@ export async function reconcileCommunityMembershipAndFollowProjections(input: {
     failed_communities: 0,
   }
 
-  const communities = (await input.communityRepository.listActiveCommunities()).slice(0, maxCommunities)
+  const communities = (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).slice(0, maxCommunities)
   for (const community of communities) {
     let db: CommunityDb | null = null
     try {

@@ -28,6 +28,18 @@ async function setupControl(): Promise<Client> {
       updated_at TEXT NOT NULL
     )
   `)
+  await client.execute(`
+    CREATE TABLE community_database_routing (
+      community_id TEXT PRIMARY KEY,
+      provisioning_state TEXT NOT NULL,
+      shard_worker_id TEXT,
+      binding_name TEXT,
+      region TEXT,
+      decommissioned_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
   return client
 }
 
@@ -48,6 +60,24 @@ async function insertCommunity(
         '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
     `,
     args: [communityId, status, provisioningState],
+  })
+}
+
+async function insertRouting(
+  client: Client,
+  communityId: string,
+  provisioningState: string,
+  decommissionedAt: string | null = null,
+): Promise<void> {
+  await client.execute({
+    sql: `
+      INSERT INTO community_database_routing (
+        community_id, provisioning_state, shard_worker_id, binding_name, region,
+        decommissioned_at, created_at, updated_at
+      ) VALUES (?1, ?2, 'community-d1-shard-staging', 'DB_CMTY_0001', 'wnam',
+        ?3, '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
+    `,
+    args: [communityId, provisioningState, decommissionedAt],
   })
 }
 
@@ -133,6 +163,29 @@ describe("setCommunityLifecycleStatus", () => {
 
     const searched = await searchActiveCommunityRows(client, { query: "cmt", limit: 10 })
     expect(searched.map((c) => c.community_id)).toEqual(["cmt_live"])
+    client.close()
+  })
+
+  test("ready-routed active discovery excludes communities without usable routing", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_ready", "active")
+    await insertCommunity(client, "cmt_no_route", "active")
+    await insertCommunity(client, "cmt_pending_route", "active")
+    await insertCommunity(client, "cmt_decommissioned_route", "active")
+    await insertRouting(client, "cmt_ready", "ready")
+    await insertRouting(client, "cmt_pending_route", "provisioning")
+    await insertRouting(client, "cmt_decommissioned_route", "ready", "2026-06-23T00:00:00.000Z")
+
+    const listed = await listActiveCommunityRows(client)
+    expect(listed.map((c) => c.community_id)).toEqual([
+      "cmt_decommissioned_route",
+      "cmt_no_route",
+      "cmt_pending_route",
+      "cmt_ready",
+    ])
+
+    const readyRouted = await listActiveCommunityRows(client, { requireReadyRouting: true })
+    expect(readyRouted.map((c) => c.community_id)).toEqual(["cmt_ready"])
     client.close()
   })
 })

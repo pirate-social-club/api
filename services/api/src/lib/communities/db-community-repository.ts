@@ -143,6 +143,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
 
   async listActiveCommunities(input?: {
     limit?: number
+    requireReadyRouting?: boolean
   }): Promise<CommunityRow[]> {
     return listActiveCommunities(this.client, input)
   }

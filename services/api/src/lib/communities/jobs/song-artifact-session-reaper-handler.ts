@@ -34,12 +34,20 @@ export async function reconcileStaleSongArtifactUploadSessionJobs(input: {
   try {
     const result = await control.execute({
       sql: `
-        SELECT community_id, COUNT(*) AS stale_sessions
-        FROM song_artifact_upload_sessions
-        WHERE status IN ('created', 'parts_uploading', 'completing', 'head_verifying', 'aborting')
-          AND expires_at < ?1
-        GROUP BY community_id
-        ORDER BY MIN(expires_at) ASC
+        SELECT s.community_id, COUNT(*) AS stale_sessions
+        FROM song_artifact_upload_sessions s
+        INNER JOIN communities c
+          ON c.community_id = s.community_id
+         AND c.status = 'active'
+         AND c.provisioning_state = 'active'
+        INNER JOIN community_database_routing r
+          ON r.community_id = s.community_id
+         AND r.provisioning_state = 'ready'
+         AND r.decommissioned_at IS NULL
+        WHERE s.status IN ('created', 'parts_uploading', 'completing', 'head_verifying', 'aborting')
+          AND s.expires_at < ?1
+        GROUP BY s.community_id
+        ORDER BY MIN(s.expires_at) ASC
         LIMIT ?2
       `,
       args: [nowIso(), maxCommunities],

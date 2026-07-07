@@ -52,7 +52,7 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
 }): Promise<LockedAssetDeliveryReconcileSummary> {
   const communityIds = (input.communityIds?.length
     ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities()).map((community) => community.community_id))
+    : (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).map((community) => community.community_id))
     .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
   const maxAssetsPerCommunity = Math.max(1, Math.trunc(input.maxAssetsPerCommunity ?? 25))
   const communities: LockedAssetDeliveryReconcileCommunitySummary[] = []
