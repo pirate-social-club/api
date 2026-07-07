@@ -1,8 +1,11 @@
 import type { Hono } from "hono"
+import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import type { Env } from "../env"
 import { resolveCommunityKaraokeScoringPolicy } from "../lib/communities/community-karaoke-policy-service"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
+import { isCommunityLive } from "../lib/communities/community-status"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { issueKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
@@ -132,6 +135,79 @@ export function setKaraokePayloadRouteDepsForTests(
   }
 }
 
+export async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
+  c: Context<E>,
+  input: {
+    communityId: string
+    postId: string
+  },
+): Promise<Response> {
+  const timing = createServerTimingRecorder(c)
+  const communityId = input.communityId
+  const postId = input.postId
+  const locale = c.req.query("locale") ?? null
+  const communityRepository = karaokePayloadRouteDeps.getCommunityRepository(c.env)
+  const cacheContext = await timing.time("cache_eligibility", () => karaokePayloadRouteDeps.loadPublicPostKaraokePayloadCacheContext({
+    communityId,
+    communityRepository,
+    env: c.env,
+    postId,
+    recordTiming: timing.record,
+    userRepository: karaokePayloadRouteDeps.getUserRepository(c.env),
+  }))
+  const workerCache = cacheContext.cacheable ? await timing.time("worker_cache_open", karaokePayloadRouteDeps.getWorkerCache) : null
+  const cacheKey = workerCache
+    ? buildPublicKaraokePayloadCacheKey(c.req.url, { communityId, locale, postId })
+    : null
+  const cached = cacheKey ? await timing.time("worker_cache_match", () => workerCache?.match(cacheKey) ?? Promise.resolve(undefined)) : undefined
+  if (cached) {
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    timing.writeHeader()
+    return responseFromCachedKaraokePayload(cached, c.res.headers.get("Server-Timing"))
+  }
+
+  const payload = await timing.time("karaoke_payload", () => karaokePayloadRouteDeps.getPostKaraokePayload({
+    communityId,
+    communityRepository,
+    env: c.env,
+    locale,
+    postContext: cacheContext.postContext,
+    postId,
+    profileRepository: karaokePayloadRouteDeps.getProfileRepository(c.env),
+    recordTiming: timing.record,
+    userRepository: karaokePayloadRouteDeps.getUserRepository(c.env),
+  }))
+  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  timing.writeHeader()
+  const response = c.json(payload, 200)
+  response.headers.set("X-Pirate-Worker-Cache", cacheContext.cacheable ? "MISS" : "BYPASS")
+  if (cacheKey && workerCache) {
+    c.executionCtx.waitUntil(workerCache.put(cacheKey, responseForKaraokePayloadCache(response.clone())))
+  }
+  return response
+}
+
+export async function handlePublicPostKaraokePayloadRequest<E extends { Bindings: Env }>(
+  c: Context<E>,
+  input: {
+    postId: string
+  },
+): Promise<Response> {
+  const communityRepository = karaokePayloadRouteDeps.getCommunityRepository(c.env)
+  const projection = await communityRepository.getCommunityPostProjectionByPostId(input.postId)
+  if (!projection) {
+    throw notFoundError("Post not found")
+  }
+  const communityRow = await communityRepository.getCommunityById(projection.community_id)
+  if (!isCommunityLive(communityRow)) {
+    throw notFoundError("Post not found")
+  }
+  return await handlePublicKaraokePayloadRequest(c, {
+    communityId: projection.community_id,
+    postId: input.postId,
+  })
+}
+
 export function registerCommunityKaraokeSessionRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/posts/:postId/karaoke", async (c) => {
     const timing = createServerTimingRecorder(c)
@@ -143,46 +219,8 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
     if (!communityId) {
       throw notFoundError("Post not found")
     }
-    const locale = c.req.query("locale") ?? null
     const postId = decodePublicPostId(c.req.param("postId"))
-    const cacheContext = await timing.time("cache_eligibility", () => karaokePayloadRouteDeps.loadPublicPostKaraokePayloadCacheContext({
-      communityId,
-      communityRepository,
-      env: c.env,
-      postId,
-      recordTiming: timing.record,
-      userRepository: karaokePayloadRouteDeps.getUserRepository(c.env),
-    }))
-    const workerCache = cacheContext.cacheable ? await timing.time("worker_cache_open", karaokePayloadRouteDeps.getWorkerCache) : null
-    const cacheKey = workerCache
-      ? buildPublicKaraokePayloadCacheKey(c.req.url, { communityId, locale, postId })
-      : null
-    const cached = cacheKey ? await timing.time("worker_cache_match", () => workerCache?.match(cacheKey) ?? Promise.resolve(undefined)) : undefined
-    if (cached) {
-      setPublicReadCacheHeaders(c, { vary: ["Accept"] })
-      timing.writeHeader()
-      return responseFromCachedKaraokePayload(cached, c.res.headers.get("Server-Timing"))
-    }
-
-    const payload = await timing.time("karaoke_payload", () => karaokePayloadRouteDeps.getPostKaraokePayload({
-      communityId,
-      communityRepository,
-      env: c.env,
-      locale,
-      postContext: cacheContext.postContext,
-      postId,
-      profileRepository: karaokePayloadRouteDeps.getProfileRepository(c.env),
-      recordTiming: timing.record,
-      userRepository: karaokePayloadRouteDeps.getUserRepository(c.env),
-    }))
-    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
-    timing.writeHeader()
-    const response = c.json(payload, 200)
-    response.headers.set("X-Pirate-Worker-Cache", cacheContext.cacheable ? "MISS" : "BYPASS")
-    if (cacheKey && workerCache) {
-      c.executionCtx.waitUntil(workerCache.put(cacheKey, responseForKaraokePayloadCache(response.clone())))
-    }
-    return response
+    return await handlePublicKaraokePayloadRequest(c, { communityId, postId })
   })
 
   communities.post("/:communityId/posts/:postId/karaoke/sessions", async (c) => {
