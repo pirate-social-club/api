@@ -141,7 +141,7 @@ describe("karaoke session creation service", () => {
     expect(result.websocket_url).toContain("token=token-uuid-3")
   })
 
-  test("does not claim idempotency or initialize when scoring is disabled", async () => {
+  test("claims idempotency and fails the pending record when scoring is disabled", async () => {
     const { calls, deps } = dependencies({
       async resolveScoringPolicy() { calls.push("policy"); return { kind: "disabled" } },
     })
@@ -149,7 +149,7 @@ describe("karaoke session creation service", () => {
       code: "karaoke_scoring_disabled",
       status: 409,
     } satisfies Partial<HttpError>)
-    expect(calls).toEqual(["payload", "policy"])
+    expect(calls).toEqual(["claim", "payload", "policy", "fail"])
   })
 
   test("retries one runtime collision using a new session and attempt", async () => {
