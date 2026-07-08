@@ -395,3 +395,55 @@ export async function markCommunityJobFailed(input: {
     jobId: input.jobId,
   })
 }
+
+export async function recycleCommunityJobForRetry(input: {
+  client: DbExecutor
+  communityId: string
+  jobId: string
+  now: string
+  reason?: string | null
+}): Promise<{ before: CommunityJobRow; after: CommunityJobRow } | null> {
+  const before = await getCommunityJobById({
+    client: input.client,
+    jobId: input.jobId,
+  })
+  if (!before || before.community_id !== input.communityId) {
+    return null
+  }
+  if (before.status !== "running" && before.status !== "failed") {
+    return { before, after: before }
+  }
+
+  const recycleReason = input.reason?.trim()
+  await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET status = 'queued',
+          error_code = ?3,
+          available_at = ?4,
+          last_checkpoint = NULL,
+          last_checkpoint_at = NULL,
+          attempt_started_at = NULL,
+          attempt_deadline_at = NULL,
+          updated_at = ?4
+      WHERE job_id = ?1
+        AND community_id = ?2
+        AND status IN ('running', 'failed')
+    `,
+    args: [
+      input.jobId,
+      input.communityId,
+      recycleReason ? `operator_recycled:${recycleReason}` : "operator_recycled",
+      input.now,
+    ],
+  })
+
+  const after = await getCommunityJobById({
+    client: input.client,
+    jobId: input.jobId,
+  })
+  if (!after) {
+    return null
+  }
+  return { before, after }
+}

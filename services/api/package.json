@@ -57,6 +57,7 @@
     "spike:courtyard-inventory-source": "bun run scripts/spike-courtyard-inventory-source.ts",
     "admin:courtyard-rolex-gate": "bun run scripts/admin-courtyard-rolex-gate.ts",
     "admin:courtyard-asset-gate": "bun run scripts/admin-courtyard-asset-gate.ts",
+    "admin:community-job-recycle": "bun run scripts/admin-community-job-recycle.ts",
     "admin:seed-courtyard-clubs": "bun run scripts/admin-seed-courtyard-clubs.ts"
   },
   "dependencies": {
