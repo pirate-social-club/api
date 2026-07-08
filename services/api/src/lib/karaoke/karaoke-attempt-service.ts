@@ -86,6 +86,50 @@ const KARAOKE_SCORE_SCALE = 10_000
 const KARAOKE_LEADERBOARD_DEFAULT_LIMIT = 50
 const KARAOKE_LEADERBOARD_MAX_LIMIT = 100
 
+function karaokeLeaderboardRankedCte(): string {
+  return `
+      WITH eligible AS (
+        SELECT ka.user_id, ka.final_score, ka.completed_at, ka.id
+        FROM karaoke_attempt ka
+        WHERE ka.post_id = ?1
+          AND ka.karaoke_revision_id = ?2
+          AND ka.scoring_version = ?3
+          AND ka.scoring_provider = ?4
+          AND ka.scoring_model = ?5
+          AND ka.rank_eligible = 1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM community_memberships cm
+            WHERE cm.community_id = ka.community_id
+              AND cm.user_id = ka.user_id
+              AND cm.status = 'banned'
+          )
+      ),
+      best AS (
+        SELECT user_id, final_score, completed_at, id
+        FROM (
+          SELECT user_id, final_score, completed_at, id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY user_id
+                   ORDER BY final_score DESC, completed_at ASC, id ASC
+                 ) AS user_best_rank
+          FROM eligible
+        )
+        WHERE user_best_rank = 1
+      ),
+      ranked AS (
+        SELECT user_id, final_score, completed_at,
+               RANK() OVER (ORDER BY final_score DESC, completed_at ASC, user_id ASC) AS rank,
+               COUNT(*) OVER () AS total_ranked
+        FROM best
+      )
+    `
+}
+
+export const karaokeAttemptServiceTestHooks = {
+  karaokeLeaderboardRankedCte,
+}
+
 function clampKaraokeLeaderboardLimit(value?: number | null): number {
   if (value == null || !Number.isFinite(value)) return KARAOKE_LEADERBOARD_DEFAULT_LIMIT
   return Math.min(KARAOKE_LEADERBOARD_MAX_LIMIT, Math.max(1, Math.trunc(value)))
@@ -397,36 +441,7 @@ export async function getPostKaraokeLeaderboard(input: {
   const tuple = await resolveCurrentKaraokeTuple(input)
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const rankedCte = `
-      WITH eligible AS (
-        SELECT user_id, final_score, completed_at, id
-        FROM karaoke_attempt
-        WHERE post_id = ?1
-          AND karaoke_revision_id = ?2
-          AND scoring_version = ?3
-          AND scoring_provider = ?4
-          AND scoring_model = ?5
-          AND rank_eligible = 1
-      ),
-      best AS (
-        SELECT user_id, final_score, completed_at, id
-        FROM (
-          SELECT user_id, final_score, completed_at, id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY user_id
-                   ORDER BY final_score DESC, completed_at ASC, id ASC
-                 ) AS user_best_rank
-          FROM eligible
-        )
-        WHERE user_best_rank = 1
-      ),
-      ranked AS (
-        SELECT user_id, final_score, completed_at,
-               RANK() OVER (ORDER BY final_score DESC, completed_at ASC, user_id ASC) AS rank,
-               COUNT(*) OVER () AS total_ranked
-        FROM best
-      )
-    `
+    const rankedCte = karaokeLeaderboardRankedCte()
     const queryArgs = [
       input.postId,
       tuple.karaokeRevisionId,
