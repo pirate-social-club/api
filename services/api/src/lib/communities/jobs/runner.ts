@@ -7,7 +7,9 @@ import {
   getCommunityJobById,
   markCommunityJobRunning,
   markCommunityJobSucceeded,
+  recordCommunityJobCheckpoint,
   resetStaleRunningCommunityJobs,
+  type CommunityJobCheckpoint,
   type CommunityJobType,
   type CommunityJobRow,
 } from "./store"
@@ -22,8 +24,10 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-const STALE_RUNNING_JOB_TIMEOUT_MS = 15 * 60 * 1000
+const DEFAULT_STALE_CHECKPOINT_TIMEOUT_MS = 2 * 60 * 1000
 const DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS = 12 * 60 * 1000
+const DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS = 30 * 60 * 1000
+const MAX_DURABLE_ATTEMPT_DEADLINE_MS = 60 * 60 * 1000
 
 type CommunityJobCommunityProcessingSummary = {
   community_id: string
@@ -52,9 +56,29 @@ export class CommunityJobAttemptTimeoutError extends Error {
 export function resolveCommunityJobAttemptTimeoutMs(env: Pick<Env, "COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS">): number {
   const raw = String(env.COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS || "").trim()
   const parsed = raw ? Number(raw) : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
-  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= STALE_RUNNING_JOB_TIMEOUT_MS
+  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= MAX_DURABLE_ATTEMPT_DEADLINE_MS
     ? parsed
     : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
+}
+
+export function resolveCommunityJobDurableAttemptDeadlineMs(
+  env: Pick<Env, "COMMUNITY_JOB_DURABLE_ATTEMPT_DEADLINE_MS">,
+): number {
+  const raw = String(env.COMMUNITY_JOB_DURABLE_ATTEMPT_DEADLINE_MS || "").trim()
+  const parsed = raw ? Number(raw) : DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
+  return Number.isInteger(parsed) && parsed >= 60_000 && parsed <= MAX_DURABLE_ATTEMPT_DEADLINE_MS
+    ? parsed
+    : DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
+}
+
+export function resolveCommunityJobStaleCheckpointTimeoutMs(
+  env: Pick<Env, "COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS">,
+): number {
+  const raw = String(env.COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS || "").trim()
+  const parsed = raw ? Number(raw) : DEFAULT_STALE_CHECKPOINT_TIMEOUT_MS
+  return Number.isInteger(parsed) && parsed >= 30_000 && parsed <= DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
+    ? parsed
+    : DEFAULT_STALE_CHECKPOINT_TIMEOUT_MS
 }
 
 export async function withCommunityJobAttemptTimeout<T>(
@@ -71,6 +95,22 @@ export async function withCommunityJobAttemptTimeout<T>(
     ])
   } finally {
     if (timeout) clearTimeout(timeout)
+  }
+}
+
+export function createCommunityJobCheckpointRecorder(input: {
+  client: Parameters<typeof recordCommunityJobCheckpoint>[0]["client"]
+  job: CommunityJobRow
+}): (checkpoint: CommunityJobCheckpoint, details?: Record<string, unknown> | null) => Promise<void> {
+  return async (checkpoint, details = null) => {
+    await recordCommunityJobCheckpoint({
+      client: input.client,
+      jobId: input.job.job_id,
+      communityId: input.job.community_id,
+      checkpoint,
+      now: nowIso(),
+      detailsJson: details ? JSON.stringify(details) : null,
+    })
   }
 }
 
@@ -129,10 +169,14 @@ export async function processCommunityJobById(input: {
       return null
     }
 
+    const startedAt = nowIso()
     const running = await markCommunityJobRunning({
       client: db.client,
       jobId: input.jobId,
-      now: nowIso(),
+      now: startedAt,
+      attemptDeadlineAt: new Date(
+        Date.parse(startedAt) + resolveCommunityJobDurableAttemptDeadlineMs(input.env),
+      ).toISOString(),
     })
     if (!running) {
       return null
@@ -144,6 +188,10 @@ export async function processCommunityJobById(input: {
           job: running,
           env: input.env,
           communityRepository: input.communityRepository,
+          recordCheckpoint: createCommunityJobCheckpointRecorder({
+            client: db.client,
+            job: running,
+          }),
         }),
         resolveCommunityJobAttemptTimeoutMs(input.env),
       )
@@ -226,18 +274,6 @@ export async function processCommunityJobsForCommunity(input: {
 }): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const now = nowIso()
-    await resetStaleRunningCommunityJobs({
-      client: db.client,
-      communityId: input.communityId,
-      now,
-      staleBefore: new Date(Date.parse(now) - STALE_RUNNING_JOB_TIMEOUT_MS).toISOString(),
-    })
-  } finally {
-    db.close()
-  }
 
   while (jobs.length < maxJobs) {
     const processed = await processNextCommunityJob({
@@ -259,6 +295,47 @@ export async function processCommunityJobsForCommunity(input: {
   }
 }
 
+async function sweepStaleRunningCommunityJobs(input: {
+  env: Env
+  communityRepository: CommunityJobRepository
+  communityIds: string[]
+}): Promise<CommunityJobCommunityFailureSummary[]> {
+  const failures: CommunityJobCommunityFailureSummary[] = []
+  const now = nowIso()
+  const staleCheckpointBefore = new Date(
+    Date.parse(now) - resolveCommunityJobStaleCheckpointTimeoutMs(input.env),
+  ).toISOString()
+  for (const communityId of input.communityIds) {
+    let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
+    try {
+      db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      const resetCount = await resetStaleRunningCommunityJobs({
+        client: db.client,
+        communityId,
+        now,
+        staleCheckpointBefore,
+        deadlineBefore: now,
+      })
+      if (resetCount > 0) {
+        logPipelineInfo("[community-job] reset stale running jobs", {
+          community_id: communityId,
+          reset_count: resetCount,
+        })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      failures.push({ community_id: communityId, error: message })
+      logPipelineError("[community-job] failed to sweep stale running jobs", {
+        community_id: communityId,
+        error: message,
+      })
+    } finally {
+      await db?.close()
+    }
+  }
+  return failures
+}
+
 export async function processAvailableCommunityJobs(input: {
   env: Env
   communityRepository: CommunityJobRepository
@@ -268,15 +345,25 @@ export async function processAvailableCommunityJobs(input: {
   skipJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobProcessingSummary> {
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const activeCommunities = input.communityIds?.length
+    ? []
+    : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
     : selectScheduledCommunityJobPollIds(
-      await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
+      activeCommunities,
       maxCommunities,
     )
+  const staleSweepCommunityIds = input.communityIds?.length
+    ? input.communityIds
+    : activeCommunities.map((community) => community.community_id)
 
   const communities: CommunityJobCommunityProcessingSummary[] = []
-  const failedCommunities: CommunityJobCommunityFailureSummary[] = []
+  const failedCommunities: CommunityJobCommunityFailureSummary[] = await sweepStaleRunningCommunityJobs({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityIds: staleSweepCommunityIds,
+  })
 
   for (const communityId of communityIds) {
     let processed: CommunityJobCommunityProcessingSummary

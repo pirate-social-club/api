@@ -53,6 +53,7 @@ import type {
   SongArtifactBundle,
   SongArtifactUpload,
 } from "../../../types"
+import type { CommunityJobCheckpoint } from "../jobs/store"
 
 export type LockedDeliverySecret = {
   algorithm: "AES-GCM"
@@ -97,6 +98,57 @@ type PreparedLockedDeliveryCoordinates = {
   lockedDeliveryMetadataJson: string
 }
 
+type LockedDeliveryProgressReporter = (
+  checkpoint: CommunityJobCheckpoint,
+  details?: Record<string, unknown> | null,
+) => Promise<void>
+
+function resolveLockedDeliveryHeartbeatIntervalMs(env: Pick<Env, "COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS">): number {
+  const raw = String(env.COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS || "").trim()
+  const parsed = raw ? Number(raw) : 30_000
+  return Number.isInteger(parsed) && parsed >= 5_000 && parsed <= 120_000 ? parsed : 30_000
+}
+
+async function recordLockedDeliveryProgress(
+  progress: LockedDeliveryProgressReporter | null | undefined,
+  checkpoint: CommunityJobCheckpoint,
+  details?: Record<string, unknown> | null,
+): Promise<void> {
+  await progress?.(checkpoint, details ?? null)
+}
+
+async function withLockedDeliveryHeartbeat<T>(input: {
+  env: Env
+  progress?: LockedDeliveryProgressReporter | null
+  checkpoint: CommunityJobCheckpoint
+  heartbeatCheckpoint?: CommunityJobCheckpoint
+  details?: Record<string, unknown> | null
+  operation: () => Promise<T>
+}): Promise<T> {
+  await recordLockedDeliveryProgress(input.progress, input.checkpoint, input.details ?? null)
+  const intervalMs = resolveLockedDeliveryHeartbeatIntervalMs(input.env)
+  let timer: ReturnType<typeof setInterval> | null = null
+  if (input.progress) {
+    timer = setInterval(() => {
+      void recordLockedDeliveryProgress(
+        input.progress,
+        input.heartbeatCheckpoint ?? input.checkpoint,
+        input.details ?? null,
+      ).catch((error) => {
+        console.warn("[community-job] locked delivery heartbeat failed", {
+          checkpoint: input.heartbeatCheckpoint ?? input.checkpoint,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }, intervalMs)
+  }
+  try {
+    return await input.operation()
+  } finally {
+    if (timer) clearInterval(timer)
+  }
+}
+
 let testLockedAssetDeliveryPreparer: ((input: {
   env: Env
   communityId: string
@@ -111,6 +163,7 @@ let testLockedAssetDeliveryPreparer: ((input: {
   upstreamAssetRefs: string[] | null
   preparedDelivery?: PreparedLockedDeliveryCoordinates | null
   onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
+  onProgress?: LockedDeliveryProgressReporter | null
 }) => Promise<LockedAssetDeliveryResult>) | null = null
 
 export function setLockedAssetDeliveryPreparerForTests(
@@ -128,6 +181,7 @@ export function setLockedAssetDeliveryPreparerForTests(
     upstreamAssetRefs: string[] | null
     preparedDelivery?: PreparedLockedDeliveryCoordinates | null
     onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
+    onProgress?: LockedDeliveryProgressReporter | null
   }) => Promise<LockedAssetDeliveryResult>) | null,
 ): void {
   testLockedAssetDeliveryPreparer = preparer
@@ -376,6 +430,7 @@ export async function prepareLockedAssetDelivery(input: {
   upstreamAssetRefs: string[] | null
   preparedDelivery?: PreparedLockedDeliveryCoordinates | null
   onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
+  onProgress?: LockedDeliveryProgressReporter | null
 }): Promise<{
   storyStatus: Asset["story_status"]
   storyPublishTxRef: string
@@ -408,6 +463,9 @@ export async function prepareLockedAssetDelivery(input: {
   if (!upload?.storage_object_key) {
     throw badRequestError("Primary asset upload is missing locked-delivery storage metadata")
   }
+  await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_upload_loaded", {
+    storage_ref: input.storageRef,
+  })
   const uploadObjectKey = upload.storage_object_key
 
   const objectKey = `locked-assets/${input.communityId}/${input.assetId}/payload.bin`
@@ -478,6 +536,10 @@ export async function prepareLockedAssetDelivery(input: {
       metadata.mime_type = input.mimeType
       lockedDeliveryMetadataJson = JSON.stringify(metadata)
       fallbackLockedDeliveryMetadataJson = lockedDeliveryMetadataJson
+      await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_payload_encrypted", {
+        plaintext_bytes: plaintext.byteLength,
+        ciphertext_bytes: ciphertext.byteLength,
+      })
       await uploadFilebaseObject({
         env: input.env,
         objectKey,
@@ -485,6 +547,9 @@ export async function prepareLockedAssetDelivery(input: {
         bytes: ciphertext,
       })
       lockedDeliveryPayloadUploaded = true
+      await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_payload_uploaded", {
+        object_key: objectKey,
+      })
       const writerConfig = resolveStoryCdrWriterDirectSigner(input.env)
       if (!writerConfig.ok) {
         throw badRequestError(writerConfig.error)
@@ -508,19 +573,30 @@ export async function prepareLockedAssetDelivery(input: {
       const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
       let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
       try {
-        cdrUpload = await uploadCdrEncryptedDataKey({
+        cdrUpload = await withLockedDeliveryHeartbeat({
           env: input.env,
-          dataKey,
-          readConditionAddr: readConditionAddress,
-          writeConditionAddr: writeConditionAddress,
-          readConditionData,
-          writeConditionData,
-          accessAuxData: "0x",
+          progress: input.onProgress,
+          checkpoint: "locked_delivery_cdr_submitted",
+          details: {
+            asset_version_id: assetVersionId,
+          },
+          operation: () => uploadCdrEncryptedDataKey({
+            env: input.env,
+            dataKey,
+            readConditionAddr: readConditionAddress,
+            writeConditionAddr: writeConditionAddress,
+            readConditionData,
+            writeConditionData,
+            accessAuxData: "0x",
+          }),
         })
       } catch (error) {
         throw new Error(`cdr_write_failed:${formatCdrWriteFailure(error, input.env)}`)
       }
       cdrVaultUuid = cdrUpload.cdrVaultUuid
+      await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_cdr_confirmed", {
+        cdr_vault_uuid: cdrVaultUuid,
+      })
       await input.onPreparedDelivery?.({
         storyAssetVersionId: assetVersionId,
         storyCdrVaultUuid: cdrVaultUuid,
@@ -535,23 +611,36 @@ export async function prepareLockedAssetDelivery(input: {
     }
     let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
     try {
-      storyPublish = await publishLockedAssetVersionToStory({
+      storyPublish = await withLockedDeliveryHeartbeat({
         env: input.env,
-        publisherAddress: input.creatorWalletAddress,
-        assetVersionId,
-        cdrVaultUuid,
-        namespace,
-        contentHash: primaryContentHash,
-        storageRefHash: deriveStorageRefHash(lockedDeliveryStorageRef),
-        entitlementTokenId,
-        readConditionAddress,
-        writeConditionAddress,
-        rightsBasis: storyPublishRightsBasis,
-        upstreamAssetRefs: input.upstreamAssetRefs,
+        progress: input.onProgress,
+        checkpoint: "story_publish_submitted",
+        heartbeatCheckpoint: "story_publish_waiting",
+        details: {
+          asset_version_id: assetVersionId,
+          cdr_vault_uuid: cdrVaultUuid,
+        },
+        operation: () => publishLockedAssetVersionToStory({
+          env: input.env,
+          publisherAddress: input.creatorWalletAddress,
+          assetVersionId,
+          cdrVaultUuid,
+          namespace,
+          contentHash: primaryContentHash,
+          storageRefHash: deriveStorageRefHash(lockedDeliveryStorageRef),
+          entitlementTokenId,
+          readConditionAddress,
+          writeConditionAddress,
+          rightsBasis: storyPublishRightsBasis,
+          upstreamAssetRefs: input.upstreamAssetRefs,
+        }),
       })
     } catch (error) {
       throw new Error(`story_publish_failed:${error instanceof Error ? error.message : String(error)}`)
     }
+    await recordLockedDeliveryProgress(input.onProgress, "story_publish_confirmed", {
+      publish_tx_hash: storyPublish.publishTxHash,
+    })
 
     return {
       storyStatus: "published",
