@@ -4,6 +4,7 @@ import {
   enqueueCommunityJob,
   getCommunityJobById,
   markCommunityJobRunning,
+  recycleCommunityJobForRetry,
 } from "../src/lib/communities/jobs/store"
 
 async function createJobStoreClient() {
@@ -77,5 +78,64 @@ describe("community job store", () => {
     const stored = await getCommunityJobById({ client, jobId: job.job_id })
     expect(stored?.status).toBe("running")
     expect(stored?.attempt_count).toBe(1)
+  })
+
+  test("recycleCommunityJobForRetry resets a running job without clearing attempt history", async () => {
+    const client = await createJobStoreClient()
+    const job = await enqueueCommunityJob({
+      client,
+      communityId: "cmt_test",
+      jobType: "locked_asset_delivery_prepare",
+      subjectType: "asset",
+      subjectId: "ast_test",
+      createdAt: "2026-06-05T12:00:00.000Z",
+    })
+    await markCommunityJobRunning({
+      client,
+      jobId: job.job_id,
+      now: "2026-06-05T12:00:01.000Z",
+      attemptDeadlineAt: "2026-06-05T12:30:01.000Z",
+    })
+
+    const recycled = await recycleCommunityJobForRetry({
+      client,
+      communityId: "cmt_test",
+      jobId: job.job_id,
+      now: "2026-06-05T12:02:00.000Z",
+      reason: "smoke retry",
+    })
+
+    expect(recycled?.before.status).toBe("running")
+    expect(recycled?.after.status).toBe("queued")
+    expect(recycled?.after.attempt_count).toBe(1)
+    expect(recycled?.after.error_code).toBe("operator_recycled:smoke retry")
+    expect(recycled?.after.available_at).toBe("2026-06-05T12:02:00.000Z")
+    expect(recycled?.after.last_checkpoint).toBeNull()
+    expect(recycled?.after.last_checkpoint_at).toBeNull()
+    expect(recycled?.after.attempt_started_at).toBeNull()
+    expect(recycled?.after.attempt_deadline_at).toBeNull()
+  })
+
+  test("recycleCommunityJobForRetry leaves terminal jobs unchanged", async () => {
+    const client = await createJobStoreClient()
+    const job = await enqueueCommunityJob({
+      client,
+      communityId: "cmt_test",
+      jobType: "locked_asset_delivery_prepare",
+      subjectType: "asset",
+      subjectId: "ast_test",
+      createdAt: "2026-06-05T12:00:00.000Z",
+    })
+
+    const recycled = await recycleCommunityJobForRetry({
+      client,
+      communityId: "cmt_test",
+      jobId: job.job_id,
+      now: "2026-06-05T12:02:00.000Z",
+    })
+
+    expect(recycled?.before.status).toBe("queued")
+    expect(recycled?.after.status).toBe("queued")
+    expect(recycled?.after.error_code).toBeNull()
   })
 })

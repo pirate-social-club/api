@@ -136,6 +136,39 @@ async function seedPipelineState(input: {
   }
 }
 
+async function seedRunningCommunityJob(input: {
+  communityDbRoot: string
+  communityId: string
+  jobId: string
+}): Promise<void> {
+  const communityClient = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await communityClient.execute({
+      sql: `
+        INSERT INTO community_jobs (
+          job_id, community_id, job_type, subject_type, subject_id, status, payload_json,
+          result_ref, error_code, attempt_count, available_at, last_checkpoint, last_checkpoint_at,
+          attempt_started_at, attempt_deadline_at, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, 'locked_asset_delivery_prepare', 'asset', 'ast_debug_recycle', 'running', ?3,
+          NULL, NULL, 2, NULL, 'story_publish_waiting', '2026-07-08T12:00:00.000Z',
+          '2026-07-08T11:59:00.000Z', '2026-07-08T12:30:00.000Z',
+          '2026-07-08T11:58:00.000Z', '2026-07-08T12:00:00.000Z'
+        )
+      `,
+      args: [
+        input.jobId,
+        input.communityId,
+        JSON.stringify({ asset_id: "ast_debug_recycle" }),
+      ],
+    })
+  } finally {
+    communityClient.close()
+  }
+}
+
 afterEach(async () => {
   await cleanup?.()
   cleanup = null
@@ -244,5 +277,113 @@ describe("debug pipeline routes", () => {
         && job.error_code === "OPENROUTER_API_KEY is not configured"
         && job.attempt_count === 3
     ))).toBe(true)
+  })
+
+  test("POST /admin/debug/community-job/recycle requires admin token", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const response = await app.request(
+      "http://pirate.test/admin/debug/community-job/recycle",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ community_id: "com_cmt_test", job_id: "job_cjb_test" }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(401)
+  })
+
+  test("POST /admin/debug/community-job/recycle queues a running community job", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "debug-recycle-author")
+    const community = await createCommunity(ctx.env, session.accessToken)
+    await seedRunningCommunityJob({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      jobId: "cjb_debug_recycle",
+    })
+
+    const response = await app.request(
+      "http://pirate.test/admin/debug/community-job/recycle",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": ADMIN_TOKEN,
+        },
+        body: JSON.stringify({
+          community_id: `com_${community.communityId}`,
+          job_id: "job_cjb_debug_recycle",
+          reason: "operator smoke retry",
+        }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      ok: boolean
+      recycled: boolean
+      community_id: string
+      job_id: string
+      before: {
+        status: string
+        attempt_count: number
+        last_checkpoint: string | null
+        attempt_deadline_at: string | null
+      }
+      after: {
+        status: string
+        error_code: string | null
+        attempt_count: number
+        last_checkpoint: string | null
+        last_checkpoint_at: string | null
+        attempt_started_at: string | null
+        attempt_deadline_at: string | null
+      }
+    }
+
+    expect(body.ok).toBe(true)
+    expect(body.recycled).toBe(true)
+    expect(body.community_id).toBe(community.communityId)
+    expect(body.job_id).toBe("cjb_debug_recycle")
+    expect(body.before).toMatchObject({
+      status: "running",
+      attempt_count: 2,
+      last_checkpoint: "story_publish_waiting",
+      attempt_deadline_at: "2026-07-08T12:30:00.000Z",
+    })
+    expect(body.after.status).toBe("queued")
+    expect(body.after.error_code).toBe("operator_recycled:operator smoke retry")
+    expect(body.after.attempt_count).toBe(2)
+    expect(body.after.last_checkpoint).toBeNull()
+    expect(body.after.last_checkpoint_at).toBeNull()
+    expect(body.after.attempt_started_at).toBeNull()
+    expect(body.after.attempt_deadline_at).toBeNull()
+
+    const communityClient = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, community.communityId),
+    })
+    try {
+      const stored = await communityClient.execute({
+        sql: `
+          SELECT status, error_code, attempt_count, last_checkpoint, attempt_deadline_at
+          FROM community_jobs
+          WHERE job_id = 'cjb_debug_recycle'
+        `,
+      })
+      expect(stored.rows[0]).toMatchObject({
+        status: "queued",
+        error_code: "operator_recycled:operator smoke retry",
+        attempt_count: 2,
+        last_checkpoint: null,
+        attempt_deadline_at: null,
+      })
+    } finally {
+      communityClient.close()
+    }
   })
 })

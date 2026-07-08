@@ -1,21 +1,29 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
-import { openCommunityReadClient } from "../lib/communities/community-read-access"
+import { openCommunityReadClient, openCommunityWriteClient } from "../lib/communities/community-read-access"
+import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
-import { decodePublicPostId } from "../lib/public-ids"
+import { decodePublicCommunityId, decodePublicJobId, decodePublicPostId } from "../lib/public-ids"
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
 
-debugPipeline.get("/post-pipeline", async (c) => {
+function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
   const admin = authenticateAdminTokenOnly({
     env: c.env,
     token: c.req.header("x-admin-token"),
   })
   if (!admin) {
+    return null
+  }
+  return admin
+}
+
+debugPipeline.get("/post-pipeline", async (c) => {
+  if (!requireDebugAdmin(c)) {
     return c.json({ error: "unauthorized" }, 401)
   }
 
@@ -140,6 +148,78 @@ debugPipeline.get("/post-pipeline", async (c) => {
         updated_at: row.updated_at,
       })),
     })
+  } finally {
+    db.close()
+  }
+})
+
+debugPipeline.post("/community-job/recycle", async (c) => {
+  if (!requireDebugAdmin(c)) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+
+  let body: {
+    community_id?: unknown
+    job_id?: unknown
+    reason?: unknown
+  }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: "invalid_json" }, 400)
+  }
+
+  const rawCommunityId = typeof body.community_id === "string" ? body.community_id.trim() : ""
+  const rawJobId = typeof body.job_id === "string" ? body.job_id.trim() : ""
+  if (!rawCommunityId || !rawJobId) {
+    return c.json({ error: "community_id and job_id are required" }, 400)
+  }
+
+  const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 120) : null
+  const communityId = decodePublicCommunityId(rawCommunityId)
+  const jobId = decodePublicJobId(rawJobId)
+  const communityRepository = getCommunityRepository(c.env)
+  const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
+  try {
+    const result = await recycleCommunityJobForRetry({
+      client: db.client,
+      communityId,
+      jobId,
+      now: new Date().toISOString(),
+      reason,
+    })
+    if (!result) {
+      return c.json({ error: "job_not_found", community_id: communityId, job_id: jobId }, 404)
+    }
+
+    return c.json({
+      ok: true,
+      recycled: result.before.status !== result.after.status && result.after.status === "queued",
+      community_id: communityId,
+      job_id: jobId,
+      before: {
+        status: result.before.status,
+        error_code: result.before.error_code,
+        attempt_count: result.before.attempt_count,
+        last_checkpoint: result.before.last_checkpoint,
+        last_checkpoint_at: result.before.last_checkpoint_at,
+        attempt_started_at: result.before.attempt_started_at,
+        attempt_deadline_at: result.before.attempt_deadline_at,
+        available_at: result.before.available_at,
+        updated_at: result.before.updated_at,
+      },
+      after: {
+        status: result.after.status,
+        error_code: result.after.error_code,
+        attempt_count: result.after.attempt_count,
+        last_checkpoint: result.after.last_checkpoint,
+        last_checkpoint_at: result.after.last_checkpoint_at,
+        attempt_started_at: result.after.attempt_started_at,
+        attempt_deadline_at: result.after.attempt_deadline_at,
+        available_at: result.after.available_at,
+        updated_at: result.after.updated_at,
+      },
+    }, 200)
   } finally {
     db.close()
   }
