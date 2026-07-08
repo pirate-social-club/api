@@ -3,10 +3,37 @@ export type PublishFailureCount = {
   count: number
 }
 
+export type StuckRoyaltyProjectionSample = {
+  asset_id: string
+  royalty_allocation_status: string
+  updated_at: string | null
+}
+
+export type StaleLockedDeliveryAssetSample = {
+  asset_id: string
+  locked_delivery_status: string
+  updated_at: string | null
+}
+
+export type RetriedLockedDeliveryJobSample = {
+  job_id: string
+  asset_id: string
+  status: string
+  attempt_count: number
+  last_checkpoint: string | null
+  updated_at: string | null
+}
+
 export type CommunityPublishAlertSignals = {
   community_id: string
   failure_codes: PublishFailureCount[]
   terminal_failed_finalize_jobs: number
+  stuck_royalty_allocation_projections: number
+  stuck_royalty_allocation_projection_samples: StuckRoyaltyProjectionSample[]
+  stale_locked_delivery_assets: number
+  stale_locked_delivery_asset_samples: StaleLockedDeliveryAssetSample[]
+  retried_locked_delivery_jobs: number
+  retried_locked_delivery_job_samples: RetriedLockedDeliveryJobSample[]
 }
 
 export type OpsAlertSeverity = "high" | "medium" | "low"

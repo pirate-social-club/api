@@ -14,6 +14,15 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
   const byCode = new Map<string, { count: number; communities: Set<string> }>()
   let deadJobs = 0
   const deadJobCommunities = new Set<string>()
+  let stuckRoyaltyProjections = 0
+  const stuckRoyaltyProjectionCommunities = new Set<string>()
+  const stuckRoyaltyProjectionSamples: Array<Record<string, unknown>> = []
+  let staleLockedDeliveryAssets = 0
+  const staleLockedDeliveryCommunities = new Set<string>()
+  const staleLockedDeliverySamples: Array<Record<string, unknown>> = []
+  let retriedLockedDeliveryJobs = 0
+  const retriedLockedDeliveryCommunities = new Set<string>()
+  const retriedLockedDeliverySamples: Array<Record<string, unknown>> = []
 
   for (const signal of signals) {
     for (const { code, count } of signal.failure_codes) {
@@ -26,6 +35,30 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
     if (signal.terminal_failed_finalize_jobs > 0) {
       deadJobs += signal.terminal_failed_finalize_jobs
       deadJobCommunities.add(signal.community_id)
+    }
+    if (signal.stuck_royalty_allocation_projections > 0) {
+      stuckRoyaltyProjections += signal.stuck_royalty_allocation_projections
+      stuckRoyaltyProjectionCommunities.add(signal.community_id)
+      for (const sample of signal.stuck_royalty_allocation_projection_samples) {
+        if (stuckRoyaltyProjectionSamples.length >= 10) break
+        stuckRoyaltyProjectionSamples.push({ community_id: signal.community_id, ...sample })
+      }
+    }
+    if (signal.stale_locked_delivery_assets > 0) {
+      staleLockedDeliveryAssets += signal.stale_locked_delivery_assets
+      staleLockedDeliveryCommunities.add(signal.community_id)
+      for (const sample of signal.stale_locked_delivery_asset_samples) {
+        if (staleLockedDeliverySamples.length >= 10) break
+        staleLockedDeliverySamples.push({ community_id: signal.community_id, ...sample })
+      }
+    }
+    if (signal.retried_locked_delivery_jobs > 0) {
+      retriedLockedDeliveryJobs += signal.retried_locked_delivery_jobs
+      retriedLockedDeliveryCommunities.add(signal.community_id)
+      for (const sample of signal.retried_locked_delivery_job_samples) {
+        if (retriedLockedDeliverySamples.length >= 10) break
+        retriedLockedDeliverySamples.push({ community_id: signal.community_id, ...sample })
+      }
     }
   }
 
@@ -47,6 +80,36 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       title: "post_publish_finalize jobs exhausted retries",
       count: deadJobs,
       community_ids: [...deadJobCommunities].sort(),
+    })
+  }
+  if (stuckRoyaltyProjections > 0) {
+    alerts.push({
+      key: "stuck_royalty_allocation_projection_sync",
+      severity: "high",
+      title: "Verified royalty allocations waiting on projection sync",
+      count: stuckRoyaltyProjections,
+      community_ids: [...stuckRoyaltyProjectionCommunities].sort(),
+      details: { samples: stuckRoyaltyProjectionSamples },
+    })
+  }
+  if (staleLockedDeliveryAssets > 0) {
+    alerts.push({
+      key: "stale_locked_delivery_requested_assets",
+      severity: "high",
+      title: "Locked delivery assets stuck in requested state",
+      count: staleLockedDeliveryAssets,
+      community_ids: [...staleLockedDeliveryCommunities].sort(),
+      details: { samples: staleLockedDeliverySamples },
+    })
+  }
+  if (retriedLockedDeliveryJobs > 0) {
+    alerts.push({
+      key: "retried_locked_asset_delivery_jobs",
+      severity: "medium",
+      title: "Locked delivery jobs retried",
+      count: retriedLockedDeliveryJobs,
+      community_ids: [...retriedLockedDeliveryCommunities].sort(),
+      details: { samples: retriedLockedDeliverySamples },
     })
   }
   return alerts
