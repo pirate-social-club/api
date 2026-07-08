@@ -184,6 +184,9 @@ export async function runStoryRuntimeFundingWatchdog(
     }
     alerts.push(report)
 
+    const topUpToWarnThresholdWei = warnThresholdWei > balance.balanceWei
+      ? warnThresholdWei - balance.balanceWei
+      : 0n
     const structured = {
       signer: balance.name,
       address: balance.address,
@@ -194,6 +197,7 @@ export async function runStoryRuntimeFundingWatchdog(
       warn_threshold_ip: formatEther(warnThresholdWei),
       worst_case_tx_ip: formatEther(worstCaseTxWei),
       balance_minus_floor_ip: formatEther(balanceMinusFloorWei),
+      top_up_to_warn_threshold_ip: formatEther(topUpToWarnThresholdWei),
       tx_headroom: txHeadroom,
     }
     // Distinct greppable prefix so it doesn't drown in the general cron noise.
@@ -204,8 +208,8 @@ export async function runStoryRuntimeFundingWatchdog(
     await captureScheduledWarning(
       env,
       severity === "critical"
-        ? `Story signer ${balance.name} is BELOW its funding floor — registrations are failing`
-        : `Story signer ${balance.name} funding runway is low`,
+        ? `Story signer ${balance.name} ${balance.address} is BELOW floor: ${formatEther(balance.balanceWei)} IP < ${formatEther(enforcedFloorWei)} IP; top up at least ${formatEther(topUpToWarnThresholdWei)} IP`
+        : `Story signer ${balance.name} ${balance.address} runway low: ${formatEther(balance.balanceWei)} IP < ${formatEther(warnThresholdWei)} IP; top up at least ${formatEther(topUpToWarnThresholdWei)} IP`,
       STORY_RUNTIME_FUNDING_WATCHDOG_TASK,
       structured,
       { signer: balance.name, urgency: severity === "critical" ? "high" : "low" },
