@@ -183,11 +183,12 @@ function assertListingDonationsSupportedForTarget(input: {
     return
   }
   if (input.liveRoomId?.trim()) {
-    throw badRequestError("Live-room ticket donations are not supported until charity payout routing is enabled")
+    return
   }
   if (input.replayAssetId?.trim()) {
-    throw badRequestError("Replay donations are not supported until charity payout routing is enabled")
+    return
   }
+  throw badRequestError("Listing charity requires a supported listing target")
 }
 
 async function assertRegionalPricingEnabledIfRequested(input: {

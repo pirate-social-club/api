@@ -99,6 +99,7 @@ describe("community-settings write-tx seams (D1 buffer-safe)", () => {
           display_name: "Ocean Cleanup",
           provider: "endaoment",
           provider_partner_ref: "end_123",
+          payout_destination_ref: "0x00000000000000000000000000000000000000aa",
           image_url: "https://example.com/logo.png",
         } as never,
         nextSettings: {},
@@ -107,7 +108,10 @@ describe("community-settings write-tx seams (D1 buffer-safe)", () => {
     ).resolves.toBeUndefined()
 
     expect(allWrites(seen)).toBe(true)
-    expect(seen.some((s) => /insert\s+into\s+donation_partners/i.test(s.sql))).toBe(true)
+    const partnerInsert = seen.find((s) => /insert\s+into\s+donation_partners/i.test(s.sql))
+    expect(partnerInsert).toBeTruthy()
+    expect(partnerInsert?.args?.[3]).toBe("end_123")
+    expect(partnerInsert?.args?.[4]).toBe("0x00000000000000000000000000000000000000aa")
     expect(seen.some((s) => /update\s+communities/i.test(s.sql))).toBe(true)
   })
 

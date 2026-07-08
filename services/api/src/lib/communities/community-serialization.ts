@@ -343,6 +343,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
         display_name: local.donation_partner.display_name,
         provider: local.donation_partner.provider,
         provider_partner_ref: local.donation_partner.provider_partner_ref,
+        payout_destination_ref: local.donation_partner.payout_destination_ref,
         image_url: local.donation_partner.image_url,
         review_status: local.donation_partner.review_status,
         status: local.donation_partner.status,

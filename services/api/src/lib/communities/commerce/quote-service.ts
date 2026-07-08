@@ -143,11 +143,12 @@ function assertDonationsSupportedForListingTarget(input: {
     return
   }
   if (input.liveRoomId?.trim()) {
-    throw eligibilityFailed("Live-room ticket donations are not supported until charity payout routing is enabled")
+    return
   }
   if (input.replayAssetId?.trim()) {
-    throw eligibilityFailed("Replay donations are not supported until charity payout routing is enabled")
+    return
   }
+  throw eligibilityFailed("Listing charity requires a supported listing target")
 }
 
 export async function preflightCommunityPurchaseQuote(input: {

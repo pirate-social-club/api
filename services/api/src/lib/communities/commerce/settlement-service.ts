@@ -1,4 +1,4 @@
-import { badRequestError, conflictError, notFoundError } from "../../errors"
+import { badRequestError, conflictError, HttpError, notFoundError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { withTransaction } from "../../transactions"
 import { decodePublicId } from "../../public-ids"
@@ -55,6 +55,7 @@ import {
 import {
   executeCharityPayoutsForSettlement,
   getAllocationExecutionKey,
+  reconcileSubmittedCharityPayoutEffect,
   type ResolvedCharityPayout,
 } from "./charity-payout-service"
 import { confirmBuyerFundingForSettlement } from "./funding-proof-service"
@@ -70,6 +71,7 @@ import {
   beginPurchaseSettlementEffectAttempt,
   confirmPurchaseSettlementEffect,
   failPurchaseSettlementEffect,
+  listPurchaseSettlementEffectsByQuoteAnyPurchase,
   listPurchaseSettlementEffectsByPurchase,
   listPurchaseSettlementEffectsByQuote,
   type PurchaseSettlementEffectRow,
@@ -105,6 +107,11 @@ import type {
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
 type CommunitySettlementRepository = CommunityDatabaseBindingRepository & Pick<CommunityReadRepository, "listActiveCommunities">
+
+type ExistingPurchaseSettlementLookup = {
+  settlement: CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement | null
+  missingConfirmedCharityPayouts: string[]
+}
 
 export type RoyaltyEarningEventForNotification = {
   recipientUserId: string
@@ -436,6 +443,27 @@ function buildConfirmedCharityPayoutsFromEffects(
   return payouts
 }
 
+function missingConfirmedCharityPayoutKeys(input: {
+  allocationSnapshot: QuoteAllocationSnapshot[]
+  charityPayouts: Map<string, ResolvedCharityPayout>
+}): string[] {
+  const missing: string[] = []
+  for (const allocation of input.allocationSnapshot) {
+    if (
+      allocation.recipient_type === "charity"
+      && allocation.settlement_strategy === "provider_payout"
+      && allocation.amount_usd > 0
+      && allocation.recipient_ref?.trim()
+    ) {
+      const allocationKey = getAllocationExecutionKey(allocation)
+      if (!input.charityPayouts.has(allocationKey)) {
+        missing.push(allocationKey)
+      }
+    }
+  }
+  return missing
+}
+
 function getConfirmedEffect(
   effects: PurchaseSettlementEffectRow[],
   kind: PurchaseSettlementEffectRow["effect_kind"],
@@ -468,19 +496,52 @@ async function getExistingPurchaseSettlement(input: {
   communityId: string
   purchaseId: string
   quote: PurchaseQuoteRow
-}): Promise<CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement | null> {
+}): Promise<ExistingPurchaseSettlementLookup> {
   const purchase = await getPurchaseRow(input.client, input.communityId, input.purchaseId)
   const entitlement = purchase
     ? await getEntitlementRowByPurchase(input.client, purchase.purchase_id)
     : null
   if (!purchase || !entitlement) {
-    return null
+    return {
+      settlement: null,
+      missingConfirmedCharityPayouts: [],
+    }
+  }
+  const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
+    parseQuoteAllocationSnapshot(input.quote.allocation_snapshot_json),
+  )
+  const effects = await listPurchaseSettlementEffectsByQuote({
+    client: input.client,
+    communityId: input.communityId,
+    quoteId: input.quote.quote_id,
+    purchaseId: input.purchaseId,
+  })
+  const missingCharityPayouts = missingConfirmedCharityPayoutKeys({
+    allocationSnapshot,
+    charityPayouts: buildConfirmedCharityPayoutsFromEffects(effects),
+  })
+  if (missingCharityPayouts.length > 0) {
+    console.warn(JSON.stringify({
+      metric: "charity_payout_missing_for_existing_settlement",
+      community_id: input.communityId,
+      quote_id: input.quote.quote_id,
+      purchase_id: input.purchaseId,
+      missing_allocation_keys: missingCharityPayouts,
+    }))
+    return {
+      settlement: null,
+      missingConfirmedCharityPayouts: missingCharityPayouts,
+    }
   }
   const allocations = await listPurchaseAllocationLegRows(input.client, purchase.purchase_id)
-  return serializeSettlementForBuyer(purchase, entitlement, input.quote, allocations)
+  return {
+    settlement: serializeSettlementForBuyer(purchase, entitlement, input.quote, allocations),
+    missingConfirmedCharityPayouts: [],
+  }
 }
 
 async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
+  env: Env
   client: Client
   communityId: string
   attempt: PurchaseSettlementAttemptRow
@@ -497,12 +558,31 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
     return "failed"
   }
 
-  const effects = await listPurchaseSettlementEffectsByQuote({
+  let effects = await listPurchaseSettlementEffectsByQuote({
     client: input.client,
     communityId: input.communityId,
     quoteId: input.attempt.quote_id,
     purchaseId: input.attempt.purchase_id,
   })
+  if (effects.some((effect) => effect.effect_kind === "charity_payout" && effect.status === "submitted")) {
+    for (const effect of effects) {
+      if (effect.effect_kind !== "charity_payout" || effect.status !== "submitted") {
+        continue
+      }
+      await reconcileSubmittedCharityPayoutEffect({
+        env: input.env,
+        client: input.client,
+        effect,
+        now: input.now,
+      })
+    }
+    effects = await listPurchaseSettlementEffectsByQuote({
+      client: input.client,
+      communityId: input.communityId,
+      quoteId: input.attempt.quote_id,
+      purchaseId: input.attempt.purchase_id,
+    })
+  }
   if (effects.some((effect) => effect.status === "failed")) {
     await markPurchaseSettlementAttemptFailed({
       client: input.client,
@@ -513,6 +593,27 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
     return "failed"
   }
   if (effects.some((effect) => effect.status === "submitted")) {
+    return "pending"
+  }
+
+  const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
+    parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
+  )
+  const charityPayouts = buildConfirmedCharityPayoutsFromEffects(effects)
+  const missingCharityPayouts = missingConfirmedCharityPayoutKeys({
+    allocationSnapshot,
+    charityPayouts,
+  })
+  if (missingCharityPayouts.length > 0) {
+    if (quote.status === "consumed") {
+      await markPurchaseSettlementAttemptFailed({
+        client: input.client,
+        quoteId: input.attempt.quote_id,
+        failureReason: "Consumed purchase is missing confirmed charity payout",
+        now: input.now,
+      })
+      return "failed"
+    }
     return "pending"
   }
 
@@ -539,22 +640,6 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       now: input.now,
     })
     return "failed"
-  }
-
-  const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
-    parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
-  )
-  const charityPayouts = buildConfirmedCharityPayoutsFromEffects(effects)
-  for (const allocation of allocationSnapshot) {
-    if (
-      allocation.recipient_type === "charity"
-      && allocation.settlement_strategy === "provider_payout"
-      && allocation.amount_usd > 0
-      && allocation.recipient_ref?.trim()
-      && !charityPayouts.has(getAllocationExecutionKey(allocation))
-    ) {
-      return "pending"
-    }
   }
 
   let settlementTxRef = input.attempt.settlement_tx_ref?.trim() ?? ""
@@ -664,6 +749,7 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
         try {
           const outcome = await reconcileStaleCommunityPurchaseSettlementAttempt({
             client: db.client,
+            env: input.env,
             communityId: community.community_id,
             attempt,
             now: new Date().toISOString(),
@@ -691,6 +777,25 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
   return summary
 }
 
+export async function reconcileStaleCommunityPurchaseSettlementsForCommunity(input: {
+  env: Env
+  communityRepository: CommunityDatabaseBindingRepository
+  communityId: string
+  staleMs?: number
+  maxAttemptsPerCommunity?: number
+}): Promise<PurchaseSettlementReconciliationSummary> {
+  return await reconcileStaleCommunityPurchaseSettlements({
+    env: input.env,
+    communityRepository: {
+      ...input.communityRepository,
+      listActiveCommunities: async () => [{ community_id: input.communityId }] as Awaited<ReturnType<CommunitySettlementRepository["listActiveCommunities"]>>,
+    } as CommunitySettlementRepository,
+    staleMs: input.staleMs,
+    maxCommunities: 1,
+    maxAttemptsPerCommunity: input.maxAttemptsPerCommunity,
+  })
+}
+
 async function settleCommunityPurchaseForBuyer(input: {
   env: Env
   communityId: string
@@ -711,17 +816,20 @@ async function settleCommunityPurchaseForBuyer(input: {
     const purchaseId = derivePurchaseIdForQuote(quote.quote_id)
     if (quote.status !== "active") {
       if (quote.status === "consumed") {
-        const settlement = await getExistingPurchaseSettlement({
+        const existingSettlement = await getExistingPurchaseSettlement({
           client: db.client,
           communityId: input.communityId,
           purchaseId,
           quote,
         })
-        if (settlement) {
+        if (existingSettlement.settlement) {
           return {
-            settlement,
+            settlement: existingSettlement.settlement,
             royaltyEarningEvents: [],
           }
+        }
+        if (existingSettlement.missingConfirmedCharityPayouts.length > 0) {
+          throw badRequestError("Purchase settlement is missing confirmed charity payout")
         }
       }
       throw badRequestError("Purchase quote is not active")
@@ -743,9 +851,6 @@ async function settleCommunityPurchaseForBuyer(input: {
     const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
       parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
     )
-    if (!quote.asset_id && allocationSnapshot.some((allocation) => allocation.recipient_type === "charity")) {
-      throw badRequestError("Non-asset purchase donations are not supported until charity payout routing is enabled")
-    }
     const {
       donationAmountUsd,
       donationPartnerId,
@@ -763,17 +868,20 @@ async function settleCommunityPurchaseForBuyer(input: {
       now: createdAt,
     })
     if (reservation === "finalized") {
-      const settlement = await getExistingPurchaseSettlement({
+      const existingSettlement = await getExistingPurchaseSettlement({
         client: db.client,
         communityId: input.communityId,
         purchaseId,
         quote,
       })
-      if (settlement) {
+      if (existingSettlement.settlement) {
         return {
-          settlement,
+          settlement: existingSettlement.settlement,
           royaltyEarningEvents: [],
         }
+      }
+      if (existingSettlement.missingConfirmedCharityPayouts.length > 0) {
+        throw conflictError("Purchase settlement is missing confirmed charity payout")
       }
       throw conflictError("Purchase settlement was finalized but local purchase rows are missing")
     }
@@ -783,6 +891,30 @@ async function settleCommunityPurchaseForBuyer(input: {
     )
     let canonicalSettlementTxRef = input.body.settlement_tx_ref
     let charityPayouts = new Map<string, ResolvedCharityPayout>()
+    const executeResolvedCharityPayouts = async () => {
+      try {
+        return await executeCharityPayoutsForSettlement({
+          env: input.env,
+          client: db.client,
+          communityId: input.communityId,
+          quoteId: quote.quote_id,
+          purchaseId,
+          settlementToken: quote.destination_settlement_token,
+          allocations: allocationSnapshot,
+          now: createdAt,
+        })
+      } catch (error) {
+        if (!(error instanceof HttpError && error.status === 409)) {
+          await markPurchaseSettlementAttemptFailed({
+            client: db.client,
+            quoteId: quote.quote_id,
+            failureReason: error instanceof Error ? error.message : String(error),
+            now: nowIso(),
+          })
+        }
+        throw error
+      }
+    }
     const royaltyEarningEvents: RoyaltyEarningEventForNotification[] = []
     // Funding-proof verification runs for ALL paid quotes, not just asset purchases.
     // Previously this was gated behind `if (quote.asset_id)`, which let non-asset purchases
@@ -842,16 +974,7 @@ async function settleCommunityPurchaseForBuyer(input: {
       if (asset.story_royalty_registration_status !== "registered" || !asset.story_ip_id?.trim()) {
         throw badRequestError("Story royalty-native asset registration is not configured")
       }
-      charityPayouts = await executeCharityPayoutsForSettlement({
-        env: input.env,
-        client: db.client,
-        communityId: input.communityId,
-        quoteId: quote.quote_id,
-        purchaseId,
-        settlementToken: quote.destination_settlement_token,
-        allocations: allocationSnapshot,
-        now: createdAt,
-      })
+      charityPayouts = await executeResolvedCharityPayouts()
       const storyPaymentIdempotencyKey = `${quote.quote_id}:story_royalty:${asset.story_ip_id}:${storyPayoutAmount.toString()}`
       const storyPaymentMetadata = JSON.stringify({
         amount_wip_wei: storyPayoutAmount.toString(),
@@ -1024,6 +1147,8 @@ async function settleCommunityPurchaseForBuyer(input: {
           }
         }
       }
+    } else {
+      charityPayouts = await executeResolvedCharityPayouts()
     }
     try {
       const settlement = await finalizeLocalPurchaseSettlement({
@@ -1205,6 +1330,28 @@ export async function listCommunityPurchaseSettlementEffects(input: {
       client: db.client,
       communityId: input.communityId,
       purchaseId: purchase.purchase_id,
+    })
+    return {
+      items: effects.map((effect) => serializePurchaseSettlementEffect(effect)),
+      next_cursor: null,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+export async function listCommunityPurchaseSettlementEffectsForQuoteAdmin(input: {
+  env: Env
+  communityId: string
+  quoteId: string
+  communityRepository: CommunityDatabaseBindingRepository
+}): Promise<CommunityPurchaseSettlementEffectListResponse> {
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const effects = await listPurchaseSettlementEffectsByQuoteAnyPurchase({
+      client: db.client,
+      communityId: input.communityId,
+      quoteId: input.quoteId,
     })
     return {
       items: effects.map((effect) => serializePurchaseSettlementEffect(effect)),

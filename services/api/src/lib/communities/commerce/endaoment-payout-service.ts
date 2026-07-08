@@ -1,6 +1,6 @@
 import { Contract, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import type { Env } from "../../../env"
-import { badRequestError } from "../../errors"
+import { badRequestError, conflictError } from "../../errors"
 import { parseExpectedEvmAddress } from "../../evm-signer"
 import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
 import type { CharityPayoutExecutionInput, CharityPayoutExecutionResult } from "./charity-payout-service"
@@ -25,20 +25,12 @@ const ENDAOMENT_REGISTRY_ABI = [
   "function isActiveEntity(address entity) view returns (bool)",
 ] as const
 
-function requireEnvValue(env: Env, key: keyof Env): string {
-  const value = String(env[key] || "").trim()
-  if (!value) {
-    throw badRequestError(`${String(key)} is not configured`)
-  }
-  return value
-}
-
 function resolveEndaomentPayoutConfig(env: Env): {
   privateKey: string
   rpcUrl: string
   chainId: number
   usdcTokenAddress: string
-  registryAddress: string
+  registryAddress: string | null
   txWaitTimeoutMs: number
 } {
   const privateKey = normalizeDirectSignerPrivateKey(
@@ -61,8 +53,9 @@ function resolveEndaomentPayoutConfig(env: Env): {
   if (!usdcTokenAddress) {
     throw badRequestError("ENDAOMENT_USDC_TOKEN_ADDRESS is invalid")
   }
-  const registryAddress = parseExpectedEvmAddress(requireEnvValue(env, "ENDAOMENT_REGISTRY_ADDRESS"))
-  if (!registryAddress) {
+  const rawRegistryAddress = String(env.ENDAOMENT_REGISTRY_ADDRESS || "").trim()
+  const registryAddress = rawRegistryAddress ? parseExpectedEvmAddress(rawRegistryAddress) : null
+  if (rawRegistryAddress && !registryAddress) {
     throw badRequestError("ENDAOMENT_REGISTRY_ADDRESS is invalid")
   }
   const txWaitTimeoutMs = Number(String(env.ENDAOMENT_TX_WAIT_TIMEOUT_MS || "120000").trim())
@@ -83,6 +76,34 @@ export function assertEndaomentPayoutConfigured(env: Env): void {
   resolveEndaomentPayoutConfig(env)
 }
 
+export type EndaomentSubmittedDonationReconciliationResult =
+  | {
+    status: "pending"
+  }
+  | {
+    status: "confirmed"
+    settlementRef: string
+    providerReceiptRef: string
+  }
+  | {
+    status: "failed"
+    reason: string
+  }
+
+let testEndaomentSubmittedDonationReconciler:
+  | ((input: {
+    env: Env
+    txHash: string
+    metadata: Record<string, unknown>
+  }) => Promise<EndaomentSubmittedDonationReconciliationResult>)
+  | null = null
+
+export function setEndaomentSubmittedDonationReconcilerForTests(
+  reconciler: typeof testEndaomentSubmittedDonationReconciler,
+): void {
+  testEndaomentSubmittedDonationReconciler = reconciler
+}
+
 function resolveUsdcAmountAtomic(amountUsd: number): bigint {
   if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
     throw badRequestError("Donation amount must be positive")
@@ -94,16 +115,35 @@ function resolveUsdcAmountAtomic(amountUsd: number): bigint {
   return amountAtomic
 }
 
+function isTransactionWaitTimeout(error: unknown): boolean {
+  const candidate = error as { code?: unknown; shortMessage?: unknown; message?: unknown } | null
+  const code = typeof candidate?.code === "string" ? candidate.code : ""
+  const message = [
+    typeof candidate?.shortMessage === "string" ? candidate.shortMessage : "",
+    typeof candidate?.message === "string" ? candidate.message : "",
+  ].join(" ").toLowerCase()
+  return code === "TIMEOUT" || message.includes("timeout") || message.includes("timed out")
+}
+
 async function waitForConfirmedTx(input: {
   provider: JsonRpcProvider
   txHash: string
   timeoutMs: number
   failureCode: string
-}): Promise<void> {
-  const receipt = await input.provider.waitForTransaction(input.txHash, 1, input.timeoutMs)
-  if (!receipt || receipt.status !== 1) {
+}): Promise<"confirmed" | "pending"> {
+  const receipt = await input.provider.waitForTransaction(input.txHash, 1, input.timeoutMs).catch((error: unknown) => {
+    if (isTransactionWaitTimeout(error)) {
+      return null
+    }
+    throw error
+  })
+  if (!receipt) {
+    return "pending"
+  }
+  if (receipt.status !== 1) {
     throw badRequestError(input.failureCode)
   }
+  return "confirmed"
 }
 
 export async function executeEndaomentUsdcDonation(
@@ -121,13 +161,15 @@ export async function executeEndaomentUsdcDonation(
   const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
   const signer = new Wallet(config.privateKey, provider)
   const entity = new Contract(getAddress(entityAddress), ENDAOMENT_ENTITY_ABI, signer)
-  const registry = new Contract(config.registryAddress, ENDAOMENT_REGISTRY_ABI, provider)
   const usdc = new Contract(config.usdcTokenAddress, ERC20_ABI, signer)
   const amount = resolveUsdcAmountAtomic(input.amountUsd)
 
-  const isActiveEntity = await registry.isActiveEntity(getAddress(entityAddress)) as boolean
-  if (!isActiveEntity) {
-    throw badRequestError("Endaoment entity is not active")
+  if (config.registryAddress) {
+    const registry = new Contract(config.registryAddress, ENDAOMENT_REGISTRY_ABI, provider)
+    const isActiveEntity = await registry.isActiveEntity(getAddress(entityAddress)) as boolean
+    if (!isActiveEntity) {
+      throw badRequestError("Endaoment entity is not active")
+    }
   }
   const decimals = Number(await usdc.decimals())
   if (decimals !== 6) {
@@ -140,12 +182,15 @@ export async function executeEndaomentUsdcDonation(
   const allowance = await usdc.allowance(signer.address, getAddress(entityAddress)) as bigint
   if (allowance < amount) {
     const approveTx = await usdc.approve(getAddress(entityAddress), amount)
-    await waitForConfirmedTx({
+    const approvalStatus = await waitForConfirmedTx({
       provider,
       txHash: String(approveTx.hash || ""),
       timeoutMs: config.txWaitTimeoutMs,
       failureCode: "endaoment_usdc_approval_failed",
     })
+    if (approvalStatus === "pending") {
+      throw badRequestError("endaoment_usdc_approval_pending")
+    }
   }
 
   const donationTx = await entity.donate(amount)
@@ -153,16 +198,66 @@ export async function executeEndaomentUsdcDonation(
   if (!donationTxHash) {
     throw badRequestError("endaoment_donation_missing_tx_hash")
   }
-  await waitForConfirmedTx({
+  const providerReceiptRef = `endaoment:${config.chainId}:${getAddress(entityAddress)}:${donationTxHash}`
+  await input.recordSubmittedTxHash?.({
+    txHash: donationTxHash,
+    providerReceiptRef,
+    metadata: {
+      provider: "endaoment",
+      chain_id: config.chainId,
+      entity_address: getAddress(entityAddress),
+      usdc_token_address: getAddress(config.usdcTokenAddress),
+      amount_usdc_atomic: amount.toString(),
+    },
+  })
+  const donationStatus = await waitForConfirmedTx({
     provider,
     txHash: donationTxHash,
     timeoutMs: config.txWaitTimeoutMs,
     failureCode: "endaoment_donation_failed",
   })
+  if (donationStatus === "pending") {
+    throw conflictError("Endaoment donation confirmation is pending")
+  }
 
   return {
     settlementRef: donationTxHash,
-    providerReceiptRef: `endaoment:${config.chainId}:${getAddress(entityAddress)}:${donationTxHash}`,
+    providerReceiptRef,
     taxReceiptRef: null,
+  }
+}
+
+export async function reconcileEndaomentSubmittedDonation(input: {
+  env: Env
+  txHash: string
+  metadata: Record<string, unknown>
+}): Promise<EndaomentSubmittedDonationReconciliationResult> {
+  if (testEndaomentSubmittedDonationReconciler) {
+    return await testEndaomentSubmittedDonationReconciler(input)
+  }
+  const txHash = input.txHash.trim()
+  if (!txHash) {
+    return { status: "failed", reason: "endaoment_submitted_tx_hash_missing" }
+  }
+  const config = resolveEndaomentPayoutConfig(input.env)
+  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
+  const receipt = await provider.getTransactionReceipt(txHash)
+  if (!receipt) {
+    return { status: "pending" }
+  }
+  if (receipt.status !== 1) {
+    return { status: "failed", reason: "endaoment_donation_failed" }
+  }
+
+  const expectedEntity = parseExpectedEvmAddress(String(input.metadata.entity_address ?? ""))
+  const receiptTo = parseExpectedEvmAddress(String((receipt as { to?: unknown }).to ?? ""))
+  if (expectedEntity && receiptTo && getAddress(receiptTo) !== getAddress(expectedEntity)) {
+    return { status: "failed", reason: "endaoment_donation_recipient_mismatch" }
+  }
+  const entityAddress = expectedEntity ? getAddress(expectedEntity) : "unknown"
+  return {
+    status: "confirmed",
+    settlementRef: txHash,
+    providerReceiptRef: `endaoment:${config.chainId}:${entityAddress}:${txHash}`,
   }
 }

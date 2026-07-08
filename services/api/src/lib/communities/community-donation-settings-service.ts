@@ -24,6 +24,8 @@ import type {
   Community,
   Env,
 } from "../../types"
+import { parseExpectedEvmAddress } from "../evm-signer"
+import { resolvePirateCheckoutSourceChainId } from "./commerce/checkout-config"
 
 type CommunityDonationSettingsRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
@@ -68,7 +70,9 @@ export async function updateCommunityDonationPolicyOnClient(
           input.donationPartner.display_name.trim(),
           "endaoment",
           input.donationPartner.provider_partner_ref?.trim() || null,
-          input.donationPartner.provider_partner_ref?.trim() || null,
+          input.donationPartner.payout_destination_ref?.trim()
+            || input.donationPartner.provider_partner_ref?.trim()
+            || null,
           input.donationPartner.image_url?.trim() || null,
           "approved",
           "active",
@@ -112,6 +116,7 @@ export async function resolveCommunityDonationPartner(input: {
   display_name: string
   provider: "endaoment"
   provider_partner_ref: string | null
+  payout_destination_ref: string | null
   image_url: string | null
 }> {
   await requireAdminOverrideOrOwnedCommunity({
@@ -164,6 +169,7 @@ export async function resolveCommunityDonationPartner(input: {
       isCompliant: typeof record.isCompliant === "boolean" ? record.isCompliant : undefined,
       logo: typeof record.logo === "string" ? record.logo : null,
       name: record.name,
+      deployments: Array.isArray(record.deployments) ? record.deployments : [],
     } satisfies EndaomentOrganizationSearchResult]
   })
 
@@ -174,12 +180,30 @@ export async function resolveCommunityDonationPartner(input: {
   if (organization.isCompliant === false) {
     throw badRequestError("This Endaoment organization is not available right now.")
   }
+  const checkoutChainId = resolvePirateCheckoutSourceChainId(input.env)
+  const deployment = organization.deployments?.find((candidate) => {
+    if (!candidate || typeof candidate !== "object") return false
+    const record = candidate as Record<string, unknown>
+    const chainId = Number(record.chainId)
+    return chainId === checkoutChainId
+      && record.isDeployed !== false
+      && typeof record.contractAddress === "string"
+      && Boolean(parseExpectedEvmAddress(record.contractAddress))
+  }) as Record<string, unknown> | undefined
+  if (!deployment) {
+    throw badRequestError(`This Endaoment organization is not deployed on chain ${checkoutChainId}.`)
+  }
+  const payoutDestinationRef = parseExpectedEvmAddress(String(deployment.contractAddress))
+  if (!payoutDestinationRef) {
+    throw badRequestError("This Endaoment organization does not have a valid payout destination.")
+  }
 
   return {
     donation_partner_id: `endaoment:${organization.id}`,
     display_name: organization.name,
     provider: "endaoment",
     provider_partner_ref: organization.ein ?? organization.id,
+    payout_destination_ref: payoutDestinationRef,
     image_url: organization.logo ?? null,
   }
 }
@@ -210,6 +234,16 @@ export async function updateCommunityDonationPolicy(input: {
     )
   ) {
     throw badRequestError("Resolved donation partner details are required when donations are enabled")
+  }
+  if (donation_policy_mode !== "none") {
+    const payoutDestinationRef = parseExpectedEvmAddress(
+      input.body.donation_partner?.payout_destination_ref
+        || input.body.donation_partner?.provider_partner_ref
+        || "",
+    )
+    if (!payoutDestinationRef) {
+      throw badRequestError("Resolved donation partner payout destination is required when donations are enabled")
+    }
   }
 
   await requireAdminOverrideOrOwnedCommunity({
@@ -304,6 +338,7 @@ export async function getCommunityDonationPolicy(input: {
           display_name: partner.display_name,
           provider: partner.provider,
           provider_partner_ref: partner.provider_partner_ref,
+          payout_destination_ref: partner.payout_destination_ref,
           image_url: partner.image_url,
           review_status: partner.review_status,
           status: partner.status,

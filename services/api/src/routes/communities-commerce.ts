@@ -10,10 +10,12 @@ import {
   getCommunityListing,
   getCommunityPurchase,
   listCommunityPurchaseSettlementEffects,
+  listCommunityPurchaseSettlementEffectsForQuoteAdmin,
   listDerivativeSources,
   listCommunityListings,
   listCommunityPurchases,
   preflightCommunityPurchaseQuote,
+  reconcileStaleCommunityPurchaseSettlementsForCommunity,
   resolveCommunityAssetAccess,
   settleCommunityPurchase,
   updateCommunityMoneyPolicy,
@@ -44,8 +46,10 @@ import { emitRoyaltyEarnedBatch } from "../lib/notifications/notification-emitte
 import {
   decodePublicAssetId,
   decodePublicListingId,
+  decodePublicId,
   decodePublicPurchaseId,
 } from "../lib/public-ids"
+import { authError } from "../lib/errors"
 
 const DEFAULT_COMMERCE_LIST_LIMIT = 25
 const MAX_COMMERCE_LIST_LIMIT = 100
@@ -85,6 +89,42 @@ function derivativeSourceScope(value: string | undefined): DerivativeSourceScope
 }
 
 export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.get("/:communityId/admin/purchase-quotes/:quoteId/settlement-effects", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    if (actor.authType !== "admin") {
+      throw authError("Admin authentication required")
+    }
+    const result = await listCommunityPurchaseSettlementEffectsForQuoteAdmin({
+      env: c.env,
+      communityId,
+      quoteId: decodePublicId(c.req.param("quoteId"), "pq"),
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/admin/purchase-settlements/reconcile-stale", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    if (actor.authType !== "admin") {
+      throw authError("Admin authentication required")
+    }
+    const staleMsQuery = c.req.query("stale_ms")
+    const staleMs = staleMsQuery == null || staleMsQuery.trim() === ""
+      ? undefined
+      : Number(staleMsQuery)
+    if (staleMs !== undefined && (!Number.isSafeInteger(staleMs) || staleMs < 0)) {
+      throw badRequestError("Invalid stale_ms")
+    }
+    const result = await reconcileStaleCommunityPurchaseSettlementsForCommunity({
+      env: c.env,
+      communityId,
+      communityRepository,
+      staleMs,
+      maxAttemptsPerCommunity: 10,
+    })
+    return c.json(result, 200)
+  })
+
   communities.get("/:communityId/money-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     await getCommunity({

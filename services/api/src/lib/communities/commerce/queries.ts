@@ -109,7 +109,7 @@ function toListingRow(row: unknown): ListingRow {
     replay_asset_id: stringOrNull(row, "replay_asset_id"),
     listing_mode: requiredString(row, "listing_mode") as CommunityListing["listing_mode"],
     status: requiredString(row, "status") as CommunityListing["status"],
-    price_usd: Number(numberOrNull(row, "price_usd") ?? 0),
+    price_usd: numberOrNull(row, "price_usd") ?? Number.NaN,
     regional_pricing_policy_json: stringOrNull(row, "regional_pricing_policy_json"),
     vinyl_release_provider: stringOrNull(row, "vinyl_release_provider") as ListingRow["vinyl_release_provider"] | null,
     vinyl_release_url: stringOrNull(row, "vinyl_release_url"),

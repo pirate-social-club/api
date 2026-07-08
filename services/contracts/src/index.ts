@@ -3226,6 +3226,7 @@ type DonationPartnerSummary = {
   display_name: string;
   provider: "endaoment";
   provider_partner_ref?: string | null;
+  payout_destination_ref?: string | null;
   image_url?: string | null;
   review_status: "pending" | "approved" | "rejected";
   status: "active" | "paused" | "retired";

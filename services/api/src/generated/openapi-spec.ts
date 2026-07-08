@@ -16057,6 +16057,10 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "payout_destination_ref": {
+            "type": "string",
+            "nullable": true
+          },
           "image_url": {
             "type": "string",
             "nullable": true

@@ -126,6 +126,27 @@ export async function listPurchaseSettlementEffectsByQuote(input: {
   return result.rows.map((row) => toSettlementEffectRow(row))
 }
 
+export async function listPurchaseSettlementEffectsByQuoteAnyPurchase(input: {
+  client: DbExecutor
+  communityId: string
+  quoteId: string
+}): Promise<PurchaseSettlementEffectRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
+             effect_key, idempotency_key, status, settlement_ref, provider_receipt_ref,
+             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
+             failed_at, created_at, updated_at
+      FROM purchase_settlement_effects
+      WHERE community_id = ?1
+        AND quote_id = ?2
+      ORDER BY created_at ASC
+    `,
+    args: [input.communityId, input.quoteId],
+  })
+  return result.rows.map((row) => toSettlementEffectRow(row))
+}
+
 export async function listPurchaseSettlementEffectsByPurchase(input: {
   client: DbExecutor
   communityId: string
@@ -284,6 +305,43 @@ export async function confirmPurchaseSettlementEffect(input: {
     throw new Error("purchase_settlement_effect_missing_after_confirm")
   }
   return confirmed
+}
+
+export async function recordSubmittedPurchaseSettlementEffectTx(input: {
+  client: DbExecutor
+  idempotencyKey: string
+  settlementRef: string
+  providerReceiptRef?: string | null
+  metadataJson?: string | null
+  now: string
+}): Promise<PurchaseSettlementEffectRow> {
+  await input.client.execute({
+    sql: `
+      UPDATE purchase_settlement_effects
+      SET settlement_ref = ?2,
+          provider_receipt_ref = COALESCE(?3, provider_receipt_ref),
+          metadata_json = COALESCE(?4, metadata_json),
+          updated_at = ?5
+      WHERE idempotency_key = ?1
+        AND status = 'submitted'
+        AND (settlement_ref IS NULL OR settlement_ref = ?2)
+    `,
+    args: [
+      input.idempotencyKey,
+      input.settlementRef,
+      input.providerReceiptRef ?? null,
+      input.metadataJson ?? null,
+      input.now,
+    ],
+  })
+  const submitted = await getPurchaseSettlementEffectByIdempotencyKey({
+    client: input.client,
+    idempotencyKey: input.idempotencyKey,
+  })
+  if (!submitted) {
+    throw new Error("purchase_settlement_effect_missing_after_submitted_tx")
+  }
+  return submitted
 }
 
 export async function failPurchaseSettlementEffect(input: {

@@ -140,6 +140,7 @@ export function parseStoredDonationPartnerSummary(
     display_name: partner.display_name,
     provider: "endaoment",
     provider_partner_ref: typeof partner.provider_partner_ref === "string" ? partner.provider_partner_ref : null,
+    payout_destination_ref: typeof partner.payout_destination_ref === "string" ? partner.payout_destination_ref : null,
     image_url: typeof partner.image_url === "string" ? partner.image_url : null,
     review_status: partner.review_status === "pending" || partner.review_status === "rejected"
       ? partner.review_status
@@ -184,6 +185,7 @@ export type EndaomentOrganizationSearchResult = {
   name: string
   logo?: string | null
   isCompliant?: boolean
+  deployments?: unknown[]
 }
 
 export function selectEndaomentOrganizationMatch(

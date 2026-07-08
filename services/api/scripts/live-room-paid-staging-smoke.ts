@@ -30,6 +30,13 @@ type RuntimeAgoraBlock = {
 
 type ReplayAccessMode = "free" | "included_with_ticket" | "paid"
 
+type DonationSmokeConfig = {
+  displayName: string
+  donationPartnerId: string
+  payoutDestinationRef: string
+  shareBps: number
+}
+
 const DEFAULT_STAGING_API_BASE_URL = "https://api-staging.pirate.sc"
 const ERC20_INTERFACE = new Interface([
   "function transfer(address to, uint256 amount) returns (bool)",
@@ -57,6 +64,9 @@ and creates a checkout quote without sending funds.
 
 Flags:
   --settle-purchase      Send Base Sepolia USDC, settle the quote, and verify viewer_attach.
+  --donation-sidecar     Configure a community Endaoment sidecar and assert confirmed charity payout on settlement.
+  --donation-recovery-smoke
+                         Expect donation settlement to return pending/409, then assert submitted effect and trigger reconciliation.
   --recording-enabled    Create the room with recording enabled and verify recording draft processing after host attach.
   --replay-access-mode <free|included_with_ticket|paid>
                          End the recorded room, wait for Filebase ingest, publish the replay, and verify replay access.
@@ -80,6 +90,10 @@ Flags:
                          Skip the staging Worker secret-name preflight for replay recording runs.
   --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
   --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
+  --donation-share-bps <n>
+                         Donation share for --donation-sidecar, default 1000.
+  --endaoment-payout-destination <address>
+                         Endaoment entity contract address. Can also be set with PIRATE_SMOKE_ENDAOMENT_PAYOUT_DESTINATION.
 
 Required env for staging:
   AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET
@@ -89,6 +103,14 @@ Required env for --settle-purchase:
   PIRATE_CHECKOUT_RPC_URL
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
   PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY, PIRATE_SMOKE_BUYER_PRIVATE_KEY, or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+
+Required env for --donation-sidecar --settle-purchase:
+  PIRATE_SMOKE_ENDAOMENT_PAYOUT_DESTINATION or --endaoment-payout-destination
+  Endaoment payout signer/operator wallet funded with testnet gas and USDC
+
+Required env for --donation-recovery-smoke:
+  PIRATE_ADMIN_TOKEN
+  Staging Worker deployed with a tiny ENDAOMENT_TX_WAIT_TIMEOUT_MS so donation confirmation returns pending
 
 Required staging Worker secrets for --recording-enabled --replay-access-mode:
   AGORA_CLOUD_RECORDING_CUSTOMER_ID
@@ -131,6 +153,31 @@ function readReplayAccessMode(): ReplayAccessMode | null {
     return value
   }
   throw new Error("--replay-access-mode must be free, included_with_ticket, or paid")
+}
+
+function readDonationSmokeConfig(input: {
+  env: Record<string, string | undefined>
+  runId: string
+}): DonationSmokeConfig | null {
+  if (!hasFlag("--donation-sidecar")) return null
+  const payoutDestinationRef = readArg("--endaoment-payout-destination")
+    || readEnv(input.env, "PIRATE_SMOKE_ENDAOMENT_PAYOUT_DESTINATION")
+  if (!payoutDestinationRef) {
+    throw new Error("--donation-sidecar requires --endaoment-payout-destination or PIRATE_SMOKE_ENDAOMENT_PAYOUT_DESTINATION")
+  }
+  const shareBps = readPositiveInteger(
+    readArg("--donation-share-bps") || readEnv(input.env, "PIRATE_SMOKE_DONATION_SHARE_BPS", "1000"),
+    "donation share bps",
+  )
+  if (shareBps < 1 || shareBps > 5000) {
+    throw new Error("donation share bps must be between 1 and 5000")
+  }
+  return {
+    displayName: `Pirate Smoke Charity ${input.runId}`,
+    donationPartnerId: `endaoment:smoke:${input.runId}`,
+    payoutDestinationRef,
+    shareBps,
+  }
 }
 
 function isStagingApiUrl(apiBaseUrl: string): boolean {
@@ -276,6 +323,7 @@ async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
 async function apiResult<T>(input: {
   apiBaseUrl: string
   body?: unknown
+  headers?: Record<string, string>
   method?: string
   path: string
   token?: string | null
@@ -288,6 +336,7 @@ async function apiResult<T>(input: {
     const response = await fetch(`${input.apiBaseUrl}${input.path}`, {
       body: input.body == null ? undefined : JSON.stringify(input.body),
       headers: {
+        ...(input.headers ?? {}),
         ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
         ...(input.body == null ? {} : { "content-type": "application/json" }),
       },
@@ -308,6 +357,7 @@ async function apiResult<T>(input: {
 async function api<T>(input: {
   apiBaseUrl: string
   body?: unknown
+  headers?: Record<string, string>
   method?: string
   ok?: number[]
   path: string
@@ -319,6 +369,17 @@ async function api<T>(input: {
     throw new Error(`${input.method ?? "GET"} ${input.path} failed with ${result.status}: ${JSON.stringify(result.body)}`)
   }
   return result.body
+}
+
+function adminHeaders(env: Record<string, string | undefined>, asUserId: string): Record<string, string> {
+  const adminToken = env.PIRATE_ADMIN_TOKEN?.trim()
+  if (!adminToken) {
+    throw new Error("PIRATE_ADMIN_TOKEN is required for --donation-recovery-smoke")
+  }
+  return {
+    "x-admin-as-user-id": asUserId,
+    "x-admin-token": adminToken,
+  }
 }
 
 async function mintUpstreamJwt(input: {
@@ -519,21 +580,104 @@ async function approveBuyerMembership(input: {
   })
 }
 
+async function grantSmokeHostAdminRole(input: {
+  apiBaseUrl: string
+  communityId: string
+  env: Record<string, string | undefined>
+  host: SmokeSession
+}): Promise<void> {
+  const result = await api<{ changed?: boolean | null; role?: string | null; status?: string | null }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      role: "admin",
+      user_id: internalUserId(input.host.userId),
+    },
+    headers: adminHeaders(input.env, internalUserId(input.host.userId)),
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/roles/grant`,
+  })
+  assert(result.role === "admin" || result.status === "active", `host admin role grant did not round-trip: ${JSON.stringify(result)}`)
+  console.log("[paid-live-smoke] host admin role", {
+    changed: result.changed ?? null,
+    community: input.communityId,
+    user: input.host.userId,
+  })
+}
+
+async function configureDonationSidecar(input: {
+  apiBaseUrl: string
+  communityId: string
+  config: DonationSmokeConfig
+  headers?: Record<string, string>
+  host: SmokeSession
+}): Promise<void> {
+  const policy = await api<{
+    donation_partner?: {
+      donation_partner: string
+      payout_destination_ref?: string | null
+    } | null
+    donation_partner_id?: string | null
+    donation_policy_mode: string
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      donation_partner: {
+        display_name: input.config.displayName,
+        donation_partner_id: input.config.donationPartnerId,
+        payout_destination_ref: input.config.payoutDestinationRef,
+        provider: "endaoment",
+        provider_partner_ref: `smoke:${input.config.payoutDestinationRef}`,
+      },
+      donation_partner_id: input.config.donationPartnerId,
+      donation_policy_mode: "optional_creator_sidecar",
+    },
+    headers: input.headers,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/donation-policy`,
+    token: input.host.accessToken,
+  })
+  assert(policy.donation_policy_mode === "optional_creator_sidecar", `donation policy mode mismatch: ${policy.donation_policy_mode}`)
+  assert(
+    policy.donation_partner_id === input.config.donationPartnerId
+      || policy.donation_partner?.donation_partner === input.config.donationPartnerId,
+    `donation partner mismatch: ${JSON.stringify(policy)}`,
+  )
+  assert(
+    !policy.donation_partner?.payout_destination_ref
+      || getAddress(policy.donation_partner.payout_destination_ref) === getAddress(input.config.payoutDestinationRef),
+    `donation payout destination mismatch: ${JSON.stringify(policy.donation_partner)}`,
+  )
+  console.log("[paid-live-smoke] donation sidecar", {
+    donation_partner: input.config.donationPartnerId,
+    payout_destination_ref: getAddress(input.config.payoutDestinationRef),
+    share_bps: input.config.shareBps,
+  })
+}
+
 async function publishPaidLiveRoom(input: {
   apiBaseUrl: string
   communityId: string
+  donation: DonationSmokeConfig | null
   host: SmokeSession
   priceCents: number
   recordingEnabled: boolean
   runId: string
 }): Promise<{ listingId: string; postId: string; roomId: string }> {
   const published = await api<{
-    listing: { id: string; live_room: string | null; price_cents: number }
+    listing: {
+      donation_partner?: string | null
+      donation_share_bps?: number | null
+      id: string
+      live_room: string | null
+      price_cents: number
+    }
     room: { anchor_post: string; id: string; recording_enabled?: boolean | null; replay_status?: string | null; status: string }
   }>({
     apiBaseUrl: input.apiBaseUrl,
     body: {
       listing: {
+        donation_partner: input.donation?.donationPartnerId ?? null,
+        donation_share_bps: input.donation?.shareBps ?? null,
         price_cents: input.priceCents,
         regional_pricing_enabled: false,
         status: "active",
@@ -571,6 +715,16 @@ async function publishPaidLiveRoom(input: {
 
   assert(published.listing.live_room === published.room.id, "listing is not linked to the published live room")
   assert(published.listing.price_cents === input.priceCents, "listing price did not round-trip")
+  if (input.donation) {
+    assert(
+      published.listing.donation_partner === input.donation.donationPartnerId,
+      `listing donation partner mismatch: ${published.listing.donation_partner}`,
+    )
+    assert(
+      published.listing.donation_share_bps === input.donation.shareBps,
+      `listing donation share mismatch: ${published.listing.donation_share_bps}`,
+    )
+  }
   if (input.recordingEnabled) {
     assert(published.room.recording_enabled === true, `recording_enabled did not round-trip true: ${published.room.recording_enabled}`)
     assert(published.room.replay_status === "none", `new recording-enabled room should start with replay_status none, got ${published.room.replay_status}`)
@@ -880,7 +1034,10 @@ async function settlePurchase(input: {
   fundingTxRef: string
   quoteId: string
   roomId: string
-}): Promise<string> {
+}): Promise<{
+  entitlementId: string
+  purchaseId: string
+}> {
   if (!input.buyer.walletAttachment) {
     throw new Error("buyer wallet attachment is required for purchase settlement")
   }
@@ -913,10 +1070,183 @@ async function settlePurchase(input: {
   assert(settlement.settlement_mode === "delivery_only_story_settlement", `unexpected settlement mode ${settlement.settlement_mode}`)
   console.log("[paid-live-smoke] purchase settlement", {
     entitlement: settlement.purchase_entitlement,
+    purchase: settlement.id,
     settlement: settlement.id,
     settlement_tx_ref: settlement.settlement_tx_ref,
   })
-  return settlement.purchase_entitlement
+  return {
+    entitlementId: settlement.purchase_entitlement,
+    purchaseId: settlement.id,
+  }
+}
+
+type SettlementEffectSmoke = {
+  attempt_count: number
+  effect_kind: string
+  effect_ref: string
+  provider_receipt_ref?: string | null
+  settlement_ref?: string | null
+  status: string
+}
+
+async function listQuoteSettlementEffectsAdmin(input: {
+  apiBaseUrl: string
+  communityId: string
+  env: Record<string, string | undefined>
+  quoteId: string
+  userId: string
+}): Promise<SettlementEffectSmoke[]> {
+  const result = await api<{ items: SettlementEffectSmoke[] }>({
+    apiBaseUrl: input.apiBaseUrl,
+    headers: adminHeaders(input.env, input.userId),
+    path: `/communities/${encodeURIComponent(input.communityId)}/admin/purchase-quotes/${encodeURIComponent(input.quoteId)}/settlement-effects`,
+  })
+  return result.items
+}
+
+async function reconcileCommunitySettlementsAdmin(input: {
+  apiBaseUrl: string
+  communityId: string
+  env: Record<string, string | undefined>
+  userId: string
+}): Promise<{
+  checked: number
+  finalized: number
+  failed: number
+  stillPending: number
+  errors: number
+}> {
+  return await api({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {},
+    headers: adminHeaders(input.env, input.userId),
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/admin/purchase-settlements/reconcile-stale?stale_ms=0`,
+  })
+}
+
+async function waitForTxReceipt(input: {
+  env: Record<string, string | undefined>
+  txHash: string
+}): Promise<void> {
+  const rpcUrl = input.env.ENDAOMENT_RPC_URL?.trim() || input.env.PIRATE_CHECKOUT_RPC_URL?.trim()
+  if (!rpcUrl) throw new Error("PIRATE_CHECKOUT_RPC_URL or ENDAOMENT_RPC_URL is required for recovery smoke")
+  const provider = new JsonRpcProvider(rpcUrl, resolveCheckoutSourceChainId(input.env))
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const receipt = await provider.getTransactionReceipt(input.txHash)
+    if (receipt?.status === 1) {
+      return
+    }
+    if (receipt?.status === 0) {
+      throw new Error(`submitted donation transaction reverted: ${input.txHash}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+  }
+  throw new Error(`submitted donation transaction did not confirm in time: ${input.txHash}`)
+}
+
+async function settlePurchaseRecoverySmoke(input: {
+  apiBaseUrl: string
+  buyer: SmokeSession
+  communityId: string
+  env: Record<string, string | undefined>
+  fundingTxRef: string
+  quoteId: string
+}): Promise<void> {
+  if (!input.buyer.walletAttachment) {
+    throw new Error("buyer wallet attachment is required for purchase settlement")
+  }
+  const settlementResult = await apiResult({
+    apiBaseUrl: input.apiBaseUrl,
+    body: {
+      funding_tx_ref: input.fundingTxRef,
+      quote: input.quoteId,
+      settlement_tx_ref: readArg("--settlement-tx-ref") || input.fundingTxRef,
+      settlement_wallet_attachment: input.buyer.walletAttachment,
+    },
+    method: "POST",
+    path: `/communities/${encodeURIComponent(input.communityId)}/purchase-settlements`,
+    token: input.buyer.accessToken,
+  })
+  assert(settlementResult.status === 409, `recovery settlement expected 409, got ${settlementResult.status}: ${JSON.stringify(settlementResult.body)}`)
+
+  const submittedEffects = await listQuoteSettlementEffectsAdmin({
+    apiBaseUrl: input.apiBaseUrl,
+    communityId: input.communityId,
+    env: input.env,
+    quoteId: input.quoteId,
+    userId: input.buyer.userId,
+  })
+  const submitted = submittedEffects.find((effect) => effect.effect_kind === "charity_payout")
+  assert(submitted, `submitted charity_payout effect missing: ${JSON.stringify(submittedEffects)}`)
+  assert(submitted.status === "submitted", `charity_payout should be submitted before reconciliation, got ${submitted.status}`)
+  assert(submitted.settlement_ref, "submitted charity_payout settlement_ref was missing")
+  const submittedTx = submitted.settlement_ref
+  const submittedAttemptCount = submitted.attempt_count
+  console.log("[paid-live-smoke] charity payout submitted", {
+    attempt_count: submittedAttemptCount,
+    effect: submitted.effect_ref,
+    settlement_ref: submittedTx,
+  })
+
+  await waitForTxReceipt({ env: input.env, txHash: submittedTx })
+  const summary = await reconcileCommunitySettlementsAdmin({
+    apiBaseUrl: input.apiBaseUrl,
+    communityId: input.communityId,
+    env: input.env,
+    userId: input.buyer.userId,
+  })
+  assert(summary.finalized === 1, `recovery reconciler did not finalize exactly one settlement: ${JSON.stringify(summary)}`)
+
+  const reconciledEffects = await listQuoteSettlementEffectsAdmin({
+    apiBaseUrl: input.apiBaseUrl,
+    communityId: input.communityId,
+    env: input.env,
+    quoteId: input.quoteId,
+    userId: input.buyer.userId,
+  })
+  const confirmed = reconciledEffects.find((effect) => effect.effect_kind === "charity_payout")
+  assert(confirmed, `confirmed charity_payout effect missing: ${JSON.stringify(reconciledEffects)}`)
+  assert(confirmed.status === "confirmed", `charity_payout should be confirmed after reconciliation, got ${confirmed.status}`)
+  assert(confirmed.settlement_ref === submittedTx, "charity_payout settlement_ref changed during reconciliation")
+  assert(confirmed.attempt_count === submittedAttemptCount, "charity_payout attempt_count changed during reconciliation")
+  console.log("[paid-live-smoke] charity payout recovered", {
+    attempt_count: confirmed.attempt_count,
+    effect: confirmed.effect_ref,
+    provider_receipt_ref: confirmed.provider_receipt_ref ?? null,
+    settlement_ref: confirmed.settlement_ref,
+  })
+}
+
+async function assertCharityPayoutConfirmed(input: {
+  apiBaseUrl: string
+  buyer: SmokeSession
+  communityId: string
+  purchaseId: string
+}): Promise<void> {
+  const effects = await api<{
+    items: Array<{
+      effect_kind: string
+      effect_ref: string
+      provider_receipt_ref?: string | null
+      settlement_ref?: string | null
+      status: string
+    }>
+  }>({
+    apiBaseUrl: input.apiBaseUrl,
+    path: `/communities/${encodeURIComponent(input.communityId)}/purchases/${encodeURIComponent(input.purchaseId)}/settlement-effects`,
+    token: input.buyer.accessToken,
+  })
+  const charity = effects.items.find((effect) => effect.effect_kind === "charity_payout")
+  assert(charity, `charity_payout effect missing: ${JSON.stringify(effects.items)}`)
+  assert(charity.status === "confirmed", `charity_payout status was ${charity.status}`)
+  assert(charity.settlement_ref, "charity_payout settlement_ref was missing")
+  assert(charity.provider_receipt_ref, "charity_payout provider_receipt_ref was missing")
+  console.log("[paid-live-smoke] charity payout confirmed", {
+    effect: charity.effect_ref,
+    provider_receipt_ref: charity.provider_receipt_ref,
+    settlement_ref: charity.settlement_ref,
+  })
 }
 
 async function assertAccessAllowed(input: {
@@ -1392,6 +1722,8 @@ async function main(): Promise<void> {
   const settle = hasFlag("--settle-purchase")
   const recordingEnabled = hasFlag("--recording-enabled")
   const replayAccessMode = readReplayAccessMode()
+  const donation = readDonationSmokeConfig({ env, runId })
+  const donationRecoverySmoke = hasFlag("--donation-recovery-smoke")
   const requireExistingCommunity = hasFlag("--require-existing-community")
   const replayPriceCents = readPositiveInteger(
     readArg("--replay-price-cents") || readEnv(env, "PIRATE_SMOKE_REPLAY_PRICE_CENTS", String(priceCents)),
@@ -1402,6 +1734,12 @@ async function main(): Promise<void> {
   }
   if (requireExistingCommunity && !existingCommunityId) {
     throw new Error("--require-existing-community requires --community-id or PIRATE_SMOKE_COMMUNITY_ID")
+  }
+  if (donation && !settle) {
+    throw new Error("--donation-sidecar requires --settle-purchase so the smoke can verify the charity payout")
+  }
+  if (donationRecoverySmoke && !donation) {
+    throw new Error("--donation-recovery-smoke requires --donation-sidecar")
   }
   assertStagingReplayWorkerSecretsPresent({
     apiBaseUrl,
@@ -1418,6 +1756,14 @@ async function main(): Promise<void> {
     console.log("[paid-live-smoke] start", {
       api_base_url: apiBaseUrl,
       price_cents: priceCents,
+      donation_sidecar: donation
+        ? {
+            donation_partner: donation.donationPartnerId,
+            payout_destination_ref: getAddress(donation.payoutDestinationRef),
+            share_bps: donation.shareBps,
+          }
+        : null,
+      donation_recovery_smoke: donationRecoverySmoke,
       replay_access_mode: replayAccessMode,
       replay_price_cents: replayAccessMode === "paid" ? replayPriceCents : null,
       recording_enabled: recordingEnabled,
@@ -1465,14 +1811,30 @@ async function main(): Promise<void> {
         community: communityId,
         reused: true,
       })
+      await grantSmokeHostAdminRole({
+        apiBaseUrl,
+        communityId,
+        env,
+        host,
+      })
     } else {
       communityId = await createCommunity({ apiBaseUrl, host, runId })
     }
     await approveBuyerMembership({ apiBaseUrl, buyer, communityId, host })
+    if (donation) {
+      await configureDonationSidecar({
+        apiBaseUrl,
+        communityId,
+        config: donation,
+        headers: existingCommunityId ? adminHeaders(env, internalUserId(host.userId)) : undefined,
+        host,
+      })
+    }
 
     const published = await publishPaidLiveRoom({
       apiBaseUrl,
       communityId,
+      donation,
       host,
       priceCents,
       recordingEnabled,
@@ -1529,28 +1891,61 @@ async function main(): Promise<void> {
       const fundingTxRef = readArg("--funding-tx-ref")
         || readEnv(env, "PIRATE_SMOKE_FUNDING_TX_REF")
         || await sendCheckoutFunding({ buyer, env, quote })
-      const entitlement = await settlePurchase({
-        apiBaseUrl,
-        buyer,
-        communityId,
-        fundingTxRef,
-        quoteId: quote.id,
-        roomId,
-      })
-      await assertAccessAllowed({
-        apiBaseUrl,
-        buyer,
-        communityId,
-        entitlementId: entitlement,
-        roomId,
-      })
-      await viewerAttachAndRenew({
-        apiBaseUrl,
-        buyer,
-        communityId,
-        expectedChannel: hostAgora.channel,
-        roomId,
-      })
+      if (donationRecoverySmoke) {
+        await settlePurchaseRecoverySmoke({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          env,
+          fundingTxRef,
+          quoteId: quote.id,
+        })
+        await assertAccessAllowed({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          entitlementId: `ent_${quote.id.replace(/^pq_/u, "")}`,
+          roomId,
+        })
+        await viewerAttachAndRenew({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          expectedChannel: hostAgora.channel,
+          roomId,
+        })
+      } else {
+        const settledTicket = await settlePurchase({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          fundingTxRef,
+          quoteId: quote.id,
+          roomId,
+        })
+        if (donation) {
+          await assertCharityPayoutConfirmed({
+            apiBaseUrl,
+            buyer,
+            communityId,
+            purchaseId: settledTicket.purchaseId,
+          })
+        }
+        await assertAccessAllowed({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          entitlementId: settledTicket.entitlementId,
+          roomId,
+        })
+        await viewerAttachAndRenew({
+          apiBaseUrl,
+          buyer,
+          communityId,
+          expectedChannel: hostAgora.channel,
+          roomId,
+        })
+      }
     } else {
       console.log("[paid-live-smoke] live-ticket quote-only mode", {
         quote: quote.id,
