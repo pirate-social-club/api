@@ -9,6 +9,7 @@ import { isCommunityLive } from "../lib/communities/community-status"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import { issueKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
+import { getPostKaraokeLeaderboard } from "../lib/karaoke/karaoke-attempt-service"
 import {
   claimKaraokeSessionCreation,
   failKaraokeSessionCreation,
@@ -36,6 +37,15 @@ function requireIdempotencyKey(value: string | undefined): string {
     throw badRequestError("Idempotency-Key must be a UUID")
   }
   return key
+}
+
+function parseLeaderboardLimit(value: string | undefined): number | undefined {
+  if (value == null || value.trim() === "") return undefined
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw badRequestError("limit must be an integer between 1 and 100")
+  }
+  return limit
 }
 
 function requireGatewaySigningKey(value: string | undefined): string {
@@ -221,6 +231,24 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
     }
     const postId = decodePublicPostId(c.req.param("postId"))
     return await handlePublicKaraokePayloadRequest(c, { communityId, postId })
+  })
+
+  communities.get("/:communityId/posts/:postId/karaoke/leaderboard", async (c) => {
+    const { actor, communityId, communityRepository, profileRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const url = new URL(c.req.url)
+    const payload = await getPostKaraokeLeaderboard({
+      actor,
+      communityId,
+      communityRepository,
+      env: c.env,
+      limit: parseLeaderboardLimit(url.searchParams.get("limit") ?? undefined),
+      postId,
+      profileRepository,
+      scope: url.searchParams.get("scope"),
+      userRepository,
+    })
+    return c.json(payload, 200)
   })
 
   communities.post("/:communityId/posts/:postId/karaoke/sessions", async (c) => {

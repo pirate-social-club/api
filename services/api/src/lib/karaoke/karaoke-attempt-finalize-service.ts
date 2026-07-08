@@ -61,6 +61,30 @@ function requireString(value: unknown, field: string): string {
   return value.trim()
 }
 
+function parseStoredScoringPolicy(json: string | null): { model: string; provider: string } {
+  if (!json) {
+    throw internalError("Karaoke session creation is missing scoring policy")
+  }
+  try {
+    const policy = JSON.parse(json) as Record<string, unknown>
+    if (
+      policy.kind !== "enabled"
+      || typeof policy.provider !== "string"
+      || !policy.provider.trim()
+      || typeof policy.model !== "string"
+      || !policy.model.trim()
+    ) {
+      throw new Error("invalid scoring policy")
+    }
+    return {
+      model: policy.model.trim(),
+      provider: policy.provider.trim(),
+    }
+  } catch {
+    throw internalError("Karaoke session creation has invalid scoring policy")
+  }
+}
+
 export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   activityDate: string
   attemptId: string
@@ -126,6 +150,7 @@ export async function finalizeKaraokeAttempt(input: {
     if (!bundle?.karaoke_revision_id) {
       throw internalError("Karaoke finalization bundle is missing karaoke revision")
     }
+    const scoringPolicy = parseStoredScoringPolicy(creation.scoringPolicyJson)
 
     const tx = await db.client.transaction("write")
     try {
@@ -138,6 +163,8 @@ export async function finalizeKaraokeAttempt(input: {
         completionReason: input.payload.completionReason,
         karaokeRevisionId: bundle.karaoke_revision_id,
         postId: creation.postId,
+        scoringModel: scoringPolicy.model,
+        scoringProvider: scoringPolicy.provider,
         sessionId: input.payload.sessionId,
         summary: input.payload.summary,
         userId: creation.subjectUserId,

@@ -1,11 +1,24 @@
 import {
   KARAOKE_SCORING_VERSION,
+  type KaraokeScoringPolicy,
   type KaraokeSessionSummary,
 } from "@pirate-social-club/karaoke-runtime"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
+import { openCommunityReadClient } from "../communities/community-read-access"
+import type { CommunityRepository } from "../communities/community-repository-types"
 import { executeFirst } from "../db-helpers"
+import { badRequestError, notFoundError } from "../errors"
 import { makeId } from "../helpers"
+import { getPostKaraokePayload } from "../posts/post-karaoke-service"
 import type { ReadClient } from "../sql-client"
+import { rowValue, stringOrNull } from "../sql-row"
 import { materializeStudyStreak } from "../posts/post-study-service"
+import type { ActorContext, AdminActorContext } from "../auth-middleware"
+import type { Env, Profile, SongKaraokePayload } from "../../types"
+import { decodePublicSongArtifactBundleId, publicCommunityId, publicPostId } from "../public-ids"
+import { getControlPlaneClient } from "../runtime-deps"
+import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
+import { resolveCommunityKaraokeScoringPolicy } from "../communities/community-karaoke-policy-service"
 
 export type KaraokeAttemptCompletionReason =
   | "abandoned"
@@ -21,13 +34,175 @@ export interface RecordKaraokeAttemptResult {
   streakCredited: boolean
 }
 
+type KaraokeLeaderboardIdentity = {
+  avatar_ref: string | null
+  display_name: string | null
+  handle: string | null
+  visibility: "anonymized" | "visible"
+}
+
+type KaraokeLeaderboardEntry = {
+  identity: KaraokeLeaderboardIdentity
+  is_viewer: boolean
+  rank: number
+  reached_at: string
+  score: number
+  top_percent: number
+}
+
+type KaraokeSongLeaderboard = {
+  community_id: string
+  entries: KaraokeLeaderboardEntry[]
+  karaoke_revision_id: string
+  object: "karaoke_song_leaderboard"
+  period_end: string | null
+  period_start: string | null
+  post_id: string
+  scope: "all_time"
+  scoring_model: string
+  scoring_provider: string
+  scoring_version: number
+  total_ranked: number
+  viewer_best_reached_at: string | null
+  viewer_best_score: number | null
+  viewer_eligible_attempt_count: number
+  viewer_rank: number | null
+  viewer_top_percent: number | null
+}
+
+type RankedKaraokeAttemptRow = {
+  completed_at: unknown
+  final_score: unknown
+  rank: unknown
+  total_ranked: unknown
+  user_id: unknown
+}
+
 const KARAOKE_MIN_MEASURED_LINES = 5
 const KARAOKE_MIN_COVERAGE_BPS = 8500
 const KARAOKE_STREAK_PASS_SCORE_BPS = 7000
 const KARAOKE_SCORE_SCALE = 10_000
 
-export const KARAOKE_ATTEMPT_SCORING_PROVIDER = "pirate-karaoke-runtime"
-export const KARAOKE_ATTEMPT_SCORING_MODEL = "text-timing-v1"
+const KARAOKE_LEADERBOARD_DEFAULT_LIMIT = 50
+const KARAOKE_LEADERBOARD_MAX_LIMIT = 100
+
+function clampKaraokeLeaderboardLimit(value?: number | null): number {
+  if (value == null || !Number.isFinite(value)) return KARAOKE_LEADERBOARD_DEFAULT_LIMIT
+  return Math.min(KARAOKE_LEADERBOARD_MAX_LIMIT, Math.max(1, Math.trunc(value)))
+}
+
+function topPercent(rank: number, total: number): number {
+  if (total <= 0 || rank <= 0) return 0
+  return Math.max(1, Math.min(100, Math.ceil((rank / total) * 100)))
+}
+
+function identityFromProfile(profile: Profile | null | undefined): KaraokeLeaderboardIdentity {
+  if (!profile) {
+    return {
+      avatar_ref: null,
+      display_name: null,
+      handle: null,
+      visibility: "anonymized",
+    }
+  }
+  return {
+    avatar_ref: profile.avatar_ref ?? null,
+    display_name: profile.display_name ?? null,
+    handle: profile.primary_public_handle?.label ?? profile.global_handle?.label ?? null,
+    visibility: "visible",
+  }
+}
+
+async function resolveKaraokeLeaderboardIdentities(
+  profileRepository: ProfileRepository,
+  userIds: string[],
+): Promise<Map<string, KaraokeLeaderboardIdentity>> {
+  const uniqueUserIds = Array.from(new Set(userIds.map((userId) => userId.trim()).filter(Boolean)))
+  const profiles = profileRepository.listProfilesByUserIds
+    ? await profileRepository.listProfilesByUserIds(uniqueUserIds)
+    : new Map(await Promise.all(uniqueUserIds.map(async (userId) => [userId, await profileRepository.getProfileByUserId(userId)] as const)))
+  const identities = new Map<string, KaraokeLeaderboardIdentity>()
+  for (const userId of uniqueUserIds) {
+    identities.set(userId, identityFromProfile(profiles.get(userId)))
+  }
+  return identities
+}
+
+function requireEnabledScoringPolicy(policy: KaraokeScoringPolicy): { model: string; provider: string } {
+  if (policy.kind !== "enabled") {
+    throw notFoundError("Karaoke leaderboard is not available")
+  }
+  return {
+    model: policy.model,
+    provider: policy.provider,
+  }
+}
+
+async function resolveCurrentKaraokeTuple(input: {
+  actor: ActorContext | AdminActorContext
+  communityId: string
+  communityRepository: CommunityRepository
+  env: Env
+  postId: string
+  profileRepository: ProfileRepository
+  userRepository: UserRepository
+}): Promise<{
+  karaokeRevisionId: string
+  payload: SongKaraokePayload
+  scoringModel: string
+  scoringProvider: string
+}> {
+  const [payload, scoringPolicy] = await Promise.all([
+    getPostKaraokePayload({
+      actor: input.actor,
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      env: input.env,
+      postId: input.postId,
+      profileRepository: input.profileRepository,
+      userRepository: input.userRepository,
+    }),
+    resolveCommunityKaraokeScoringPolicy({
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      env: input.env,
+    }),
+  ])
+  const scoring = requireEnabledScoringPolicy(scoringPolicy)
+  const songArtifactBundleRef = payload.song ?? payload.id
+  const bundle = await getSongArtifactBundle(
+    getControlPlaneClient(input.env),
+    input.communityId,
+    decodePublicSongArtifactBundleId(songArtifactBundleRef),
+  )
+  if (!bundle?.karaoke_revision_id) {
+    throw notFoundError("Karaoke leaderboard is not available")
+  }
+  return {
+    karaokeRevisionId: bundle.karaoke_revision_id,
+    payload,
+    scoringModel: scoring.model,
+    scoringProvider: scoring.provider,
+  }
+}
+
+function rankedEntry(input: {
+  identity: KaraokeLeaderboardIdentity
+  row: RankedKaraokeAttemptRow
+  userId: string
+  viewerUserId: string
+}): KaraokeLeaderboardEntry {
+  const rank = Number(input.row.rank ?? 0)
+  const totalRanked = Number(input.row.total_ranked ?? 0)
+  return {
+    identity: input.identity,
+    is_viewer: input.userId === input.viewerUserId,
+    rank,
+    reached_at: stringOrNull(input.row.completed_at) ?? "",
+    score: Number(input.row.final_score ?? 0),
+    top_percent: topPercent(rank, totalRanked),
+  }
+}
 
 function scoreBps(value: number | null): number | null {
   if (value === null || !Number.isFinite(value)) return null
@@ -78,6 +253,8 @@ export async function recordKaraokeAttempt(input: {
   completionReason: KaraokeAttemptCompletionReason
   karaokeRevisionId: string
   postId: string
+  scoringModel: string
+  scoringProvider: string
   sessionId: string
   attemptId: string
   summary: KaraokeSessionSummary
@@ -119,8 +296,8 @@ export async function recordKaraokeAttempt(input: {
       input.communityId,
       input.karaokeRevisionId,
       KARAOKE_SCORING_VERSION,
-      KARAOKE_ATTEMPT_SCORING_PROVIDER,
-      KARAOKE_ATTEMPT_SCORING_MODEL,
+      input.scoringProvider,
+      input.scoringModel,
       finalScoreBps,
       lyricsScoreBps,
       timingScoreBps,
@@ -199,4 +376,144 @@ export async function hasKaraokeAttempt(input: {
   sessionId: string
 }): Promise<boolean> {
   return insertedAttemptExists(input)
+}
+
+export async function getPostKaraokeLeaderboard(input: {
+  actor: ActorContext | AdminActorContext
+  communityId: string
+  communityRepository: CommunityRepository
+  env: Env
+  limit?: number | null
+  postId: string
+  profileRepository: ProfileRepository
+  scope?: string | null
+  userRepository: UserRepository
+}): Promise<KaraokeSongLeaderboard> {
+  const scope = input.scope?.trim() || "all_time"
+  if (scope !== "all_time") {
+    throw badRequestError("Only all_time karaoke leaderboard scope is supported")
+  }
+  const limit = clampKaraokeLeaderboardLimit(input.limit)
+  const tuple = await resolveCurrentKaraokeTuple(input)
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const rankedCte = `
+      WITH eligible AS (
+        SELECT user_id, final_score, completed_at, id
+        FROM karaoke_attempt
+        WHERE post_id = ?1
+          AND karaoke_revision_id = ?2
+          AND scoring_version = ?3
+          AND scoring_provider = ?4
+          AND scoring_model = ?5
+          AND rank_eligible = 1
+      ),
+      best AS (
+        SELECT user_id, final_score, completed_at, id
+        FROM (
+          SELECT user_id, final_score, completed_at, id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY user_id
+                   ORDER BY final_score DESC, completed_at ASC, id ASC
+                 ) AS user_best_rank
+          FROM eligible
+        )
+        WHERE user_best_rank = 1
+      ),
+      ranked AS (
+        SELECT user_id, final_score, completed_at,
+               RANK() OVER (ORDER BY final_score DESC, completed_at ASC, user_id ASC) AS rank,
+               COUNT(*) OVER () AS total_ranked
+        FROM best
+      )
+    `
+    const queryArgs = [
+      input.postId,
+      tuple.karaokeRevisionId,
+      KARAOKE_SCORING_VERSION,
+      tuple.scoringProvider,
+      tuple.scoringModel,
+    ]
+    const [topResult, viewerRow, viewerAttemptCountRow] = await Promise.all([
+      db.client.execute({
+        sql: `
+          ${rankedCte}
+          SELECT user_id, final_score, completed_at, rank, total_ranked
+          FROM ranked
+          ORDER BY rank ASC, completed_at ASC, user_id ASC
+          LIMIT ?6
+        `,
+        args: [...queryArgs, limit],
+      }),
+      executeFirst(db.client, {
+        sql: `
+          ${rankedCte}
+          SELECT user_id, final_score, completed_at, rank, total_ranked
+          FROM ranked
+          WHERE user_id = ?6
+          LIMIT 1
+        `,
+        args: [...queryArgs, input.actor.userId],
+      }) as Promise<RankedKaraokeAttemptRow | null>,
+      executeFirst(db.client, {
+        sql: `
+          SELECT COUNT(*) AS attempt_count
+          FROM karaoke_attempt
+          WHERE user_id = ?1
+            AND post_id = ?2
+            AND karaoke_revision_id = ?3
+            AND scoring_version = ?4
+            AND scoring_provider = ?5
+            AND scoring_model = ?6
+            AND rank_eligible = 1
+        `,
+        args: [
+          input.actor.userId,
+          input.postId,
+          tuple.karaokeRevisionId,
+          KARAOKE_SCORING_VERSION,
+          tuple.scoringProvider,
+          tuple.scoringModel,
+        ],
+      }) as Promise<Record<string, unknown> | null>,
+    ])
+    const topRows = topResult.rows as RankedKaraokeAttemptRow[]
+    const userIds = [
+      ...topRows.map((row) => stringOrNull(row.user_id) ?? ""),
+      stringOrNull(viewerRow?.user_id) ?? "",
+    ].filter(Boolean)
+    const identities = await resolveKaraokeLeaderboardIdentities(input.profileRepository, userIds)
+    const entries = topRows.map((row) => {
+      const userId = stringOrNull(row.user_id) ?? ""
+      return rankedEntry({
+        identity: identities.get(userId) ?? identityFromProfile(null),
+        row,
+        userId,
+        viewerUserId: input.actor.userId,
+      })
+    })
+    const viewerRank = viewerRow ? Number(viewerRow.rank ?? 0) : null
+    const totalRanked = Number(topRows[0]?.total_ranked ?? viewerRow?.total_ranked ?? 0)
+    return {
+      community_id: publicCommunityId(input.communityId),
+      entries,
+      karaoke_revision_id: tuple.karaokeRevisionId,
+      object: "karaoke_song_leaderboard",
+      period_end: null,
+      period_start: null,
+      post_id: publicPostId(input.postId),
+      scope: "all_time",
+      scoring_model: tuple.scoringModel,
+      scoring_provider: tuple.scoringProvider,
+      scoring_version: KARAOKE_SCORING_VERSION,
+      total_ranked: totalRanked,
+      viewer_best_reached_at: stringOrNull(viewerRow?.completed_at),
+      viewer_best_score: viewerRow ? Number(viewerRow.final_score ?? 0) : null,
+      viewer_eligible_attempt_count: Number(rowValue(viewerAttemptCountRow, "attempt_count") ?? 0),
+      viewer_rank: viewerRank,
+      viewer_top_percent: viewerRank ? topPercent(viewerRank, totalRanked) : null,
+    }
+  } finally {
+    db.close()
+  }
 }

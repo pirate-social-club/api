@@ -4011,6 +4011,7 @@ export const apiRoutes = {
   communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
   communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
   communityPostStreaksLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/streaks/leaderboard`,
+  communityPostKaraokeLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/leaderboard`,
   communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
   job: (jobId: string) => `/jobs/${jobId}`,
