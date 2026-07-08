@@ -23,6 +23,12 @@ const signals: CommunityPublishAlertSignals[] = [
     community_id: "c1",
     failure_codes: [{ code: "listing_creation_failed", count: 2 }],
     terminal_failed_finalize_jobs: 0,
+    stuck_royalty_allocation_projections: 0,
+    stuck_royalty_allocation_projection_samples: [],
+    stale_locked_delivery_assets: 0,
+    stale_locked_delivery_asset_samples: [],
+    retried_locked_delivery_jobs: 0,
+    retried_locked_delivery_job_samples: [],
   },
   {
     community_id: "c2",
@@ -32,6 +38,27 @@ const signals: CommunityPublishAlertSignals[] = [
       { code: "text_moderation_blocked", count: 9 },
     ],
     terminal_failed_finalize_jobs: 3,
+    stuck_royalty_allocation_projections: 2,
+    stuck_royalty_allocation_projection_samples: [{
+      asset_id: "ast_projection_stuck",
+      royalty_allocation_status: "verified",
+      updated_at: "2026-07-08T10:00:00.000Z",
+    }],
+    stale_locked_delivery_assets: 1,
+    stale_locked_delivery_asset_samples: [{
+      asset_id: "ast_delivery_stuck",
+      locked_delivery_status: "requested",
+      updated_at: "2026-07-08T10:01:00.000Z",
+    }],
+    retried_locked_delivery_jobs: 1,
+    retried_locked_delivery_job_samples: [{
+      job_id: "job_retry",
+      asset_id: "ast_retry",
+      status: "failed",
+      attempt_count: 2,
+      last_checkpoint: "story_publish_submitted",
+      updated_at: "2026-07-08T10:02:00.000Z",
+    }],
   },
 ]
 
@@ -45,6 +72,9 @@ describe("ops-alerts emit", () => {
     expect(listing?.community_ids).toEqual(["c1", "c2"])
     expect(alerts.find((alert) => alert.key === "publish_failure:text_moderation_blocked")).toBeUndefined()
     expect(alerts.find((alert) => alert.key === "terminal_failed_finalize_jobs")?.count).toBe(3)
+    expect(alerts.find((alert) => alert.key === "stuck_royalty_allocation_projection_sync")?.severity).toBe("high")
+    expect(alerts.find((alert) => alert.key === "stale_locked_delivery_requested_assets")?.count).toBe(1)
+    expect(alerts.find((alert) => alert.key === "retried_locked_asset_delivery_jobs")?.severity).toBe("medium")
   })
 
   test("dedupe checks without marking, then suppresses only after sent alerts are marked", async () => {
