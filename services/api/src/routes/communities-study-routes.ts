@@ -6,6 +6,7 @@ import {
   getPostStreakLeaderboard,
   getPostStudyPayload,
   getSongStudyAttemptTiming,
+  resolveStudyTimezone,
   submitPostStudyAttempt,
   transcribePostStudyAudio,
   type SongStudyAttemptRequest,
@@ -62,6 +63,7 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       limit,
       postId,
       profileRepository,
+      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
     })
     return c.json(payload, 200)
   })
@@ -77,6 +79,7 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       communityRepository,
       env: c.env,
       postId,
+      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
       waitUntil: getWaitUntil(c),
     })
     const timing = getSongStudyAttemptTiming(result)
