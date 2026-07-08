@@ -69,6 +69,7 @@ export interface KaraokeSessionCreationDependencies {
   }): Promise<KaraokeSessionCreationRecord>
   initializeRuntime(input: {
     communityId: string
+    postId: string
     sessionId: string
     attemptId: string
     subjectUserId: string
@@ -309,6 +310,7 @@ export async function createKaraokeSession(input: {
         attemptId,
         communityId: input.communityId,
         lines,
+        postId: input.postId,
         scoringPolicy,
         sessionExpiresAtMs,
         sessionId,

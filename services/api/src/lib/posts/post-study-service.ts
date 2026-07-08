@@ -2366,13 +2366,14 @@ async function getStudyAttemptProgressSnapshot(input: {
 }
 
 export async function materializeStudyStreak(input: {
+  activityDate?: string
   client: ReadClient
   now: string
   postId: string
   studyTimezone?: string
   userId: string
 }): Promise<void> {
-  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
+  const today = input.activityDate ?? studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
   await input.client.execute({
     sql: `
       INSERT INTO song_streaks (

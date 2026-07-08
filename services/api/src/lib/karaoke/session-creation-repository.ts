@@ -105,6 +105,24 @@ export async function getKaraokeSessionCreationRecord(input: {
   return row ? toRecord(row) : null
 }
 
+export async function getKaraokeSessionCreationRecordBySession(input: {
+  client: Client
+  sessionId: string
+  attemptId: string
+}): Promise<KaraokeSessionCreationRecord | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT ${COLUMNS}
+      FROM karaoke_session_creation_requests
+      WHERE session_id = ?1
+        AND attempt_id = ?2
+      LIMIT 1
+    `,
+    args: [input.sessionId, input.attemptId],
+  })
+  return row ? toRecord(row) : null
+}
+
 export async function claimKaraokeSessionCreation(input: {
   client: Client
   key: KaraokeSessionCreationKey

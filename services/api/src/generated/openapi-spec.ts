@@ -14037,6 +14037,10 @@ const spec = {
           "lyrics_sha256": {
             "type": "string"
           },
+          "karaoke_revision_id": {
+            "type": "string",
+            "nullable": true
+          },
           "genius_annotations_url": {
             "type": "string",
             "nullable": true

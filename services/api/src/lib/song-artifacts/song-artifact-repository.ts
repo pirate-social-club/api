@@ -19,7 +19,9 @@ import {
 } from "./song-artifact-serialization"
 import { ensureSongArtifactBundleAlignmentReasonColumn } from "./ensure-song-artifact-bundle-alignment-reason-column"
 import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "./ensure-song-artifact-bundle-genius-annotations-url-column"
+import { ensureSongArtifactBundleKaraokeRevisionColumn } from "./ensure-song-artifact-bundle-karaoke-revision-column"
 import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
+import { deriveKaraokeRevisionId } from "./karaoke-revision"
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
 async function getSongArtifactUploadRow(
@@ -51,6 +53,7 @@ async function getSongArtifactBundleRow(
   await ensureSongArtifactBundleTitleColumn(client)
   await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(client)
   await ensureSongArtifactBundleAlignmentReasonColumn(client)
+  await ensureSongArtifactBundleKaraokeRevisionColumn(client)
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
@@ -59,7 +62,7 @@ async function getSongArtifactBundleRow(
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
-             alignment_reason, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
+             alignment_reason, karaoke_revision_id, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
              moderation_result_ref, moderation_result_json, created_at, updated_at
       FROM song_artifact_bundles
       WHERE community_id = ?1
@@ -268,6 +271,7 @@ export async function createSongArtifactBundleDraft(input: {
   await ensureSongArtifactBundleTitleColumn(input.client)
   await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
   await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
+  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   await input.client.execute({
     sql: `
       INSERT INTO song_artifact_bundles (
@@ -275,7 +279,7 @@ export async function createSongArtifactBundleDraft(input: {
         title, lyrics_text, lyrics_sha256, cover_art_json, preview_audio_json, canvas_video_json,
         instrumental_audio_json, vocal_audio_json, translation_status,
         translation_error, translated_lyrics_ref, translated_lyrics_json, alignment_status,
-        alignment_error, alignment_reason, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
+        alignment_error, alignment_reason, karaoke_revision_id, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
         moderation_result_ref, moderation_result_json, preview_window_json, preview_status,
         preview_error, created_at, updated_at, genius_annotations_url
       ) VALUES (
@@ -283,7 +287,7 @@ export async function createSongArtifactBundleDraft(input: {
         ?5, ?6, ?7, ?8, ?9, ?10,
         ?11, ?12, 'pending',
         NULL, NULL, NULL, 'processing',
-        NULL, NULL, NULL, NULL, 'processing', NULL,
+        NULL, NULL, NULL, NULL, NULL, 'processing', NULL,
         NULL, NULL, ?13, ?14,
         NULL, ?15, ?15, ?16
       )
@@ -327,6 +331,7 @@ export async function finalizeSongArtifactBundle(input: {
   alignmentStatus: SongArtifactBundle["alignment_status"]
   alignmentError: string | null
   alignmentReason: SongArtifactBundle["alignment_reason"] | null
+  instrumentalAudio: SongArtifactBundle["instrumental_audio"]
   timedLyricsRef: string | null
   timedLyrics: Record<string, unknown> | null
   moderationStatus: SongArtifactBundle["moderation_status"]
@@ -338,6 +343,11 @@ export async function finalizeSongArtifactBundle(input: {
   updatedAt: string
 }): Promise<SongArtifactBundle> {
   await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
+  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
+  const karaokeRevisionId = await deriveKaraokeRevisionId({
+    instrumentalAudio: input.instrumentalAudio,
+    timedLyrics: input.timedLyrics,
+  })
   await input.client.execute({
     sql: `
       UPDATE song_artifact_bundles
@@ -349,15 +359,16 @@ export async function finalizeSongArtifactBundle(input: {
           alignment_status = ?8,
           alignment_error = ?9,
           alignment_reason = ?10,
-          timed_lyrics_ref = ?11,
-          timed_lyrics_json = ?12,
-          moderation_status = ?13,
-          moderation_error = ?14,
-          moderation_result_ref = ?15,
-          moderation_result_json = ?16,
-          preview_status = ?17,
-          preview_error = ?18,
-          updated_at = ?19
+          karaoke_revision_id = ?11,
+          timed_lyrics_ref = ?12,
+          timed_lyrics_json = ?13,
+          moderation_status = ?14,
+          moderation_error = ?15,
+          moderation_result_ref = ?16,
+          moderation_result_json = ?17,
+          preview_status = ?18,
+          preview_error = ?19,
+          updated_at = ?20
       WHERE community_id = ?1
         AND song_artifact_bundle_id = ?2
     `,
@@ -372,6 +383,7 @@ export async function finalizeSongArtifactBundle(input: {
       input.alignmentStatus,
       input.alignmentError,
       input.alignmentReason,
+      karaokeRevisionId,
       input.timedLyricsRef,
       input.timedLyrics ? JSON.stringify(input.timedLyrics) : null,
       input.moderationStatus,
@@ -439,15 +451,26 @@ export async function updateSongArtifactBundleAlignment(input: {
   updatedAt: string
 }): Promise<SongArtifactBundle> {
   await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
+  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
+  const existing = await getSongArtifactBundleRow(input.client, input.communityId, input.songArtifactBundleId)
+  if (!existing) {
+    throw internalError("Song artifact bundle is missing before alignment update")
+  }
+  const existingBundle = serializeSongArtifactBundle(existing)
+  const karaokeRevisionId = await deriveKaraokeRevisionId({
+    instrumentalAudio: existingBundle.instrumental_audio,
+    timedLyrics: input.timedLyrics,
+  })
   await input.client.execute({
     sql: `
       UPDATE song_artifact_bundles
       SET alignment_status = ?3,
           alignment_error = ?4,
           alignment_reason = ?5,
-          timed_lyrics_ref = ?6,
-          timed_lyrics_json = ?7,
-          updated_at = ?8
+          karaoke_revision_id = ?6,
+          timed_lyrics_ref = ?7,
+          timed_lyrics_json = ?8,
+          updated_at = ?9
       WHERE community_id = ?1
         AND song_artifact_bundle_id = ?2
     `,
@@ -457,6 +480,7 @@ export async function updateSongArtifactBundleAlignment(input: {
       input.alignmentStatus,
       input.alignmentError,
       input.alignmentReason,
+      karaokeRevisionId,
       input.timedLyricsRef,
       input.timedLyrics ? JSON.stringify(input.timedLyrics) : null,
       input.updatedAt,
@@ -492,6 +516,8 @@ export async function listSongArtifactBundles(input: {
 }): Promise<SongArtifactBundleListResponse> {
   await ensureSongArtifactBundleTitleColumn(input.client)
   await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
+  await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
+  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   const query = input.query?.trim()
   const hasQuery = Boolean(query)
   const rows = await input.client.execute({
@@ -502,7 +528,7 @@ export async function listSongArtifactBundles(input: {
              preview_status, preview_error, canvas_video_json,
              instrumental_audio_json, vocal_audio_json, translation_status, translation_error,
              translated_lyrics_ref, translated_lyrics_json, alignment_status, alignment_error,
-             alignment_reason, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
+             alignment_reason, karaoke_revision_id, timed_lyrics_ref, timed_lyrics_json, moderation_status, moderation_error,
              moderation_result_ref, moderation_result_json, created_at, updated_at
       FROM song_artifact_bundles
       WHERE community_id = ?1

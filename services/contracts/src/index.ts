@@ -1693,6 +1693,7 @@ export type SongArtifactBundle = {
   media_refs: Array<MediaDescriptor>;
   lyrics: string;
   lyrics_sha256: string;
+  karaoke_revision_id?: string | null;
   genius_annotations_url?: string | null;
   cover_art?: SongImageArtifactDescriptor | null;
   preview_audio?: SongAudioArtifactDescriptor | null;
@@ -2149,6 +2150,74 @@ export type KaraokeSession = {
   token_expires_at: number;
   session_expires_at: number;
   scoring_policy: KaraokeScoringPolicy;
+};
+
+export type KaraokeAttempt = {
+  id: string;
+  object: "karaoke_attempt";
+  session_id: string;
+  attempt_id: string;
+  post_id: string;
+  community_id: string;
+  karaoke_revision_id: string;
+  scoring_version: number;
+  scoring_provider: string;
+  scoring_model: string;
+  final_score: number;
+  lyrics_score: number;
+  timing_score: number | null;
+  timing_trend: KaraokeTimingTrend;
+  scored_line_count: number;
+  line_count: number;
+  uncertain_line_count: number;
+  no_recognition_line_count: number;
+  low_confidence_line_count: number;
+  completion_reason: KaraokeAttemptCompletionReason;
+  rank_eligible: boolean;
+  activity_date: string;
+  completed_at: string;
+};
+
+export type KaraokeRankingScope = "all_time" | "weekly";
+
+export type KaraokeAttemptCompletionReason = "completed" | "session_error" | "provider_unavailable" | "abandoned";
+
+export type KaraokeTimingTrend = "early" | "late" | "mixed" | "on_time";
+
+export type KaraokeSongLeaderboard = {
+  object: "karaoke_song_leaderboard";
+  post_id: string;
+  community_id: string;
+  scope: KaraokeRankingScope;
+  period_start?: string | null;
+  period_end?: string | null;
+  karaoke_revision_id: string;
+  scoring_version: number;
+  scoring_provider: string;
+  scoring_model: string;
+  total_ranked: number;
+  entries: Array<KaraokeLeaderboardEntry>;
+  viewer_rank: number | null;
+  viewer_top_percent: number | null;
+  viewer_best_score: number | null;
+  viewer_best_reached_at: string | null;
+  viewer_eligible_attempt_count: number;
+};
+
+export type KaraokeLeaderboardEntry = {
+  rank: number;
+  top_percent: number;
+  score: number;
+  reached_at: string;
+  identity: KaraokeLeaderboardIdentity;
+  is_viewer: boolean;
+};
+
+export type KaraokeLeaderboardIdentity = {
+  visibility: "visible" | "anonymized";
+  display_name: string | null;
+  handle: string | null;
+  avatar_ref: string | null;
 };
 
 export type SongStudyUnavailableReason = "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed" | "missing_transcription_provider";

@@ -295,6 +295,7 @@ export async function createSongArtifactBundle(input: {
       alignmentStatus: analysis.alignmentStatus,
       alignmentError: analysis.alignmentError,
       alignmentReason: analysis.alignmentReason,
+      instrumentalAudio: instrumentalAudioUpload ? descriptorFromUpload(input.env, instrumentalAudioUpload) : null,
       timedLyricsRef: null,
       timedLyrics: analysis.timedLyrics,
       moderationStatus: analysis.moderationStatus,
