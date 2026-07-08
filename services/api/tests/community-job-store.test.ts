@@ -21,8 +21,22 @@ async function createJobStoreClient() {
       error_code TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       available_at TEXT,
+      last_checkpoint TEXT,
+      last_checkpoint_at TEXT,
+      attempt_started_at TEXT,
+      attempt_deadline_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE community_job_events (
+      event_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      community_id TEXT NOT NULL,
+      checkpoint TEXT NOT NULL,
+      details_json TEXT,
+      created_at TEXT NOT NULL
     )
   `)
   return client
@@ -45,14 +59,18 @@ describe("community job store", () => {
       client,
       jobId: job.job_id,
       now: "2026-06-05T12:00:01.000Z",
+      attemptDeadlineAt: "2026-06-05T12:30:01.000Z",
     })
     expect(firstClaim?.status).toBe("running")
     expect(firstClaim?.attempt_count).toBe(1)
+    expect(firstClaim?.last_checkpoint).toBe("attempt_started")
+    expect(firstClaim?.attempt_deadline_at).toBe("2026-06-05T12:30:01.000Z")
 
     const secondClaim = await markCommunityJobRunning({
       client,
       jobId: job.job_id,
       now: "2026-06-05T12:00:02.000Z",
+      attemptDeadlineAt: "2026-06-05T12:30:02.000Z",
     })
     expect(secondClaim).toBeNull()
 

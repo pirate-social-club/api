@@ -25,6 +25,23 @@ export type CommunityJobType =
   | "live_room_viewer_sessions_prune"
   | "video_media_analysis"
 export type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
+export type CommunityJobCheckpoint =
+  | "attempt_started"
+  | "locked_delivery_started"
+  | "locked_delivery_upload_loaded"
+  | "locked_delivery_payload_encrypted"
+  | "locked_delivery_payload_uploaded"
+  | "locked_delivery_cdr_submitted"
+  | "locked_delivery_cdr_confirmed"
+  | "locked_delivery_checkpoint_persisted"
+  | "story_publish_submitted"
+  | "story_publish_waiting"
+  | "story_publish_confirmed"
+  | "royalty_registration_started"
+  | "royalty_registration_waiting"
+  | "royalty_registration_completed"
+  | "projection_sync_started"
+  | "projection_sync_completed"
 
 export type CommunityJobRow = {
   job_id: string
@@ -38,13 +55,18 @@ export type CommunityJobRow = {
   error_code: string | null
   attempt_count: number
   available_at: string | null
+  last_checkpoint: string | null
+  last_checkpoint_at: string | null
+  attempt_started_at: string | null
+  attempt_deadline_at: string | null
   created_at: string
   updated_at: string
 }
 
 const COMMUNITY_JOB_SELECT_COLUMNS = `
   job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
-  error_code, attempt_count, available_at, created_at, updated_at
+  error_code, attempt_count, available_at, last_checkpoint, last_checkpoint_at,
+  attempt_started_at, attempt_deadline_at, created_at, updated_at
 `
 
 function toCommunityJobRow(row: unknown): CommunityJobRow {
@@ -60,6 +82,10 @@ function toCommunityJobRow(row: unknown): CommunityJobRow {
     error_code: stringOrNull(rowValue(row, "error_code")),
     attempt_count: requiredNumber(row, "attempt_count"),
     available_at: stringOrNull(rowValue(row, "available_at")),
+    last_checkpoint: stringOrNull(rowValue(row, "last_checkpoint")),
+    last_checkpoint_at: stringOrNull(rowValue(row, "last_checkpoint_at")),
+    attempt_started_at: stringOrNull(rowValue(row, "attempt_started_at")),
+    attempt_deadline_at: stringOrNull(rowValue(row, "attempt_deadline_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -134,7 +160,8 @@ export async function findNextRunnableCommunityJob(input: {
 export async function resetStaleRunningCommunityJobs(input: {
   client: DbExecutor
   now: string
-  staleBefore: string
+  staleCheckpointBefore: string
+  deadlineBefore: string
   communityId?: string | null
 }): Promise<number> {
   const result = await input.client.execute({
@@ -142,13 +169,17 @@ export async function resetStaleRunningCommunityJobs(input: {
       UPDATE community_jobs
       SET status = 'failed',
           error_code = 'stale_running_timeout',
-          available_at = ?2,
-          updated_at = ?2
+          available_at = ?3,
+          attempt_deadline_at = NULL,
+          updated_at = ?3
       WHERE status = 'running'
-        AND updated_at <= ?1
-        AND (?3 IS NULL OR community_id = ?3)
+        AND (
+          (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?2)
+          OR (COALESCE(last_checkpoint_at, updated_at) <= ?1)
+        )
+        AND (?4 IS NULL OR community_id = ?4)
     `,
-    args: [input.staleBefore, input.now, input.communityId ?? null],
+    args: [input.staleCheckpointBefore, input.deadlineBefore, input.now, input.communityId ?? null],
   })
 
   return result.rowsAffected ?? 0
@@ -187,10 +218,12 @@ export async function enqueueCommunityJob(input: {
     sql: `
       INSERT OR IGNORE INTO community_jobs (
         job_id, community_id, job_type, subject_type, subject_id, status, payload_json,
-        result_ref, error_code, attempt_count, available_at, created_at, updated_at
+        result_ref, error_code, attempt_count, available_at, last_checkpoint, last_checkpoint_at,
+        attempt_started_at, attempt_deadline_at, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, 'queued', ?6,
-        NULL, NULL, 0, ?7, ?8, ?8
+        NULL, NULL, 0, ?7, NULL, NULL,
+        NULL, NULL, ?8, ?8
       )
     `,
     args: [
@@ -233,6 +266,10 @@ export async function enqueueCommunityJob(input: {
     error_code: null,
     attempt_count: 0,
     available_at: input.availableAt ?? null,
+    last_checkpoint: null,
+    last_checkpoint_at: null,
+    attempt_started_at: null,
+    attempt_deadline_at: null,
     created_at: input.createdAt,
     updated_at: input.createdAt,
   }
@@ -242,6 +279,7 @@ export async function markCommunityJobRunning(input: {
   client: DbExecutor
   jobId: string
   now: string
+  attemptDeadlineAt: string
 }): Promise<CommunityJobRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
@@ -249,15 +287,61 @@ export async function markCommunityJobRunning(input: {
       SET status = 'running',
           attempt_count = attempt_count + 1,
           error_code = NULL,
+          last_checkpoint = 'attempt_started',
+          last_checkpoint_at = ?2,
+          attempt_started_at = ?2,
+          attempt_deadline_at = ?3,
           updated_at = ?2
       WHERE job_id = ?1
         AND status IN ('queued', 'failed')
       RETURNING ${COMMUNITY_JOB_SELECT_COLUMNS}
     `,
-    args: [input.jobId, input.now],
+    args: [input.jobId, input.now, input.attemptDeadlineAt],
   })
 
   return row ? toCommunityJobRow(row) : null
+}
+
+export async function recordCommunityJobCheckpoint(input: {
+  client: DbExecutor
+  jobId: string
+  communityId: string
+  checkpoint: CommunityJobCheckpoint
+  now: string
+  detailsJson?: string | null
+}): Promise<void> {
+  const update = await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET last_checkpoint = ?3,
+          last_checkpoint_at = ?4,
+          updated_at = ?4
+      WHERE job_id = ?1
+        AND community_id = ?2
+        AND status = 'running'
+    `,
+    args: [input.jobId, input.communityId, input.checkpoint, input.now],
+  })
+  if ((update.rowsAffected ?? 0) === 0) {
+    return
+  }
+  await input.client.execute({
+    sql: `
+      INSERT INTO community_job_events (
+        event_id, job_id, community_id, checkpoint, details_json, created_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6
+      )
+    `,
+    args: [
+      makeId("cje"),
+      input.jobId,
+      input.communityId,
+      input.checkpoint,
+      input.detailsJson ?? null,
+      input.now,
+    ],
+  })
 }
 
 export async function markCommunityJobSucceeded(input: {
@@ -273,6 +357,7 @@ export async function markCommunityJobSucceeded(input: {
           result_ref = ?2,
           error_code = NULL,
           available_at = NULL,
+          attempt_deadline_at = NULL,
           updated_at = ?3
       WHERE job_id = ?1
     `,
@@ -298,6 +383,7 @@ export async function markCommunityJobFailed(input: {
       SET status = 'failed',
           error_code = ?2,
           available_at = ?3,
+          attempt_deadline_at = NULL,
           updated_at = ?4
       WHERE job_id = ?1
     `,

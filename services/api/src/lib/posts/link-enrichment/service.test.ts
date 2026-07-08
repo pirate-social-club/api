@@ -81,8 +81,22 @@ async function createCommunityClient() {
       error_code TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 0,
       available_at TEXT,
+      last_checkpoint TEXT,
+      last_checkpoint_at TEXT,
+      attempt_started_at TEXT,
+      attempt_deadline_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE community_job_events (
+      event_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      community_id TEXT NOT NULL,
+      checkpoint TEXT NOT NULL,
+      details_json TEXT,
+      created_at TEXT NOT NULL
     )
   `)
   await client.execute({

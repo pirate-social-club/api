@@ -59,6 +59,7 @@ import {
 } from "./shared"
 import type { BuyerIdentity } from "./buyer-identity"
 import { getControlPlaneClient } from "../../runtime-deps"
+import type { CommunityJobCheckpoint } from "../jobs/store"
 import {
   buildStoryCdrAccessPackage,
   fetchPrimaryAssetContent,
@@ -96,6 +97,57 @@ function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {
     return null
   }
   return `story:ip:${storyIpId}#licenseTermsId=${storyLicenseTermsId}`
+}
+
+type LockedDeliveryProgressReporter = (
+  checkpoint: CommunityJobCheckpoint,
+  details?: Record<string, unknown> | null,
+) => Promise<void>
+
+function resolveLockedDeliveryHeartbeatIntervalMs(env: Pick<Env, "COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS">): number {
+  const raw = String(env.COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS || "").trim()
+  const parsed = raw ? Number(raw) : 30_000
+  return Number.isInteger(parsed) && parsed >= 5_000 && parsed <= 120_000 ? parsed : 30_000
+}
+
+async function recordLockedDeliveryProgress(
+  progress: LockedDeliveryProgressReporter | null | undefined,
+  checkpoint: CommunityJobCheckpoint,
+  details?: Record<string, unknown> | null,
+): Promise<void> {
+  await progress?.(checkpoint, details ?? null)
+}
+
+async function withLockedDeliveryProgressHeartbeat<T>(input: {
+  env: Env
+  progress?: LockedDeliveryProgressReporter | null
+  checkpoint: CommunityJobCheckpoint
+  heartbeatCheckpoint?: CommunityJobCheckpoint
+  details?: Record<string, unknown> | null
+  operation: () => Promise<T>
+}): Promise<T> {
+  await recordLockedDeliveryProgress(input.progress, input.checkpoint, input.details ?? null)
+  const intervalMs = resolveLockedDeliveryHeartbeatIntervalMs(input.env)
+  let timer: ReturnType<typeof setInterval> | null = null
+  if (input.progress) {
+    timer = setInterval(() => {
+      void recordLockedDeliveryProgress(
+        input.progress,
+        input.heartbeatCheckpoint ?? input.checkpoint,
+        input.details ?? null,
+      ).catch((error) => {
+        console.warn("[community-job] locked delivery heartbeat failed", {
+          checkpoint: input.heartbeatCheckpoint ?? input.checkpoint,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }, intervalMs)
+  }
+  try {
+    return await input.operation()
+  } finally {
+    if (timer) clearInterval(timer)
+  }
 }
 
 async function syncStoryRoyaltyAllocationProjectionSafely(input: {
@@ -1196,6 +1248,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   assetId: string
   userRepository: UserRepository
   markFailureAsTerminal?: boolean
+  onProgress?: LockedDeliveryProgressReporter | null
 }): Promise<Asset> {
   const asset = await getAssetRow(input.client, input.communityId, input.assetId)
   if (!asset) {
@@ -1265,6 +1318,9 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   let lockedDeliveryMetadataJson: string | null = asset.locked_delivery_secret_json
 
   try {
+    await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_started", {
+      asset_id: asset.asset_id,
+    })
     const lockedDelivery = await prepareLockedAssetDelivery({
       env: input.env,
       communityId: input.communityId,
@@ -1277,6 +1333,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       bundleId: asset.song_artifact_bundle_id,
       rightsBasis: asset.rights_basis,
       upstreamAssetRefs: post.upstream_asset_refs ?? null,
+      onProgress: input.onProgress ?? null,
       preparedDelivery: asset.story_asset_version_id
         && asset.story_cdr_vault_uuid
         && asset.story_namespace
@@ -1365,6 +1422,10 @@ export async function prepareRequestedLockedAssetDelivery(input: {
         if (!checkpointMatches) {
           throw new Error("locked_delivery_checkpoint_not_persisted")
         }
+        await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_checkpoint_persisted", {
+          asset_version_id: prepared.storyAssetVersionId,
+          cdr_vault_uuid: prepared.storyCdrVaultUuid,
+        })
       },
     })
     storyStatus = lockedDelivery.storyStatus
@@ -1441,23 +1502,37 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     }
 
     const royaltyRegistration = shouldRunRoyaltyRegistration && !reusableOriginalRegistration
-      ? await maybeRegisterStoryRoyaltyForAsset({
+      ? await withLockedDeliveryProgressHeartbeat({
           env: input.env,
-          client: input.client,
-          communityId: input.communityId,
-          assetId: asset.asset_id,
-          creatorWalletAddress,
-          title: post.title ?? null,
-          rightsBasis: asset.rights_basis,
-          licensePreset: storyRegistration.effectiveLicensePreset,
-          commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
-          upstreamAssetRefs: post.upstream_asset_refs ?? null,
-          assetKind: asset.asset_kind,
-          bundle,
-          primaryContentHash: resolvedPrimaryContentHash,
+          progress: input.onProgress,
+          checkpoint: "royalty_registration_started",
+          heartbeatCheckpoint: "royalty_registration_waiting",
+          details: {
+            asset_id: asset.asset_id,
+            rights_basis: asset.rights_basis,
+          },
+          operation: () => maybeRegisterStoryRoyaltyForAsset({
+            env: input.env,
+            client: input.client,
+            communityId: input.communityId,
+            assetId: asset.asset_id,
+            creatorWalletAddress,
+            title: post.title ?? null,
+            rightsBasis: asset.rights_basis,
+            licensePreset: storyRegistration.effectiveLicensePreset,
+            commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
+            upstreamAssetRefs: post.upstream_asset_refs ?? null,
+            assetKind: asset.asset_kind,
+            bundle,
+            primaryContentHash: resolvedPrimaryContentHash,
+          }),
         })
       : null
     if (royaltyRegistration) {
+      await recordLockedDeliveryProgress(input.onProgress, "royalty_registration_completed", {
+        story_ip_id: royaltyRegistration.storyIpId,
+        ip_royalty_vault: royaltyRegistration.ipRoyaltyVault,
+      })
       applyRoyaltyRegistrationFields(storyRegistration, royaltyRegistration)
       storyStatus = "published"
       publicationStatus = "story_published"
@@ -1641,13 +1716,26 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     }
   }
   if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
-    await syncStoryRoyaltyAllocationProjectionSafely({
+    await withLockedDeliveryProgressHeartbeat({
       env: input.env,
-      client: input.client,
-      communityId: input.communityId,
-      postId: post.post_id,
-      assetId: asset.asset_id,
-      sourceUpdatedAt: post.updated_at ?? updatedAt,
+      progress: input.onProgress,
+      checkpoint: "projection_sync_started",
+      details: {
+        asset_id: asset.asset_id,
+      },
+      operation: async () => {
+        await syncStoryRoyaltyAllocationProjectionSafely({
+          env: input.env,
+          client: input.client,
+          communityId: input.communityId,
+          postId: post.post_id,
+          assetId: asset.asset_id,
+          sourceUpdatedAt: post.updated_at ?? updatedAt,
+        })
+      },
+    })
+    await recordLockedDeliveryProgress(input.onProgress, "projection_sync_completed", {
+      asset_id: asset.asset_id,
     })
   }
 
