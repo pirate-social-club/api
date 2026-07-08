@@ -27,6 +27,19 @@ const ASSET_PUBLISH_COORDINATOR_ABI = [
 
 const ASSET_VERSION_ALREADY_PUBLISHED_SELECTOR = "0xcc747504"
 
+export type PublishedAssetVersionSnapshot = {
+  publisher: string
+  cdrVaultUuid: bigint | number
+  namespace: string
+  contentHash: string
+  storageRefHash: string
+  entitlementTokenId: bigint
+  readCondition: string
+  writeCondition: string
+  active: boolean
+  exists: boolean
+}
+
 export type StoryAssetPublishResult = {
   entitlementConfiguredTxHash: string
   publishTxHash: string
@@ -88,6 +101,31 @@ async function waitForStoryTxReceipt(input: {
   if (!receipt || receipt.status !== 1) {
     throw new Error(input.failureCode)
   }
+}
+
+export function publishedAssetVersionMatches(input: {
+  existing: PublishedAssetVersionSnapshot
+  expected: {
+    publisherAddress: string
+    cdrVaultUuid: number
+    namespace: string
+    contentHash: string
+    storageRefHash: string
+    entitlementTokenId: bigint
+    readConditionAddress: string
+    writeConditionAddress: string
+  }
+}): boolean {
+  const { existing, expected } = input
+  return existing.exists === true
+    && getAddress(existing.publisher) === getAddress(expected.publisherAddress)
+    && Number(existing.cdrVaultUuid) === expected.cdrVaultUuid
+    && String(existing.namespace).toLowerCase() === expected.namespace.toLowerCase()
+    && String(existing.contentHash).toLowerCase() === expected.contentHash.toLowerCase()
+    && String(existing.storageRefHash).toLowerCase() === expected.storageRefHash.toLowerCase()
+    && BigInt(existing.entitlementTokenId) === expected.entitlementTokenId
+    && getAddress(existing.readCondition) === getAddress(expected.readConditionAddress)
+    && getAddress(existing.writeCondition) === getAddress(expected.writeConditionAddress)
 }
 
 export async function publishLockedAssetVersionToStory(input: {
@@ -229,15 +267,19 @@ export async function publishLockedAssetVersionToStory(input: {
       active: boolean
       exists: boolean
     }
-    const matches = existing.exists === true
-      && getAddress(existing.publisher) === getAddress(publishArgs[0])
-      && Number(existing.cdrVaultUuid) === input.cdrVaultUuid
-      && String(existing.namespace).toLowerCase() === input.namespace.toLowerCase()
-      && String(existing.contentHash).toLowerCase() === input.contentHash.toLowerCase()
-      && String(existing.storageRefHash).toLowerCase() === input.storageRefHash.toLowerCase()
-      && BigInt(existing.entitlementTokenId) === input.entitlementTokenId
-      && getAddress(existing.readCondition) === getAddress(readConditionAddress)
-      && getAddress(existing.writeCondition) === getAddress(writeConditionAddress)
+    const matches = publishedAssetVersionMatches({
+      existing,
+      expected: {
+        publisherAddress: publishArgs[0],
+        cdrVaultUuid: input.cdrVaultUuid,
+        namespace: input.namespace,
+        contentHash: input.contentHash,
+        storageRefHash: input.storageRefHash,
+        entitlementTokenId: input.entitlementTokenId,
+        readConditionAddress,
+        writeConditionAddress,
+      },
+    })
     if (!matches) {
       throw error
     }

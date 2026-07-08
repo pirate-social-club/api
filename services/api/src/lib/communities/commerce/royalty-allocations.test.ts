@@ -414,6 +414,60 @@ describe("Story royalty token share registration", () => {
     expect(rows.rows.every((row) => row.distribution_status === "pending")).toBe(true)
     expect(rows.rows.every((row) => row.registered_at === "2026-01-02T00:00:00Z")).toBe(true)
   })
+
+  test("registration-pending marker is idempotent for the same asset split", async () => {
+    const client = freshDb()
+    await createTables(client)
+    await insertAllocationAsset(client, "ast_registration_retry")
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+
+    for (const registeredAt of ["2026-01-02T00:00:00Z", "2026-01-02T00:05:00Z"]) {
+      await markStoryRoyaltyAllocationRegistrationPendingVerification({
+        client: appClient(client),
+        communityId: "com_1",
+        assetId: "ast_registration_retry",
+        ipRoyaltyVault: "0xcccccccccccccccccccccccccccccccccccccccc",
+        distributionTxHash: "0xtx-retry",
+        registeredAt,
+      })
+    }
+
+    const asset = await client.execute({
+      sql: `
+        SELECT royalty_allocation_status, royalty_allocation_effect_key, royalty_allocation_tx_hash,
+               ip_royalty_vault, royalty_allocation_registered_at, royalty_allocation_projection_synced
+        FROM assets
+        WHERE asset_id = ?1
+      `,
+      args: ["ast_registration_retry"],
+    })
+    expect(asset.rows[0]).toMatchObject({
+      royalty_allocation_status: "verification_pending",
+      royalty_allocation_effect_key: `ast_registration_retry:${fingerprint}`,
+      royalty_allocation_tx_hash: "0xtx-retry",
+      ip_royalty_vault: "0xcccccccccccccccccccccccccccccccccccccccc",
+      royalty_allocation_registered_at: "2026-01-02T00:05:00Z",
+      royalty_allocation_projection_synced: 0,
+    })
+    const allocations = await client.execute({
+      sql: `
+        SELECT COUNT(*) AS count, COUNT(DISTINCT wallet_address_normalized) AS wallets,
+               MIN(distribution_status) AS min_status, MAX(distribution_status) AS max_status,
+               MIN(registered_at) AS min_registered_at, MAX(registered_at) AS max_registered_at
+        FROM initial_royalty_allocations
+        WHERE asset_id = ?1
+      `,
+      args: ["ast_registration_retry"],
+    })
+    expect(allocations.rows[0]).toMatchObject({
+      count: 2,
+      wallets: 2,
+      min_status: "pending",
+      max_status: "pending",
+      min_registered_at: "2026-01-02T00:05:00Z",
+      max_registered_at: "2026-01-02T00:05:00Z",
+    })
+  })
 })
 
 describe("loadStoryRoyaltyAllocationProjectionRows", () => {
@@ -560,6 +614,97 @@ describe("loadStoryRoyaltyAllocationProjectionRows", () => {
     })
     expect(Number(asset.rows[0].royalty_allocation_projection_synced)).toBe(1)
   })
+
+  test("projection sync is idempotent and upserts the same allocation rows on retry", async () => {
+    const communityClient = freshDb()
+    const controlPlaneClient = freshDb()
+    await createTables(communityClient)
+    await createProjectionTable(controlPlaneClient)
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+    await persistAssetWithAllocations({
+      client: appClient(communityClient),
+      assetInsert: assetInsertFor("ast_sync_retry", fingerprint),
+      allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+        assetId: "ast_sync_retry",
+        communityId: "com_1",
+        creatorUserId: "usr_author",
+        allocations: split(),
+        fingerprint,
+        creator: snapshot,
+        chainId: AENEID,
+        now: "2026-01-01T00:00:00Z",
+        newId: () => crypto.randomUUID(),
+      })),
+    })
+    await communityClient.execute({
+      sql: `
+        UPDATE assets
+        SET story_ip_id = ?1,
+            ip_royalty_vault = ?2,
+            royalty_allocation_status = 'verified',
+            updated_at = ?3
+        WHERE asset_id = ?4
+      `,
+      args: [
+        "0x1111111111111111111111111111111111111111",
+        "0xcccccccccccccccccccccccccccccccccccccccc",
+        "2026-01-02T00:00:00Z",
+        "ast_sync_retry",
+      ],
+    })
+    await communityClient.execute({
+      sql: `
+        UPDATE initial_royalty_allocations
+        SET distribution_status = 'verified',
+            expected_rt_units = share_bps,
+            verified_rt_units = share_bps
+        WHERE asset_id = ?1
+      `,
+      args: ["ast_sync_retry"],
+    })
+
+    await expect(syncStoryRoyaltyAllocationProjectionForAsset({
+      env: {} as never,
+      client: appClient(communityClient),
+      controlPlaneClient: appClient(controlPlaneClient),
+      communityId: "com_1",
+      assetId: "ast_sync_retry",
+      sourceUpdatedAt: "2026-01-02T00:00:00Z",
+    })).resolves.toEqual({ projectedRows: 2 })
+    await communityClient.execute({
+      sql: `UPDATE assets SET royalty_allocation_projection_synced = 0 WHERE asset_id = ?1`,
+      args: ["ast_sync_retry"],
+    })
+    await expect(syncStoryRoyaltyAllocationProjectionForAsset({
+      env: {} as never,
+      client: appClient(communityClient),
+      controlPlaneClient: appClient(controlPlaneClient),
+      communityId: "com_1",
+      assetId: "ast_sync_retry",
+      sourceUpdatedAt: "2026-01-02T00:00:00Z",
+    })).resolves.toEqual({ projectedRows: 2 })
+
+    const projected = await controlPlaneClient.execute({
+      sql: `
+        SELECT COUNT(*) AS count, COUNT(DISTINCT wallet_address_normalized) AS wallets,
+               MIN(distribution_status) AS min_status, MAX(distribution_status) AS max_status
+        FROM story_royalty_allocation_projections
+        WHERE community_id = ?1 AND asset_id = ?2
+      `,
+      args: ["com_1", "ast_sync_retry"],
+    })
+    expect(projected.rows[0]).toMatchObject({
+      count: 2,
+      wallets: 2,
+      min_status: "verified",
+      max_status: "verified",
+    })
+    const asset = await communityClient.execute({
+      sql: `SELECT royalty_allocation_projection_synced FROM assets WHERE asset_id = ?1`,
+      args: ["ast_sync_retry"],
+    })
+    expect(Number(asset.rows[0].royalty_allocation_projection_synced)).toBe(1)
+  })
 })
 
 describe("story royalty allocation vault verification", () => {
@@ -693,6 +838,48 @@ describe("story royalty allocation vault verification", () => {
         failure_reason: null,
       },
     ])
+  })
+
+  test("skips already-verified assets without reading the vault again", async () => {
+    const client = freshDb()
+    await createTables(client)
+    await registeredPendingAsset(client, "ast_already_verified")
+    await verifyStoryRoyaltyAllocationForAsset({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_already_verified",
+      checkedAt: "2026-01-03T00:00:00Z",
+      vaultReader: vaultReader({
+        totalSupply: 1_000_000n,
+        balances: {
+          [CREATOR]: 900_000n,
+          [COLLAB]: 100_000n,
+        },
+      }),
+    })
+
+    const result = await verifyStoryRoyaltyAllocationForAsset({
+      client: appClient(client),
+      communityId: "com_1",
+      assetId: "ast_already_verified",
+      vaultReader: {
+        totalSupply: async () => {
+          throw new Error("already verified retry should not read total supply")
+        },
+        decimals: async () => {
+          throw new Error("already verified retry should not read decimals")
+        },
+        balanceOf: async () => {
+          throw new Error("already verified retry should not read balances")
+        },
+      },
+    })
+
+    expect(result).toEqual({
+      status: "skipped",
+      assetId: "ast_already_verified",
+      reason: "already_verified",
+    })
   })
 
   test("keeps allocations pending when a vault balance does not match", async () => {
