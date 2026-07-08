@@ -2654,6 +2654,28 @@ describe("post study service", () => {
     expect(fetchCalled).toBe(false)
   })
 
+  test("transcription reports a study-scoped missing ElevenLabs key", async () => {
+    await clearElevenLabsCredential()
+    await seedSongPost()
+
+    let fetchCalled = false
+    await withMockedFetch(() => (async () => {
+      fetchCalled = true
+      return new Response("unexpected", { status: 500 })
+    }) as typeof fetch, async () => {
+      await expect(transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: env(),
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })).rejects.toThrow(/say-it-back transcription/)
+    })
+
+    expect(fetchCalled).toBe(false)
+  })
+
   test("transcription accepts MediaRecorder audio/webm;codecs=opus (base type gate)", async () => {
     await setStudyEnabled(true)
     await seedSongPost()
