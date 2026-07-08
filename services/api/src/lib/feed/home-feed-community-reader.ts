@@ -347,6 +347,7 @@ export async function readHomeFeedCommunityItems(input: {
   communityRepository: HomeFeedCommunityRepository
   profileRepository?: ProfileRepository | null
   userId: string | null
+  studyTimezone?: string
   locale?: string | null
   ageGateState: AgeGateViewerState | null
   waitUntil?: HomeFeedWaitUntil
@@ -470,6 +471,7 @@ export async function readHomeFeedCommunityItems(input: {
       client: db.client,
       responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
+      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
     if (communitySummary) {

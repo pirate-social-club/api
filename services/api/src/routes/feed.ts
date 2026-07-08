@@ -11,6 +11,7 @@ import {
   storeMaterializedPublicHomeFeed,
 } from "../lib/feed/materialized-public-feed"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { resolveStudyTimezone } from "../lib/posts/post-study-service"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const feed = new Hono<OptionalAuthenticatedEnv>()
@@ -93,6 +94,7 @@ feed.get("/home", async (c) => {
     env: c.env,
     userId: actor?.userId ?? null,
     locale: c.req.query("locale") ?? null,
+    studyTimezone: actor?.userId ? resolveStudyTimezone(c.req.raw.cf) : undefined,
     sort: c.req.query("sort") ?? null,
     timeRange: c.req.query("time_range") ?? null,
     cursor: c.req.query("cursor") ?? null,

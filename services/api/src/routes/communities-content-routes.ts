@@ -22,6 +22,7 @@ import {
   retryPostPublish,
   setPostCommentLock,
 } from "../lib/posts/post-service"
+import { resolveStudyTimezone } from "../lib/posts/post-study-service"
 import { serializeComment, serializeCommentListResponse } from "../serializers/comment"
 import { serializeDeletedPostResponse, serializeLocalizedPostResponse, serializePost } from "../serializers/post"
 import type { CreatePostRequest } from "../types"
@@ -161,6 +162,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userId: actor.userId,
       communityId,
       locale: c.req.query("locale"),
+      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
       limit: c.req.query("limit"),
       communityRepository,
       userRepository,
@@ -378,6 +380,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userId: actor.userId,
       communityId,
       locale: c.req.query("locale") ?? null,
+      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
       limit: c.req.query("limit") ?? null,
       cursor: c.req.query("cursor") ?? null,
       flairId: c.req.query("flair_id") ?? null,
@@ -400,6 +403,7 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
       userId: actor.userId,
       communityId,
       locale: c.req.query("locale") ?? null,
+      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
       from: c.req.query("from") ?? null,
       to: c.req.query("to") ?? null,
       limit: c.req.query("limit") ?? null,

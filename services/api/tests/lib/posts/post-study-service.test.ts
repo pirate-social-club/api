@@ -1521,6 +1521,51 @@ describe("post study service", () => {
     expect(secondResponse.streak_summary).toEqual(secondSummary)
   })
 
+  test("streak summary hydration reads the viewer timezone day", async () => {
+    await seedSongPost()
+    const currentUtcHour = new Date().getUTCHours()
+    const studyTimezone = currentUtcHour < 10 ? "Pacific/Honolulu" : "Pacific/Kiritimati"
+    const now = new Date().toISOString()
+
+    await upsertStudyStreakProgress({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      isCorrect: true,
+      now,
+      postId: POST_ID,
+      studyTargetCount: 1,
+      studyTimezone,
+      userId: LEARNER_ID,
+    })
+
+    const utcSummary = await getPostStreakSummary({
+      client: client!,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+    })
+    expect(utcSummary?.viewer?.qualified_today).toBe(false)
+
+    const response = {
+      post: {
+        community_id: COMMUNITY_ID,
+        post_id: POST_ID,
+        post_type: "song",
+        status: "published",
+      },
+    } as LocalizedPostResponse
+    await hydrateSongStreakSummariesForResponses({
+      client: client!,
+      responses: [response],
+      profileRepository: profileRepository as never,
+      studyTimezone,
+      viewerUserId: LEARNER_ID,
+    })
+    expect(response.streak_summary?.viewer?.qualified_today).toBe(true)
+    expect(response.streak_summary?.viewer?.study_attempts_today).toBe(1)
+    expect(response.streak_summary?.viewer?.study_target_today).toBe(1)
+  })
+
   test("streak materialization extends consecutive days, resets gaps, and ignores stale qualified dates", async () => {
     await seedSongPost()
 

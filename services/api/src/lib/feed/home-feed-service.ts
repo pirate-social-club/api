@@ -409,6 +409,7 @@ export async function listHomeFeed(input: {
   env: Env
   userId: string | null
   locale?: string | null
+  studyTimezone?: string
   sort?: string | null
   timeRange?: string | null
   cursor?: string | null
@@ -565,6 +566,7 @@ export async function listHomeFeed(input: {
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
       userId: input.userId,
+      studyTimezone: input.studyTimezone,
       locale: input.locale,
       ageGateState,
       waitUntil: input.waitUntil,
