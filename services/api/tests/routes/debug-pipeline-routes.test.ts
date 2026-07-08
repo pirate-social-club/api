@@ -358,7 +358,7 @@ describe("debug pipeline routes", () => {
     })
     expect(body.after.status).toBe("queued")
     expect(body.after.error_code).toBe("operator_recycled:operator smoke retry")
-    expect(body.after.attempt_count).toBe(2)
+    expect(body.after.attempt_count).toBe(0)
     expect(body.after.last_checkpoint).toBeNull()
     expect(body.after.last_checkpoint_at).toBeNull()
     expect(body.after.attempt_started_at).toBeNull()
@@ -378,7 +378,7 @@ describe("debug pipeline routes", () => {
       expect(stored.rows[0]).toMatchObject({
         status: "queued",
         error_code: "operator_recycled:operator smoke retry",
-        attempt_count: 2,
+        attempt_count: 0,
         last_checkpoint: null,
         attempt_deadline_at: null,
       })

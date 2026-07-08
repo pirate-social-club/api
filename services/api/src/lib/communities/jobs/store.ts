@@ -420,6 +420,7 @@ export async function recycleCommunityJobForRetry(input: {
       UPDATE community_jobs
       SET status = 'queued',
           error_code = ?3,
+          attempt_count = 0,
           available_at = ?4,
           last_checkpoint = NULL,
           last_checkpoint_at = NULL,

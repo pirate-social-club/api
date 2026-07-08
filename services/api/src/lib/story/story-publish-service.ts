@@ -103,6 +103,40 @@ async function waitForStoryTxReceipt(input: {
   }
 }
 
+export async function configureStoryEntitlementClass(input: {
+  provider: JsonRpcProvider
+  signer: Wallet
+  configurerContractAddress: string
+  entitlementTokenId: bigint
+  assetVersionId: `0x${string}`
+  cdrVaultUuid: number
+  gasPolicy: Parameters<typeof sendContractTxWithPolicy>[0]["gasPolicy"]
+  txWaitTimeoutMs: number
+}): Promise<TransactionResponse> {
+  const configureTx = await sendContractTxWithPolicy({
+    provider: input.provider,
+    signer: input.signer,
+    contractAddress: input.configurerContractAddress,
+    abi: PURCHASE_ENTITLEMENT_CLASS_CONFIGURER_ABI,
+    functionName: "configureEntitlementClass",
+    args: [
+      input.entitlementTokenId,
+      input.assetVersionId,
+      input.cdrVaultUuid,
+      true,
+    ],
+    gasPolicy: input.gasPolicy,
+    defaultWaitTimeoutMs: input.txWaitTimeoutMs,
+  })
+  await waitForStoryTxReceipt({
+    provider: input.provider,
+    tx: configureTx,
+    timeoutMs: input.txWaitTimeoutMs,
+    failureCode: "story_entitlement_class_configure_failed",
+  })
+  return configureTx
+}
+
 export function publishedAssetVersionMatches(input: {
   existing: PublishedAssetVersionSnapshot
   expected: {
@@ -195,26 +229,15 @@ export async function publishLockedAssetVersionToStory(input: {
     operatorAddress: operatorSigner.address,
   })
 
-  const configureTx = await sendContractTxWithPolicy({
+  const configureTx = await configureStoryEntitlementClass({
     provider,
     signer: classConfigurerSigner,
-    contractAddress: deliveryContracts.purchaseEntitlementClassConfigurer,
-    abi: PURCHASE_ENTITLEMENT_CLASS_CONFIGURER_ABI,
-    functionName: "configureEntitlementClass",
-    args: [
-      input.entitlementTokenId,
-      input.assetVersionId,
-      input.cdrVaultUuid,
-      true,
-    ],
+    configurerContractAddress: deliveryContracts.purchaseEntitlementClassConfigurer,
+    entitlementTokenId: input.entitlementTokenId,
+    assetVersionId: input.assetVersionId,
+    cdrVaultUuid: input.cdrVaultUuid,
     gasPolicy: gasPolicy.value,
-    defaultWaitTimeoutMs: txWaitTimeoutMs,
-  })
-  await waitForStoryTxReceipt({
-    provider,
-    tx: configureTx,
-    timeoutMs: txWaitTimeoutMs,
-    failureCode: "story_entitlement_class_configure_failed",
+    txWaitTimeoutMs,
   })
 
   const publishArgs = [

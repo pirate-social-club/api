@@ -107,7 +107,7 @@ describe("community job store", () => {
 
     expect(recycled?.before.status).toBe("running")
     expect(recycled?.after.status).toBe("queued")
-    expect(recycled?.after.attempt_count).toBe(1)
+    expect(recycled?.after.attempt_count).toBe(0)
     expect(recycled?.after.error_code).toBe("operator_recycled:smoke retry")
     expect(recycled?.after.available_at).toBe("2026-06-05T12:02:00.000Z")
     expect(recycled?.after.last_checkpoint).toBeNull()
@@ -137,5 +137,50 @@ describe("community job store", () => {
     expect(recycled?.before.status).toBe("queued")
     expect(recycled?.after.status).toBe("queued")
     expect(recycled?.after.error_code).toBeNull()
+  })
+
+  test("recycleCommunityJobForRetry gives attempt-capped jobs a fresh retry budget", async () => {
+    const client = await createJobStoreClient()
+    const job = await enqueueCommunityJob({
+      client,
+      communityId: "cmt_test",
+      jobType: "locked_asset_delivery_prepare",
+      subjectType: "asset",
+      subjectId: "ast_test",
+      createdAt: "2026-06-05T12:00:00.000Z",
+    })
+    await client.execute({
+      sql: `
+        UPDATE community_jobs
+        SET status = 'failed',
+            error_code = 'community_job_attempt_timeout:720000',
+            attempt_count = 8,
+            available_at = NULL
+        WHERE job_id = ?1
+      `,
+      args: [job.job_id],
+    })
+
+    const recycled = await recycleCommunityJobForRetry({
+      client,
+      communityId: "cmt_test",
+      jobId: job.job_id,
+      now: "2026-06-05T12:02:00.000Z",
+      reason: "fresh budget",
+    })
+
+    expect(recycled?.before.status).toBe("failed")
+    expect(recycled?.before.attempt_count).toBe(8)
+    expect(recycled?.after.status).toBe("queued")
+    expect(recycled?.after.attempt_count).toBe(0)
+
+    const claim = await markCommunityJobRunning({
+      client,
+      jobId: job.job_id,
+      now: "2026-06-05T12:03:00.000Z",
+      attemptDeadlineAt: "2026-06-05T12:33:00.000Z",
+    })
+    expect(claim?.status).toBe("running")
+    expect(claim?.attempt_count).toBe(1)
   })
 })
