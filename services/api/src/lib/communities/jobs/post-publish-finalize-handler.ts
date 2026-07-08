@@ -545,6 +545,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
           alignmentStatus: analysis.alignmentStatus,
           alignmentError: analysis.alignmentError,
           alignmentReason: analysis.alignmentReason,
+          instrumentalAudio: bundle.instrumental_audio,
           timedLyricsRef: null,
           timedLyrics: analysis.timedLyrics,
           moderationStatus: analysis.moderationStatus,

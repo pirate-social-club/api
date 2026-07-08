@@ -3761,6 +3761,68 @@ const spec = {
         "operationId": "post_communities_by_community_id_posts_by_post_id_karaoke_sessions"
       }
     },
+    "/communities/{community_id}/posts/{post_id}/karaoke/leaderboard": {
+      "get": {
+        "operationId": "communityPostKaraokeLeaderboard",
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Fetch the karaoke leaderboard for a song post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/KaraokeRankingScope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaraokeSongLeaderboard"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
     "/communities/{community_id}/posts/{post_id}/study": {
       "get": {
         "tags": [
@@ -13225,6 +13287,106 @@ const spec = {
           }
         }
       },
+      "KaraokeRankingScope": {
+        "type": "string",
+        "enum": [
+          "all_time",
+          "weekly"
+        ]
+      },
+      "KaraokeSongLeaderboard": {
+        "type": "object",
+        "required": [
+          "object",
+          "post_id",
+          "community_id",
+          "scope",
+          "karaoke_revision_id",
+          "scoring_version",
+          "scoring_provider",
+          "scoring_model",
+          "total_ranked",
+          "entries",
+          "viewer_rank",
+          "viewer_top_percent",
+          "viewer_best_score",
+          "viewer_best_reached_at",
+          "viewer_eligible_attempt_count"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "karaoke_song_leaderboard"
+            ]
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/KaraokeRankingScope"
+          },
+          "period_start": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "karaoke_revision_id": {
+            "type": "string"
+          },
+          "scoring_version": {
+            "type": "integer"
+          },
+          "scoring_provider": {
+            "type": "string"
+          },
+          "scoring_model": {
+            "type": "string"
+          },
+          "total_ranked": {
+            "type": "integer"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KaraokeLeaderboardEntry"
+            }
+          },
+          "viewer_rank": {
+            "type": "integer",
+            "nullable": true
+          },
+          "viewer_top_percent": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "viewer_best_score": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "viewer_best_reached_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "viewer_eligible_attempt_count": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStudyPayload": {
         "type": "object",
         "required": [
@@ -14036,6 +14198,10 @@ const spec = {
           },
           "lyrics_sha256": {
             "type": "string"
+          },
+          "karaoke_revision_id": {
+            "type": "string",
+            "nullable": true
           },
           "genius_annotations_url": {
             "type": "string",
@@ -18308,6 +18474,43 @@ const spec = {
           }
         ]
       },
+      "KaraokeLeaderboardEntry": {
+        "type": "object",
+        "required": [
+          "rank",
+          "top_percent",
+          "score",
+          "reached_at",
+          "identity",
+          "is_viewer"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer"
+          },
+          "top_percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "reached_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/KaraokeLeaderboardIdentity"
+          },
+          "is_viewer": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStudyAccessState": {
         "type": "string",
         "enum": [
@@ -21683,6 +21886,37 @@ const spec = {
           "removed",
           "unavailable"
         ]
+      },
+      "KaraokeLeaderboardIdentity": {
+        "type": "object",
+        "required": [
+          "visibility",
+          "display_name",
+          "handle",
+          "avatar_ref"
+        ],
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "visible",
+              "anonymized"
+            ]
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
       },
       "SongStreakLeaderboardIdentity": {
         "type": "object",

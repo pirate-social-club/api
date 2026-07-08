@@ -22,6 +22,8 @@ import {
 } from "./cloudflare-effect-runner";
 import { FakeKaraokeStreamingSttAdapter } from "./fake-stt-adapter";
 import {
+  KARAOKE_ATTEMPT_FINALIZE_INDEX_DDL,
+  KARAOKE_ATTEMPT_FINALIZE_TABLE_DDL,
   KARAOKE_OUTBOX_INDEX_DDL,
   KARAOKE_OUTBOX_TABLE_DDL,
   KARAOKE_SNAPSHOT_TABLE_DDL,
@@ -37,9 +39,12 @@ const TRUSTED_GATEWAY_HEADERS = [
   "x-karaoke-subject",
 ] as const;
 const SESSION_EXPIRED_CLOSE_CODE = 4001;
+const FINALIZE_RETRY_BASE_MS = 5_000;
+const FINALIZE_RETRY_MAX_MS = 5 * 60_000;
 
 export interface InitializeRequest {
   communityId: string;
+  postId: string;
   sessionId: string;
   attemptId: string;
   subjectUserId: string;
@@ -132,9 +137,11 @@ export class SqliteOutboxStore implements OutboxStore {
 
 interface PersistedRuntimeMeta {
   communityId: string;
+  postId: string;
   sessionId: string;
   attemptId: string;
   subjectUserId: string;
+  sessionStartedAtMs: number;
   sessionExpiresAtMs: number;
 }
 
@@ -177,6 +184,8 @@ export class KaraokeSessionRuntimeDO {
     this.env = env;
     this.options = options;
     this.schemaReady = this.ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec(KARAOKE_ATTEMPT_FINALIZE_TABLE_DDL);
+      this.ctx.storage.sql.exec(KARAOKE_ATTEMPT_FINALIZE_INDEX_DDL);
       this.ctx.storage.sql.exec(KARAOKE_SNAPSHOT_TABLE_DDL);
       this.ctx.storage.sql.exec(KARAOKE_OUTBOX_TABLE_DDL);
       this.ctx.storage.sql.exec(KARAOKE_OUTBOX_INDEX_DDL);
@@ -265,6 +274,19 @@ export class KaraokeSessionRuntimeDO {
 
   async alarm(): Promise<void> {
     await this.schemaReady;
+    await this.deliverPendingFinalizations();
+    const hasPendingFinalizations = this.hasPendingFinalizations();
+    if (hasPendingFinalizations && (!this.meta || !this.isExpired())) {
+      this.scheduleNextFinalizationAlarm();
+      return;
+    }
+    if (this.meta && !this.isExpired()) {
+      const expiresAt = this.meta?.sessionExpiresAtMs;
+      if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
+        await this.ctx.storage.setAlarm?.(expiresAt);
+      }
+      return;
+    }
     // V1 stores exactly one attempt per DO. Multi-attempt sessions must schedule
     // the nearest attempt expiry instead of deleting the whole object here.
     for (const socket of this.ctx.getWebSockets?.() ?? []) {
@@ -277,11 +299,15 @@ export class KaraokeSessionRuntimeDO {
     await this.sttAdapter?.close().catch(() => undefined);
     this.ctx.storage.sql.exec("DELETE FROM karaoke_session_outbox");
     this.ctx.storage.sql.exec("DELETE FROM karaoke_session_snapshots");
-    await this.ctx.storage.deleteAlarm?.();
     this.host = null;
     this.effectRunner = null;
     this.sttAdapter = null;
     this.meta = null;
+    if (hasPendingFinalizations) {
+      this.scheduleNextFinalizationAlarm();
+      return;
+    }
+    await this.ctx.storage.deleteAlarm?.();
   }
 
   snapshotForTests(): KaraokeSessionState | null {
@@ -293,6 +319,7 @@ export class KaraokeSessionRuntimeDO {
     if (
       !body
       || !body.communityId
+      || !body.postId
       || !body.sessionId
       || !body.attemptId
       || !body.subjectUserId
@@ -332,6 +359,8 @@ export class KaraokeSessionRuntimeDO {
     this.meta = {
       attemptId: body.attemptId,
       communityId: body.communityId,
+      postId: body.postId,
+      sessionStartedAtMs: this.now(),
       sessionExpiresAtMs: body.sessionExpiresAtMs,
       sessionId: body.sessionId,
       subjectUserId: body.subjectUserId,
@@ -629,15 +658,129 @@ export class KaraokeSessionRuntimeDO {
     };
     if (!this.options.outboxStore && this.ctx.storage.transactionSync) {
       this.ctx.storage.transactionSync(persist);
-      return;
+    } else {
+      persist();
     }
-    persist();
     if (this.options.outboxStore) {
       await this.options.outboxStore.markPending({
         attemptId: input.state.attemptId,
         rows: input.rows,
         sessionId: input.state.sessionId,
       });
+    }
+    await this.enqueueSummaryFinalization(input.state, input.rows);
+  }
+
+  private activityDateFromMeta(): string {
+    const startedAt = this.meta?.sessionStartedAtMs;
+    const ms = typeof startedAt === "number" && Number.isFinite(startedAt) ? startedAt : this.now();
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  private async enqueueSummaryFinalization(state: KaraokeSessionState, rows: OutboxRow[]): Promise<void> {
+    if (!this.meta || !state.summary) return;
+    if (!rows.some((row) => row.event.type === "summary")) return;
+    const now = this.now();
+    const payload = {
+      activity_date: this.activityDateFromMeta(),
+      attempt_id: state.attemptId,
+      completed_at: new Date(now).toISOString(),
+      completion_reason: "completed",
+      session_id: state.sessionId,
+      summary: state.summary,
+    };
+    this.ctx.storage.sql.exec(
+      `INSERT INTO karaoke_attempt_finalize_outbox (
+        session_id, attempt_id, payload_json, attempts, next_attempt_at, delivered_at, created_at, updated_at
+      ) VALUES (?, ?, ?, 0, ?, NULL, ?, ?)
+      ON CONFLICT(session_id, attempt_id) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at`,
+      state.sessionId,
+      state.attemptId,
+      JSON.stringify(payload),
+      now,
+      now,
+      now,
+    );
+    await this.deliverPendingFinalizations();
+    if (this.hasPendingFinalizations()) {
+      this.scheduleNextFinalizationAlarm();
+    }
+  }
+
+  private hasPendingFinalizations(): boolean {
+    const rows = this.ctx.storage.sql.exec<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM karaoke_attempt_finalize_outbox WHERE delivered_at IS NULL",
+    ).toArray();
+    return Number(rows[0]?.count ?? 0) > 0;
+  }
+
+  private scheduleNextFinalizationAlarm(): void {
+    const rows = this.ctx.storage.sql.exec<{ next_attempt_at: number }>(
+      "SELECT next_attempt_at FROM karaoke_attempt_finalize_outbox WHERE delivered_at IS NULL ORDER BY next_attempt_at ASC LIMIT 1",
+    ).toArray();
+    const nextAttemptAt = Number(rows[0]?.next_attempt_at ?? 0);
+    if (Number.isFinite(nextAttemptAt) && nextAttemptAt > 0) {
+      void this.ctx.storage.setAlarm?.(Math.max(nextAttemptAt, this.now() + 1000));
+    }
+  }
+
+  private finalizeEndpoint(sessionId: string): string | null {
+    const origin = this.env.PIRATE_API_PUBLIC_ORIGIN?.trim().replace(/\/+$/u, "");
+    if (!origin) return null;
+    return `${origin}/karaoke/sessions/${encodeURIComponent(sessionId)}/finalize`;
+  }
+
+  private async deliverPendingFinalizations(): Promise<void> {
+    const rows = this.ctx.storage.sql.exec<{
+      session_id: string;
+      attempt_id: string;
+      payload_json: string;
+      attempts: number;
+    }>(
+      "SELECT session_id, attempt_id, payload_json, attempts FROM karaoke_attempt_finalize_outbox WHERE delivered_at IS NULL AND next_attempt_at <= ? ORDER BY next_attempt_at ASC LIMIT 3",
+      this.now(),
+    ).toArray();
+    const secret = this.env.KARAOKE_GATEWAY_SIGNING_KEY?.trim();
+    if (!secret || secret.length < 32) return;
+    for (const row of rows) {
+      const endpoint = this.finalizeEndpoint(row.session_id);
+      if (!endpoint) return;
+      const now = this.now();
+      try {
+        const response = await fetch(endpoint, {
+          body: row.payload_json,
+          headers: {
+            "content-type": "application/json",
+            "x-karaoke-finalize-secret": secret,
+            "x-request-id": crypto.randomUUID(),
+          },
+          method: "POST",
+        });
+        if (response.ok) {
+          this.ctx.storage.sql.exec(
+            "UPDATE karaoke_attempt_finalize_outbox SET delivered_at = ?, updated_at = ? WHERE session_id = ? AND attempt_id = ?",
+            now,
+            now,
+            row.session_id,
+            row.attempt_id,
+          );
+          continue;
+        }
+      } catch {
+        // Retry below.
+      }
+      const attempts = Number(row.attempts ?? 0) + 1;
+      const delay = Math.min(FINALIZE_RETRY_MAX_MS, FINALIZE_RETRY_BASE_MS * 2 ** Math.min(attempts, 6));
+      this.ctx.storage.sql.exec(
+        "UPDATE karaoke_attempt_finalize_outbox SET attempts = ?, next_attempt_at = ?, updated_at = ? WHERE session_id = ? AND attempt_id = ?",
+        attempts,
+        now + delay,
+        now,
+        row.session_id,
+        row.attempt_id,
+      );
     }
   }
 

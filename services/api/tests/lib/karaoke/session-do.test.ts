@@ -35,11 +35,24 @@ class FakeSqlStorage {
       this.tables.set("karaoke_session_snapshots", this.tables.get("karaoke_session_snapshots") ?? []);
     } else if (normalized.includes("CREATE TABLE IF NOT EXISTS karaoke_session_outbox")) {
       this.tables.set("karaoke_session_outbox", this.tables.get("karaoke_session_outbox") ?? []);
-    } else if (normalized.startsWith("CREATE INDEX")) {
+    } else if (normalized.includes("CREATE TABLE IF NOT EXISTS karaoke_attempt_finalize_outbox")) {
+      this.tables.set("karaoke_attempt_finalize_outbox", this.tables.get("karaoke_attempt_finalize_outbox") ?? []);
+    } else if (normalized.includes("CREATE INDEX IF NOT EXISTS karaoke_session_outbox_pending_idx")) {
       this.requireTable("karaoke_session_outbox");
+    } else if (normalized.includes("CREATE INDEX IF NOT EXISTS karaoke_attempt_finalize_pending_idx")) {
+      this.requireTable("karaoke_attempt_finalize_outbox");
     } else if (normalized.startsWith("INSERT OR IGNORE INTO karaoke_session_outbox")) {
       this.requireTable("karaoke_session_outbox");
       this.upsertOutboxRow(bindings);
+    } else if (normalized.startsWith("INSERT INTO karaoke_attempt_finalize_outbox")) {
+      this.requireTable("karaoke_attempt_finalize_outbox");
+      this.upsertFinalizeOutboxRow(bindings);
+    } else if (normalized.startsWith("UPDATE karaoke_attempt_finalize_outbox SET delivered_at")) {
+      this.requireTable("karaoke_attempt_finalize_outbox");
+      this.updateFinalizeDelivered(bindings);
+    } else if (normalized.startsWith("UPDATE karaoke_attempt_finalize_outbox SET attempts")) {
+      this.requireTable("karaoke_attempt_finalize_outbox");
+      this.updateFinalizeRetry(bindings);
     } else if (normalized.startsWith("UPDATE karaoke_session_outbox")) {
       this.requireTable("karaoke_session_outbox");
       this.updateOutboxDelivered(bindings);
@@ -75,6 +88,27 @@ class FakeSqlStorage {
       );
       return filtered;
     }
+    if (normalized.includes("FROM karaoke_attempt_finalize_outbox")) {
+      this.requireTable("karaoke_attempt_finalize_outbox");
+      const table = this.tables.get("karaoke_attempt_finalize_outbox") ?? [];
+      if (normalized.includes("COUNT(*) AS count")) {
+        return [{ count: table.filter((row) => row.delivered_at === null).length }];
+      }
+      if (normalized.includes("SELECT next_attempt_at")) {
+        return table
+          .filter((row) => row.delivered_at === null)
+          .sort((a, b) => Number(a.next_attempt_at) - Number(b.next_attempt_at))
+          .slice(0, 1);
+      }
+      if (normalized.includes("WHERE delivered_at IS NULL AND next_attempt_at <= ?")) {
+        const [now] = _bindings as [number];
+        return table
+          .filter((row) => row.delivered_at === null && Number(row.next_attempt_at) <= now)
+          .sort((a, b) => Number(a.next_attempt_at) - Number(b.next_attempt_at))
+          .slice(0, 3);
+      }
+      return table;
+    }
     if (normalized.includes("FROM karaoke_session_snapshots")) {
       return this.tables.get("karaoke_session_snapshots") ?? [];
     }
@@ -109,6 +143,53 @@ class FakeSqlStorage {
     const table = this.tables.get("karaoke_session_outbox") ?? [];
     const row = table.find((r) => r.session_id === sessionId && r.attempt_id === attemptId && r.event_id === eventId);
     if (row) row.delivered_at = deliveredAt;
+  }
+
+  private upsertFinalizeOutboxRow(bindings: unknown[]): void {
+    const [
+      sessionId,
+      attemptId,
+      payloadJson,
+      nextAttemptAt,
+      createdAt,
+      updatedAt,
+    ] = bindings as [string, string, string, number, number, number];
+    const table = this.tables.get("karaoke_attempt_finalize_outbox") ?? [];
+    const existing = table.find((row) => row.session_id === sessionId && row.attempt_id === attemptId);
+    const next = {
+      attempt_id: attemptId,
+      attempts: 0,
+      created_at: createdAt,
+      delivered_at: null,
+      next_attempt_at: nextAttemptAt,
+      payload_json: payloadJson,
+      session_id: sessionId,
+      updated_at: updatedAt,
+    };
+    if (existing) Object.assign(existing, next);
+    else table.push(next);
+    this.tables.set("karaoke_attempt_finalize_outbox", table);
+  }
+
+  private updateFinalizeDelivered(bindings: unknown[]): void {
+    const [deliveredAt, updatedAt, sessionId, attemptId] = bindings as [number, number, string, string];
+    const table = this.tables.get("karaoke_attempt_finalize_outbox") ?? [];
+    const row = table.find((r) => r.session_id === sessionId && r.attempt_id === attemptId);
+    if (row) {
+      row.delivered_at = deliveredAt;
+      row.updated_at = updatedAt;
+    }
+  }
+
+  private updateFinalizeRetry(bindings: unknown[]): void {
+    const [attempts, nextAttemptAt, updatedAt, sessionId, attemptId] = bindings as [number, number, number, string, string];
+    const table = this.tables.get("karaoke_attempt_finalize_outbox") ?? [];
+    const row = table.find((r) => r.session_id === sessionId && r.attempt_id === attemptId);
+    if (row) {
+      row.attempts = attempts;
+      row.next_attempt_at = nextAttemptAt;
+      row.updated_at = updatedAt;
+    }
   }
 
   private upsertSnapshotRow(bindings: unknown[]): void {
@@ -222,6 +303,7 @@ function initRequest() {
     attemptId: "attempt-1",
     communityId: "community-1",
     lines: LINES,
+    postId: "post-1",
     scoringPolicy: ENABLED_POLICY,
     sessionExpiresAtMs: Date.now() + 60 * 60 * 1000,
     sessionId: "session-1",
@@ -352,8 +434,9 @@ describe("KaraokeSessionRuntimeDO", () => {
       },
       send() {},
     });
-    const expiresAt = Date.now() + 60_000;
-    const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {});
+    let now = Date.now();
+    const expiresAt = now + 60_000;
+    const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, { now: () => now });
     const response = await do_.fetch(new Request("https://do/init", {
       body: JSON.stringify({ ...initRequest(), sessionExpiresAtMs: expiresAt }),
       headers: { "content-type": "application/json" },
@@ -362,6 +445,7 @@ describe("KaraokeSessionRuntimeDO", () => {
 
     expect(response.status).toBe(200);
     expect(storage.alarm).toBe(expiresAt);
+    now = expiresAt;
     await do_.alarm();
     expect(closed as unknown).toEqual([4001, "Karaoke session expired"]);
     expect(storage.alarm).toBeNull();

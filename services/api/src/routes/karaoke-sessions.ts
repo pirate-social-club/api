@@ -1,6 +1,11 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import type { Env } from "../env"
 import { isAllowedKaraokeWebSocketOrigin } from "../lib/http/allowed-origins"
+import {
+  finalizeKaraokeAttempt,
+  parseFinalizeKaraokeAttemptPayload,
+} from "../lib/karaoke/karaoke-attempt-finalize-service"
 import { verifyKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
 
 const karaokeSessions = new Hono<{ Bindings: Env }>()
@@ -18,6 +23,38 @@ function errorResponse(requestId: string, status: number, code: string, message:
     status,
   })
 }
+
+function requireFinalizeSecret(c: Context<{ Bindings: Env }>): Response | null {
+  const expected = c.env.KARAOKE_GATEWAY_SIGNING_KEY?.trim()
+  const provided = c.req.header("x-karaoke-finalize-secret")?.trim()
+  if (!expected || expected.length < 32 || !provided || provided !== expected) {
+    return errorResponse(
+      c.req.header("x-request-id")?.trim() || crypto.randomUUID(),
+      401,
+      "karaoke_finalize_unauthorized",
+      "Karaoke finalization is unauthorized",
+    )
+  }
+  return null
+}
+
+karaokeSessions.post("/:sessionId/finalize", async (c) => {
+  const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
+  const unauthorized = requireFinalizeSecret(c)
+  if (unauthorized) return unauthorized
+  const payload = parseFinalizeKaraokeAttemptPayload(await c.req.json().catch(() => null))
+  if (payload.sessionId !== c.req.param("sessionId")) {
+    return errorResponse(requestId, 400, "karaoke_finalize_session_mismatch", "Karaoke finalization session does not match")
+  }
+  const result = await finalizeKaraokeAttempt({
+    env: c.env,
+    payload,
+  })
+  return Response.json(result, {
+    headers: responseHeaders(requestId),
+    status: 200,
+  })
+})
 
 karaokeSessions.get("/:sessionId/websocket", async (c) => {
   const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()

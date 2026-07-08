@@ -296,6 +296,17 @@ function clearActiveCredentialPresenceCache(input: {
   activeCredentialPresenceCache.delete(activeCredentialCacheKey(input))
 }
 
+export function clearActiveCommunityElevenLabsCredentialPresenceCacheForTests(input: {
+  env: Env
+  communityId: string
+}): void {
+  clearActiveCredentialPresenceCache({
+    env: input.env,
+    communityId: input.communityId,
+    provider: ELEVENLABS_PROVIDER,
+  })
+}
+
 async function readCredential(input: {
   env: Env
   communityId: string
