@@ -86,7 +86,7 @@ type LockedAssetDeliveryResult = {
   lockedDeliveryMetadataJson: string
 }
 
-type PreparedLockedDeliveryCoordinates = {
+export type PreparedLockedDeliveryCoordinates = {
   storyAssetVersionId: string
   storyCdrVaultUuid: number
   storyNamespace: string
@@ -185,6 +185,32 @@ export function setLockedAssetDeliveryPreparerForTests(
   }) => Promise<LockedAssetDeliveryResult>) | null,
 ): void {
   testLockedAssetDeliveryPreparer = preparer
+}
+
+export function preparedLockedDeliveryMatches(input: {
+  prepared: PreparedLockedDeliveryCoordinates | null | undefined
+  expected: {
+    storyAssetVersionId: string
+    storyNamespace: string
+    storyEntitlementTokenId: string
+    storyReadCondition: string
+    storyWriteCondition: string
+    lockedDeliveryRef: string
+  }
+}): boolean {
+  const { prepared, expected } = input
+  return Boolean(
+    prepared
+      && prepared.storyAssetVersionId === expected.storyAssetVersionId
+      && prepared.storyCdrVaultUuid > 0
+      && prepared.storyNamespace === expected.storyNamespace
+      && prepared.storyEntitlementTokenId === expected.storyEntitlementTokenId
+      && prepared.storyReadCondition === expected.storyReadCondition
+      && prepared.storyWriteCondition === expected.storyWriteCondition
+      && prepared.lockedDeliveryRef === expected.lockedDeliveryRef
+      && prepared.lockedDeliveryStorageRef.trim()
+      && prepared.lockedDeliveryMetadataJson.trim(),
+  )
 }
 
 function toOwnedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -512,21 +538,21 @@ export async function prepareLockedAssetDelivery(input: {
     let lockedDeliveryStorageRef = objectKey
     let lockedDeliveryMetadataJson: string
     const prepared = input.preparedDelivery
-    if (
-      prepared
-      && prepared.storyAssetVersionId === assetVersionId
-      && prepared.storyCdrVaultUuid > 0
-      && prepared.storyNamespace === namespace
-      && prepared.storyEntitlementTokenId === entitlementTokenId.toString()
-      && prepared.storyReadCondition === readConditionAddress
-      && prepared.storyWriteCondition === writeConditionAddress
-      && prepared.lockedDeliveryRef === lockedDeliveryRef
-      && prepared.lockedDeliveryStorageRef.trim()
-      && prepared.lockedDeliveryMetadataJson.trim()
-    ) {
-      cdrVaultUuid = prepared.storyCdrVaultUuid
-      lockedDeliveryStorageRef = prepared.lockedDeliveryStorageRef
-      lockedDeliveryMetadataJson = prepared.lockedDeliveryMetadataJson
+    if (preparedLockedDeliveryMatches({
+      prepared,
+      expected: {
+        storyAssetVersionId: assetVersionId,
+        storyNamespace: namespace,
+        storyEntitlementTokenId: entitlementTokenId.toString(),
+        storyReadCondition: readConditionAddress,
+        storyWriteCondition: writeConditionAddress,
+        lockedDeliveryRef,
+      },
+    })) {
+      const reusablePrepared = prepared!
+      cdrVaultUuid = reusablePrepared.storyCdrVaultUuid
+      lockedDeliveryStorageRef = reusablePrepared.lockedDeliveryStorageRef
+      lockedDeliveryMetadataJson = reusablePrepared.lockedDeliveryMetadataJson
     } else {
       const plaintext = await getPlaintext()
       if (plaintext.byteLength > 50 * 1024 * 1024) {
