@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url"
 import type { ActorContext } from "../../../src/lib/auth-middleware"
 import { buildLocalCommunityDbUrl, ensureCommunityDbSchema } from "../../../src/lib/communities/community-local-db"
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/community-repository-types"
-import { getCommunityElevenLabsStudyCapability } from "../../../src/lib/communities/assistant-policy/credential-service"
+import {
+  clearActiveCommunityElevenLabsCredentialPresenceCacheForTests,
+  getCommunityElevenLabsStudyCapability,
+} from "../../../src/lib/communities/assistant-policy/credential-service"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
 import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
 import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, getSongStudyAttemptTiming, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
@@ -482,10 +485,85 @@ async function seedActiveElevenLabsCredential(): Promise<void> {
       'labs', 1, 'active', ?2, NULL, NULL, ?3
     )
   `, [COMMUNITY_ID, NOW, AUTHOR_ID])
+  clearActiveCommunityElevenLabsCredentialPresenceCacheForTests({
+    env: env(),
+    communityId: COMMUNITY_ID,
+  })
 }
 
 async function clearElevenLabsCredential(): Promise<void> {
-  await execControl("DELETE FROM community_assistant_credentials WHERE community_id = ?1 AND provider = 'elevenlabs'", [COMMUNITY_ID])
+  const testEnv = env()
+  const controlPlaneUrl = testEnv.CONTROL_PLANE_DATABASE_URL
+  if (!controlPlaneUrl) throw new Error("test control plane URL is not configured")
+  const credentialClient = createClient({ url: controlPlaneUrl })
+  try {
+    await credentialClient.execute("DELETE FROM community_assistant_credentials WHERE provider = 'elevenlabs'")
+  } finally {
+    credentialClient.close()
+  }
+  clearActiveCommunityElevenLabsCredentialPresenceCacheForTests({
+    env: testEnv,
+    communityId: COMMUNITY_ID,
+  })
+}
+
+async function createEmptyCredentialEnv(): Promise<Env> {
+  if (!rootDir) throw new Error("test root not initialized")
+  const credentialDbUrl = `file:${join(rootDir, "empty-credentials.db")}`
+  const credentialClient = createClient({ url: credentialDbUrl })
+  try {
+    await credentialClient.execute(`
+      CREATE TABLE community_database_routing (
+        community_id TEXT PRIMARY KEY,
+        backend TEXT NOT NULL,
+        provisioning_state TEXT NOT NULL,
+        shard_worker_id TEXT,
+        binding_name TEXT,
+        region TEXT,
+        migrated_at TEXT,
+        decommissioned_at TEXT,
+        last_error_at TEXT,
+        last_error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+    await credentialClient.execute({
+      sql: `
+        INSERT INTO community_database_routing (
+          community_id, backend, provisioning_state, shard_worker_id, binding_name,
+          region, migrated_at, decommissioned_at,
+          last_error_at, last_error_message, created_at, updated_at
+        )
+        VALUES (?1, 'd1', 'ready', 'test-shard', 'DB_CMTY_STUDY', 'test',
+                  ?2, NULL, NULL, NULL, ?2, ?2)
+      `,
+      args: [COMMUNITY_ID, NOW],
+    })
+    await credentialClient.execute(`
+      CREATE TABLE community_assistant_credentials (
+        community_assistant_credential_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        encrypted_secret TEXT NOT NULL,
+        key_last4 TEXT NOT NULL,
+        encryption_key_version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        rotated_from TEXT,
+        actor_user_id TEXT NOT NULL
+      )
+    `)
+  } finally {
+    credentialClient.close()
+  }
+  const testEnv = env({ CONTROL_PLANE_DATABASE_URL: credentialDbUrl })
+  clearActiveCommunityElevenLabsCredentialPresenceCacheForTests({
+    env: testEnv,
+    communityId: COMMUNITY_ID,
+  })
+  return testEnv
 }
 
 beforeEach(async () => {
@@ -2655,7 +2733,7 @@ describe("post study service", () => {
   })
 
   test("transcription reports a study-scoped missing ElevenLabs key", async () => {
-    await clearElevenLabsCredential()
+    const missingCredentialEnv = await createEmptyCredentialEnv()
     await seedSongPost()
 
     let fetchCalled = false
@@ -2667,7 +2745,7 @@ describe("post study service", () => {
         actor: learnerActor,
         communityId: COMMUNITY_ID,
         communityRepository: repo,
-        env: env(),
+        env: missingCredentialEnv,
         file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
         postId: POST_ID,
       })).rejects.toThrow(/say-it-back transcription/)

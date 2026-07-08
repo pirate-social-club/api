@@ -3245,6 +3245,13 @@ export async function transcribePostStudyAudio(input: {
     await db.close()
   }
 
+  if (!await hasActiveCommunityElevenLabsCredential({
+    env: input.env,
+    communityId: input.communityId,
+  })) {
+    throw badRequestError("An ElevenLabs API key is required for say-it-back transcription")
+  }
+
   const transcription = await transcribeCommunityAudioWithElevenLabs({
     communityId: input.communityId,
     env: input.env,
