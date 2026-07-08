@@ -61,7 +61,6 @@ export async function prepareSongPostAsset(input: {
   return {
     writeBody: {
       ...input.body,
-      identity_mode: "public",
       media_refs: mediaRefs,
       lyrics: resolvedBundle.lyrics,
       access_mode: accessMode,
@@ -126,7 +125,6 @@ export async function prepareVideoPostAsset(input: {
   return {
     writeBody: {
       ...input.body,
-      identity_mode: "public",
       media_refs: accessMode === "locked" ? lockedPosterMediaRefs : publicVideoMediaRefs,
       access_mode: input.body.access_mode,
       asset_id: input.body.access_mode ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,

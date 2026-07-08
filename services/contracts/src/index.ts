@@ -1517,7 +1517,6 @@ export type CreatePostRequest = (((unknown & {
   link_url: string;
 } | (unknown & {
   post_type: "song";
-  identity_mode: "public";
   access_mode?: "public" | "locked";
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;

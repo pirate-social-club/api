@@ -26,6 +26,9 @@ const PREPARED: PreparedLiveRoomCreate = {
   description: null,
   storeUrl: null,
   storeLabel: null,
+  identityMode: "public",
+  anonymousScope: null,
+  disclosedQualifierIds: null,
   roomKind: "solo",
   accessMode: "free",
   visibility: "public",
@@ -58,5 +61,26 @@ describe("createLiveRoomInTransaction (buffer-safe)", () => {
     // The core writes happened.
     expect(sqls.some((s) => /insert\s+into\s+posts/i.test(s))).toBe(true)
     expect(sqls.some((s) => /insert\s+into\s+live_rooms/i.test(s) && /store_url/i.test(s) && /store_label/i.test(s) && /audience_gate_json/i.test(s))).toBe(true)
+  })
+
+  test("stores anonymous identity on the anchor post descriptor without reads", async () => {
+    const { executor, sqls } = recordingExecutor()
+    const result = await createLiveRoomInTransaction({
+      tx: executor,
+      userId: "usr_host",
+      communityId: "cmt_lr",
+      prepared: {
+        ...PREPARED,
+        identityMode: "anonymous",
+        anonymousScope: "community_stable",
+        disclosedQualifierIds: ["qual_unique_human"],
+      },
+    })
+
+    expect(result.anchorPost.identity_mode).toBe("anonymous")
+    expect(result.anchorPost.anonymous_scope).toBe("community_stable")
+    expect(result.anchorPost.anonymous_label).toMatch(/^anon_/)
+    expect(result.anchorPost.disclosed_qualifiers_json).toContain("qual_unique_human")
+    expect(sqls.some((s) => /^\s*select\b/i.test(s) || /pragma/i.test(s))).toBe(false)
   })
 })

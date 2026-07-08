@@ -3,7 +3,7 @@ import type { Env } from "../../../env"
 import type { CommunityDatabaseBindingRepository, CommunityPostProjectionRepository, CommunityReadRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import { executeFirst } from "../../db-helpers"
-import { authError, badRequestError, conflictError, notFoundError, paymentRequired } from "../../errors"
+import { authError, badRequestError, conflictError, eligibilityFailed, notFoundError, paymentRequired } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { decodePublicUserId, publicId } from "../../public-ids"
 import { withTransaction } from "../../transactions"
@@ -15,6 +15,8 @@ import {
   getCommunityMembershipState,
   hasCommunityRole,
 } from "../membership/membership-state-store"
+import { buildAnonymousLabel, buildDisclosedQualifierSnapshots } from "../../identity/anonymous-identity"
+import { getCommunityPostPolicy } from "../../posts/community-post-policy-store"
 import { fetchSongArtifactBytes } from "../../song-artifacts/song-artifact-storage"
 import { rowValue } from "../../sql-row"
 import { assertAcceptedLiveRoomGuestInvite } from "./guest-invites"
@@ -104,7 +106,7 @@ import {
   normalizeLiveRoomViewerUid,
   recordLiveRoomViewerSession,
 } from "./viewer-sessions"
-import type { CommunityListing, CreateCommunityListingRequest } from "../../../types"
+import type { CommunityListing, CreateCommunityListingRequest, Post } from "../../../types"
 import type {
   CreateLiveRoomRequest,
   LiveRoom,
@@ -258,7 +260,10 @@ type LiveRoomAnchorPost = {
   community_id: string
   author_user_id: string
   authorship_mode: "human_direct"
-  identity_mode: "public"
+  identity_mode: Post["identity_mode"]
+  anonymous_scope: Post["anonymous_scope"]
+  anonymous_label: string | null
+  disclosed_qualifiers_json: string | null
   post_type: "video"
   status: "published"
   visibility: "public"
@@ -342,6 +347,24 @@ async function createLiveRoomPreflight(input: {
       throw notFoundError("Guest user not found")
     }
   }
+  if (prepared.identityMode === "anonymous") {
+    const policy = await getCommunityPostPolicy(input.client, input.communityId)
+    if (!policy) {
+      throw notFoundError("Community not found")
+    }
+    if (!policy.allow_anonymous_identity) {
+      throw eligibilityFailed("Anonymous posts are not enabled in this community")
+    }
+    const allowedScope = policy.anonymous_identity_scope ?? "community_stable"
+    const requestedScope = prepared.anonymousScope ?? allowedScope
+    if (requestedScope !== allowedScope) {
+      throw badRequestError("anonymous_scope does not match the community policy")
+    }
+    return {
+      ...prepared,
+      anonymousScope: requestedScope,
+    }
+  }
   return prepared
 }
 
@@ -361,6 +384,20 @@ export async function createLiveRoomInTransaction(input: {
   const setlistId = makeId("lrs")
   const now = nowIso()
   const status: LiveRoomStatus = "scheduled"
+  const identityMode = input.prepared.identityMode ?? "public"
+  const anonymousScope = identityMode === "anonymous" ? input.prepared.anonymousScope ?? "community_stable" : null
+  const anonymousLabel = identityMode === "anonymous" && anonymousScope
+    ? buildAnonymousLabel({
+        communityId: input.communityId,
+        entityId: anchorPostId,
+        scope: anonymousScope,
+        userId: input.userId,
+      })
+    : null
+  const disclosedQualifierSnapshots = identityMode === "anonymous"
+    ? buildDisclosedQualifierSnapshots(input.prepared.disclosedQualifierIds)
+    : null
+  const disclosedQualifiersJson = disclosedQualifierSnapshots ? JSON.stringify(disclosedQualifierSnapshots) : null
   await input.tx.execute({
     sql: `
       INSERT INTO posts (
@@ -371,15 +408,26 @@ export async function createLiveRoomInTransaction(input: {
         asset_id, parent_post_id, analysis_state, analysis_result_ref,
         content_safety_state, age_gate_policy, created_at, updated_at
       ) VALUES (
-        ?1, ?2, ?3, 'public', NULL,
-        NULL, NULL, NULL, 'video', 'published',
-        NULL, ?4, ?5, NULL, NULL, NULL, NULL,
+        ?1, ?2, ?3, ?4, ?5,
+        ?6, ?7, NULL, 'video', 'published',
+        NULL, ?8, ?9, NULL, NULL, NULL, NULL,
         NULL, NULL, 'machine_allowed', 'none',
         NULL, NULL, 'allow', NULL,
-        'safe', 'none', ?6, ?6
+        'safe', 'none', ?10, ?10
       )
     `,
-    args: [anchorPostId, input.communityId, input.userId, input.prepared.title, input.prepared.description, now],
+    args: [
+      anchorPostId,
+      input.communityId,
+      input.userId,
+      identityMode,
+      anonymousScope,
+      anonymousLabel,
+      disclosedQualifiersJson,
+      input.prepared.title,
+      input.prepared.description,
+      now,
+    ],
   })
   await input.tx.execute({
     sql: `
@@ -485,7 +533,10 @@ export async function createLiveRoomInTransaction(input: {
       community_id: input.communityId,
       author_user_id: input.userId,
       authorship_mode: "human_direct",
-      identity_mode: "public",
+      identity_mode: identityMode,
+      anonymous_scope: anonymousScope,
+      anonymous_label: anonymousLabel,
+      disclosed_qualifiers_json: disclosedQualifiersJson,
       post_type: "video",
       status: "published",
       visibility: "public",

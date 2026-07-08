@@ -33,6 +33,31 @@ describe("normalizeLiveRoomCreateRequest", () => {
     expect(prepared.storeLabel).toBe("Event merch")
   })
 
+  test("normalizes anonymous identity fields", () => {
+    const prepared = normalizeLiveRoomCreateRequest({
+      hostUserId: "usr_host",
+      body: createRequest({
+        identity_mode: "anonymous",
+        anonymous_scope: "community_stable",
+        disclosed_qualifier_ids: [" qual_unique_human ", "qual_unique_human"],
+      }),
+    })
+
+    expect(prepared.identityMode).toBe("anonymous")
+    expect(prepared.anonymousScope).toBe("community_stable")
+    expect(prepared.disclosedQualifierIds).toEqual(["qual_unique_human"])
+  })
+
+  test("rejects anonymous identity fields on public live rooms", () => {
+    expect(() => normalizeLiveRoomCreateRequest({
+      hostUserId: "usr_host",
+      body: createRequest({
+        identity_mode: "public",
+        anonymous_scope: "community_stable",
+      }),
+    })).toThrow("anonymous_scope is only allowed for anonymous posts")
+  })
+
   test("treats blank store link fields as null", () => {
     const prepared = normalizeLiveRoomCreateRequest({
       hostUserId: "usr_host",

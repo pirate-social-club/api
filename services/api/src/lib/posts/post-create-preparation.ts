@@ -167,7 +167,6 @@ export async function preparePostCreate(input: {
       const accessMode = input.body.access_mode ?? "public"
       writeBody = {
         ...input.body,
-        identity_mode: "public",
         media_refs: accessMode === "locked"
           ? bundle.preview_audio?.storage_ref && bundle.preview_audio?.mime_type
             ? [{

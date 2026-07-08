@@ -601,7 +601,7 @@ export type CreatePostRequest = CreatePostRequestBase & {
   | { post_type: "image"; media_refs: Array<MediaDescriptor> }
   | { post_type: "video"; media_refs: Array<MediaDescriptor> }
   | { post_type: "link"; link_url: string }
-  | { post_type: "song"; identity_mode: "public"; media_refs?: Array<MediaDescriptor> }
+  | { post_type: "song"; media_refs?: Array<MediaDescriptor> }
   | { post_type: "crosspost"; title: string; source_post: string; source_community: string }
 )
 

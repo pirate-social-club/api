@@ -1,4 +1,4 @@
-import type { CreateCommunityListingRequest } from "../../../types"
+import type { CreateCommunityListingRequest, Post } from "../../../types"
 
 export type LiveRoomKind = "solo" | "duet"
 export type LiveRoomStatus = "scheduled" | "live" | "ended" | "canceled"
@@ -25,6 +25,9 @@ export type LiveRoomAudienceGate = {
 export type CreateLiveRoomRequest = {
   title?: string | null
   description?: string | null
+  identity_mode?: Post["identity_mode"] | null
+  anonymous_scope?: Post["anonymous_scope"] | null
+  disclosed_qualifier_ids?: string[] | null
   store_url?: string | null
   store_label?: string | null
   audience_gate?: LiveRoomAudienceGate | null

@@ -1,5 +1,6 @@
 import { badRequestError } from "../../errors"
 import { decodePublicAssetId, decodePublicSongArtifactBundleId, decodePublicUserId, publicId } from "../../public-ids"
+import type { Post } from "../../../types"
 import type {
   CreateLiveRoomRequest,
   LiveRoomAccessMode,
@@ -16,6 +17,9 @@ export type PreparedLiveRoomCreate = {
   description: string | null
   storeUrl: string | null
   storeLabel: string | null
+  identityMode: Post["identity_mode"]
+  anonymousScope: Post["anonymous_scope"]
+  disclosedQualifierIds: string[] | null
   roomKind: LiveRoomKind
   accessMode: LiveRoomAccessMode
   visibility: LiveRoomVisibility
@@ -48,6 +52,7 @@ export function normalizeLiveRoomCreateRequest(input: {
 }): PreparedLiveRoomCreate {
   const title = requireTitle(input.body.title)
   const description = optionalDescription(input.body.description)
+  const identity = normalizeIdentity(input.body)
   const storeUrl = optionalStoreUrl(input.body.store_url)
   const storeLabel = optionalStoreLabel(input.body.store_label)
   const roomKind = normalizeRoomKind(input.body.room_kind)
@@ -67,6 +72,9 @@ export function normalizeLiveRoomCreateRequest(input: {
     description,
     storeUrl,
     storeLabel,
+    identityMode: identity.identityMode,
+    anonymousScope: identity.anonymousScope,
+    disclosedQualifierIds: identity.disclosedQualifierIds,
     roomKind,
     accessMode,
     visibility,
@@ -83,6 +91,55 @@ export function normalizeLiveRoomCreateRequest(input: {
     }),
     setlist: normalizeSetlist(input.body),
   }
+}
+
+function normalizeIdentity(body: CreateLiveRoomRequest): {
+  identityMode: Post["identity_mode"]
+  anonymousScope: Post["anonymous_scope"]
+  disclosedQualifierIds: string[] | null
+} {
+  const identityMode = body.identity_mode ?? "public"
+  if (identityMode !== "public" && identityMode !== "anonymous") {
+    throw badRequestError("identity_mode must be public or anonymous")
+  }
+  if (identityMode !== "anonymous" && body.anonymous_scope) {
+    throw badRequestError("anonymous_scope is only allowed for anonymous posts")
+  }
+  if (identityMode === "anonymous" && !body.anonymous_scope) {
+    throw badRequestError("anonymous_scope is required for anonymous posts")
+  }
+  if (
+    body.anonymous_scope
+    && body.anonymous_scope !== "community_stable"
+    && body.anonymous_scope !== "thread_stable"
+    && body.anonymous_scope !== "post_ephemeral"
+  ) {
+    throw badRequestError("anonymous_scope is invalid")
+  }
+  if (identityMode !== "anonymous" && body.disclosed_qualifier_ids?.length) {
+    throw badRequestError("disclosed_qualifier_ids are only allowed for anonymous posts")
+  }
+
+  const disclosedQualifierIds = normalizeDisclosedQualifierIds(body.disclosed_qualifier_ids)
+  return {
+    identityMode,
+    anonymousScope: identityMode === "anonymous" ? body.anonymous_scope ?? null : null,
+    disclosedQualifierIds: identityMode === "anonymous" ? disclosedQualifierIds : null,
+  }
+}
+
+function normalizeDisclosedQualifierIds(value: unknown): string[] | null {
+  if (value == null) return null
+  if (!Array.isArray(value)) {
+    throw badRequestError("disclosed_qualifier_ids must be an array")
+  }
+  const ids = [...new Set(value.map((item) => {
+    if (typeof item !== "string") {
+      throw badRequestError("disclosed_qualifier_ids must be strings")
+    }
+    return item.trim()
+  }).filter(Boolean))]
+  return ids.length > 0 ? ids : null
 }
 
 function normalizeRecordingEnabled(value: unknown): boolean {
