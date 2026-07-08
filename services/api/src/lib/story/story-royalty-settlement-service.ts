@@ -8,8 +8,8 @@ import { parseExpectedEvmAddress } from "../evm-signer"
 import { resolveStorySettlementDirectSigner } from "./story-direct-signer"
 import { ensureStoryEntitlementMinterAuthorized } from "./story-runtime-authorization"
 import {
-  STORY_DELIVERY_CONTRACTS,
   resolveStoryChainId,
+  resolveStoryDeliveryContracts,
   resolveStoryRpcUrl,
   resolveStoryTxWaitTimeoutMs,
 } from "./story-runtime-config"
@@ -181,6 +181,7 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
   }
 
   const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), resolveStoryChainId(input.env))
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
   const settlementSigner = new Wallet(settlementConfig.value.privateKey, provider)
   await ensureStoryEntitlementMinterAuthorized({
     env: input.env,
@@ -202,7 +203,7 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
   const entitlementTx = await sendContractTxWithPolicy({
     provider,
     signer: settlementSigner,
-    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+    contractAddress: deliveryContracts.purchaseEntitlementToken,
     abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
     functionName: "mintEntitlement",
     args: [

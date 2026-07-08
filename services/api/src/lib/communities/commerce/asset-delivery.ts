@@ -33,6 +33,7 @@ import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-fundi
 import {
   resolveStoryChainId,
   resolveStoryCompositeReadConditionAddress,
+  resolveStoryDeliveryContracts,
   resolveStoryRpcUrl,
   resolveStoryRuntimeSignerTargetBalanceWei,
   STORY_DELIVERY_CONTRACTS,
@@ -491,14 +492,15 @@ export async function prepareLockedAssetDelivery(input: {
       if (!writerConfig.value) {
         throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
       }
+      const deliveryContracts = resolveStoryDeliveryContracts(input.env)
       const readConditionData = sameStoryAddress(readConditionAddress, STORY_DELIVERY_CONTRACTS.tokenGateCondition)
         ? encodeTokenGateConditionData({
-          entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+          entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
           tokenId: entitlementTokenId,
           minBalance: 1n,
         })
         : encodeCompositeReadConditionData({
-          entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+          entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
           tokenId: entitlementTokenId,
           minBalance: 1n,
           namespace,

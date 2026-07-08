@@ -69,6 +69,20 @@ export function resolveStoryOperatorDirectSigner(env: Pick<Env, "STORY_RUNTIME_P
   })
 }
 
+export function resolveStoryEntitlementClassConfigurerDirectSigner(
+  env: Pick<
+    Env,
+    "STORY_RUNTIME_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS"
+  >,
+): ConfigResult<StoryDirectSignerConfig | null> {
+  return resolveStoryDirectSignerConfig({
+    privateKeyValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY",
+    expectedAddressValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS,
+    expectedAddressField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS",
+  })
+}
+
 export function resolveStoryCdrWriterDirectSigner(env: Pick<Env, "STORY_RUNTIME_PRIVATE_KEY" | "STORY_CDR_WRITER_PRIVATE_KEY" | "STORY_CDR_WRITER_PKP_ADDRESS">): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
     privateKeyValue: env.STORY_CDR_WRITER_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
