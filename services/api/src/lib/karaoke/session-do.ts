@@ -275,7 +275,8 @@ export class KaraokeSessionRuntimeDO {
   async alarm(): Promise<void> {
     await this.schemaReady;
     await this.deliverPendingFinalizations();
-    if (this.hasPendingFinalizations()) {
+    const hasPendingFinalizations = this.hasPendingFinalizations();
+    if (hasPendingFinalizations && (!this.meta || !this.isExpired())) {
       this.scheduleNextFinalizationAlarm();
       return;
     }
@@ -298,11 +299,15 @@ export class KaraokeSessionRuntimeDO {
     await this.sttAdapter?.close().catch(() => undefined);
     this.ctx.storage.sql.exec("DELETE FROM karaoke_session_outbox");
     this.ctx.storage.sql.exec("DELETE FROM karaoke_session_snapshots");
-    await this.ctx.storage.deleteAlarm?.();
     this.host = null;
     this.effectRunner = null;
     this.sttAdapter = null;
     this.meta = null;
+    if (hasPendingFinalizations) {
+      this.scheduleNextFinalizationAlarm();
+      return;
+    }
+    await this.ctx.storage.deleteAlarm?.();
   }
 
   snapshotForTests(): KaraokeSessionState | null {
