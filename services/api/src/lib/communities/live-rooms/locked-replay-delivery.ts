@@ -15,6 +15,7 @@ import {
 import { assertStoryRuntimeSignerFunding } from "../../story/story-runtime-funding"
 import {
   resolveStoryCompositeReadConditionAddress,
+  resolveStoryDeliveryContracts,
   resolveStoryRuntimeSignerTargetBalanceWei,
   STORY_DELIVERY_CONTRACTS,
 } from "../../story/story-runtime-config"
@@ -113,13 +114,14 @@ export async function prepareIncludedTicketReplayDelivery(input: {
   ])
 
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
   const cdrUpload = await uploadCdrEncryptedDataKey({
     env: input.env,
     dataKey,
     readConditionAddr: readConditionAddress,
     writeConditionAddr: writeConditionAddress,
     readConditionData: encodeCompositeReadConditionData({
-      entitlementTokenAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
+      entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
       tokenId: entitlementTokenId,
       minBalance: 1n,
       namespace,

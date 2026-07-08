@@ -3,17 +3,20 @@ import type { TransactionResponse } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy, sendContractTxWithPolicy } from "../evm-direct-tx"
 import { parseExpectedEvmAddress } from "../evm-signer"
-import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
+import {
+  resolveStoryEntitlementClassConfigurerDirectSigner,
+  resolveStoryOperatorDirectSigner,
+} from "./story-direct-signer"
 import { ensureStoryPublishOperatorAuthorized } from "./story-runtime-authorization"
 import {
   DEFAULT_STORY_RPC_URL,
-  STORY_DELIVERY_CONTRACTS,
   resolveStoryChainId,
+  resolveStoryDeliveryContracts,
   resolveStoryRpcUrl,
   resolveStoryTxWaitTimeoutMs,
 } from "./story-runtime-config"
 
-const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
+const PURCHASE_ENTITLEMENT_CLASS_CONFIGURER_ABI = [
   "function configureEntitlementClass(uint256 tokenId, bytes32 assetVersionId, uint32 cdrVaultUuid, bool active)",
 ] as const
 
@@ -67,13 +70,6 @@ export function setStoryAssetPublisherForTests(
   testPublisher = publisher
 }
 
-function normalizePrivateKey(raw: string | null | undefined): string | null {
-  const value = String(raw || "").trim()
-  if (!value) return null
-  const withPrefix = value.startsWith("0x") ? value : `0x${value}`
-  return /^0x[a-fA-F0-9]{64}$/.test(withPrefix) ? withPrefix : null
-}
-
 function errorData(error: unknown): string {
   if (!error || typeof error !== "object") return ""
   const direct = (error as { data?: unknown }).data
@@ -111,14 +107,15 @@ export async function publishLockedAssetVersionToStory(input: {
   if (testPublisher) {
     return await testPublisher(input)
   }
-  const ownerPrivateKey = normalizePrivateKey(input.env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
-  if (!ownerPrivateKey) {
-    throw new Error("STORY_CONTRACT_OWNER_PRIVATE_KEY missing/invalid")
-  }
   const operatorConfig = resolveStoryOperatorDirectSigner(input.env)
   if (!operatorConfig.ok) throw new Error(operatorConfig.error)
   if (!operatorConfig.value) {
     throw new Error("STORY_OPERATOR_PRIVATE_KEY missing/invalid")
+  }
+  const classConfigurerConfig = resolveStoryEntitlementClassConfigurerDirectSigner(input.env)
+  if (!classConfigurerConfig.ok) throw new Error(classConfigurerConfig.error)
+  if (!classConfigurerConfig.value) {
+    throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY missing/invalid")
   }
 
   const publisherAddress = parseExpectedEvmAddress(input.publisherAddress)
@@ -137,6 +134,7 @@ export async function publishLockedAssetVersionToStory(input: {
   const chainId = resolveStoryChainId(input.env)
   const rpcUrl = resolveStoryRpcUrl(input.env) || DEFAULT_STORY_RPC_URL
   const txWaitTimeoutMs = resolveStoryTxWaitTimeoutMs(input.env)
+  const deliveryContracts = resolveStoryDeliveryContracts(input.env)
   const gasPolicy = resolveDirectTxGasPolicy({
     maxFeePerGasCapWeiRaw: input.env.STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI,
     maxPriorityFeePerGasCapWeiRaw: input.env.STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI,
@@ -150,8 +148,8 @@ export async function publishLockedAssetVersionToStory(input: {
   if (!gasPolicy.ok) throw new Error(gasPolicy.error)
 
   const provider = new JsonRpcProvider(rpcUrl, chainId)
-  const ownerSigner = new Wallet(ownerPrivateKey, provider)
   const operatorSigner = new Wallet(operatorConfig.value.privateKey, provider)
+  const classConfigurerSigner = new Wallet(classConfigurerConfig.value.privateKey, provider)
 
   await ensureStoryPublishOperatorAuthorized({
     env: input.env,
@@ -161,9 +159,9 @@ export async function publishLockedAssetVersionToStory(input: {
 
   const configureTx = await sendContractTxWithPolicy({
     provider,
-    signer: ownerSigner,
-    contractAddress: STORY_DELIVERY_CONTRACTS.purchaseEntitlementToken,
-    abi: PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    signer: classConfigurerSigner,
+    contractAddress: deliveryContracts.purchaseEntitlementClassConfigurer,
+    abi: PURCHASE_ENTITLEMENT_CLASS_CONFIGURER_ABI,
     functionName: "configureEntitlementClass",
     args: [
       input.entitlementTokenId,
@@ -196,7 +194,7 @@ export async function publishLockedAssetVersionToStory(input: {
   try {
     publishTx = await sendContractTxWithPolicy({
       provider,
-      contractAddress: STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      contractAddress: deliveryContracts.assetPublishCoordinatorV1,
       abi: ASSET_PUBLISH_COORDINATOR_ABI,
       functionName: "publishAssetVersion",
       args: publishArgs,
@@ -215,7 +213,7 @@ export async function publishLockedAssetVersionToStory(input: {
       throw error
     }
     const coordinator = new Contract(
-      STORY_DELIVERY_CONTRACTS.assetPublishCoordinatorV1,
+      deliveryContracts.assetPublishCoordinatorV1,
       ASSET_PUBLISH_COORDINATOR_ABI,
       provider,
     )
