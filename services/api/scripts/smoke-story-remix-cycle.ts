@@ -6,6 +6,7 @@ import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
+import { STAGING_TEST_JWT_AUDIENCE, STAGING_TEST_JWT_ISSUER } from "../src/lib/auth/staging-test-auth"
 
 type SmokeSession = {
   accessToken: string
@@ -52,6 +53,12 @@ function readSmokeAccessMode(): "public" | "locked" {
   const value = readEnv("PIRATE_SMOKE_ACCESS_MODE", "public").toLowerCase()
   if (value === "public" || value === "locked") return value
   throw new Error(`PIRATE_SMOKE_ACCESS_MODE must be public or locked, got ${value}`)
+}
+
+function readSmokeAuthMode(): "upstream_jwt" | "staging_test" {
+  const value = readEnv("PIRATE_SMOKE_AUTH_MODE", "upstream_jwt").toLowerCase()
+  if (value === "upstream_jwt" || value === "staging_test") return value
+  throw new Error(`PIRATE_SMOKE_AUTH_MODE must be upstream_jwt or staging_test, got ${value}`)
 }
 
 function normalizePrivateKey(value: string | null | undefined): string | null {
@@ -341,19 +348,46 @@ async function mintUpstreamJwt(input: {
     .sign(new TextEncoder().encode(secret))
 }
 
+async function mintStagingTestJwt(input: {
+  subject: string
+  walletAddress: string
+}): Promise<string> {
+  const secret = readEnv("STAGING_TEST_JWT_SHARED_SECRET")
+  if (!secret) throw new Error("STAGING_TEST_JWT_SHARED_SECRET is required when PIRATE_SMOKE_AUTH_MODE=staging_test")
+  return await new SignJWT({
+    wallet_addresses: [input.walletAddress],
+    selected_wallet_address: input.walletAddress,
+  })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuer(STAGING_TEST_JWT_ISSUER)
+    .setAudience(STAGING_TEST_JWT_AUDIENCE)
+    .setSubject(input.subject)
+    .setIssuedAt()
+    .setExpirationTime("30m")
+    .sign(new TextEncoder().encode(secret))
+}
+
 async function createSession(input: {
   apiBaseUrl: string
   env: Record<string, string | undefined>
   subject: string
   privateKey?: string | null
+  walletAddress?: string | null
 }): Promise<SmokeSession> {
   const normalizedPrivateKey = normalizePrivateKey(input.privateKey)
-  const wallet = normalizedPrivateKey ? new Wallet(normalizedPrivateKey) : Wallet.createRandom()
-  const jwt = await mintUpstreamJwt({
-    env: input.env,
-    subject: input.subject,
-    walletAddress: wallet.address,
-  })
+  const wallet = normalizedPrivateKey ? new Wallet(normalizedPrivateKey) : null
+  const walletAddress = input.walletAddress?.trim() || wallet?.address || Wallet.createRandom().address
+  const authMode = readSmokeAuthMode()
+  const jwt = authMode === "staging_test"
+    ? await mintStagingTestJwt({
+        subject: input.subject,
+        walletAddress,
+      })
+    : await mintUpstreamJwt({
+        env: input.env,
+        subject: input.subject,
+        walletAddress,
+      })
   const body = await api<{
     access_token: string
     user: { id: string; primary_wallet_attachment?: string | null }
@@ -364,7 +398,7 @@ async function createSession(input: {
     path: "/auth/session/exchange",
     body: {
       proof: {
-        type: "jwt_based_auth",
+        type: authMode === "staging_test" ? "staging_test_jwt" : "jwt_based_auth",
         jwt,
       },
     },
@@ -372,8 +406,8 @@ async function createSession(input: {
   return {
     accessToken: body.access_token,
     userId: body.user.id,
-    walletAddress: wallet.address,
-    privateKey: wallet.privateKey,
+    walletAddress,
+    privateKey: wallet?.privateKey ?? "",
     walletAttachment:
       body.user.primary_wallet_attachment
       ?? body.wallet_attachments?.find((attachment) => attachment.is_primary)?.wallet_attachment
@@ -1083,11 +1117,16 @@ async function main(): Promise<void> {
   const settlePurchase = hasFlag("--settle-purchase")
   const createDerivativeVideo = hasFlag("--create-derivative-video")
   const createRoyaltyAllocation = hasFlag("--royalty-allocation")
+  const createDerivativeRoyaltyAllocation = hasFlag("--derivative-royalty-allocation")
+  const useExistingSource = hasFlag("--use-existing-source")
   if (createDerivativeVideo && accessMode !== "locked") {
     throw new Error("--create-derivative-video requires PIRATE_SMOKE_ACCESS_MODE=locked")
   }
   if (createRoyaltyAllocation && accessMode !== "locked") {
     throw new Error("--royalty-allocation requires PIRATE_SMOKE_ACCESS_MODE=locked")
+  }
+  if (createDerivativeRoyaltyAllocation && accessMode !== "locked") {
+    throw new Error("--derivative-royalty-allocation requires PIRATE_SMOKE_ACCESS_MODE=locked")
   }
   const runId = Date.now()
   const authorSubject = readEnv("PIRATE_SMOKE_AUTHOR_SUBJECT", `story-remix-smoke-author-${runId}`)
@@ -1100,12 +1139,15 @@ async function main(): Promise<void> {
     shouldCreateCommunity,
     access_mode: accessMode,
     skipVerification,
+    auth_mode: readSmokeAuthMode(),
     useLocalSetup,
     settlePurchase,
     createDerivativeVideo,
     createRoyaltyAllocation,
+    createDerivativeRoyaltyAllocation,
+    useExistingSource,
     author_subject: authorSubject,
-    collaborator_subject: createRoyaltyAllocation ? collaboratorSubject : null,
+    collaborator_subject: createRoyaltyAllocation || createDerivativeRoyaltyAllocation ? collaboratorSubject : null,
     remixer_subject: remixerSubject,
   })
 
@@ -1113,6 +1155,7 @@ async function main(): Promise<void> {
     apiBaseUrl,
     env,
     subject: authorSubject,
+    walletAddress: readEnv("PIRATE_SMOKE_AUTHOR_WALLET"),
   })
   console.log("[smoke] author", {
     user: author.userId,
@@ -1140,11 +1183,12 @@ async function main(): Promise<void> {
       runId: String(runId),
     })
   }
-  const collaborator = createRoyaltyAllocation
+  const collaborator = createRoyaltyAllocation || createDerivativeRoyaltyAllocation
     ? await createSession({
       apiBaseUrl,
       env,
       subject: collaboratorSubject,
+      walletAddress: readEnv("PIRATE_SMOKE_COLLABORATOR_WALLET"),
     })
     : null
   if (collaborator) {
@@ -1176,101 +1220,149 @@ async function main(): Promise<void> {
     }
   }
 
-  const originalTitle = `${titlePrefix} Smoke Original ${new Date().toISOString()}`
-  const originalBundle = await uploadSong({
-    apiBaseUrl,
-    communityId,
-    session: author,
-    title: originalTitle,
-    filename: "story-smoke-original.wav",
-    bytes: makeSilentWavBytes(),
-  })
-  if (accessMode === "locked") {
-    await waitForSongPreviewReady({
+  let originalPost: { post: string | null; asset: string }
+  let originalAsset: {
+    story_ip?: string | null
+    story_license_terms?: string | null
+    story_royalty_registration_status?: string | null
+    locked_delivery_status?: string | null
+    story_cdr_vault_uuid?: number | null
+  }
+  let source: { asset: string; title: string; source_ref?: string | null; story_ip: string; story_license_terms: string }
+  if (useExistingSource) {
+    const sourceAsset = readEnv("PIRATE_SMOKE_SOURCE_ASSET").replace(/^asset_/, "")
+    const sourceQuery = readEnv("PIRATE_SMOKE_SOURCE_QUERY", titlePrefix)
+    const catalog = await api<{
+      items: Array<{ asset: string; title: string; source_ref?: string | null; story_ip: string; story_license_terms: string }>
+    }>({
+      apiBaseUrl,
+      method: "GET",
+      path: `/communities/${encodeURIComponent(communityId)}/derivative-sources?scope=global&kind=song&limit=25&q=${encodeURIComponent(sourceQuery)}`,
+      token: author.accessToken,
+    })
+    console.log("[smoke] existing derivative sources", {
+      query: sourceQuery,
+      count: catalog.items.length,
+      requested_asset: sourceAsset || null,
+      first: catalog.items[0] ?? null,
+    })
+    source = (sourceAsset
+      ? catalog.items.find((item) => item.asset.replace(/^asset_/, "") === sourceAsset)
+      : catalog.items[0]) as typeof source
+    if (!source) throw new Error(`existing source not found in derivative sources: asset=${sourceAsset || "<first>"} query=${sourceQuery}`)
+    originalPost = { post: null, asset: source.asset }
+    originalAsset = {
+      story_ip: source.story_ip,
+      story_license_terms: source.story_license_terms,
+      story_royalty_registration_status: "registered",
+      locked_delivery_status: null,
+      story_cdr_vault_uuid: null,
+    }
+    console.log("[smoke] existing source asset", {
+      asset: source.asset,
+      title: source.title,
+      story_ip: source.story_ip,
+      story_license_terms: source.story_license_terms,
+      source_ref: source.source_ref ?? null,
+    })
+  } else {
+    const originalTitle = `${titlePrefix} Smoke Original ${new Date().toISOString()}`
+    const originalBundle = await uploadSong({
       apiBaseUrl,
       communityId,
       session: author,
-      bundle: originalBundle,
       title: originalTitle,
+      filename: "story-smoke-original.wav",
+      bytes: makeSilentWavBytes(),
     })
-  }
-  const originalPost = await createSongPost({
-    apiBaseUrl,
-    communityId,
-    session: author,
-    title: originalTitle,
-    bundle: originalBundle,
-    songMode: "original",
-    accessMode,
-    rightsBasis: "original",
-    royaltyAllocations: collaborator
-      ? [
-        { recipient_kind: "creator", wallet_address: author.walletAddress, share_bps: 9000 },
-        { recipient_kind: "collaborator", wallet_address: collaborator.walletAddress, share_bps: 1000 },
-      ]
-      : null,
-  })
-  const originalAsset = await waitForAssetReady({
-    accessMode,
-    apiBaseUrl,
-    asset: originalPost.asset,
-    communityId,
-    label: "original",
-    session: author,
-  })
-  console.log("[smoke] original asset", {
-    post: originalPost.post,
-    asset: originalPost.asset,
-    access_mode: originalAsset.access_mode ?? null,
-    locked_delivery_status: originalAsset.locked_delivery_status ?? null,
-    story_cdr_vault_uuid: originalAsset.story_cdr_vault_uuid ?? null,
-    story_ip: originalAsset.story_ip ?? null,
-    story_license_terms: originalAsset.story_license_terms ?? null,
-    story_royalty_registration_status: originalAsset.story_royalty_registration_status ?? null,
-    royalty_allocation_requested: Boolean(collaborator),
-    royalty_allocation_wallets: collaborator
-      ? [
-        { recipient_kind: "creator", wallet: author.walletAddress, share_bps: 9000 },
-        { recipient_kind: "collaborator", wallet: collaborator.walletAddress, share_bps: 1000 },
-      ]
-      : null,
-  })
-  if (accessMode === "locked" && originalAsset.locked_delivery_status !== "ready") {
-    throw new Error(`original locked delivery was not ready: ${JSON.stringify(originalAsset)}`)
-  }
-  if (originalAsset.story_royalty_registration_status !== "registered") {
-    throw new Error(`original asset was not Story registered: ${JSON.stringify(originalAsset)}`)
-  }
-  if (collaborator) {
-    console.log("[smoke] royalty allocation verifier target", {
-      community: communityId,
+    if (accessMode === "locked") {
+      await waitForSongPreviewReady({
+        apiBaseUrl,
+        communityId,
+        session: author,
+        bundle: originalBundle,
+        title: originalTitle,
+      })
+    }
+    originalPost = await createSongPost({
+      apiBaseUrl,
+      communityId,
+      session: author,
+      title: originalTitle,
+      bundle: originalBundle,
+      songMode: "original",
+      accessMode,
+      rightsBasis: "original",
+      royaltyAllocations: collaborator
+        ? [
+          { recipient_kind: "creator", wallet_address: author.walletAddress, share_bps: 9000 },
+          { recipient_kind: "collaborator", wallet_address: collaborator.walletAddress, share_bps: 1000 },
+        ]
+        : null,
+    })
+    originalAsset = await waitForAssetReady({
+      accessMode,
+      apiBaseUrl,
       asset: originalPost.asset,
-      expected_status_after_cron: "verified",
-      expected_distribution_status_after_cron: "verified",
-      note: "Poll the community shard for assets.royalty_allocation_status and initial_royalty_allocations.distribution_status.",
+      communityId,
+      label: "original",
+      session: author,
     })
-  }
+    console.log("[smoke] original asset", {
+      post: originalPost.post,
+      asset: originalPost.asset,
+      access_mode: originalAsset.access_mode ?? null,
+      locked_delivery_status: originalAsset.locked_delivery_status ?? null,
+      story_cdr_vault_uuid: originalAsset.story_cdr_vault_uuid ?? null,
+      story_ip: originalAsset.story_ip ?? null,
+      story_license_terms: originalAsset.story_license_terms ?? null,
+      story_royalty_registration_status: originalAsset.story_royalty_registration_status ?? null,
+      royalty_allocation_requested: Boolean(collaborator),
+      royalty_allocation_wallets: collaborator
+        ? [
+          { recipient_kind: "creator", wallet: author.walletAddress, share_bps: 9000 },
+          { recipient_kind: "collaborator", wallet: collaborator.walletAddress, share_bps: 1000 },
+        ]
+        : null,
+    })
+    if (accessMode === "locked" && originalAsset.locked_delivery_status !== "ready") {
+      throw new Error(`original locked delivery was not ready: ${JSON.stringify(originalAsset)}`)
+    }
+    if (originalAsset.story_royalty_registration_status !== "registered") {
+      throw new Error(`original asset was not Story registered: ${JSON.stringify(originalAsset)}`)
+    }
+    if (collaborator) {
+      console.log("[smoke] royalty allocation verifier target", {
+        community: communityId,
+        asset: originalPost.asset,
+        expected_status_after_cron: "verified",
+        expected_distribution_status_after_cron: "verified",
+        note: "Poll the community shard for assets.royalty_allocation_status and initial_royalty_allocations.distribution_status.",
+      })
+    }
 
-  const catalog = await api<{
+    const catalog = await api<{
     items: Array<{ asset: string; title: string; source_ref?: string | null; story_ip: string; story_license_terms: string }>
-  }>({
-    apiBaseUrl,
-    method: "GET",
-    path: `/communities/${encodeURIComponent(communityId)}/derivative-sources?kind=song&q=${encodeURIComponent(originalTitle)}`,
-    token: author.accessToken,
-  })
-  console.log("[smoke] derivative sources", {
-    count: catalog.items.length,
-    first: catalog.items[0] ?? null,
-  })
-  const source = catalog.items.find((item) => item.asset === originalPost.asset) ?? catalog.items[0]
-  if (!source) throw new Error("original did not appear in derivative sources")
+    }>({
+      apiBaseUrl,
+      method: "GET",
+      path: `/communities/${encodeURIComponent(communityId)}/derivative-sources?kind=song&q=${encodeURIComponent(originalTitle)}`,
+      token: author.accessToken,
+    })
+    console.log("[smoke] derivative sources", {
+      count: catalog.items.length,
+      first: catalog.items[0] ?? null,
+    })
+    source = catalog.items.find((item) => item.asset === originalPost.asset) ?? catalog.items[0]
+    if (!source) throw new Error("original did not appear in derivative sources")
+  }
   const upstreamAssetRefs = [source.source_ref?.trim() || `story:asset:${source.asset}`]
 
   const remixer = await createSession({
     apiBaseUrl,
     env,
     subject: remixerSubject,
+    walletAddress: readEnv("PIRATE_SMOKE_REMIXER_WALLET"),
   })
   console.log("[smoke] remixer", {
     user: remixer.userId,
@@ -1327,6 +1419,12 @@ async function main(): Promise<void> {
     accessMode,
     rightsBasis: "derivative",
     upstreamAssetRefs,
+    royaltyAllocations: createDerivativeRoyaltyAllocation && collaborator
+      ? [
+        { recipient_kind: "creator", wallet_address: remixer.walletAddress, share_bps: 6667 },
+        { recipient_kind: "collaborator", wallet_address: collaborator.walletAddress, share_bps: 3333 },
+      ]
+      : null,
   })
   const remixAsset = await waitForAssetReady({
     accessMode,
@@ -1345,6 +1443,13 @@ async function main(): Promise<void> {
     story_ip: remixAsset.story_ip ?? null,
     story_royalty_registration_status: remixAsset.story_royalty_registration_status ?? null,
     parents: remixAsset.story_derivative_parent_ip_ids ?? null,
+    royalty_allocation_requested: createDerivativeRoyaltyAllocation,
+    royalty_allocation_wallets: createDerivativeRoyaltyAllocation && collaborator
+      ? [
+        { recipient_kind: "creator", wallet: remixer.walletAddress, share_bps: 6667 },
+        { recipient_kind: "collaborator", wallet: collaborator.walletAddress, share_bps: 3333 },
+      ]
+      : null,
   })
   if (accessMode === "locked" && remixAsset.locked_delivery_status !== "ready") {
     throw new Error(`remix locked delivery was not ready: ${JSON.stringify(remixAsset)}`)

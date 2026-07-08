@@ -77,6 +77,7 @@ type StoryIpAssetClient = {
   }) => Promise<{
     ipId?: `0x${string}`
     tokenId?: bigint | number | string
+    txHash?: `0x${string}` | string
     distributeRoyaltyTokensTxHash?: `0x${string}` | string
     ipRoyaltyVault?: `0x${string}` | string
   }>
@@ -851,7 +852,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       storyRevenueToken: WIP_TOKEN_ADDRESS,
       storyRoyaltyRegistrationStatus: "registered",
       storyDerivativeRegisteredAt: nowIso(),
-      royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || "").trim() || null,
+      royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
     }
   }
 
