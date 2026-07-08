@@ -586,10 +586,8 @@ export async function resolveStoryRoyaltyDerivativeParents(input: {
 
   const resolved: ResolvedDerivativeParent[] = []
   for (const ref of refs) {
-    const direct = parseDirectStoryParentRef(ref)
-    if (direct) {
-      resolved.push(direct)
-      continue
+    if (parseDirectStoryParentRef(ref)) {
+      return null
     }
 
     const localAssetId = ref.startsWith("story:asset:") ? ref.slice("story:asset:".length) : ref
@@ -599,6 +597,9 @@ export async function resolveStoryRoyaltyDerivativeParents(input: {
     }
     const asset = await getAssetRow(input.client, input.communityId, decodedAssetId)
     if (!asset?.story_ip_id?.trim() || !asset.story_license_terms_id?.trim()) {
+      return null
+    }
+    if (asset.license_preset !== "commercial-remix") {
       return null
     }
     if (!/^\d+$/.test(asset.story_license_terms_id)) {

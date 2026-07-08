@@ -9,7 +9,7 @@ import { listDerivativeSources } from "../../../src/lib/communities/commerce/ser
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { getProfileRepository } from "../../../src/lib/auth/repositories"
 import type { Client } from "../../../src/lib/sql-client"
-import type { Env } from "../../../src/types"
+import type { Asset, Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
   exchangeJwt,
@@ -149,6 +149,8 @@ async function insertDerivativeSourceAsset(input: {
   assetKind: "song_audio" | "video_file"
   rightsBasis: "original" | "derivative"
   publicationStatus: "story_published" | "withdrawn"
+  licensePreset?: Asset["license_preset"]
+  commercialRevSharePct?: number | null
   storyIpId?: string
   storyLicenseTermsId?: string
   postStatus?: "published" | "deleted" | "hidden" | "removed"
@@ -201,13 +203,13 @@ async function insertDerivativeSourceAsset(input: {
           story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json
         ) VALUES (
           ?1, ?2, ?3, ?4, NULL, ?5, ?6,
-          ?7, 'public', 'commercial-remix', 15,
-          ?8, ?9, ?10,
-          'published', NULL, ?11, NULL, NULL,
-          'story_ip_v1', ?12, NULL, NULL,
+          ?7, 'public', ?8, ?9,
+          ?10, ?11, ?12,
+          'published', NULL, ?13, NULL, NULL,
+          'story_ip_v1', ?14, NULL, NULL,
           NULL, NULL, NULL,
           NULL, 'registered', 'none', NULL,
-          NULL, ?13, ?13, NULL, NULL,
+          NULL, ?15, ?15, NULL, NULL,
           NULL, NULL, NULL, NULL,
           NULL, NULL, NULL
         )
@@ -220,6 +222,8 @@ async function insertDerivativeSourceAsset(input: {
         input.creatorUserId,
         input.assetKind,
         input.rightsBasis,
+        input.licensePreset ?? "commercial-remix",
+        input.commercialRevSharePct ?? 15,
         `asset:${input.assetId}`,
         `0xhash${input.assetId}`,
         input.publicationStatus,
@@ -240,6 +244,8 @@ async function insertDerivativeSourceProjection(input: {
   assetId: string
   title: string
   assetKind: "song_audio" | "video_file"
+  licensePreset?: Asset["license_preset"]
+  commercialRevSharePct?: number | null
   storyIpId?: string
   storyLicenseTermsId?: string
   postStatus?: "published" | "deleted" | "hidden" | "removed"
@@ -253,8 +259,8 @@ async function insertDerivativeSourceProjection(input: {
       displayTitle: input.title,
       creatorUserId: input.creatorUserId,
       assetKind: input.assetKind,
-      licensePreset: "commercial-remix",
-      commercialRevSharePct: 15,
+      licensePreset: input.licensePreset ?? "commercial-remix",
+      commercialRevSharePct: input.commercialRevSharePct ?? 15,
       storyIpId: input.storyIpId ?? `0x${input.assetId.padEnd(40, "0").slice(0, 40)}`,
       storyLicenseTermsId: input.storyLicenseTermsId ?? "17",
       sourcePostId: `post_${input.assetId}`,
@@ -333,6 +339,34 @@ describe("song artifact catalog routes", () => {
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       creatorUserId: owner.userId,
+      assetId: "ast_commercial_use_song",
+      title: "Commercial Use Only Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      licensePreset: "commercial-use",
+      commercialRevSharePct: null,
+      storyIpId: "0x1212121212121212121212121212121212121212",
+      storyLicenseTermsId: "22",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      creatorUserId: owner.userId,
+      assetId: "ast_non_commercial_song",
+      title: "Non-commercial Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      licensePreset: "non-commercial",
+      commercialRevSharePct: null,
+      storyIpId: "0x1313131313131313131313131313131313131313",
+      storyLicenseTermsId: "23",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      creatorUserId: owner.userId,
       assetId: "ast_derivative_song",
       title: "Derivative Echo",
       assetKind: "song_audio",
@@ -395,6 +429,8 @@ describe("song artifact catalog routes", () => {
       "asset_ast_derivative_song",
       "asset_ast_original_song",
     ])
+    expect(songSourcesBody.items.map((item) => item.asset)).not.toContain("asset_ast_commercial_use_song")
+    expect(songSourcesBody.items.map((item) => item.asset)).not.toContain("asset_ast_non_commercial_song")
     expect(songSourcesBody.items.map((item) => item.title).sort()).toEqual([
       "Derivative Echo",
       "Original Source",
@@ -504,6 +540,18 @@ describe("song artifact catalog routes", () => {
       storyIpId: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       storyLicenseTermsId: "21",
     })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_global_commercial_use_source",
+      title: "Global Commercial Use Only",
+      assetKind: "song_audio",
+      licensePreset: "commercial-use",
+      commercialRevSharePct: null,
+      storyIpId: "0xacacacacacacacacacacacacacacacacacacacac",
+      storyLicenseTermsId: "24",
+    })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
       communityId: composerCommunityId,
@@ -542,6 +590,7 @@ describe("song artifact catalog routes", () => {
       "asset_ast_global_source",
       "asset_ast_local_source",
     ])
+    expect(body.items.map((item) => item.asset)).not.toContain("asset_ast_global_commercial_use_source")
   })
 
   test("lists global derivative sources when composer membership stores a public user id", async () => {

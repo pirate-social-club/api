@@ -253,6 +253,7 @@ export async function listDerivativeSourceRows(input: {
   let nextArg = 2
   const filters = [
     "a.community_id = ?1",
+    "a.license_preset = 'commercial-remix'",
     "a.publication_status = 'story_published'",
     "a.story_status = 'published'",
     "a.story_royalty_registration_status = 'registered'",

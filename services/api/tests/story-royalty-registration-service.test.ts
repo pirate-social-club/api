@@ -190,8 +190,7 @@ async function seedControlPlaneCommunityForProjection(input: {
       ) VALUES (
         ?1, ?2, 'Story Royalty Test Community', NULL, NULL, NULL,
         'request', 'active', 'active', 'none',
-        NULL, NULL, NULL,
-        NULL, ?3, ?3
+        NULL, NULL, NULL, ?3, ?3
       )
       ON CONFLICT(community_id) DO NOTHING
     `,
@@ -310,7 +309,8 @@ describe("story royalty registration service", () => {
         sql: `
           INSERT INTO assets (
             asset_id, community_id, source_post_id, song_artifact_bundle_id, creator_user_id, asset_kind,
-            rights_basis, access_mode, primary_content_ref, primary_content_hash, publication_status,
+            rights_basis, access_mode, license_preset, commercial_rev_share_pct,
+            primary_content_ref, primary_content_hash, publication_status,
             story_status, story_error, story_ip_id, story_ip_nft_contract, story_ip_nft_token_id,
             story_publish_model, story_license_terms_id, story_license_template, story_royalty_policy,
             story_royalty_policy_id, story_derivative_parent_ip_ids_json, story_derivative_registered_at,
@@ -318,7 +318,8 @@ describe("story royalty registration service", () => {
             locked_delivery_error, created_at, updated_at
           ) VALUES (
             ?1, ?2, ?3, NULL, ?4, 'song_audio',
-            'original', 'locked', ?5, ?6, 'draft',
+            'original', 'locked', 'commercial-remix', 10,
+            ?5, ?6, 'draft',
             'published', NULL, ?7, NULL, NULL,
             'story_ip_v1', ?8, NULL, NULL,
             ?9, NULL, NULL,
@@ -352,6 +353,40 @@ describe("story royalty registration service", () => {
           licenseTermsId: 17n,
         },
       ])
+
+      await db.client.execute({
+        sql: "UPDATE assets SET license_preset = 'commercial-use', commercial_rev_share_pct = NULL WHERE asset_id = ?1",
+        args: ["ast_parent_story"],
+      })
+      await expect(resolveStoryRoyaltyDerivativeParents({
+        client: db.client,
+        communityId,
+        upstreamAssetRefs: ["story:asset:ast_parent_story"],
+      })).resolves.toBeNull()
+    } finally {
+      db.close()
+    }
+  })
+
+  test("rejects direct Story parent refs because remix eligibility cannot be validated locally", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-direct-parent-"))
+    cleanupPaths.push(rootDir)
+
+    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_royalty_direct_parent"
+    const userId = "usr_author_story_direct_parent"
+    await seedStoryCommunity({ env, repo, communityId, userId })
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const resolved = await resolveStoryRoyaltyDerivativeParents({
+        client: db.client,
+        communityId,
+        upstreamAssetRefs: ["story:ip:0x9999999999999999999999999999999999999999#licenseTermsId=17"],
+      })
+
+      expect(resolved).toBeNull()
     } finally {
       db.close()
     }
@@ -582,7 +617,7 @@ describe("story royalty registration service", () => {
 
     const configMissingRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-config-missing-"))
     cleanupPaths.push(configMissingRootDir)
-    const configMissingEnv = { LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir } as Env
+    const configMissingEnv = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: configMissingRootDir } as Env
     const configMissingCommunityId = "cmt_story_royalty_config_missing"
     const configMissingUserId = "usr_author_story_config_missing"
     const configMissing = await createUnavailableAsset({
@@ -613,6 +648,7 @@ describe("story royalty registration service", () => {
     const unavailableRootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-unavailable-"))
     cleanupPaths.push(unavailableRootDir)
     const unavailableEnv = {
+      ENVIRONMENT: "test",
       LOCAL_COMMUNITY_DB_ROOT: unavailableRootDir,
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
       STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
@@ -899,7 +935,7 @@ describe("story royalty registration service", () => {
             song_mode: "remix",
             rights_basis: "derivative",
             access_mode: "public",
-            upstream_asset_refs: [`story:ip:${originalIpId}#licenseTermsId=17`],
+            upstream_asset_refs: ["story:asset:ast_original_collision_registered"],
           },
           createdAt: now,
         })
@@ -1048,6 +1084,7 @@ describe("story royalty registration service", () => {
     const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
 
     const env = {
+      ENVIRONMENT: "test",
       LOCAL_COMMUNITY_DB_ROOT: rootDir,
       CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
     } as Env
@@ -1197,7 +1234,7 @@ describe("story royalty registration service", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-source-"))
     cleanupPaths.push(rootDir)
 
-    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
     const repo = buildRepository()
     const communityId = "cmt_story_royalty_remix_source"
     const userId = "usr_author_story_remix_source"
@@ -1362,7 +1399,7 @@ describe("story royalty registration service", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-royalty-remix-chain-"))
     cleanupPaths.push(rootDir)
 
-    const env = { LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
+    const env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir } as Env
     const repo = buildRepository()
     const communityId = "cmt_story_royalty_remix_chain"
     const userId = "usr_author_story_remix_chain"
@@ -1470,8 +1507,8 @@ describe("story royalty registration service", () => {
         communityRepository: repo,
         profileRepository: buildProfileRepository(),
       })
-      const originalRef = originalSources.items[0]?.source_ref
-      expect(originalRef).toBe(`story:ip:${originalIpId}#licenseTermsId=17`)
+      const originalRef = `story:asset:${originalSources.items[0]?.asset}`
+      expect(originalRef).toBe("story:asset:asset_ast_chain_original")
 
       const firstRemixPost = await insertPost({
         client: db.client,
@@ -1518,8 +1555,8 @@ describe("story royalty registration service", () => {
         communityRepository: repo,
         profileRepository: buildProfileRepository(),
       })
-      const firstRemixRef = remixSources.items[0]?.source_ref
-      expect(firstRemixRef).toBe(`story:ip:${firstRemixIpId}#licenseTermsId=23`)
+      const firstRemixRef = `story:asset:${remixSources.items[0]?.asset}`
+      expect(firstRemixRef).toBe("story:asset:asset_ast_chain_first_remix")
 
       const secondRemixPost = await insertPost({
         client: db.client,

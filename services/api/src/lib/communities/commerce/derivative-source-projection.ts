@@ -118,6 +118,7 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   const client = getControlPlaneClient(input.env)
   const filters = [
     "source_post_status = 'published'",
+    "license_preset = 'commercial-remix'",
     "story_ip_id IS NOT NULL",
     "story_ip_id != ''",
     "story_license_terms_id IS NOT NULL",
