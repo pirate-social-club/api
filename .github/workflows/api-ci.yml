@@ -321,6 +321,7 @@ jobs:
       - name: Run API coverage report
         # Report-only: this command enforces no threshold, and coverage instrumentation can be flaky/OOM-prone.
         continue-on-error: true
+        timeout-minutes: 10
         working-directory: services/api
         run: bun run coverage
 
