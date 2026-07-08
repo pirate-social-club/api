@@ -1330,6 +1330,41 @@ export async function prepareRequestedLockedAssetDelivery(input: {
             nowIso(),
           ],
         })
+        const checkpoint = await input.client.execute({
+          sql: `
+            SELECT story_asset_version_id,
+                   story_cdr_vault_uuid,
+                   story_namespace,
+                   story_entitlement_token_id,
+                   story_read_condition,
+                   story_write_condition,
+                   locked_delivery_ref,
+                   locked_delivery_storage_ref,
+                   locked_delivery_secret_json
+            FROM assets
+            WHERE community_id = ?1
+              AND asset_id = ?2
+            LIMIT 1
+          `,
+          args: [
+            input.communityId,
+            asset.asset_id,
+          ],
+        })
+        const row = checkpoint.rows[0]
+        const checkpointMatches = row
+          && String(row.story_asset_version_id ?? "") === prepared.storyAssetVersionId
+          && Number(row.story_cdr_vault_uuid ?? 0) === prepared.storyCdrVaultUuid
+          && String(row.story_namespace ?? "") === prepared.storyNamespace
+          && String(row.story_entitlement_token_id ?? "") === prepared.storyEntitlementTokenId
+          && String(row.story_read_condition ?? "") === prepared.storyReadCondition
+          && String(row.story_write_condition ?? "") === prepared.storyWriteCondition
+          && String(row.locked_delivery_ref ?? "") === prepared.lockedDeliveryRef
+          && String(row.locked_delivery_storage_ref ?? "") === prepared.lockedDeliveryStorageRef
+          && String(row.locked_delivery_secret_json ?? "") === prepared.lockedDeliveryMetadataJson
+        if (!checkpointMatches) {
+          throw new Error("locked_delivery_checkpoint_not_persisted")
+        }
       },
     })
     storyStatus = lockedDelivery.storyStatus
