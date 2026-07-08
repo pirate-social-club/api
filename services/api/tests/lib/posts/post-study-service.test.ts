@@ -215,6 +215,17 @@ async function applyStudyMigration(): Promise<void> {
     }
   }
 
+  const engagementColumns = await client.execute("PRAGMA table_info(song_engagement_days)")
+  if (!engagementColumns.rows.some((row) => String(row.name) === "activity_timezone")) {
+    const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1123_song_engagement_activity_timezone.sql", import.meta.url))
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
+
   const finalAttemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
   if (finalAttemptColumns.rows.some((row) => String(row.name) === "review_session_id")) {
     const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1121_song_study_attempt_identity.sql", import.meta.url))
@@ -1756,13 +1767,14 @@ describe("post study service", () => {
       userId: LEARNER_ID,
     })
 
-    const days = await client!.execute("SELECT activity_date, qualified FROM song_engagement_days ORDER BY activity_date")
+    const days = await client!.execute("SELECT activity_date, activity_timezone, qualified FROM song_engagement_days ORDER BY activity_date")
     expect(days.rows.map((row) => ({
       activity_date: row.activity_date,
+      activity_timezone: row.activity_timezone,
       qualified: Number(row.qualified),
     }))).toEqual([
-      { activity_date: "2026-07-01", qualified: 1 },
-      { activity_date: "2026-07-02", qualified: 1 },
+      { activity_date: "2026-07-01", activity_timezone: "America/Los_Angeles", qualified: 1 },
+      { activity_date: "2026-07-02", activity_timezone: "America/Los_Angeles", qualified: 1 },
     ])
 
     const streak = await client!.execute("SELECT current_streak, last_qualified_date, streak_started_date FROM song_streaks")

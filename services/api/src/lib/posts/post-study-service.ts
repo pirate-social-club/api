@@ -2242,17 +2242,19 @@ export async function upsertStudyEngagementDay(input: {
   studyTimezone?: string
   userId: string
 }): Promise<void> {
-  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
+  const activityTimezone = input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE
+  const today = studyActivityDate(input.now, activityTimezone)
   const isCorrect = input.isCorrect ? 1 : 0
   await input.client.execute({
     sql: `
       INSERT INTO song_engagement_days (
-        user_id, post_id, community_id, activity_date,
+        user_id, post_id, community_id, activity_date, activity_timezone,
         study_attempt_count, study_correct_count, study_target_count,
         karaoke_pass_count, qualified, created_at, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 0, CASE WHEN ?5 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
+      VALUES (?1, ?2, ?3, ?4, ?8, 1, ?5, ?6, 0, CASE WHEN ?5 >= ?6 THEN 1 ELSE 0 END, ?7, ?7)
       ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
+        activity_timezone = excluded.activity_timezone,
         study_attempt_count = song_engagement_days.study_attempt_count + 1,
         study_correct_count = song_engagement_days.study_correct_count + ?5,
         qualified = CASE
@@ -2270,6 +2272,7 @@ export async function upsertStudyEngagementDay(input: {
       isCorrect,
       input.studyTargetCount,
       input.now,
+      activityTimezone,
     ],
   })
 }
