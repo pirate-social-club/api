@@ -8,6 +8,7 @@ import { ensureRemoteThreadCommentLockColumns } from "./ensure-remote-thread-com
 import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
 import { ensureRemotePostSongTitleColumn } from "./ensure-remote-post-song-title-column"
 import { ensureRemoteCommerceVinylReleaseColumns } from "./ensure-remote-commerce-vinyl-release-columns"
+import { ensureRemoteSongEngagementActivityTimezoneColumn } from "./ensure-remote-song-engagement-activity-timezone"
 import type { Env } from "../../env"
 
 export type OpenCommunityDbOptions = {
@@ -15,6 +16,7 @@ export type OpenCommunityDbOptions = {
   ensureRemoteCommentGuestAuthorship?: (client: Client) => Promise<void>
   ensureRemotePostSongTitleColumn?: (client: Client) => Promise<void>
   ensureRemoteCommerceVinylReleaseColumns?: (client: Client) => Promise<void>
+  ensureRemoteSongEngagementActivityTimezoneColumn?: (client: Client) => Promise<void>
 }
 
 export type CommunityDbHandle = { client: Client; close: () => void; databaseUrl: string }
@@ -125,6 +127,7 @@ async function openCommunityDbEntry(
     await ensureRemoteCommentGuestAuthorship(client)
     await ensureRemotePostSongTitleColumn(client)
     await ensureRemoteCommerceVinylReleaseColumns(client)
+    await ensureRemoteSongEngagementActivityTimezoneColumn(client)
     return {
       client,
       databaseUrl,
@@ -152,5 +155,6 @@ async function openCommunityDbEntry(
   await (options?.ensureRemoteCommentGuestAuthorship ?? ensureRemoteCommentGuestAuthorship)(client)
   await (options?.ensureRemotePostSongTitleColumn ?? ensureRemotePostSongTitleColumn)(client)
   await (options?.ensureRemoteCommerceVinylReleaseColumns ?? ensureRemoteCommerceVinylReleaseColumns)(client)
+  await (options?.ensureRemoteSongEngagementActivityTimezoneColumn ?? ensureRemoteSongEngagementActivityTimezoneColumn)(client)
   return { client, close: () => client.close(), databaseUrl: binding.database_url }
 }
