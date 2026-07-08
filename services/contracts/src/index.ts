@@ -1692,7 +1692,6 @@ export type SongArtifactBundle = {
   media_refs: Array<MediaDescriptor>;
   lyrics: string;
   lyrics_sha256: string;
-  karaoke_revision_id?: string | null;
   genius_annotations_url?: string | null;
   cover_art?: SongImageArtifactDescriptor | null;
   preview_audio?: SongAudioArtifactDescriptor | null;
@@ -1708,7 +1707,6 @@ export type SongArtifactBundle = {
   translated_lyrics?: (Record<string, unknown>) | null;
   alignment_status: "pending" | "processing" | "completed" | "failed";
   alignment_error?: string | null;
-  alignment_reason?: "lyrics_missing" | "audio_missing" | "elevenlabs_key_missing" | "elevenlabs_key_invalid" | "elevenlabs_rate_limited" | "elevenlabs_provider_unavailable" | "elevenlabs_timeout" | "elevenlabs_invalid_response" | "alignment_failed" | null;
   timed_lyrics_ref?: string | null;
   timed_lyrics?: (Record<string, unknown>) | null;
   moderation_status: "pending" | "processing" | "completed" | "failed";
@@ -2090,7 +2088,6 @@ export type SongStudyCapability = {
   exercise_count?: number | null;
   source_language?: string | null;
   target_language?: string | null;
-  reasons?: Array<SongFeatureCapabilityReason>;
 };
 
 export type SongStudyPayload = {
@@ -2149,74 +2146,6 @@ export type KaraokeSession = {
   token_expires_at: number;
   session_expires_at: number;
   scoring_policy: KaraokeScoringPolicy;
-};
-
-export type KaraokeAttempt = {
-  id: string;
-  object: "karaoke_attempt";
-  session_id: string;
-  attempt_id: string;
-  post_id: string;
-  community_id: string;
-  karaoke_revision_id: string;
-  scoring_version: number;
-  scoring_provider: string;
-  scoring_model: string;
-  final_score: number;
-  lyrics_score: number;
-  timing_score: number | null;
-  timing_trend: KaraokeTimingTrend;
-  scored_line_count: number;
-  line_count: number;
-  uncertain_line_count: number;
-  no_recognition_line_count: number;
-  low_confidence_line_count: number;
-  completion_reason: KaraokeAttemptCompletionReason;
-  rank_eligible: boolean;
-  activity_date: string;
-  completed_at: string;
-};
-
-export type KaraokeRankingScope = "all_time" | "weekly";
-
-export type KaraokeAttemptCompletionReason = "completed" | "session_error" | "provider_unavailable" | "abandoned";
-
-export type KaraokeTimingTrend = "early" | "late" | "mixed" | "on_time";
-
-export type KaraokeSongLeaderboard = {
-  object: "karaoke_song_leaderboard";
-  post_id: string;
-  community_id: string;
-  scope: KaraokeRankingScope;
-  period_start?: string | null;
-  period_end?: string | null;
-  karaoke_revision_id: string;
-  scoring_version: number;
-  scoring_provider: string;
-  scoring_model: string;
-  total_ranked: number;
-  entries: Array<KaraokeLeaderboardEntry>;
-  viewer_rank: number | null;
-  viewer_top_percent: number | null;
-  viewer_best_score: number | null;
-  viewer_best_reached_at: string | null;
-  viewer_eligible_attempt_count: number;
-};
-
-export type KaraokeLeaderboardEntry = {
-  rank: number;
-  top_percent: number;
-  score: number;
-  reached_at: string;
-  identity: KaraokeLeaderboardIdentity;
-  is_viewer: boolean;
-};
-
-export type KaraokeLeaderboardIdentity = {
-  visibility: "visible" | "anonymized";
-  display_name: string | null;
-  handle: string | null;
-  avatar_ref: string | null;
 };
 
 export type SongStudyUnavailableReason = "not_song" | "no_lyrics" | "unsupported_language" | "generation_failed" | "missing_transcription_provider";
@@ -2335,7 +2264,6 @@ export type LocalizedPostResponse = {
   label?: PostLabel | null;
   song_presentation?: SongPresentation | null;
   study_capability?: SongStudyCapability | null;
-  karaoke_capability?: SongKaraokeCapability | null;
   streak_summary?: SongStreakSummary | null;
   asset_story?: PostAssetStorySummary | null;
   derivative_sources?: Array<PostDerivativeSource> | null;
@@ -3297,6 +3225,7 @@ type DonationPartnerSummary = {
   display_name: string;
   provider: "endaoment";
   provider_partner_ref?: string | null;
+  payout_destination_ref?: string | null;
   image_url?: string | null;
   review_status: "pending" | "approved" | "rejected";
   status: "active" | "paused" | "retired";
@@ -3726,12 +3655,6 @@ type SongAudioArtifactDescriptor = {
   clip_duration_ms?: number | null;
 };
 
-type SongFeatureCapabilityReason = {
-  code: "lyrics_missing" | "lyrics_too_short" | "exercise_generation_failed" | "provider_key_missing" | "provider_key_invalid" | "provider_rate_limited" | "provider_unavailable" | "provider_timeout" | "provider_invalid_response" | "instrumental_missing" | "timed_lyrics_missing" | "alignment_failed" | "karaoke_disabled" | "locked";
-  kind: "config" | "content" | "processing_failure" | "entitlement" | "unavailable";
-  owner_action: "none" | "manage_integrations" | "retry" | "edit_song" | "upload_instrumental" | "enable_karaoke" | "buy";
-};
-
 type SongImageArtifactDescriptor = {
   storage_ref: string;
   mime_type: string;
@@ -3740,11 +3663,6 @@ type SongImageArtifactDescriptor = {
   upload_mode?: "proxy" | "direct_multipart";
   width?: number | null;
   height?: number | null;
-};
-
-type SongKaraokeCapability = {
-  status: "ready" | "locked" | "processing" | "failed" | "unavailable";
-  reasons?: Array<SongFeatureCapabilityReason>;
 };
 
 type SongKaraokeLine = {
@@ -4010,7 +3928,6 @@ export const apiRoutes = {
   communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
   communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
   communityPostStreaksLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/streaks/leaderboard`,
-  communityPostKaraokeLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/leaderboard`,
   communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
   job: (jobId: string) => `/jobs/${jobId}`,
