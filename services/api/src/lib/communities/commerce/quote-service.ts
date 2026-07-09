@@ -69,7 +69,7 @@ import type {
   Env,
 } from "../../../types"
 
-function resolveReplayQuoteAllocationSnapshot(input: {
+export function resolveReplayQuoteAllocationSnapshot(input: {
   finalPriceUsd: number
   replayAllocations: Awaited<ReturnType<typeof listLiveRoomReplayAllocations>>
   listingPolicy: {
