@@ -468,7 +468,10 @@ function buildTokenRow(atom: Extract<GateAtom, { type: "erc721_holding" | "erc72
     proof_requirements_json: null,
     chain_namespace: atom.chain_namespace,
     gate_config_json: JSON.stringify(atom.type === "erc721_holding"
-      ? { contract_address: atom.contract_address }
+      ? {
+        contract_address: atom.contract_address,
+        ...(atom.min_count != null ? { min_count: atom.min_count } : {}),
+      }
       : {
         contract_address: atom.contract_address,
         inventory_provider: atom.provider,

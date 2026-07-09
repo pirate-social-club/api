@@ -145,7 +145,15 @@ function validateGateAtom(input: unknown): GateAtom {
       if (!contractAddress) {
         throw eligibilityFailed("erc721_holding gate requires a valid contract_address")
       }
-      return { type: "erc721_holding", chain_namespace: "eip155:1", contract_address: contractAddress }
+      if (atom.min_count != null && (!Number.isInteger(atom.min_count) || (atom.min_count as number) < 1 || (atom.min_count as number) > 100)) {
+        throw eligibilityFailed("erc721_holding gate min_count must be from 1 to 100")
+      }
+      return {
+        type: "erc721_holding",
+        chain_namespace: "eip155:1",
+        contract_address: contractAddress,
+        ...(atom.min_count != null ? { min_count: atom.min_count as number } : {}),
+      }
     }
     case "erc721_inventory_match": {
       if (atom.provider !== "courtyard") {

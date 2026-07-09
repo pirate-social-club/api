@@ -26,7 +26,7 @@ export type GateAtom =
   | { type: "nationality"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: string[] }
   | { type: "gender"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: Array<"M" | "F"> }
   | { type: "wallet_score"; provider: "passport"; minimum_score: number }
-  | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string }
+  | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string; min_count?: number }
   | {
     type: "erc721_inventory_match"
     provider: "courtyard"

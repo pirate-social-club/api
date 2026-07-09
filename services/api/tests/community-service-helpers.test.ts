@@ -72,6 +72,7 @@ function gateRuleToAtom(rule: Record<string, unknown>): Record<string, unknown> 
       type: "erc721_holding",
       chain_namespace: rule.chain_namespace,
       contract_address: config?.contract_address,
+      min_count: config?.min_count,
     }
   }
   if (rule.gate_type === "erc721_inventory_match") {
@@ -280,6 +281,23 @@ describe("community helper functions", () => {
             gate_type: "erc721_holding",
             chain_namespace: "eip155:1",
             gate_config: { contract_address: "0x1111111111111111111111111111111111111111" },
+          }],
+        }), { ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("allows erc721_holding gate family with min_count", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0x1111111111111111111111111111111111111111",
+              min_count: 3,
+            },
           }],
         }), { ageOver18Verified: false }),
       ).not.toThrow()
@@ -519,6 +537,23 @@ describe("community helper functions", () => {
           }],
         }), { ageOver18Verified: false }),
       ).toThrow("erc721_holding gate must target Ethereum mainnet (eip155:1)")
+    })
+
+    test("rejects erc721_holding gate with invalid min_count", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0x1111111111111111111111111111111111111111",
+              min_count: 0,
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_holding gate min_count must be from 1 to 100")
     })
 
     test("allows gender gate in public v0 with valid self config", () => {

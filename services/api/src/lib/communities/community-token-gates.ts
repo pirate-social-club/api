@@ -13,14 +13,14 @@ let erc721OwnershipCheckerForTests: ((input: {
   contractAddress: string
   env: Env
   walletAddress: string
-}) => Promise<boolean>) | null = null
+}) => Promise<boolean | number>) | null = null
 let erc721ContractSupportCheckerForTests: ((input: {
   contractAddress: string
   env: Env
 }) => Promise<boolean>) | null = null
 
 export function setErc721OwnershipCheckerForTests(
-  checker: ((input: { contractAddress: string; env: Env; walletAddress: string }) => Promise<boolean>) | null,
+  checker: ((input: { contractAddress: string; env: Env; walletAddress: string }) => Promise<boolean | number>) | null,
 ): void {
   erc721OwnershipCheckerForTests = checker
 }
@@ -95,6 +95,7 @@ export async function anyAttachedEthereumWalletOwnsErc721Collection(input: {
 export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(input: {
   contractAddress: string
   env: Env
+  minCount?: number
   walletAttachments: WalletAttachmentSummary[]
 }): Promise<{ owns: boolean; unavailable: boolean }> {
   const normalizedContractAddress = normalizeEthereumAddress(input.contractAddress)
@@ -106,14 +107,18 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
   if (walletAddresses.length === 0) {
     return { owns: false, unavailable: false }
   }
+  const minCount = Number.isInteger(input.minCount) && input.minCount != null && input.minCount > 1 ? input.minCount : 1
 
   if (erc721OwnershipCheckerForTests) {
+    let totalBalance = 0
     for (const walletAddress of walletAddresses) {
-      if (await erc721OwnershipCheckerForTests({
+      const result = await erc721OwnershipCheckerForTests({
         contractAddress: normalizedContractAddress,
         env: input.env,
         walletAddress,
-      })) {
+      })
+      totalBalance += typeof result === "number" ? Math.max(0, result) : result ? 1 : 0
+      if (totalBalance >= minCount) {
         return { owns: true, unavailable: false }
       }
     }
@@ -127,10 +132,12 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
 
   const contract = new Contract(normalizedContractAddress, ERC721_COLLECTION_ABI, provider)
   let unavailable = false
+  let totalBalance = 0n
   for (const walletAddress of walletAddresses) {
     try {
       const balance = await contract.balanceOf(walletAddress) as bigint
-      if (balance > 0n) {
+      totalBalance += balance
+      if (totalBalance >= BigInt(minCount)) {
         return { owns: true, unavailable: false }
       }
     } catch {
