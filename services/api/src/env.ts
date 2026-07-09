@@ -274,6 +274,8 @@ export type Env = {
   REWARDS_READS_ENABLED?: string
   REWARDS_PAYOUTS_ENABLED?: string
   REWARDS_CAMPAIGNS_ENABLED?: string
+  // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
+  REWARDS_IDENTITY_PROVIDER?: string
   REWARDS_DAILY_STREAK_CENTS?: string
   REWARDS_DAILY_USER_CAP_CENTS?: string
   REWARDS_STREAK_MILESTONE_7_CENTS?: string

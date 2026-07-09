@@ -11,12 +11,11 @@ type QualifiedDay = {
   user_id: string
 }
 
-type Streak = {
+type MilestoneCandidate = {
   community_id: string
-  current_streak: number
-  last_qualified_date: string
+  milestone_30_date: string | null
+  milestone_7_date: string
   post_id: string
-  streak_started_date: string
   user_id: string
 }
 
@@ -31,10 +30,10 @@ type RewardEvent = {
 
 const shardState: {
   qualifiedDays: QualifiedDay[]
-  streaks: Streak[]
+  milestones: MilestoneCandidate[]
 } = {
   qualifiedDays: [],
-  streaks: [],
+  milestones: [],
 }
 
 mock.module("../communities/community-read-access", () => ({
@@ -42,11 +41,14 @@ mock.module("../communities/community-read-access", () => ({
     client: {
       execute: mock(async (statement: InStatement | string): Promise<QueryResult> => {
         const sql = typeof statement === "string" ? statement : statement.sql
-        if (sql.includes("FROM song_engagement_days")) {
-          return { rows: shardState.qualifiedDays }
+        const args = typeof statement === "string" ? [] : statement.args ?? []
+        if (sql.includes("WITH ordered_days")) {
+          const [limit, offset] = args as [number, number]
+          return { rows: shardState.milestones.slice(offset, offset + limit) }
         }
-        if (sql.includes("FROM song_streaks")) {
-          return { rows: shardState.streaks }
+        if (sql.includes("FROM song_engagement_days")) {
+          const [, limit, offset] = args as [string, number, number]
+          return { rows: shardState.qualifiedDays.slice(offset, offset + limit) }
         }
         return { rows: [] }
       }),
@@ -232,7 +234,7 @@ function env(overrides: Partial<Env> = {}): Env {
 
 beforeEach(() => {
   shardState.qualifiedDays = []
-  shardState.streaks = []
+  shardState.milestones = []
 })
 
 describe("song practice rewards reconciler", () => {
@@ -335,19 +337,48 @@ describe("song practice rewards reconciler", () => {
     expect(controlPlane.closedTransactionCount).toBe(3)
   })
 
-  test("credits milestone rewards once ever per song and exempts them from the daily cap", async () => {
-    shardState.streaks = [{
+  test("paginates past already credited rows instead of starving older qualifications", async () => {
+    shardState.qualifiedDays = [1, 2, 3, 4].map((day) => ({
+      activity_date: `2026-07-0${day}`,
       community_id: "cmty_rewards",
-      current_streak: 30,
-      last_qualified_date: "2026-07-30",
+      post_id: `post_${day}`,
+      user_id: "usr_rewards",
+    }))
+    const controlPlane = createControlPlaneClient()
+
+    const first = await reconcileSongPracticeRewards({
+      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "100" }),
+      communityRepository: repository() as never,
+      controlPlaneClient: controlPlane.client,
+      maxQualifiedDaysPerCommunity: 2,
+      lookbackDays: 10_000,
+    })
+    const second = await reconcileSongPracticeRewards({
+      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "100" }),
+      communityRepository: repository() as never,
+      controlPlaneClient: controlPlane.client,
+      maxQualifiedDaysPerCommunity: 2,
+      lookbackDays: 10_000,
+    })
+
+    expect(first.credited_events).toBe(2)
+    expect(second.credited_events).toBe(2)
+    expect(second.scanned_qualified_days).toBe(4)
+    expect(controlPlane.events).toHaveLength(4)
+  })
+
+  test("credits durable historical milestones once per song and applies the daily cap", async () => {
+    shardState.milestones = [{
+      community_id: "cmty_rewards",
+      milestone_30_date: "2026-07-30",
+      milestone_7_date: "2026-07-07",
       post_id: "post_rewards",
-      streak_started_date: "2026-07-01",
       user_id: "usr_rewards",
     }]
     const controlPlane = createControlPlaneClient()
 
     const summary = await reconcileSongPracticeRewards({
-      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "0" }),
+      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "300" }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
     })
@@ -359,18 +390,18 @@ describe("song practice rewards reconciler", () => {
       ["study_streak_milestone_7", "2026-07-07", 50],
       ["study_streak_milestone_30", "2026-07-30", 200],
     ])
-    expect(controlPlane.userDays.size).toBe(0)
+    expect(controlPlane.userDays.get("usr_rewards:2026-07-07")).toBe(50)
+    expect(controlPlane.userDays.get("usr_rewards:2026-07-30")).toBe(200)
 
-    shardState.streaks = [{
+    shardState.milestones = [{
       community_id: "cmty_rewards",
-      current_streak: 7,
-      last_qualified_date: "2026-08-16",
+      milestone_30_date: null,
+      milestone_7_date: "2026-07-07",
       post_id: "post_rewards",
-      streak_started_date: "2026-08-10",
       user_id: "usr_rewards",
     }]
     const replayAfterRebuild = await reconcileSongPracticeRewards({
-      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "0" }),
+      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "300" }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
     })
@@ -380,5 +411,27 @@ describe("song practice rewards reconciler", () => {
     expect(controlPlane.events).toHaveLength(2)
     expect(controlPlane.transactionCount).toBe(2)
     expect(controlPlane.closedTransactionCount).toBe(2)
+  })
+
+  test("does not partially credit a milestone that would exceed the daily cap", async () => {
+    shardState.milestones = [{
+      community_id: "cmty_rewards",
+      milestone_30_date: null,
+      milestone_7_date: "2026-07-07",
+      post_id: "post_rewards",
+      user_id: "usr_rewards",
+    }]
+    const controlPlane = createControlPlaneClient()
+
+    const summary = await reconcileSongPracticeRewards({
+      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "40" }),
+      communityRepository: repository() as never,
+      controlPlaneClient: controlPlane.client,
+    })
+
+    expect(summary.credited_events).toBe(0)
+    expect(summary.skipped_cap_cents).toBe(50)
+    expect(controlPlane.events).toHaveLength(0)
+    expect(controlPlane.userDays.get("usr_rewards:2026-07-07")).toBe(0)
   })
 })

@@ -1,7 +1,7 @@
 import { getAddress } from "ethers"
 
 import type { Env } from "../../env"
-import { badRequestError, conflictError, eligibilityFailed } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, notFoundError } from "../errors"
 import { parseExpectedEvmAddress } from "../evm-signer"
 import { getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import type { Client, QueryResultRow, Transaction } from "../sql-client"
@@ -12,7 +12,7 @@ import {
   initializePrimaryWalletIfNeeded,
   reconcileWalletAttachments,
 } from "../auth/auth-db-user-queries"
-import { hasActiveUniqueHumanNullifier } from "../verification/unique-human-eligibility"
+import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import {
   operatorSigningCoordinatorName,
   type OperatorSettleRequest,
@@ -20,6 +20,7 @@ import {
   type OperatorSigningCoordinatorDO,
 } from "../communities/bookings/operator-signing-coordinator-do"
 import {
+  assertDistinctBookingAndRewardsSignerDomains,
   resolveRewardsSettlementChainId,
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
@@ -152,6 +153,23 @@ async function getPayoutByUserIdAndIdempotencyKey(
   return result.rows[0] ? decodePayoutEffect(result.rows[0]) : null
 }
 
+async function getPayoutByUserIdAndEffectId(
+  exec: Pick<Client | Transaction, "execute">,
+  userId: string,
+  effectId: string,
+): Promise<RewardPayoutEffect | null> {
+  const result = await exec.execute({
+    sql: `
+      SELECT ${PAYOUT_COLUMNS}
+      FROM reward_payout_effects
+      WHERE user_id = ?1 AND reward_payout_effect_id = ?2
+      LIMIT 1
+    `,
+    args: [userId, effectId],
+  })
+  return result.rows[0] ? decodePayoutEffect(result.rows[0]) : null
+}
+
 async function resolveCashoutRecipient(exec: Pick<Client | Transaction, "execute">, userId: string): Promise<string> {
   const result = await exec.execute({
     sql: `
@@ -230,11 +248,10 @@ async function lockUserForCashout(input: { env: Env; tx: Transaction; userId: st
   if (!result.rows[0]) throw conflictError("Rewards cashout user was not found")
 }
 
-function assertReplayMatches(input: { effect: RewardPayoutEffect; userId: string; amountCents: number; recipientAddress: string }): void {
+function assertReplayMatches(input: { effect: RewardPayoutEffect; userId: string; amountCents: number }): void {
   if (
     input.effect.userId !== input.userId ||
-    input.effect.amountCents !== input.amountCents ||
-    getAddress(input.effect.recipientAddress) !== getAddress(input.recipientAddress)
+    input.effect.amountCents !== input.amountCents
   ) {
     throw conflictError("Rewards cashout idempotency key reused with different payout data")
   }
@@ -251,7 +268,13 @@ async function reserveCashoutEffect(input: {
 }): Promise<ReservedCashout> {
   return await withTransaction(input.client, "write", async (tx) => {
     await lockUserForCashout({ env: input.env, tx, userId: input.userId })
-    if (!(await hasActiveUniqueHumanNullifier(tx, input.userId))) {
+    const existing = await getPayoutByUserIdAndIdempotencyKey(tx, input.userId, input.idempotencyKey)
+    if (existing) {
+      assertReplayMatches({ effect: existing, userId: input.userId, amountCents: input.amountCents })
+      return { effect: existing, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
+    }
+
+    if (!(await hasActiveUniqueHumanNullifier(tx, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)))) {
       throw eligibilityFailed("Verify you are a unique human before cashing out rewards", {
         verification_state: "unverified",
       })
@@ -263,12 +286,6 @@ async function reserveCashoutEffect(input: {
       nowUtc: input.nowUtc,
     })
     const recipientAddress = await resolveCashoutRecipient(tx, input.userId)
-    const existing = await getPayoutByUserIdAndIdempotencyKey(tx, input.userId, input.idempotencyKey)
-    if (existing) {
-      assertReplayMatches({ effect: existing, userId: input.userId, amountCents: input.amountCents, recipientAddress })
-      return { effect: existing, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
-    }
-
     const balanceCents = await currentBalanceCents(tx, input.userId)
     if (balanceCents < input.amountCents) {
       throw eligibilityFailed("Rewards cashout amount exceeds available balance", {
@@ -298,6 +315,7 @@ async function reserveCashoutEffect(input: {
 }
 
 function realRewardsCoordinator(env: Env): RewardSettlementCoordinator {
+  assertDistinctBookingAndRewardsSignerDomains(env)
   const ns = env.OPERATOR_SIGNING_COORDINATOR as DurableObjectNamespace<OperatorSigningCoordinatorDO> | undefined
   if (!ns) throw badRequestError("OPERATOR_SIGNING_COORDINATOR binding is not configured")
   const stub = ns.getByName(operatorSigningCoordinatorName(
@@ -576,6 +594,20 @@ export async function cashOutRewards(input: {
     confirmPollMs: input.confirmPollMs,
   })
 
+  return serializeCashout(effect, await currentBalanceCents(client, input.userId))
+}
+
+export async function getRewardCashoutForUser(input: {
+  env: Env
+  userId: string
+  cashoutId: string
+  client?: Client
+}): Promise<RewardCashoutResponse> {
+  const cashoutId = String(input.cashoutId ?? "").trim()
+  if (!cashoutId) throw notFoundError("Rewards cashout not found")
+  const client = input.client ?? getControlPlaneClient(input.env)
+  const effect = await getPayoutByUserIdAndEffectId(client, input.userId, cashoutId)
+  if (!effect) throw notFoundError("Rewards cashout not found")
   return serializeCashout(effect, await currentBalanceCents(client, input.userId))
 }
 

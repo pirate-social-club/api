@@ -2,7 +2,7 @@ import type { Env } from "../../env"
 import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { makeId, nowIso } from "../helpers"
-import { requiredNumber, requiredString, rowValue } from "../sql-row"
+import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
@@ -28,13 +28,12 @@ type QualifiedDayRow = {
   activityDate: string
 }
 
-type StreakRow = {
+type MilestoneCandidateRow = {
   userId: string
   communityId: string
   postId: string
-  currentStreak: number
-  streakStartedDate: string
-  lastQualifiedDate: string
+  milestone7Date: string | null
+  milestone30Date: string | null
 }
 
 export type SongPracticeRewardsReconciliationSummary = {
@@ -96,36 +95,22 @@ function rowToQualifiedDay(row: QueryResultRow): QualifiedDayRow {
   }
 }
 
-function rowToStreak(row: QueryResultRow): StreakRow {
+function rowToMilestoneCandidate(row: QueryResultRow): MilestoneCandidateRow {
   return {
     userId: requiredString(row, "user_id"),
     communityId: requiredString(row, "community_id"),
     postId: requiredString(row, "post_id"),
-    currentStreak: requiredNumber(row, "current_streak"),
-    streakStartedDate: requiredString(row, "streak_started_date"),
-    lastQualifiedDate: requiredString(row, "last_qualified_date"),
+    milestone7Date: stringOrNull(rowValue(row, "milestone_7_date")),
+    milestone30Date: stringOrNull(rowValue(row, "milestone_30_date")),
   }
-}
-
-function addDays(date: string, days: number): string | null {
-  const parsed = Date.parse(`${date}T00:00:00.000Z`)
-  if (!Number.isFinite(parsed)) return null
-  return new Date(parsed + days * 86_400_000).toISOString().slice(0, 10)
-}
-
-function reachedMilestoneDate(streak: StreakRow, threshold: number): string | null {
-  if (streak.currentStreak < threshold) return null
-  const milestoneDate = addDays(streak.streakStartedDate, threshold - 1)
-  if (!milestoneDate || milestoneDate > streak.lastQualifiedDate) return null
-  return milestoneDate
 }
 
 function dailyKey(day: QualifiedDayRow): string {
   return `${day.userId}\u0000${day.communityId}\u0000${day.postId}\u0000${day.activityDate}`
 }
 
-function milestoneKey(streak: StreakRow, rewardKind: RewardKind): string {
-  return `${streak.userId}\u0000${streak.communityId}\u0000${streak.postId}\u0000${rewardKind}`
+function milestoneKey(candidate: MilestoneCandidateRow, rewardKind: RewardKind): string {
+  return `${candidate.userId}\u0000${candidate.communityId}\u0000${candidate.postId}\u0000${rewardKind}`
 }
 
 async function existingDailyKeys(input: {
@@ -288,23 +273,57 @@ async function creditDailyReward(input: {
 
 async function creditMilestoneReward(input: {
   client: Client
-  streak: StreakRow
+  candidate: MilestoneCandidateRow
   activityDate: string
   amountCents: number
+  dailyCapCents: number
   rewardKind: Extract<RewardKind, "study_streak_milestone_7" | "study_streak_milestone_30">
   now: string
-}): Promise<{ creditedCents: number; duplicate: boolean }> {
-  if (input.amountCents <= 0) return { creditedCents: 0, duplicate: false }
+}): Promise<{ creditedCents: number; duplicate: boolean; skippedCapCents: number }> {
+  if (input.amountCents <= 0 || input.dailyCapCents <= 0) {
+    return { creditedCents: 0, duplicate: false, skippedCapCents: input.amountCents }
+  }
 
   return await withTransaction(input.client, "write", async (tx) => {
+    await tx.execute({
+      sql: `
+        INSERT INTO reward_user_days (user_id, activity_date, credited_cents, updated_at)
+        VALUES (?1, ?2, 0, ?3)
+        ON CONFLICT (user_id, activity_date) DO NOTHING
+      `,
+      args: [input.candidate.userId, input.activityDate, input.now],
+    })
+    const budgetRow = await executeFirst(tx, {
+      sql: `
+        SELECT credited_cents
+        FROM reward_user_days
+        WHERE user_id = ?1 AND activity_date = ?2
+        FOR UPDATE
+      `,
+      args: [input.candidate.userId, input.activityDate],
+    })
     if (await rewardEventExists(tx, {
-      userId: input.streak.userId,
-      communityId: input.streak.communityId,
-      postId: input.streak.postId,
+      userId: input.candidate.userId,
+      communityId: input.candidate.communityId,
+      postId: input.candidate.postId,
       rewardKind: input.rewardKind,
     })) {
-      return { creditedCents: 0, duplicate: true }
+      return { creditedCents: 0, duplicate: true, skippedCapCents: 0 }
     }
+    const creditedToday = Number(rowValue(budgetRow, "credited_cents") ?? 0)
+    if (creditedToday + input.amountCents > input.dailyCapCents) {
+      return { creditedCents: 0, duplicate: false, skippedCapCents: input.amountCents }
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE reward_user_days
+        SET credited_cents = credited_cents + ?3,
+            updated_at = ?4
+        WHERE user_id = ?1 AND activity_date = ?2
+      `,
+      args: [input.candidate.userId, input.activityDate, input.amountCents, input.now],
+    })
 
     const inserted = await tx.execute({
       sql: `
@@ -318,9 +337,9 @@ async function creditMilestoneReward(input: {
       `,
       args: [
         makeId("rew"),
-        input.streak.userId,
-        input.streak.communityId,
-        input.streak.postId,
+        input.candidate.userId,
+        input.candidate.communityId,
+        input.candidate.postId,
         input.activityDate,
         input.rewardKind,
         input.amountCents,
@@ -329,8 +348,8 @@ async function creditMilestoneReward(input: {
     })
 
     return inserted.rows.length > 0
-      ? { creditedCents: input.amountCents, duplicate: false }
-      : { creditedCents: 0, duplicate: true }
+      ? { creditedCents: input.amountCents, duplicate: false, skippedCapCents: 0 }
+      : { creditedCents: 0, duplicate: true, skippedCapCents: 0 }
   })
 }
 
@@ -365,105 +384,153 @@ export async function reconcileSongPracticeRewards(input: {
         sinceDate,
       })
 
-      const dayRows = await db.client.execute({
-        sql: `
-          SELECT user_id, community_id, post_id, activity_date
-          FROM song_engagement_days
-          WHERE qualified = 1
-            AND activity_date >= ?1
-          ORDER BY activity_date DESC, user_id ASC, post_id ASC
-          LIMIT ?2
-        `,
-        args: [sinceDate, maxQualifiedDays],
-      })
-
-      for (const row of dayRows.rows) {
-        const day = rowToQualifiedDay(row)
-        summary.scanned_qualified_days += 1
-        if (creditedDailyKeys.has(dailyKey(day))) {
-          summary.duplicate_events += 1
-          continue
-        }
-        const result = await creditDailyReward({
-          client: input.controlPlaneClient,
-          day,
-          amountCents: config.dailyCents,
-          dailyCapCents: config.dailyUserCapCents,
-          now,
+      const pageSize = Math.min(500, maxQualifiedDays)
+      let dayOffset = 0
+      let uncreditedDaysVisited = 0
+      while (uncreditedDaysVisited < maxQualifiedDays) {
+        const dayRows = await db.client.execute({
+          sql: `
+            SELECT user_id, community_id, post_id, activity_date
+            FROM song_engagement_days
+            WHERE qualified = 1
+              AND activity_date >= ?1
+            ORDER BY activity_date ASC, user_id ASC, post_id ASC
+            LIMIT ?2 OFFSET ?3
+          `,
+          args: [sinceDate, pageSize, dayOffset],
         })
-        if (result.duplicate) summary.duplicate_events += 1
-        if (result.creditedCents > 0) {
-          summary.credited_events += 1
-          summary.credited_cents += result.creditedCents
-          creditedDailyKeys.add(dailyKey(day))
+        for (const row of dayRows.rows) {
+          const day = rowToQualifiedDay(row)
+          summary.scanned_qualified_days += 1
+          if (creditedDailyKeys.has(dailyKey(day))) {
+            summary.duplicate_events += 1
+            continue
+          }
+          uncreditedDaysVisited += 1
+          const result = await creditDailyReward({
+            client: input.controlPlaneClient,
+            day,
+            amountCents: config.dailyCents,
+            dailyCapCents: config.dailyUserCapCents,
+            now,
+          })
+          if (result.duplicate) summary.duplicate_events += 1
+          if (result.creditedCents > 0) {
+            summary.credited_events += 1
+            summary.credited_cents += result.creditedCents
+            creditedDailyKeys.add(dailyKey(day))
+          }
+          summary.skipped_cap_cents += result.skippedCapCents
+          if (uncreditedDaysVisited >= maxQualifiedDays) break
         }
-        summary.skipped_cap_cents += result.skippedCapCents
+        if (dayRows.rows.length < pageSize || uncreditedDaysVisited >= maxQualifiedDays) break
+        dayOffset += dayRows.rows.length
       }
       const creditedMilestoneKeys = await existingMilestoneKeys({
         client: input.controlPlaneClient,
         communityId,
       })
 
-      const streakRows = await db.client.execute({
-        sql: `
-          SELECT user_id, community_id, post_id, current_streak, streak_started_date, last_qualified_date
-          FROM song_streaks
-          WHERE current_streak >= 7
-          ORDER BY last_qualified_date DESC, user_id ASC, post_id ASC
-          LIMIT ?1
-        `,
-        args: [maxQualifiedDays],
-      })
+      let milestoneOffset = 0
+      let uncreditedMilestonesVisited = 0
+      while (uncreditedMilestonesVisited < maxQualifiedDays) {
+        const milestoneRows = await db.client.execute({
+          sql: `
+            WITH ordered_days AS (
+              SELECT
+                user_id,
+                community_id,
+                post_id,
+                activity_date,
+                CAST(julianday(activity_date) AS INTEGER)
+                  - ROW_NUMBER() OVER (PARTITION BY user_id, community_id, post_id ORDER BY activity_date) AS run_group
+              FROM song_engagement_days
+              WHERE qualified = 1
+            ),
+            runs AS (
+              SELECT user_id, community_id, post_id, MIN(activity_date) AS started_date, COUNT(*) AS run_length
+              FROM ordered_days
+              GROUP BY user_id, community_id, post_id, run_group
+            ),
+            earned AS (
+              SELECT
+                user_id,
+                community_id,
+                post_id,
+                MIN(CASE WHEN run_length >= 7 THEN date(started_date, '+6 days') END) AS milestone_7_date,
+                MIN(CASE WHEN run_length >= 30 THEN date(started_date, '+29 days') END) AS milestone_30_date
+              FROM runs
+              GROUP BY user_id, community_id, post_id
+            )
+            SELECT user_id, community_id, post_id, milestone_7_date, milestone_30_date
+            FROM earned
+            WHERE milestone_7_date IS NOT NULL
+            ORDER BY user_id ASC, community_id ASC, post_id ASC
+            LIMIT ?1 OFFSET ?2
+          `,
+          args: [pageSize, milestoneOffset],
+        })
 
-      for (const row of streakRows.rows) {
-        const streak = rowToStreak(row)
-        summary.scanned_streaks += 1
+        for (const row of milestoneRows.rows) {
+          const candidate = rowToMilestoneCandidate(row)
+          summary.scanned_streaks += 1
+          let candidateHadUncreditedMilestone = false
 
-        const milestone7Date = reachedMilestoneDate(streak, 7)
-        if (milestone7Date) {
-          const key = milestoneKey(streak, "study_streak_milestone_7")
-          if (creditedMilestoneKeys.has(key)) {
-            summary.duplicate_events += 1
-          } else {
-          const result = await creditMilestoneReward({
-            client: input.controlPlaneClient,
-            streak,
-            activityDate: milestone7Date,
-            amountCents: config.milestone7Cents,
-            rewardKind: "study_streak_milestone_7",
-            now,
-          })
-          if (result.duplicate) summary.duplicate_events += 1
-          if (result.creditedCents > 0) {
-            summary.credited_events += 1
-            summary.credited_cents += result.creditedCents
-            creditedMilestoneKeys.add(key)
+          if (candidate.milestone7Date) {
+            const key = milestoneKey(candidate, "study_streak_milestone_7")
+            if (creditedMilestoneKeys.has(key)) {
+              summary.duplicate_events += 1
+            } else {
+              candidateHadUncreditedMilestone = true
+              const result = await creditMilestoneReward({
+                client: input.controlPlaneClient,
+                candidate,
+                activityDate: candidate.milestone7Date,
+                amountCents: config.milestone7Cents,
+                dailyCapCents: config.dailyUserCapCents,
+                rewardKind: "study_streak_milestone_7",
+                now,
+              })
+              if (result.duplicate) summary.duplicate_events += 1
+              if (result.creditedCents > 0) {
+                summary.credited_events += 1
+                summary.credited_cents += result.creditedCents
+                creditedMilestoneKeys.add(key)
+              }
+              summary.skipped_cap_cents += result.skippedCapCents
+            }
           }
+
+          if (candidate.milestone30Date) {
+            const key = milestoneKey(candidate, "study_streak_milestone_30")
+            if (creditedMilestoneKeys.has(key)) {
+              summary.duplicate_events += 1
+            } else {
+              candidateHadUncreditedMilestone = true
+              const result = await creditMilestoneReward({
+                client: input.controlPlaneClient,
+                candidate,
+                activityDate: candidate.milestone30Date,
+                amountCents: config.milestone30Cents,
+                dailyCapCents: config.dailyUserCapCents,
+                rewardKind: "study_streak_milestone_30",
+                now,
+              })
+              if (result.duplicate) summary.duplicate_events += 1
+              if (result.creditedCents > 0) {
+                summary.credited_events += 1
+                summary.credited_cents += result.creditedCents
+                creditedMilestoneKeys.add(key)
+              }
+              summary.skipped_cap_cents += result.skippedCapCents
+            }
           }
+
+          if (candidateHadUncreditedMilestone) uncreditedMilestonesVisited += 1
+          if (uncreditedMilestonesVisited >= maxQualifiedDays) break
         }
-
-        const milestone30Date = reachedMilestoneDate(streak, 30)
-        if (milestone30Date) {
-          const key = milestoneKey(streak, "study_streak_milestone_30")
-          if (creditedMilestoneKeys.has(key)) {
-            summary.duplicate_events += 1
-          } else {
-          const result = await creditMilestoneReward({
-            client: input.controlPlaneClient,
-            streak,
-            activityDate: milestone30Date,
-            amountCents: config.milestone30Cents,
-            rewardKind: "study_streak_milestone_30",
-            now,
-          })
-          if (result.duplicate) summary.duplicate_events += 1
-          if (result.creditedCents > 0) {
-            summary.credited_events += 1
-            summary.credited_cents += result.creditedCents
-            creditedMilestoneKeys.add(key)
-          }
-          }
-        }
+        if (milestoneRows.rows.length < pageSize || uncreditedMilestonesVisited >= maxQualifiedDays) break
+        milestoneOffset += milestoneRows.rows.length
       }
     } catch (error) {
       summary.failed_communities += 1

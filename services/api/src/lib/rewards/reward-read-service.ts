@@ -3,7 +3,7 @@ import type { Client, QueryResultRow } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import { getControlPlaneClient } from "../runtime-deps"
-import { hasActiveUniqueHumanNullifier } from "../verification/unique-human-eligibility"
+import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import type {
   RewardEventKind,
   RewardEventSummary,
@@ -113,7 +113,7 @@ export async function getRewardsSummaryForUser(input: {
       `,
       args: [input.userId, recentLimit],
     }),
-    hasActiveUniqueHumanNullifier(client, input.userId),
+    hasActiveUniqueHumanNullifier(client, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)),
   ])
 
   const creditCents = numberOrNull(rowValue(creditRow, "credit_cents")) ?? 0

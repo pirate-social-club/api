@@ -3,6 +3,7 @@ import { Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../../src/env"
 import {
+  assertDistinctBookingAndRewardsSignerDomains,
   resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorAddress,
   resolveBookingSettlementRpcUrl,
@@ -96,5 +97,27 @@ describe("booking settlement chain config", () => {
       PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: new Wallet(KEY).address,
     } as Env
     expect(resolveBookingSettlementOperatorAddress(env)).toBe(new Wallet(KEY).address)
+  })
+
+  test("rejects sharing one on-chain signer across independent booking and reward nonce coordinators", () => {
+    const env = {
+      PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+    } as Env
+
+    expect(() => assertDistinctBookingAndRewardsSignerDomains(env)).toThrow(/distinct operator signers/)
+  })
+
+  test("allows distinct signers on the same settlement chain", () => {
+    const env = {
+      PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: KEY,
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: "0x7000000000000000000000000000000000000000000000000000000000000007",
+    } as Env
+
+    expect(() => assertDistinctBookingAndRewardsSignerDomains(env)).not.toThrow()
   })
 })

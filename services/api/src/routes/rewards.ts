@@ -2,7 +2,7 @@ import { Hono } from "hono"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { badRequestError } from "../lib/errors"
 import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
-import { cashOutRewards } from "../lib/rewards/reward-cashout-service"
+import { cashOutRewards, getRewardCashoutForUser } from "../lib/rewards/reward-cashout-service"
 import { getRewardsSummaryForUser } from "../lib/rewards/reward-read-service"
 import type { RewardCashoutRequest } from "../types"
 
@@ -46,6 +46,18 @@ rewards.post("/me/rewards/cashouts", async (c) => {
     walletIdentity,
   })
   return c.json(result, 202, {
+    "cache-control": "no-store",
+  })
+})
+
+rewards.get("/me/rewards/cashouts/:cashoutId", async (c) => {
+  const actor = c.get("actor")
+  const result = await getRewardCashoutForUser({
+    env: c.env,
+    userId: actor.userId,
+    cashoutId: c.req.param("cashoutId"),
+  })
+  return c.json(result, 200, {
     "cache-control": "no-store",
   })
 })

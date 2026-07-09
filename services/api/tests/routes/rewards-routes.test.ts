@@ -81,8 +81,22 @@ describe("rewards routes", () => {
           first_seen_at, created_at, updated_at
         )
         VALUES ('idn_rewards_' || ?1, ?1, 'self', 'zk-nullifier', 'reward-nullifier-' || ?1, 'active', ?2, ?2, ?2)
+        ON CONFLICT (identity_nullifier_id) DO UPDATE
+        SET status = 'active', updated_at = excluded.updated_at
       `,
       args: [userId, now],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [userId, JSON.stringify({
+        unique_human: {
+          state: "verified",
+          provider: "self",
+          proof_type: "unique_human",
+          mechanism: "session_complete",
+          verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
     })
   }
 
@@ -124,6 +138,7 @@ describe("rewards routes", () => {
   test("GET /me/rewards returns ledger balance, today earnings, recent events, and nullifier gate state", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -176,16 +191,7 @@ describe("rewards routes", () => {
       verification_state: "unverified",
     })
 
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO identity_nullifiers (
-          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash, status,
-          first_seen_at, created_at, updated_at
-        )
-        VALUES ('idn_rewards_route', ?1, 'self', 'zk-nullifier', 'reward-route-nullifier', 'active', ?2, ?2, ?2)
-      `,
-      args: [session.userId, now],
-    })
+    await addNullifier(ctx, session.userId, now)
     await ctx.client.execute({
       sql: `
         INSERT INTO reward_events (
@@ -226,6 +232,14 @@ describe("rewards routes", () => {
       min_cents: 100,
       verification_state: "verified",
     })
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
+    const wrongIdentityNamespace = await app.request(
+      "http://pirate.test/me/rewards",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect((await json(wrongIdentityNamespace) as { cashout: { verification_state: string } }).cashout.verification_state).toBe("unverified")
   })
 
   test("GET /me/rewards requires authentication", async () => {
@@ -290,6 +304,7 @@ describe("rewards routes", () => {
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -319,6 +334,19 @@ describe("rewards routes", () => {
       ctx.env,
     )
     expect(unverified.status).toBe(403)
+    expect(settleCount).toBe(0)
+
+    await addNullifier(ctx, session.userId, "2025-01-01T12:00:00.000Z")
+    const expiredVerification = await app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100, idempotency_key: "reward-cashout-expired-human" }),
+      },
+      ctx.env,
+    )
+    expect(expiredVerification.status).toBe(403)
     expect(settleCount).toBe(0)
 
     await addNullifier(ctx, session.userId, now)
@@ -357,7 +385,7 @@ describe("rewards routes", () => {
     )
     expect(response.status).toBe(202)
     const body = await json(response) as {
-      payout: { amount_cents: number; status: string; settlement_ref: string | null; recipient_address: string }
+      payout: { id: string; amount_cents: number; status: string; settlement_ref: string | null; recipient_address: string }
       balance_cents: number
     }
     expect(body.payout.amount_cents).toBe(100)
@@ -366,6 +394,23 @@ describe("rewards routes", () => {
     expect(body.payout.recipient_address).toBe("0x1000000000000000000000000000000000000001")
     expect(body.balance_cents).toBe(50)
     expect(settleCount).toBe(1)
+
+    const statusResponse = await app.request(
+      `http://pirate.test/me/rewards/cashouts/${body.payout.id}`,
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(statusResponse.status).toBe(200)
+    expect(await json(statusResponse)).toEqual(body)
+
+    await ctx.client.execute({
+      sql: "UPDATE wallet_attachments SET wallet_address_display = ?2 WHERE user_id = ?1 AND status = 'active'",
+      args: [session.userId, "0x3000000000000000000000000000000000000003"],
+    })
+    await ctx.client.execute({
+      sql: "DELETE FROM identity_nullifiers WHERE user_id = ?1",
+      args: [session.userId],
+    })
 
     const replay = await app.request(
       "http://pirate.test/me/rewards/cashouts",
@@ -378,9 +423,10 @@ describe("rewards routes", () => {
     )
     expect(replay.status).toBe(202)
     expect(settleCount).toBe(1)
-    const replayBody = await json(replay) as { balance_cents: number; payout: { status: string } }
+    const replayBody = await json(replay) as { balance_cents: number; payout: { recipient_address: string; status: string } }
     expect(replayBody.balance_cents).toBe(50)
     expect(replayBody.payout.status).toBe("confirmed")
+    expect(replayBody.payout.recipient_address).toBe("0x1000000000000000000000000000000000000001")
 
     const otherSession = await exchangeJwt(ctx.env, "reward-cashout-other-user")
     await addWallet(ctx, otherSession.userId, now, "0x2000000000000000000000000000000000000002")
@@ -397,11 +443,19 @@ describe("rewards routes", () => {
     )
     expect(sameKeyOtherUser.status).toBe(202)
     expect(settleCount).toBe(2)
+
+    const otherUserCannotReadCashout = await app.request(
+      `http://pirate.test/me/rewards/cashouts/${body.payout.id}`,
+      { headers: authHeaders(otherSession.accessToken) },
+      ctx.env,
+    )
+    expect(otherUserCannotReadCashout.status).toBe(404)
   })
 
   test("POST /me/rewards/cashouts can attach a verified Privy wallet at claim time", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -500,6 +554,7 @@ describe("rewards routes", () => {
   test("POST /me/rewards/cashouts rejects a claim-time wallet proof linked to another account", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -573,6 +628,7 @@ describe("rewards routes", () => {
   test("submitted reward payouts are reconciled without creating a new payout effect", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -641,6 +697,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup

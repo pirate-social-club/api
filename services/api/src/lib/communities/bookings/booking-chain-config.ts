@@ -182,3 +182,19 @@ export function resolveBookingSettlementOperatorAddress(env: Env): string {
 export function resolveRewardsSettlementOperatorAddress(env: Env): string {
   return resolveSettlementOperatorAddress(env, "rewards")
 }
+
+export function assertDistinctBookingAndRewardsSignerDomains(env: Env): void {
+  const hasBookingSigner = Boolean(
+    String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS ?? "").trim()
+    || String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY ?? "").trim(),
+  )
+  const hasBookingChain = Boolean(String(env.PIRATE_BOOKING_SETTLEMENT_CHAIN_ID ?? "").trim())
+  if (!hasBookingSigner || !hasBookingChain) return
+
+  const rewardsChainId = resolveRewardsSettlementChainId(env)
+  if (resolveBookingSettlementChainId(env) !== rewardsChainId) return
+  const rewardsAddress = resolveRewardsSettlementOperatorAddress(env)
+  if (resolveBookingSettlementOperatorAddress(env) === rewardsAddress) {
+    throw badRequestError("Booking and rewards settlement must use distinct operator signers on the same chain")
+  }
+}
