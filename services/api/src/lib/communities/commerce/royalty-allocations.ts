@@ -32,6 +32,7 @@ type CreatorWalletReader = Pick<UserRepository, "getUserById" | "getWalletAttach
 
 export type CreatorWalletSnapshot = {
   walletAddressNormalized: string
+  walletAddressDisplay: string
   walletAttachmentId: string | null
 }
 
@@ -139,13 +140,13 @@ export async function fingerprintForRequest(
 }
 
 // Resolve the creator's primary wallet SERVER-SIDE; never trust a client creator address.
-export async function resolveCreatorWalletSnapshot(input: {
+async function readCreatorWalletSnapshot(input: {
   userRepository: CreatorWalletReader
   userId: string
-}): Promise<CreatorWalletSnapshot> {
+}): Promise<CreatorWalletSnapshot | null> {
   const user = await input.userRepository.getUserById(input.userId)
   if (!user) {
-    throw badRequestError("Primary wallet is required for a royalty split")
+    return null
   }
   const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
   const primaryAttachmentId = user.primary_wallet_attachment_id
@@ -157,12 +158,47 @@ export async function resolveCreatorWalletSnapshot(input: {
     ?? attachments[0]
   const address = resolved?.wallet_address?.trim()
   if (!address) {
-    throw badRequestError("Primary wallet is required for a royalty split")
+    return null
   }
   return {
     walletAddressNormalized: address.toLowerCase(),
+    walletAddressDisplay: address,
     walletAttachmentId: resolved?.wallet_attachment ?? null,
   }
+}
+
+export async function tryResolveCreatorWalletSnapshot(input: {
+  userRepository: CreatorWalletReader
+  userId: string
+}): Promise<CreatorWalletSnapshot | null> {
+  return await readCreatorWalletSnapshot(input)
+}
+
+export async function resolveCreatorWalletSnapshot(input: {
+  userRepository: CreatorWalletReader
+  userId: string
+}): Promise<CreatorWalletSnapshot> {
+  const snapshot = await readCreatorWalletSnapshot(input)
+  if (!snapshot) {
+    throw badRequestError("Primary wallet is required for royalty allocations")
+  }
+  return snapshot
+}
+
+export function resolveRoyaltyAllocationRequests(input: {
+  requestedAllocations: RoyaltyAllocationRequest[] | null | undefined
+  creator: CreatorWalletSnapshot
+}): RoyaltyAllocationRequest[] {
+  if (input.requestedAllocations && input.requestedAllocations.length > 0) {
+    return input.requestedAllocations
+  }
+  return [
+    {
+      recipient_kind: "creator",
+      wallet_address: input.creator.walletAddressDisplay,
+      share_bps: 10_000,
+    },
+  ]
 }
 
 // Build the per-recipient rows, enforcing creator-wallet identity and snapshotting the
