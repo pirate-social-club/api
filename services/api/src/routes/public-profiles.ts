@@ -29,6 +29,7 @@ publicProfiles.get("/:handleLabel/activity", async (c) => {
   }
   const result = await getProfileActivity({
     env: c.env,
+    profileRepository: repository,
     repository: getCommunityRepository(c.env),
     targetUserId: decodePublicUserId(resolved.profile.id),
     viewerUserId: null,

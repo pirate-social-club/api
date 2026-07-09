@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { createComment } from "../src/lib/comments/comment-service"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
+import { upsertD1CommunityRoutingRow } from "../src/lib/communities/community-routing-repository"
 import { insertPostForTest as insertPost } from "./community-test-helpers"
 import { getPostById } from "../src/lib/posts/community-post-query-store"
 import { getProfileActivity } from "../src/lib/profile/profile-activity-read-service"
+import type { ProfileRepository } from "../src/lib/auth/repositories"
 import type { Env } from "../src/types"
 import { createControlPlaneTestClient } from "./helpers"
 import {
@@ -46,7 +48,7 @@ async function seedControlPlaneCommunity(input: {
         community_id, creator_user_id, display_name, membership_mode, status,
         provisioning_state, transfer_state, route_slug, namespace_verification_id,
         pending_namespace_verification_session_id,
-        created_at, updated_at
+        primary_database_binding_id, created_at, updated_at
       ) VALUES (
         ?1, 'usr_owner', 'Profile Activity Club', 'request', 'active',
         'active', 'none', NULL, NULL,
@@ -56,6 +58,44 @@ async function seedControlPlaneCommunity(input: {
     `,
     args: [input.communityId, input.now],
   })
+  await upsertD1CommunityRoutingRow(input.client, {
+    communityId: input.communityId,
+    provisioningState: "ready",
+    shardWorkerId: "community-d1-shard-test",
+    bindingName: "DB_CMTY_TEST",
+    region: "enam",
+    now: input.now,
+  })
+}
+
+function buildProfileRepository(labelsByUserId: Record<string, string | null>): ProfileRepository {
+  return {
+    async getProfileByUserId(userId: string) {
+      const label = labelsByUserId[userId]
+      return label ? { global_handle: { label }, primary_public_handle: null } : null
+    },
+    async listProfilesByUserIds(userIds: string[]) {
+      return new Map(userIds.map((userId) => [
+        userId,
+        labelsByUserId[userId]
+          ? { global_handle: { label: labelsByUserId[userId] }, primary_public_handle: null }
+          : null,
+      ]))
+    },
+  } as ProfileRepository
+}
+
+async function addColumnIfMissing(
+  client: Awaited<ReturnType<typeof openCommunityDb>>["client"],
+  sql: string,
+): Promise<void> {
+  try {
+    await client.execute(sql)
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("duplicate column")) {
+      throw error
+    }
+  }
 }
 
 describe("getProfileActivity", () => {
@@ -68,6 +108,7 @@ describe("getProfileActivity", () => {
     const databasePath = join(rootDir, "community.db")
     const env: Env = {
       CONTROL_PLANE_DATABASE_URL: `file:${control.databasePath}`,
+      ENVIRONMENT: "test",
       LOCAL_COMMUNITY_DB_ROOT: rootDir,
     }
     const repo = buildTestCommunityRepository({
@@ -94,10 +135,16 @@ describe("getProfileActivity", () => {
 
     let publicPostPayload = ""
     let publicPostId = ""
+    let ownerPostPayload = ""
+    let ownerPostId = ""
     let anonymousPostPayload = ""
     let anonymousPostId = ""
     const db = await openCommunityDb(env, repo, communityId)
     try {
+      await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN last_checkpoint TEXT")
+      await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN last_checkpoint_at TEXT")
+      await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN attempt_started_at TEXT")
+      await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN attempt_deadline_at TEXT")
       const publicPost = await insertPost({
         client: db.client,
         communityId,
@@ -124,9 +171,23 @@ describe("getProfileActivity", () => {
         },
         createdAt: "2026-05-12T10:03:00.000Z",
       })
+      const ownerPost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: "usr_owner",
+        body: {
+          post_type: "text",
+          title: "Owner profile post",
+          body: "Owner-visible profile post",
+          idempotency_key: "profile-owner-post",
+        },
+        createdAt: "2026-05-12T10:05:00.000Z",
+      })
       publicPostId = publicPost.post_id
+      ownerPostId = ownerPost.post_id
       anonymousPostId = anonymousPost.post_id
       publicPostPayload = JSON.stringify(await getPostById(db.client, publicPost.post_id))
+      ownerPostPayload = JSON.stringify(await getPostById(db.client, ownerPost.post_id))
       anonymousPostPayload = JSON.stringify(await getPostById(db.client, anonymousPost.post_id))
     } finally {
       db.close()
@@ -177,12 +238,16 @@ describe("getProfileActivity", () => {
              'text', 'published', 'public', 0, 0, 0,
              0, '2026-05-12T10:04:00.000Z', ?3, 1,
              ?5, ?5),
+            ('cpp_owner', ?1, ?7, 'usr_owner', 'public',
+             'text', 'published', 'public', 0, 0, 0,
+             0, '2026-05-12T10:05:00.000Z', ?8, 1,
+             ?5, ?5),
             ('cpp_anonymous', ?1, ?4, 'usr_alice', 'anonymous',
              'text', 'published', 'public', 0, 0, 0,
              0, '2026-05-12T10:03:00.000Z', ?6, 1,
              ?5, ?5)
         `,
-        args: [communityId, publicPostId, publicPostPayload, anonymousPostId, now, anonymousPostPayload],
+        args: [communityId, publicPostId, publicPostPayload, anonymousPostId, now, anonymousPostPayload, ownerPostId, ownerPostPayload],
       },
       {
         sql: `
@@ -209,9 +274,14 @@ describe("getProfileActivity", () => {
         args: [communityId, publicComment.comment_id, anonymousComment.comment_id],
       },
     ])
+    const profileRepository = buildProfileRepository({
+      usr_alice: "alice.pirate",
+      usr_owner: "owner.pirate",
+    })
 
     const posts = await getProfileActivity({
       env,
+      profileRepository,
       repository: repo,
       targetUserId: "usr_alice",
       viewerUserId: "usr_alice",
@@ -222,9 +292,23 @@ describe("getProfileActivity", () => {
     expect(posts.posts[0]?.community.community_id).toBe(communityId)
     expect(posts.posts[0]?.post.community?.community_id).toBe(communityId)
     expect(posts.posts[0]?.post.comment_count).toBe(1)
+    expect(posts.posts[0]?.post.post.author_public_handle).toBe("alice.pirate")
+
+    const ownerPosts = await getProfileActivity({
+      env,
+      profileRepository,
+      repository: repo,
+      targetUserId: "usr_owner",
+      viewerUserId: "usr_owner",
+      tab: "posts",
+      limit: 10,
+    })
+    expect(ownerPosts.posts.map((item) => item.post.post.title)).toEqual(["Owner profile post"])
+    expect(ownerPosts.posts[0]?.post.post.author_public_handle).toBe("owner.pirate")
 
     const comments = await getProfileActivity({
       env,
+      profileRepository,
       repository: repo,
       targetUserId: "usr_alice",
       viewerUserId: "usr_alice",
@@ -235,9 +319,11 @@ describe("getProfileActivity", () => {
     expect(comments.comments[0]?.community.community_id).toBe(communityId)
     expect(comments.comments[0]?.thread_root_post.community?.community_id).toBe(communityId)
     expect(comments.comments[0]?.thread_root_post.comment_count).toBe(2)
+    expect(comments.comments[0]?.comment.comment.author_public_handle).toBe("alice.pirate")
 
     const overview = await getProfileActivity({
       env,
+      profileRepository,
       repository: repo,
       targetUserId: "usr_alice",
       viewerUserId: "usr_alice",

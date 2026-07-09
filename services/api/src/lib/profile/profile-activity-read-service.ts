@@ -8,17 +8,20 @@ import type {
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError } from "../errors"
 import { getCommentById } from "../comments/community-comment-store"
+import { hydrateCommentAuthorPublicHandles } from "../comments/comment-author-hydration"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { getPostReadMetrics } from "../posts/community-post-metrics-store"
 import { getPostById } from "../posts/community-post-query-store"
 import { isPubliclyReadablePost } from "../posts/post-access"
-import { createStudyElevenLabsCredentialResolver, type StudyElevenLabsCredentialResolver } from "../posts/post-read-response"
+import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, type StudyElevenLabsCredentialResolver } from "../posts/post-read-response"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
+import type { ProfileRepository } from "../auth/repositories"
 import type { Env } from "../../env"
 import type {
   LocalizedPostResponse,
+  CommentListItem,
   Post,
   ProfileActivityCommentPage,
   ProfileActivityItem,
@@ -278,6 +281,7 @@ async function getViewerCommentVote(input: {
 
 async function hydratePostRows(input: {
   env: Env
+  profileRepository?: ProfileRepository | null
   repository: ProfileActivityRepository
   rows: PostProjectionRow[]
   viewerUserId: string | null
@@ -301,6 +305,7 @@ async function hydratePostRows(input: {
       })
       const studyEnabledCache = new Map<string, Promise<boolean>>()
       const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
+      const communityPostResponses: LocalizedPostResponse[] = []
       for (const row of rows) {
         const post = parseProjectedPost(row)
         if (!post || post.identity_mode !== "public" || !isPubliclyReadablePost(post)) {
@@ -324,6 +329,7 @@ async function hydratePostRows(input: {
           viewerUserId: input.viewerUserId,
         })
         response.community = preview
+        communityPostResponses.push(response)
         items.push({
           kind: "post",
           post: response,
@@ -331,6 +337,10 @@ async function hydratePostRows(input: {
           created_at: row.source_created_at,
         })
       }
+      await hydrateAuthorPublicHandlesForResponses({
+        responses: communityPostResponses,
+        profileRepository: input.profileRepository,
+      })
     } finally {
       db.close()
     }
@@ -341,6 +351,7 @@ async function hydratePostRows(input: {
 async function buildThreadRootPost(input: {
   client: DbExecutor
   env: Env
+  profileRepository?: ProfileRepository | null
   postId: string
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: Map<string, Promise<boolean>>
@@ -356,7 +367,7 @@ async function buildThreadRootPost(input: {
     postId: post.post_id,
     viewerUserId: input.viewerUserId,
   })
-  return await buildLocalizedPostResponse({
+  const response = await buildLocalizedPostResponse({
     executor: input.client,
     env: input.env,
     post,
@@ -368,10 +379,16 @@ async function buildThreadRootPost(input: {
     studyEnabledCache: input.studyEnabledCache,
     viewerUserId: input.viewerUserId,
   })
+  await hydrateAuthorPublicHandlesForResponses({
+    responses: [response],
+    profileRepository: input.profileRepository,
+  })
+  return response
 }
 
 async function hydrateCommentRows(input: {
   env: Env
+  profileRepository?: ProfileRepository | null
   repository: ProfileActivityRepository
   rows: CommentDiscoveryRow[]
   viewerUserId: string | null
@@ -397,6 +414,7 @@ async function hydrateCommentRows(input: {
       const studyEnabledCache = new Map<string, Promise<boolean>>()
       const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
       const threadRoots = new Map<string, LocalizedPostResponse | null>()
+      const communityCommentItems: CommentListItem[] = []
       for (const row of rows) {
         if (seenCommentIds.has(row.source_comment_id)) {
           continue
@@ -411,6 +429,7 @@ async function hydrateCommentRows(input: {
           : await buildThreadRootPost({
               client: db.client,
               env: input.env,
+              profileRepository: input.profileRepository,
               postId: row.thread_root_post_id,
               studyElevenLabsCredentialResolver,
               studyEnabledCache,
@@ -436,6 +455,7 @@ async function hydrateCommentRows(input: {
           },
           locale: input.locale,
         })
+        communityCommentItems.push(localizedComment)
         items.push({
           kind: "comment",
           comment: localizedComment,
@@ -444,6 +464,7 @@ async function hydrateCommentRows(input: {
           created_at: row.created_at,
         })
       }
+      await hydrateCommentAuthorPublicHandles(communityCommentItems, input.profileRepository)
     } finally {
       db.close()
     }
@@ -477,6 +498,7 @@ function cursorForItem(item: ProfileActivityItem): string {
 
 export async function getProfileActivity(input: {
   env: Env
+  profileRepository?: ProfileRepository | null
   repository: ProfileActivityRepository
   targetUserId: string
   viewerUserId: string | null
@@ -513,6 +535,7 @@ export async function getProfileActivity(input: {
   const [posts, comments] = await Promise.all([
     hydratePostRows({
       env: input.env,
+      profileRepository: input.profileRepository,
       repository: input.repository,
       rows: postRows,
       viewerUserId: input.viewerUserId,
@@ -520,6 +543,7 @@ export async function getProfileActivity(input: {
     }),
     hydrateCommentRows({
       env: input.env,
+      profileRepository: input.profileRepository,
       repository: input.repository,
       rows: commentRows,
       viewerUserId: input.viewerUserId,

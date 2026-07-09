@@ -230,6 +230,7 @@ profiles.get("/me/activity", async (c) => {
   const actor = c.get("actor")
   const result = await getProfileActivity({
     env: c.env,
+    profileRepository: getProfileRepository(c.env),
     repository: getCommunityRepository(c.env),
     targetUserId: actor.userId,
     viewerUserId: actor.userId,
