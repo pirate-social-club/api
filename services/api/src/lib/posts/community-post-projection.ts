@@ -46,6 +46,7 @@ export type PostProjectionSchema = {
   hasCommentLockColumns: boolean
   hasCrosspostSourceJson: boolean
   hasPostEvents: boolean
+  hasRightsHolds: boolean
   hasSongAnnotationsUrl: boolean
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
@@ -58,6 +59,7 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
   const assetResult = await executor.execute("PRAGMA table_info(assets)")
   const assetColumnNames = new Set(assetResult.rows.map((row) => String(row.name ?? "")))
   const postEventsResult = await executor.execute("PRAGMA table_info(post_events)")
+  const rightsHoldsResult = await executor.execute("PRAGMA table_info(rights_holds)")
   return {
     hasAssetStoryColumns: assetColumnNames.has("asset_id")
       && assetColumnNames.has("community_id")
@@ -69,6 +71,7 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("comments_lock_reason"),
     hasCrosspostSourceJson: columnNames.has("crosspost_source_json"),
     hasPostEvents: postEventsResult.rows.length > 0,
+    hasRightsHolds: rightsHoldsResult.rows.length > 0,
     hasSongAnnotationsUrl: columnNames.has("song_annotations_url"),
     hasSongCoverArtRef: columnNames.has("song_cover_art_ref"),
     hasSongDurationMs: columnNames.has("song_duration_ms"),

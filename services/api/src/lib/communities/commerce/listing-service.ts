@@ -31,6 +31,10 @@ import { centsToUsd } from "./serialization"
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationSharePct } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import {
+  assertAssetNotRightsHeld,
+  assertListingNotRightsHeld,
+} from "./rights-hold-gates"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
   getReplayAssetListingTarget,
@@ -306,6 +310,11 @@ export async function prepareCommunityListingWrite(input: {
     if (asset.access_mode !== "locked") {
       assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     }
+    await assertAssetNotRightsHeld({
+      client: input.client,
+      communityId: input.communityId,
+      asset,
+    })
     if (asset.creator_user_id !== input.userId && !hasCommunityRole(membership, OWNER_OR_ADMIN_ROLE)) {
       throw notFoundError("Asset not found")
     }
@@ -502,9 +511,20 @@ export async function updateCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertAssetNotRightsHeld({
+        client: db.client,
+        communityId: input.communityId,
+        asset,
+      })
       if (asset.access_mode !== "locked") {
         assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
       }
+    } else if ((input.body.status ?? listing.status) === "active") {
+      await assertListingNotRightsHeld({
+        client: db.client,
+        communityId: input.communityId,
+        listing,
+      })
     }
     const currentPolicy = parseListingPolicy(listing)
     const nextRegional = input.body.regional_pricing_enabled

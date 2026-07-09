@@ -572,6 +572,7 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       acr,
       audioTrackPresent,
       analysisSkippedReason,
+      blockCommercialMusicMatches: trimEnv(input.env.VIDEO_MEDIA_ANALYSIS_BLOCK_COMMERCIAL_MATCHES) === "1",
     })
     const persisted = await persistVideoRightsAnalysis({
       client: db.client,

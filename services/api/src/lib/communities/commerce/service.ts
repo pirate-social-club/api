@@ -59,6 +59,10 @@ import {
   serializeAsset,
   type DerivativeSourceRow,
 } from "./shared"
+import {
+  assertAssetNotBlockedByRightsHold,
+  assertAssetNotRightsHeld,
+} from "./rights-hold-gates"
 import type { BuyerIdentity } from "./buyer-identity"
 import { getControlPlaneClient } from "../../runtime-deps"
 import type { CommunityJobCheckpoint } from "../jobs/store"
@@ -1314,6 +1318,11 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   if (!post) {
     throw notFoundError("Asset source post not found")
   }
+  await assertAssetNotBlockedByRightsHold({
+    client: input.client,
+    communityId: input.communityId,
+    asset,
+  })
 
   const controlPlaneClient = getControlPlaneClient(input.env)
   const artifactKind: SongArtifactUpload["artifact_kind"] = asset.asset_kind === "video_file"
@@ -2113,6 +2122,12 @@ export async function fetchPublicCommunityAssetContent(input: {
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset content not found")
     }
+    await assertAssetNotRightsHeld({
+      client: db.client,
+      communityId: input.communityId,
+      asset,
+      mode: "public",
+    })
     if (asset.access_mode === "public") {
       return await fetchPrimaryAssetContent({
         env: input.env,
@@ -2149,6 +2164,11 @@ export async function fetchCommunityAssetContent(input: {
       assetId: input.assetId,
       notFoundMessage: "Asset not found",
       unpublishedMessage: "Asset content not found",
+    })
+    await assertAssetNotRightsHeld({
+      client: db.client,
+      communityId: input.communityId,
+      asset,
     })
     if (asset.access_mode === "public") {
       return await fetchPrimaryAssetContent({

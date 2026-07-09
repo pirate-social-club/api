@@ -1,10 +1,11 @@
 import { makeId, nowIso } from "../helpers"
 import type { Client } from "../sql-client"
+import { upsertActiveRightsHold } from "../rights/rights-hold-store"
+import type { RightsHoldType } from "../rights/rights-review-types"
 
-// v1 policy for the video attribution guardrail: analysis never auto-hides or
-// blocks a post. Every run records a media_analysis_results row; outcomes that
-// need a human open a rights_review_cases row for moderators. Enforcement
-// stays with the existing moderation tools.
+// Video attribution guardrail: every run records a media_analysis_results row;
+// outcomes that need action open a rights_review_cases row and create a
+// rights_holds row that commerce/delivery gates can enforce.
 
 export type VideoRightsOutcome =
   | "allow"
@@ -58,6 +59,7 @@ export function computeVideoRightsOutcome(input: {
   acr: VideoRightsAcrEvaluation
   audioTrackPresent: boolean
   analysisSkippedReason?: string | null
+  blockCommercialMusicMatches?: boolean
 }): VideoRightsDecision {
   if (input.analysisSkippedReason) {
     return {
@@ -138,10 +140,18 @@ export function computeVideoRightsOutcome(input: {
     }
   }
   if (hasMusicMatch) {
+    if (!input.blockCommercialMusicMatches) {
+      return {
+        outcome: "review_required",
+        policyReasonCode: "commercial_catalog_match",
+        policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
+        caseTrigger: "acrcloud_match",
+      }
+    }
     return {
-      outcome: "review_required",
+      outcome: "blocked",
       policyReasonCode: "commercial_catalog_match",
-      policyReason: "Soundtrack matches a commercial recording outside the platform catalog.",
+      policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
       caseTrigger: "acrcloud_match",
     }
   }
@@ -172,6 +182,19 @@ export type PersistVideoRightsAnalysisInput = {
   audioSafety?: VideoAudioSafetyEvaluation | null
   sampleWindow: { start_ms: number; duration_ms: number } | null
   createdAt?: string
+}
+
+function holdTypeForRightsOutcome(outcome: VideoRightsOutcome): RightsHoldType | null {
+  switch (outcome) {
+    case "allow":
+      return null
+    case "allow_with_required_reference":
+      return "reference_required"
+    case "review_required":
+      return "review_hold"
+    case "blocked":
+      return "blocked"
+  }
 }
 
 export async function persistVideoRightsAnalysis(
@@ -246,6 +269,7 @@ export async function persistVideoRightsAnalysis(
   }
 
   let rightsReviewCaseId: string | null = null
+  let holdSourceCaseId: string | null = null
   if (input.decision.caseTrigger) {
     rightsReviewCaseId = makeId("rrc")
     // The partial unique index (subject, trigger, open statuses) makes retries
@@ -270,7 +294,47 @@ export async function persistVideoRightsAnalysis(
     })
     if (!result.rowsAffected) {
       rightsReviewCaseId = null
+    } else {
+      holdSourceCaseId = rightsReviewCaseId
     }
+    if (!holdSourceCaseId) {
+      const existing = await input.client.execute({
+        sql: `
+          SELECT rights_review_case_id
+          FROM rights_review_cases
+          WHERE subject_type = ?1
+            AND subject_id = ?2
+            AND trigger_source = ?3
+            AND status IN ('open', 'under_review')
+          ORDER BY updated_at DESC, rights_review_case_id DESC
+          LIMIT 1
+        `,
+        args: [
+          input.assetId ? "asset" : "post",
+          input.assetId ?? input.postId,
+          input.decision.caseTrigger,
+        ],
+      })
+      holdSourceCaseId = typeof existing.rows[0]?.rights_review_case_id === "string"
+        ? existing.rows[0].rights_review_case_id
+        : null
+    }
+  }
+
+  const holdType = holdTypeForRightsOutcome(input.decision.outcome)
+  if (holdType && input.decision.caseTrigger) {
+    await upsertActiveRightsHold({
+      executor: input.client,
+      communityId: input.communityId,
+      subjectType: input.assetId ? "asset" : "post",
+      subjectId: input.assetId ?? input.postId,
+      holdType,
+      sourceCaseId: holdSourceCaseId,
+      analysisResultRef: mediaAnalysisResultId,
+      reasonCode: input.decision.policyReasonCode,
+      reason: input.decision.policyReason,
+      now: createdAt,
+    })
   }
 
   return { mediaAnalysisResultId, rightsReviewCaseId }

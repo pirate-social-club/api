@@ -117,6 +117,20 @@ async function seedRightsReviewCase(input: {
       `,
       args: [caseId, input.postId, input.communityId, analysisId, now],
     })
+    await client.execute({
+      sql: `
+        INSERT INTO rights_holds (
+          rights_hold_id, subject_type, subject_id, community_id, hold_type,
+          source_case_id, analysis_result_ref, status, reason_code, reason,
+          created_at, updated_at
+        ) VALUES (
+          ?1, 'post', ?2, ?3, 'reference_required',
+          ?4, ?5, 'active', 'undeclared_catalog_match', 'Catalog song matched without a declared source',
+          ?6, ?6
+        )
+      `,
+      args: [`rhold_${caseId}`, input.postId, input.communityId, caseId, analysisId, now],
+    })
     if (input.subjectAssetId) {
       await client.execute({
         sql: `
@@ -138,6 +152,31 @@ async function seedRightsReviewCase(input: {
       })
     }
     return { caseId, analysisId }
+  } finally {
+    client.close()
+  }
+}
+
+async function readRightsHolds(input: {
+  communityDbRoot: string
+  communityId: string
+}): Promise<Array<{ subject_type: string; subject_id: string; hold_type: string; status: string; released_at: string | null }>> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute(`
+      SELECT subject_type, subject_id, hold_type, status, released_at
+      FROM rights_holds
+      ORDER BY created_at ASC, rights_hold_id ASC
+    `)
+    return result.rows.map((row) => ({
+      subject_type: String(row.subject_type),
+      subject_id: String(row.subject_id),
+      hold_type: String(row.hold_type),
+      status: String(row.status),
+      released_at: typeof row.released_at === "string" ? row.released_at : null,
+    }))
   } finally {
     client.close()
   }
@@ -367,6 +406,13 @@ describe("rights review routes", () => {
       asset_id: "ast_review_video",
       upstream_asset_id: "ast_source_song",
     }])
+    const holdsAfterClear = await readRightsHolds({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+    })
+    expect(holdsAfterClear).toHaveLength(1)
+    expect(holdsAfterClear[0]?.status).toBe("released")
+    expect(typeof holdsAfterClear[0]?.released_at).toBe("string")
 
     const activeAfterResolve = await app.request(
       `http://pirate.test/communities/${community.communityId}/rights-review/cases`,
@@ -380,7 +426,61 @@ describe("rights review routes", () => {
     expect(activeAfterResolve.status).toBe(200)
     const activeAfterResolveBody = await json(activeAfterResolve) as { items: Array<unknown> }
     expect(activeAfterResolveBody.items).toHaveLength(0)
-  })
+  }, 15_000)
+
+  test("block action creates an active blocked rights hold", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "rights-review-block-owner")
+    const community = await createCommunity(ctx.env, owner.accessToken, "Rights Review Block Club")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Rights blocked video",
+        body: "Represents a blocked rights case",
+        idempotency_key: "rights-review-block-post-1",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+    const rawPostId = decodePublicPostId(postBody.id)
+    const seeded = await seedRightsReviewCase({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      postId: rawPostId,
+    })
+
+    const action = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      {
+        action_type: "block",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(action.status).toBe(200)
+    const actionBody = await json(action) as { case: { status: string; resolution: string | null } }
+    expect(actionBody.case.status).toBe("blocked")
+    expect(actionBody.case.resolution).toBe("block")
+
+    const holds = await readRightsHolds({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+    })
+    expect(holds).toHaveLength(1)
+    expect(holds[0]).toMatchObject({
+      subject_type: "post",
+      subject_id: rawPostId,
+      hold_type: "blocked",
+      status: "active",
+      released_at: null,
+    })
+  }, 15_000)
 
   test("community members cannot read rights review cases", async () => {
     const ctx = await createRouteTestContext()

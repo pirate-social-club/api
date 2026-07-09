@@ -9,6 +9,8 @@ export type RightsReviewTriggerSource =
   | "operator_escalation"
 export type RightsReviewResolution = "clear" | "clear_with_upstream_refs" | "block" | "needs_more_evidence"
 export type RightsReviewActionType = "start_review" | RightsReviewResolution
+export type RightsHoldType = "reference_required" | "review_hold" | "blocked"
+export type RightsHoldStatus = "active" | "released"
 
 export type MediaAnalysisResult = {
   media_analysis_result_id: string
@@ -47,6 +49,22 @@ export type RightsReviewCase = {
   created_at: string
   updated_at: string
   resolved_at: string | null
+}
+
+export type RightsHold = {
+  rights_hold_id: string
+  subject_type: RightsReviewSubjectType
+  subject_id: string
+  community_id: string
+  hold_type: RightsHoldType
+  source_case_id: string | null
+  analysis_result_ref: string | null
+  status: RightsHoldStatus
+  reason_code: string | null
+  reason: string | null
+  created_at: string
+  updated_at: string
+  released_at: string | null
 }
 
 export type RightsReviewCaseListItem = RightsReviewCase & {

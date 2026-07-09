@@ -11,6 +11,10 @@ import {
   listRightsReviewCases,
   updateRightsReviewCaseAction,
 } from "./rights-review-store"
+import {
+  releaseActiveRightsHoldsForSubject,
+  upsertActiveRightsHold,
+} from "./rights-hold-store"
 import type {
   CreateRightsReviewActionRequest,
   RightsReviewActionType,
@@ -359,6 +363,44 @@ export async function applyRightsReviewCaseAction(input: {
         dbClient: db.client,
         caseRow,
         evidenceRefs,
+        now,
+      })
+    }
+
+    if (actionType === "start_review" || actionType === "needs_more_evidence") {
+      await upsertActiveRightsHold({
+        executor: db.client,
+        communityId: input.communityId,
+        subjectType: caseRow.subject_type,
+        subjectId: caseRow.subject_id,
+        holdType: "review_hold",
+        sourceCaseId: caseRow.rights_review_case_id,
+        analysisResultRef: caseRow.analysis_result_ref,
+        reasonCode: actionType === "needs_more_evidence" ? "needs_more_evidence" : "under_review",
+        reason: actionType === "needs_more_evidence"
+          ? "Rights review needs more evidence before commerce or delivery can continue."
+          : "Rights review is in progress.",
+        now,
+      })
+    } else if (actionType === "block") {
+      await upsertActiveRightsHold({
+        executor: db.client,
+        communityId: input.communityId,
+        subjectType: caseRow.subject_type,
+        subjectId: caseRow.subject_id,
+        holdType: "blocked",
+        sourceCaseId: caseRow.rights_review_case_id,
+        analysisResultRef: caseRow.analysis_result_ref,
+        reasonCode: "rights_blocked",
+        reason: "Rights review blocked this subject.",
+        now,
+      })
+    } else {
+      await releaseActiveRightsHoldsForSubject({
+        executor: db.client,
+        communityId: input.communityId,
+        subjectType: caseRow.subject_type,
+        subjectId: caseRow.subject_id,
         now,
       })
     }

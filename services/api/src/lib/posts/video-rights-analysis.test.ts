@@ -86,13 +86,25 @@ describe("computeVideoRightsOutcome", () => {
     expect(decision.policyReasonCode).toBe("unmappable_catalog_match")
   })
 
-  test("commercial catalog match goes to review", () => {
+  test("commercial catalog match goes to review by default", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared(),
       acr: acr({ musicMatches: [{ title: "Famous Song" }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("review_required")
+    expect(decision.policyReasonCode).toBe("commercial_catalog_match")
+    expect(decision.caseTrigger).toBe("acrcloud_match")
+  })
+
+  test("commercial catalog match blocks when enforcement is enabled", () => {
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr({ musicMatches: [{ title: "Famous Song" }] }),
+      audioTrackPresent: true,
+      blockCommercialMusicMatches: true,
+    })
+    expect(decision.outcome).toBe("blocked")
     expect(decision.policyReasonCode).toBe("commercial_catalog_match")
     expect(decision.caseTrigger).toBe("acrcloud_match")
   })
@@ -304,6 +316,32 @@ describe("persistVideoRightsAnalysis", () => {
         ON rights_review_cases(subject_type, subject_id, trigger_source)
         WHERE status IN ('open', 'under_review')
     `)
+    await client.execute(`
+      CREATE TABLE rights_holds (
+        rights_hold_id TEXT PRIMARY KEY,
+        subject_type TEXT NOT NULL CHECK (
+          subject_type IN ('asset', 'post', 'live_room', 'replay_asset')
+        ),
+        subject_id TEXT NOT NULL,
+        community_id TEXT NOT NULL,
+        hold_type TEXT NOT NULL CHECK (
+          hold_type IN ('reference_required', 'review_hold', 'blocked')
+        ),
+        source_case_id TEXT,
+        analysis_result_ref TEXT,
+        status TEXT NOT NULL CHECK (status IN ('active', 'released')),
+        reason_code TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        released_at TEXT
+      )
+    `)
+    await client.execute(`
+      CREATE UNIQUE INDEX idx_rights_holds_active_subject
+        ON rights_holds(subject_type, subject_id)
+        WHERE status = 'active'
+    `)
     return client
   }
 
@@ -345,6 +383,14 @@ describe("persistVideoRightsAnalysis", () => {
     expect(caseRows.rows[0]?.trigger_source).toBe("declared_reference_mismatch")
     expect(caseRows.rows[0]?.analysis_result_ref).toBe(persisted.mediaAnalysisResultId)
     expect(persisted.rightsReviewCaseId).toBe(caseRows.rows[0]?.rights_review_case_id as string)
+
+    const holdRows = await client.execute("SELECT * FROM rights_holds")
+    expect(holdRows.rows).toHaveLength(1)
+    expect(holdRows.rows[0]?.subject_type).toBe("asset")
+    expect(holdRows.rows[0]?.subject_id).toBe("ast_video")
+    expect(holdRows.rows[0]?.hold_type).toBe("review_hold")
+    expect(holdRows.rows[0]?.source_case_id).toBe(persisted.rightsReviewCaseId)
+    expect(holdRows.rows[0]?.analysis_result_ref).toBe(persisted.mediaAnalysisResultId)
   })
 
   test("posts without an asset open post-subject cases and skip links", async () => {
@@ -371,6 +417,12 @@ describe("persistVideoRightsAnalysis", () => {
     expect(caseRows.rows[0]?.subject_id).toBe("pst_public_video")
     const linkRows = await client.execute("SELECT * FROM asset_derivative_links")
     expect(linkRows.rows).toHaveLength(0)
+    const holdRows = await client.execute("SELECT subject_type, subject_id, hold_type FROM rights_holds")
+    expect(holdRows.rows).toEqual([{
+      subject_type: "post",
+      subject_id: "pst_public_video",
+      hold_type: "reference_required",
+    }])
   })
 
   test("re-analysis does not duplicate an open case or derivative link", async () => {
