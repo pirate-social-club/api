@@ -33,6 +33,10 @@ import {
 } from "./row-types"
 import type { AssetRow } from "./row-types"
 import {
+  assertAssetNotRightsHeld,
+  assertListingNotRightsHeld,
+} from "./rights-hold-gates"
+import {
   requireCommunityMember,
   resolveWalletAttachmentAddress,
 } from "./access"
@@ -228,6 +232,11 @@ async function finalizeLocalPurchaseSettlement(input: {
   if (!listing) {
     throw notFoundError("Listing not found")
   }
+  await assertListingNotRightsHeld({
+    client: input.client,
+    communityId: input.communityId,
+    listing,
+  })
 
   // Quote-consumption eligibility BEFORE the tx — a buffered D1 write tx can't read
   // the quote's UPDATE rowsAffected back mid-flight. Re-read the authoritative status:
@@ -813,6 +822,11 @@ async function settleCommunityPurchaseForBuyer(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertAssetNotRightsHeld({
+        client: db.client,
+        communityId: input.communityId,
+        asset,
+      })
       if (quote.settlement_mode !== "royalty_native_story_payment") {
         throw badRequestError("Asset purchases require Story royalty-native settlement")
       }

@@ -12,6 +12,7 @@ import {
   resolveStoryRuntimeSignerTargetBalanceWei,
 } from "./story-runtime-config"
 import { getAssetRow } from "../communities/commerce/queries"
+import { getActiveRightsHoldForAsset } from "../rights/rights-hold-store"
 import { decodePublicAssetId } from "../public-ids"
 import { publishStoryJsonMetadata } from "./story-metadata-publisher"
 import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
@@ -737,6 +738,17 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   const rightsBasis = normalizeStoryRoyaltyRightsBasis(input.rightsBasis)
   if (!rightsBasis) {
     return null
+  }
+
+  const existingAsset = await getAssetRow(input.client, input.communityId, input.assetId)
+  const activeRightsHold = await getActiveRightsHoldForAsset({
+    executor: input.client,
+    communityId: input.communityId,
+    assetId: input.assetId,
+    sourcePostId: existingAsset?.source_post_id ?? null,
+  })
+  if (activeRightsHold?.hold_type === "blocked") {
+    throw new Error("rights_hold_blocked")
   }
 
   const spgNftContract = resolveStoryRoyaltySpgNftContract(input.env)

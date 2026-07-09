@@ -4,6 +4,7 @@ import {
   capStoryRoyaltyRpcFeeResponseForTests,
   capStoryRoyaltyWriteContractRequestForTests,
   isRetryableStoryRegistrationError,
+  maybeRegisterStoryRoyaltyForAsset,
   withStoryRegistrationRetry,
 } from "./story-royalty-registration-service"
 import type { DirectTxGasPolicy } from "../evm-direct-tx"
@@ -225,5 +226,54 @@ describe("withStoryRegistrationRetry", () => {
       }),
     ).rejects.toThrow(/RPC Request failed/)
     expect(calls).toBe(3)
+  })
+})
+
+describe("maybeRegisterStoryRoyaltyForAsset rights holds", () => {
+  test("blocks Story registration at the chokepoint for an active blocked hold", async () => {
+    const client = {
+      async execute(statement: { sql: string; args?: unknown[] } | string) {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("FROM assets")) {
+          return { rows: [] }
+        }
+        if (sql.includes("FROM rights_holds")) {
+          return {
+            rows: [{
+              rights_hold_id: "rhold_blocked",
+              subject_type: "asset",
+              subject_id: "ast_blocked",
+              community_id: "cmt_1",
+              hold_type: "blocked",
+              source_case_id: "rrc_1",
+              analysis_result_ref: "mar_1",
+              status: "active",
+              reason_code: "commercial_catalog_match",
+              reason: "Blocked",
+              created_at: "2026-07-09T00:00:00.000Z",
+              updated_at: "2026-07-09T00:00:00.000Z",
+              released_at: null,
+            }],
+          }
+        }
+        return { rows: [] }
+      },
+    }
+
+    await expect(maybeRegisterStoryRoyaltyForAsset({
+      env: {} as any,
+      client,
+      communityId: "cmt_1",
+      assetId: "ast_blocked",
+      creatorWalletAddress: "0x1111111111111111111111111111111111111111",
+      title: "Blocked video",
+      rightsBasis: "original",
+      licensePreset: "commercial-use",
+      commercialRevSharePct: 0,
+      upstreamAssetRefs: null,
+      assetKind: "video_file",
+      bundle: null,
+      primaryContentHash: `0x${"1".repeat(64)}`,
+    })).rejects.toThrow("rights_hold_blocked")
   })
 })

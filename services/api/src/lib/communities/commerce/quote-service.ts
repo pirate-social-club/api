@@ -29,6 +29,10 @@ import {
   getCommunityPricingPolicy,
 } from "./policy-service"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import {
+  assertAssetNotRightsHeld,
+  assertListingNotRightsHeld,
+} from "./rights-hold-gates"
 import { resolveStorySettlementDirectSigner } from "../../story/story-direct-signer"
 import {
   resolvePirateCheckoutOperatorAddress,
@@ -172,6 +176,13 @@ export async function preflightCommunityPurchaseQuote(input: {
     if (listingId && (!listing || listing.status !== "active")) {
       throw notFoundError("Listing not found")
     }
+    if (listing) {
+      await assertListingNotRightsHeld({
+        client: db.client,
+        communityId: input.communityId,
+        listing,
+      })
+    }
     const serializedListing = listing ? serializeListing(listing) : null
     const resolvedPrice = serializedListing
       ? resolveRegionalPrice({
@@ -265,6 +276,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
     if (!listing || listing.status !== "active") {
       throw notFoundError("Listing not found")
     }
+    await assertListingNotRightsHeld({
+      client: db.client,
+      communityId: input.communityId,
+      listing,
+      mode: input.publicBuyer ? "public" : "private",
+    })
     let settlementMode = resolvePurchaseSettlementMode({})
     let replayAllocationSnapshot: QuoteAllocationSnapshot[] | null = null
     if (listing.asset_id?.trim()) {
@@ -272,6 +289,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertAssetNotRightsHeld({
+        client: db.client,
+        communityId: input.communityId,
+        asset,
+        mode: input.publicBuyer ? "public" : "private",
+      })
       if (input.publicBuyer) {
         if (asset.access_mode !== "locked" || asset.locked_delivery_status !== "ready") {
           throw notFoundError("Listing not found")

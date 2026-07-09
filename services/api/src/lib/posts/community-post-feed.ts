@@ -6,6 +6,7 @@ import {
   postSelectColumnsForSchema,
   requiredAssetRowFilterForSchema,
   resolvePostProjectionSchema,
+  type PostProjectionSchema,
 } from "./community-post-projection"
 import {
   serializePost,
@@ -63,6 +64,28 @@ function parseOffsetCursor(cursor: string | null | undefined): number {
   }
   const parsed = Number(cursor.slice(2))
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0
+}
+
+function activeRightsHoldFilterSql(schema: PostProjectionSchema, postAlias = "posts"): string {
+  if (!schema.hasRightsHolds) {
+    return ""
+  }
+  return `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM rights_holds rh
+          WHERE rh.community_id = ${postAlias}.community_id
+            AND rh.status = 'active'
+            AND (
+              (rh.subject_type = 'post' AND rh.subject_id = ${postAlias}.post_id)
+              OR (
+                rh.subject_type = 'asset'
+                AND ${postAlias}.asset_id IS NOT NULL
+                AND rh.subject_id = ${postAlias}.asset_id
+              )
+            )
+          LIMIT 1
+        )`
 }
 
 export async function listPublishedLocalizedPosts(input: {
@@ -139,6 +162,7 @@ export async function listPublishedLocalizedPosts(input: {
         AND (?3 IS NULL OR label_id = ?3)
         AND (?4 IS NULL OR visibility = ?4)
         ${requiredAssetRowFilterForSchema(projectionSchema)}
+        ${activeRightsHoldFilterSql(projectionSchema, "posts")}
         ${eventFilterSql}
         AND (
           ?5 = 0
@@ -295,6 +319,7 @@ export async function listPublishedLocalizedEventPosts(input: {
       ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE posts.status = 'published'
         ${requiredAssetRowFilterForSchema(projectionSchema)}
+        ${activeRightsHoldFilterSql(projectionSchema, "posts")}
       ORDER BY event_posts.event_sort_start ASC, event_posts.event_post_id ASC
       LIMIT ?6
     `,
