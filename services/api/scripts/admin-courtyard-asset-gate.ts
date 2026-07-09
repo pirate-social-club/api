@@ -270,18 +270,30 @@ function normalizeAlchemyNft(nft: AlchemyNft): {
 }
 
 function factsMatch(asset: NormalizedFacts, match: Erc721InventoryAssetMatch): boolean {
-  if (match.category && asset.category !== match.category) return false
-  if (match.franchise && asset.franchise !== match.franchise) return false
-  if (match.subject && !asset.subject?.includes(match.subject)) return false
-  if (match.brand && asset.brand !== match.brand) return false
-  if (match.model && !asset.model?.includes(match.model)) return false
-  if (match.reference && asset.reference !== match.reference) return false
-  if (match.set && asset.set !== match.set) return false
-  if (match.year && asset.year !== match.year) return false
-  if (match.grader && asset.grader !== match.grader) return false
-  if (match.grade && asset.grade !== match.grade) return false
-  if (match.condition && asset.condition !== match.condition) return false
+  if (match.category && !matchesExact(asset.category, match.category)) return false
+  if (match.franchise && !matchesExact(asset.franchise, match.franchise)) return false
+  if (match.subject && !matchesContains(asset.subject, match.subject)) return false
+  if (match.brand && !matchesExact(asset.brand, match.brand)) return false
+  if (match.model && !matchesContains(asset.model, match.model)) return false
+  if (match.reference && !matchesExact(asset.reference, match.reference)) return false
+  if (match.set && !matchesExact(asset.set, match.set)) return false
+  if (match.year && !matchesExact(asset.year, match.year)) return false
+  if (match.grader && !matchesExact(asset.grader, match.grader)) return false
+  if (match.grade && !matchesExact(asset.grade, match.grade)) return false
+  if (match.condition && !matchesExact(asset.condition, match.condition)) return false
   return true
+}
+
+function matchValues(value: string | string[]): string[] {
+  return Array.isArray(value) ? value : [value]
+}
+
+function matchesExact(assetValue: string | null, matchValue: string | string[]): boolean {
+  return assetValue != null && matchValues(matchValue).includes(assetValue)
+}
+
+function matchesContains(assetValue: string | null, matchValue: string | string[]): boolean {
+  return assetValue != null && matchValues(matchValue).some((candidate) => assetValue.includes(candidate))
 }
 
 async function proveOwnerWithAlchemy(input: {

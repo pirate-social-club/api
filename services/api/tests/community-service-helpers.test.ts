@@ -328,6 +328,30 @@ describe("community helper functions", () => {
       ).not.toThrow()
     })
 
+    test("allows Courtyard inventory match gates with per-key allowlists", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 2,
+              match: {
+                category: "trading_card",
+                franchise: "pokemon",
+                subject: ["charizard", "gengar"],
+                grade: ["psa 9", "psa 10"],
+              },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
     test("allows Courtyard erc721 inventory match gate with valid Ethereum config", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
@@ -421,6 +445,66 @@ describe("community helper functions", () => {
           }],
         }), { ageOver18Verified: false }),
       ).toThrow("erc721_inventory_match must include category plus a supported matching field")
+    })
+
+    test("rejects Courtyard inventory gate with empty allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: { category: "trading_card", subject: [] },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
+    })
+
+    test("rejects Courtyard inventory gate with too many allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: {
+                category: "trading_card",
+                subject: ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven"],
+              },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
+    })
+
+    test("rejects Courtyard inventory gate with duplicate allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: { category: "trading_card", subject: ["Charizard", "charizard"] },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
     })
 
     test("rejects erc721_holding gate with invalid chain namespace", () => {

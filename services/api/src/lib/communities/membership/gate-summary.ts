@@ -70,7 +70,9 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
       summary.contract_address = config.contractAddress
       summary.inventory_provider = config.inventoryProvider
       summary.min_quantity = config.minQuantity
-      summary.asset_category = config.assetFilter.category ?? null
+      summary.asset_category = Array.isArray(config.assetFilter.category)
+        ? config.assetFilter.category[0] ?? null
+        : config.assetFilter.category ?? null
       summary.asset_filter_label = formatAssetFilterLabel(config.assetFilter)
     } else if (rule.chain_namespace) {
       summary.chain_namespace = rule.chain_namespace
@@ -166,7 +168,9 @@ export function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGa
       summary.contract_address = atom.contract_address
       summary.inventory_provider = atom.provider
       summary.min_quantity = atom.min_quantity
-      summary.asset_category = typeof atom.match.category === "string" ? atom.match.category : null
+      summary.asset_category = Array.isArray(atom.match.category)
+        ? atom.match.category[0] ?? null
+        : typeof atom.match.category === "string" ? atom.match.category : null
       summary.asset_filter_label = formatAssetFilterLabel(atom.match)
       break
     case "unique_human":

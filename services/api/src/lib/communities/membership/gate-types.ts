@@ -33,7 +33,7 @@ export type GateAtom =
     chain_namespace: "eip155:1" | "eip155:137"
     contract_address: string
     min_quantity: number
-    match: Record<string, unknown>
+    match: Record<string, string | string[]>
   }
 
 export type GateTraceNode =

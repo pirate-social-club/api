@@ -4,6 +4,7 @@ import { normalizeEthereumAddress } from "../community-token-gates"
 import {
   getInventoryMatchKeys,
   isAllowedCourtyardRegistry,
+  MAX_INVENTORY_MATCH_VALUES_PER_KEY,
   normalizeAssetMatch,
   normalizeInventoryText,
 } from "../community-token-inventory-gates"
@@ -166,18 +167,19 @@ function validateGateAtom(input: unknown): GateAtom {
       if (!atom.match || typeof atom.match !== "object" || Array.isArray(atom.match)) {
         throw eligibilityFailed("erc721_inventory_match gate requires match")
       }
-      const match = atom.match as Record<string, unknown>
+      const rawMatch = atom.match as Record<string, unknown>
       const allowedKeys = new Set(getInventoryMatchKeys())
-      const invalidKeys = Object.keys(match).filter((key) => !allowedKeys.has(key))
+      const invalidKeys = Object.keys(rawMatch).filter((key) => !allowedKeys.has(key))
       if (invalidKeys.length > 0) {
         throw eligibilityFailed(`erc721_inventory_match has unsupported keys: ${invalidKeys.join(", ")}`)
       }
-      if (!normalizeAssetMatch(match)) {
+      if (Object.values(rawMatch).some((value) => !isValidInventoryMatchValue(value))) {
+        throw eligibilityFailed(`erc721_inventory_match values must be non-empty strings or arrays of 1 to ${MAX_INVENTORY_MATCH_VALUES_PER_KEY} unique non-empty strings`)
+      }
+      if (!normalizeAssetMatch(rawMatch)) {
         throw eligibilityFailed("erc721_inventory_match must include category plus a supported matching field")
       }
-      if (Object.values(match).some((value) => typeof value === "string" && normalizeInventoryText(value) == null)) {
-        throw eligibilityFailed("erc721_inventory_match values must be non-empty strings")
-      }
+      const match = rawMatch as Record<string, string | string[]>
       return {
         type: "erc721_inventory_match",
         provider: "courtyard",
@@ -190,6 +192,22 @@ function validateGateAtom(input: unknown): GateAtom {
     default:
       throw eligibilityFailed("Unsupported gate atom type")
   }
+}
+
+function isValidInventoryMatchValue(value: unknown): boolean {
+  const values = Array.isArray(value) ? value : [value]
+  if (values.length === 0 || values.length > MAX_INVENTORY_MATCH_VALUES_PER_KEY) {
+    return false
+  }
+  const normalizedValues = new Set<string>()
+  for (const raw of values) {
+    const normalized = normalizeInventoryText(raw)
+    if (!normalized || normalizedValues.has(normalized)) {
+      return false
+    }
+    normalizedValues.add(normalized)
+  }
+  return Array.isArray(value) || typeof value === "string"
 }
 
 function validateDocumentAcceptedProviders(input: unknown, gateType: string): DocumentProofProvider[] | null {

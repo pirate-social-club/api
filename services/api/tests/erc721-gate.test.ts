@@ -297,6 +297,125 @@ describe("erc721 gate evaluation", () => {
     expect(result.mismatchReasons).toEqual([])
   })
 
+  test("matches Courtyard inventory when a facet value is in an allowlist", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Graded Cards",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Charizard V",
+        token_id: "charizard-token",
+        attributes: [
+          { name: "Category", value: "Pokemon" },
+          { name: "Title/Subject", value: "Charizard V" },
+        ],
+      }],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 1,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Charizard"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
+    })
+  })
+
+  test("does not match Courtyard inventory when no allowlist value matches", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Graded Cards",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Charizard V",
+        token_id: "charizard-token",
+        attributes: [
+          { name: "Category", value: "Pokemon" },
+          { name: "Title/Subject", value: "Charizard V" },
+        ],
+      }],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 1,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Pikachu"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(false)
+      expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+    })
+  })
+
+  test("counts any matching allowlist value toward min_quantity", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 2,
+      assets: [
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "charizard-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+          ],
+        },
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Gengar V",
+          token_id: "gengar-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Gengar V" },
+          ],
+        },
+      ],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 2,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Charizard"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
+    })
+  })
+
   test("fails closed when the inventory provider is unavailable", async () => {
     setErc721InventoryMatcherForTests(async () => ({ matchedQuantity: 0, unavailable: true }))
 
