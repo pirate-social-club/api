@@ -62,6 +62,7 @@ import {
 import {
   assertAssetNotBlockedByRightsHold,
   assertAssetNotRightsHeld,
+  blockedRightsHoldMessage,
 } from "./rights-hold-gates"
 import type { BuyerIdentity } from "./buyer-identity"
 import { getControlPlaneClient } from "../../runtime-deps"
@@ -1318,11 +1319,31 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   if (!post) {
     throw notFoundError("Asset source post not found")
   }
-  await assertAssetNotBlockedByRightsHold({
-    client: input.client,
-    communityId: input.communityId,
-    asset,
-  })
+  try {
+    await assertAssetNotBlockedByRightsHold({
+      client: input.client,
+      communityId: input.communityId,
+      asset,
+    })
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== blockedRightsHoldMessage()) {
+      throw error
+    }
+    await input.client.execute({
+      sql: `
+        UPDATE assets
+        SET story_status = 'failed',
+            story_error = ?3,
+            locked_delivery_status = 'failed',
+            locked_delivery_error = ?3,
+            updated_at = ?4
+        WHERE community_id = ?1
+          AND asset_id = ?2
+      `,
+      args: [input.communityId, asset.asset_id, "rights_hold_blocked", nowIso()],
+    })
+    throw error
+  }
 
   const controlPlaneClient = getControlPlaneClient(input.env)
   const artifactKind: SongArtifactUpload["artifact_kind"] = asset.asset_kind === "video_file"
