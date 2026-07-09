@@ -123,7 +123,7 @@ describe("rewards routes", () => {
 
   test("GET /me/rewards returns ledger balance, today earnings, recent events, and nullifier gate state", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_READS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -236,7 +236,7 @@ describe("rewards routes", () => {
     expect(response.status).toBe(401)
   })
 
-  test("rewards routes are dark when REWARDS_ENABLED is not true", async () => {
+  test("reward reads and payouts fail closed when their independent flags are not true", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -289,7 +289,7 @@ describe("rewards routes", () => {
 
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -401,7 +401,7 @@ describe("rewards routes", () => {
 
   test("POST /me/rewards/cashouts can attach a verified Privy wallet at claim time", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -499,7 +499,7 @@ describe("rewards routes", () => {
 
   test("POST /me/rewards/cashouts rejects a claim-time wallet proof linked to another account", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -572,7 +572,7 @@ describe("rewards routes", () => {
 
   test("submitted reward payouts are reconciled without creating a new payout effect", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -639,7 +639,8 @@ describe("rewards routes", () => {
 
   test("failed preparation payouts eventually fail and release reserved balance", async () => {
     const ctx = await createRouteTestContext({
-      REWARDS_ENABLED: "true",
+      REWARDS_READS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup

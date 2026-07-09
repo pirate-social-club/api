@@ -221,7 +221,7 @@ function repository() {
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
-    REWARDS_ENABLED: "true",
+    REWARDS_ACCRUAL_ENABLED: "true",
     REWARDS_DAILY_STREAK_CENTS: "10",
     REWARDS_DAILY_USER_CAP_CENTS: "25",
     REWARDS_STREAK_MILESTONE_7_CENTS: "50",
@@ -255,7 +255,7 @@ describe("song practice rewards reconciler", () => {
 
   test("invalid money knobs resolve to zero credits", () => {
     const config = resolveRewardConfig({
-      REWARDS_ENABLED: "true",
+      REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_DAILY_STREAK_CENTS: "0.10",
       REWARDS_DAILY_USER_CAP_CENTS: "-30",
       REWARDS_STREAK_MILESTONE_7_CENTS: "fifty",

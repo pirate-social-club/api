@@ -13,8 +13,8 @@ import type {
 
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 
-function rewardsEnabled(env: Pick<Env, "REWARDS_ENABLED">): boolean {
-  return String(env.REWARDS_ENABLED ?? "").trim().toLowerCase() === "true"
+function rewardReadsEnabled(env: Pick<Env, "REWARDS_READS_ENABLED">): boolean {
+  return String(env.REWARDS_READS_ENABLED ?? "").trim().toLowerCase() === "true"
 }
 
 function parseConfiguredCents(raw: string | undefined, fallback: number): number {
@@ -62,7 +62,7 @@ export async function getRewardsSummaryForUser(input: {
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
-  if (!rewardsEnabled(input.env)) {
+  if (!rewardReadsEnabled(input.env)) {
     return {
       balance_cents: 0,
       today_earned_cents: 0,

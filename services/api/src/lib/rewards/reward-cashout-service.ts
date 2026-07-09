@@ -100,8 +100,8 @@ function parseConfiguredCents(raw: string | undefined, fallback: number): number
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback
 }
 
-function rewardsEnabled(env: Pick<Env, "REWARDS_ENABLED">): boolean {
-  return String(env.REWARDS_ENABLED ?? "").trim().toLowerCase() === "true"
+function rewardPayoutsEnabled(env: Pick<Env, "REWARDS_PAYOUTS_ENABLED">): boolean {
+  return String(env.REWARDS_PAYOUTS_ENABLED ?? "").trim().toLowerCase() === "true"
 }
 
 function normalizeRecipientAddress(raw: string): string {
@@ -546,7 +546,7 @@ export async function cashOutRewards(input: {
   const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
   const nowUtc = input.nowUtc ?? new Date().toISOString()
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
-  if (!rewardsEnabled(input.env)) {
+  if (!rewardPayoutsEnabled(input.env)) {
     throw eligibilityFailed("Rewards cashout is not enabled")
   }
   if (amountCents < minCashoutCents) {
@@ -587,7 +587,7 @@ export async function reconcileSubmittedRewardPayouts(input: {
   confirmPollMs?: number[]
 }): Promise<RewardPayoutReconciliationSummary> {
   const summary: RewardPayoutReconciliationSummary = {
-    enabled: rewardsEnabled(input.env),
+    enabled: rewardPayoutsEnabled(input.env),
     scanned: 0,
     confirmed: 0,
     failed: 0,

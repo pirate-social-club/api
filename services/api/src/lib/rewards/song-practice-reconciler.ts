@@ -58,14 +58,14 @@ function parseCents(raw: string | undefined): number {
 
 export function resolveRewardConfig(env: Pick<
   Env,
-  | "REWARDS_ENABLED"
+  | "REWARDS_ACCRUAL_ENABLED"
   | "REWARDS_DAILY_STREAK_CENTS"
   | "REWARDS_DAILY_USER_CAP_CENTS"
   | "REWARDS_STREAK_MILESTONE_7_CENTS"
   | "REWARDS_STREAK_MILESTONE_30_CENTS"
 >): RewardConfig {
   return {
-    enabled: String(env.REWARDS_ENABLED ?? "").trim().toLowerCase() === "true",
+    enabled: String(env.REWARDS_ACCRUAL_ENABLED ?? "").trim().toLowerCase() === "true",
     dailyCents: parseCents(env.REWARDS_DAILY_STREAK_CENTS),
     dailyUserCapCents: parseCents(env.REWARDS_DAILY_USER_CAP_CENTS),
     milestone7Cents: parseCents(env.REWARDS_STREAK_MILESTONE_7_CENTS),

@@ -268,8 +268,12 @@ export type Env = {
   // When true, attendance-ambiguous due bookings are moved to disputed/pending operator review
   // instead of being left untouched by the settlement cron.
   BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED?: string
-  // Off-chain song-practice rewards. Missing/empty/invalid = disabled/no credit.
-  REWARDS_ENABLED?: string
+  // Off-chain song-practice rewards. Every surface fails closed independently: a legacy
+  // REWARDS_ENABLED value must never enable accrual, reads, payouts, or campaigns.
+  REWARDS_ACCRUAL_ENABLED?: string
+  REWARDS_READS_ENABLED?: string
+  REWARDS_PAYOUTS_ENABLED?: string
+  REWARDS_CAMPAIGNS_ENABLED?: string
   REWARDS_DAILY_STREAK_CENTS?: string
   REWARDS_DAILY_USER_CAP_CENTS?: string
   REWARDS_STREAK_MILESTONE_7_CENTS?: string
