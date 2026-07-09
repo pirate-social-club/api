@@ -10,12 +10,11 @@
   "scripts": {
     "generate": "bun run scripts/generate-from-core.ts",
     "check:fresh": "bun run scripts/check-generated-fresh.ts",
-    "check": "tsgo --noEmit && bun run check:consumer",
-    "check:consumer": "tsgo --noEmit -p tsconfig.consumer.json"
+    "check": "tsc --noEmit && bun run check:consumer",
+    "check:consumer": "tsc --noEmit -p tsconfig.consumer.json"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
-    "@typescript/native-preview": "^7.0.0-dev.20260421.2",
-    "typescript": "^5.8.3"
+    "typescript": "7.0.2"
   }
 }
