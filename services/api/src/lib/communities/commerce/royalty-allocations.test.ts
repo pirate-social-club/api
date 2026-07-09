@@ -14,6 +14,7 @@ import {
   markStoryRoyaltyAllocationRegistrationPendingVerification,
   persistAssetWithAllocations,
   resolveAllocationChainId,
+  resolveRoyaltyAllocationRequests,
   verifyStoryRoyaltyAllocationForAsset,
   type StoryRoyaltyVaultReader,
 } from "./royalty-allocations"
@@ -219,7 +220,7 @@ describe("computeAllocationFingerprint", () => {
 })
 
 describe("buildAllocationRows", () => {
-  const snapshot = { walletAddressNormalized: CREATOR, walletAttachmentId: "wa_1" }
+  const snapshot = { walletAddressNormalized: CREATOR, walletAddressDisplay: CREATOR, walletAttachmentId: "wa_1" }
 
   test("snapshots the creator and preserves declared order; collaborators get null user/attachment", () => {
     const rows = buildAllocationRows({
@@ -261,7 +262,7 @@ describe("buildAllocationRows", () => {
 })
 
 describe("persistAssetWithAllocations", () => {
-  const snapshot = { walletAddressNormalized: CREATOR, walletAttachmentId: "wa_1" }
+  const snapshot = { walletAddressNormalized: CREATOR, walletAddressDisplay: CREATOR, walletAttachmentId: "wa_1" }
   let counter = 0
   const rowsFor = (assetId: string, fingerprint: string) => buildAllocationRows({
     assetId, communityId: "com_1", creatorUserId: "usr_author", allocations: split(),
@@ -304,6 +305,31 @@ describe("persistAssetWithAllocations", () => {
     expect(Number(assets.rows[0].n)).toBe(0)
     const allocs = await client.execute({ sql: `SELECT COUNT(*) AS n FROM initial_royalty_allocations WHERE asset_id = ?1`, args: ["ast_rollback"] })
     expect(Number(allocs.rows[0].n)).toBe(0)
+  })
+})
+
+describe("resolveRoyaltyAllocationRequests", () => {
+  const snapshot = { walletAddressNormalized: CREATOR, walletAddressDisplay: CREATOR, walletAttachmentId: "wa_1" }
+
+  test("synthesizes the default creator split when the client omits allocations", () => {
+    expect(resolveRoyaltyAllocationRequests({
+      requestedAllocations: null,
+      creator: snapshot,
+    })).toEqual([
+      {
+        recipient_kind: "creator",
+        wallet_address: CREATOR,
+        share_bps: 10_000,
+      },
+    ])
+  })
+
+  test("preserves explicit allocation requests", () => {
+    const allocations = split()
+    expect(resolveRoyaltyAllocationRequests({
+      requestedAllocations: allocations,
+      creator: snapshot,
+    })).toBe(allocations)
   })
 })
 

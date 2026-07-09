@@ -11,6 +11,8 @@ import {
   persistAssetWithAllocations,
   resolveAllocationChainId,
   resolveCreatorWalletSnapshot,
+  resolveRoyaltyAllocationRequests,
+  tryResolveCreatorWalletSnapshot,
 } from "./royalty-allocations"
 import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
@@ -857,15 +859,15 @@ export async function createAssetForPost(input: {
   })
   let creatorWalletAddress: string | null = null
   const resolvedPrimaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(input.storageRef)}`) as `0x${string}`
-  const requestedAllocations = input.royaltyAllocations ?? []
-  let royaltyAllocationStatus: "none" | "draft" | "verification_pending" = "none"
+  const clientRequestedAllocations = input.royaltyAllocations ?? []
+  let royaltyAllocationStatus: AssetRow["royalty_allocation_status"] = "none"
   let royaltyAllocationFingerprint: string | null = null
   let allocationStatements: InStatement[] = []
   let storyRoyaltySharesForRegistration: ReturnType<typeof buildStoryRoyaltySharesFromAllocationRows> | null = null
   let storyRoyaltyAllocationDistributionTxHash: string | null = null
-  if (requestedAllocations.length > 0) {
+  if (clientRequestedAllocations.length > 0) {
     const allocationChainId = resolveAllocationChainId(input.env)
-    const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
+    const fingerprint = await fingerprintForRequest(clientRequestedAllocations, allocationChainId)
     const creator = await resolveCreatorWalletSnapshot({
       userRepository: input.userRepository,
       userId: input.post.author_user_id ?? "",
@@ -874,7 +876,7 @@ export async function createAssetForPost(input: {
       assetId: input.post.asset_id,
       communityId: input.communityId,
       creatorUserId: input.post.author_user_id ?? "",
-      allocations: requestedAllocations,
+      allocations: clientRequestedAllocations,
       fingerprint,
       creator,
       chainId: allocationChainId,
@@ -885,6 +887,36 @@ export async function createAssetForPost(input: {
     allocationStatements = buildAllocationInsertStatements(allocationRows)
     royaltyAllocationStatus = "draft"
     royaltyAllocationFingerprint = fingerprint
+  } else {
+    const creator = await tryResolveCreatorWalletSnapshot({
+      userRepository: input.userRepository,
+      userId: input.post.author_user_id ?? "",
+    })
+    if (creator) {
+      const allocationChainId = resolveAllocationChainId(input.env)
+      const requestedAllocations = resolveRoyaltyAllocationRequests({
+        requestedAllocations: null,
+        creator,
+      })
+      const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
+      const allocationRows = buildAllocationRows({
+        assetId: input.post.asset_id,
+        communityId: input.communityId,
+        creatorUserId: input.post.author_user_id ?? "",
+        allocations: requestedAllocations,
+        fingerprint,
+        creator,
+        chainId: allocationChainId,
+        now: createdAt,
+        newId: () => `rya_${crypto.randomUUID()}`,
+      })
+      storyRoyaltySharesForRegistration = buildStoryRoyaltySharesFromAllocationRows(allocationRows)
+      allocationStatements = buildAllocationInsertStatements(allocationRows)
+      royaltyAllocationStatus = "draft"
+      royaltyAllocationFingerprint = fingerprint
+    } else {
+      royaltyAllocationStatus = "legacy_unverified"
+    }
   }
   const lockedDeliveryAsync = (input.post.access_mode ?? "public") === "locked"
     && shouldPrepareLockedDeliveryAsync(input.env)
@@ -953,7 +985,7 @@ export async function createAssetForPost(input: {
     try {
       const shouldRunRoyaltyRegistration = shouldRegisterRoyalty && storyRegistration.storyRoyaltyRegistrationStatus !== "registered"
       const reusableOriginalRegistration = shouldRunRoyaltyRegistration
-        && requestedAllocations.length === 0
+        && clientRequestedAllocations.length === 0
         && (input.post.rights_basis ?? "none") === "original"
         ? await findReusableRegisteredOriginalStoryAssetByContent({
             client: input.client,
