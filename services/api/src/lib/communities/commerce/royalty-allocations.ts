@@ -30,6 +30,7 @@ type CreatorWalletReader = Pick<UserRepository, "getUserById" | "getWalletAttach
 
 export type CreatorWalletSnapshot = {
   walletAddressNormalized: string
+  walletAddressDisplay: string
   walletAttachmentId: string | null
 }
 
@@ -108,8 +109,25 @@ export async function resolveCreatorWalletSnapshot(input: {
   }
   return {
     walletAddressNormalized: address.toLowerCase(),
+    walletAddressDisplay: address,
     walletAttachmentId: resolved?.wallet_attachment ?? null,
   }
+}
+
+export function resolveRoyaltyAllocationRequests(input: {
+  requestedAllocations: RoyaltyAllocationRequest[] | null | undefined
+  creator: CreatorWalletSnapshot
+}): RoyaltyAllocationRequest[] {
+  if (input.requestedAllocations && input.requestedAllocations.length > 0) {
+    return input.requestedAllocations
+  }
+  return [
+    {
+      recipient_kind: "creator",
+      wallet_address: input.creator.walletAddressDisplay,
+      share_bps: 10_000,
+    },
+  ]
 }
 
 // Build the per-recipient rows, enforcing creator-wallet identity and snapshotting the

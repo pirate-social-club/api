@@ -193,6 +193,87 @@ function fakeClient(initial: AssetRow) {
   }
 }
 
+function fakeCreateClient() {
+  let row: AssetRow | null = null
+  const allocationArgs: unknown[][] = []
+  let assetInsertArgs: unknown[] | null = null
+  const client = {
+    execute: async (statement: { sql: string; args?: unknown[] }) => {
+      if (statement.sql.includes("SELECT asset_id, community_id, source_post_id")) {
+        return { rows: row ? [row] : [] }
+      }
+      return { rows: [] }
+    },
+    transaction: async () => ({
+      execute: async (statement: { sql: string; args?: unknown[] }) => {
+        if (statement.sql.includes("INSERT INTO assets")) {
+          const args = statement.args ?? []
+          assetInsertArgs = [...args]
+          row = assetRow({
+            access_mode: args[8] as AssetRow["access_mode"],
+            asset_id: args[0] as string,
+            asset_kind: args[6] as AssetRow["asset_kind"],
+            commercial_rev_share_pct: args[10] as AssetRow["commercial_rev_share_pct"],
+            community_id: args[1] as string,
+            created_at: args[31] as string,
+            creator_user_id: args[5] as string,
+            display_title: args[3] as string | null,
+            license_preset: args[9] as AssetRow["license_preset"],
+            locked_delivery_error: args[30] as AssetRow["locked_delivery_error"],
+            locked_delivery_ref: args[29] as AssetRow["locked_delivery_ref"],
+            locked_delivery_secret_json: args[40] as AssetRow["locked_delivery_secret_json"],
+            locked_delivery_status: args[28] as AssetRow["locked_delivery_status"],
+            locked_delivery_storage_ref: args[39] as AssetRow["locked_delivery_storage_ref"],
+            primary_content_hash: args[12] as AssetRow["primary_content_hash"],
+            primary_content_ref: args[11] as string,
+            publication_status: args[13] as AssetRow["publication_status"],
+            rights_basis: args[7] as AssetRow["rights_basis"],
+            song_artifact_bundle_id: args[4] as AssetRow["song_artifact_bundle_id"],
+            source_post_id: args[2] as string,
+            story_asset_version_id: args[33] as AssetRow["story_asset_version_id"],
+            story_cdr_vault_uuid: args[34] as AssetRow["story_cdr_vault_uuid"],
+            story_derivative_parent_ip_ids_json: args[24] as AssetRow["story_derivative_parent_ip_ids_json"],
+            story_derivative_registered_at: args[25] as AssetRow["story_derivative_registered_at"],
+            story_entitlement_token_id: args[36] as AssetRow["story_entitlement_token_id"],
+            story_error: args[15] as AssetRow["story_error"],
+            story_ip_id: args[16] as AssetRow["story_ip_id"],
+            story_ip_nft_contract: args[17] as AssetRow["story_ip_nft_contract"],
+            story_ip_nft_token_id: args[18] as AssetRow["story_ip_nft_token_id"],
+            story_license_template: args[21] as AssetRow["story_license_template"],
+            story_license_terms_id: args[20] as AssetRow["story_license_terms_id"],
+            story_namespace: args[35] as AssetRow["story_namespace"],
+            story_publish_model: args[19] as AssetRow["story_publish_model"],
+            story_publish_tx_ref: args[32] as AssetRow["story_publish_tx_ref"],
+            story_read_condition: args[37] as AssetRow["story_read_condition"],
+            story_revenue_token: args[26] as AssetRow["story_revenue_token"],
+            story_royalty_policy: args[22] as AssetRow["story_royalty_policy"],
+            story_royalty_policy_id: args[23] as AssetRow["story_royalty_policy_id"],
+            story_royalty_registration_status: args[27] as AssetRow["story_royalty_registration_status"],
+            story_status: args[14] as AssetRow["story_status"],
+            story_write_condition: args[38] as AssetRow["story_write_condition"],
+            updated_at: args[31] as string,
+          })
+        } else if (statement.sql.includes("INSERT INTO initial_royalty_allocations")) {
+          allocationArgs.push([...(statement.args ?? [])])
+        }
+        return { rows: [] }
+      },
+      commit: async () => undefined,
+      rollback: async () => undefined,
+      close: () => undefined,
+    }),
+  }
+  return {
+    get allocationArgs() {
+      return allocationArgs
+    },
+    get assetInsertArgs() {
+      return assetInsertArgs
+    },
+    client,
+  }
+}
+
 describe("createAssetForPost existing asset resume", () => {
   test("retries Story registration for an existing failed asset and returns the registered asset", async () => {
     registrationMode = "success"
@@ -259,5 +340,47 @@ describe("createAssetForPost existing asset resume", () => {
       retryable: true,
     })
     expect(maybeRegisterStoryRoyaltyForAsset).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("createAssetForPost royalty allocation freeze", () => {
+  test("freezes a default 100% creator allocation when the client omits royaltyAllocations", async () => {
+    registrationMode = "success"
+    maybeRegisterStoryRoyaltyForAsset.mockClear()
+    const fake = fakeCreateClient()
+
+    await createAssetForPost({
+      assetKind: "song_audio",
+      artifactKind: "primary_audio",
+      bundle: null,
+      bundleId: null,
+      client: fake.client,
+      commercialRevSharePct: null,
+      communityId: COMMUNITY_ID,
+      contentHash: "0xabc",
+      displayTitle: "Default split song",
+      env: {} as never,
+      licensePreset: null,
+      mimeType: "audio/wav",
+      post: {
+        ...post(),
+        song_artifact_bundle_id: null,
+      },
+      requireStoryRoyaltyRegistration: false,
+      royaltyAllocations: null,
+      storageRef: "r2://song.wav",
+      userRepository: userRepository() as never,
+    })
+
+    expect(fake.assetInsertArgs?.[41]).toBe("draft")
+    expect(fake.assetInsertArgs?.[42]).toBe(1)
+    expect(typeof fake.assetInsertArgs?.[43]).toBe("string")
+    expect(fake.allocationArgs).toHaveLength(1)
+    expect(fake.allocationArgs[0][3]).toBe("creator")
+    expect(fake.allocationArgs[0][4]).toBe("usr_artist")
+    expect(fake.allocationArgs[0][5]).toBe("wallet_1")
+    expect(fake.allocationArgs[0][6]).toBe("0x6666666666666666666666666666666666666666")
+    expect(fake.allocationArgs[0][9]).toBe(10_000)
+    expect(fake.allocationArgs[0][10]).toBe(0)
   })
 })

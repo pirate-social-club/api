@@ -9,6 +9,7 @@ import {
   persistAssetWithAllocations,
   resolveAllocationChainId,
   resolveCreatorWalletSnapshot,
+  resolveRoyaltyAllocationRequests,
 } from "./royalty-allocations"
 import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, notFoundError, providerUnavailable } from "../../errors"
@@ -901,31 +902,28 @@ export async function createAssetForPost(input: {
     )
   }
 
-  const requestedAllocations = input.royaltyAllocations ?? []
-  let royaltyAllocationStatus: "none" | "draft" = "none"
-  let royaltyAllocationFingerprint: string | null = null
-  let allocationStatements: InStatement[] = []
-  if (requestedAllocations.length > 0) {
-    const allocationChainId = resolveAllocationChainId(input.env)
-    const fingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
-    const creator = await resolveCreatorWalletSnapshot({
-      userRepository: input.userRepository,
-      userId: input.post.author_user_id ?? "",
-    })
-    allocationStatements = buildAllocationInsertStatements(buildAllocationRows({
-      assetId: input.post.asset_id,
-      communityId: input.communityId,
-      creatorUserId: input.post.author_user_id ?? "",
-      allocations: requestedAllocations,
-      fingerprint,
-      creator,
-      chainId: allocationChainId,
-      now: createdAt,
-      newId: () => `rya_${crypto.randomUUID()}`,
-    }))
-    royaltyAllocationStatus = "draft"
-    royaltyAllocationFingerprint = fingerprint
-  }
+  const allocationChainId = resolveAllocationChainId(input.env)
+  const creator = await resolveCreatorWalletSnapshot({
+    userRepository: input.userRepository,
+    userId: input.post.author_user_id ?? "",
+  })
+  const requestedAllocations = resolveRoyaltyAllocationRequests({
+    requestedAllocations: input.royaltyAllocations,
+    creator,
+  })
+  const royaltyAllocationFingerprint = await fingerprintForRequest(requestedAllocations, allocationChainId)
+  const allocationStatements = buildAllocationInsertStatements(buildAllocationRows({
+    assetId: input.post.asset_id,
+    communityId: input.communityId,
+    creatorUserId: input.post.author_user_id ?? "",
+    allocations: requestedAllocations,
+    fingerprint: royaltyAllocationFingerprint,
+    creator,
+    chainId: allocationChainId,
+    now: createdAt,
+    newId: () => `rya_${crypto.randomUUID()}`,
+  }))
+  const royaltyAllocationStatus: "draft" = "draft"
 
   const assetInsert: InStatement = {
     sql: `
@@ -1001,15 +999,11 @@ export async function createAssetForPost(input: {
       royaltyAllocationFingerprint,
     ],
   }
-  if (allocationStatements.length > 0) {
-    await persistAssetWithAllocations({
-      client: input.client,
-      assetInsert,
-      allocationStatements,
-    })
-  } else {
-    await input.client.execute(assetInsert)
-  }
+  await persistAssetWithAllocations({
+    client: input.client,
+    assetInsert,
+    allocationStatements,
+  })
   const projectionCandidate = {
     assetKind: input.assetKind,
     publicationStatus,
