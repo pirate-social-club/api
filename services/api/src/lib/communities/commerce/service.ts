@@ -1167,7 +1167,7 @@ export async function createAssetForPost(input: {
       royaltyAllocationStatus,
       ROYALTY_ALLOCATION_VERSION,
       royaltyAllocationFingerprint,
-      royaltyAllocationStatus === "none" ? 1 : 0,
+      allocationStatements.length === 0 ? 1 : 0,
     ],
   }
   if (allocationStatements.length > 0) {

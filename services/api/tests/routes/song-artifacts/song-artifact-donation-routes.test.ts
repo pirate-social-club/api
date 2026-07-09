@@ -10,6 +10,7 @@ import { openCommunityDb } from "../../../src/lib/communities/community-db-facto
 import type { CommunityDatabaseBindingRepository } from "../../../src/lib/communities/db-community-repository"
 import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
+import { decodePublicAssetId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
@@ -71,6 +72,60 @@ async function markGeneratedPreviewReady(input: {
 
 async function verifyForLockedSongCommerce(env: Env, _userId: string, accessToken: string): Promise<void> {
   await completeUniqueHumanVerification(env, accessToken)
+}
+
+async function markAssetRoyaltyAllocationVerified(input: {
+  ctx: Awaited<ReturnType<typeof createRouteTestContext>>
+  communityId: string
+  assetId: string
+}): Promise<void> {
+  const repo: CommunityDatabaseBindingRepository = {
+    async getPrimaryCommunityDatabaseBinding() {
+      return {
+        community_database_binding_id: "cdb_test",
+        community_id: input.communityId,
+        binding_role: "primary",
+        organization_slug: "local",
+        group_name: "local",
+        group_id: null,
+        database_name: `community-${input.communityId}`,
+        database_id: null,
+        database_url: `file:${input.ctx.communityDbRoot}/community-${input.communityId}.db`,
+        location: null,
+        requires_credentials: false,
+        status: "active",
+        transferred_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+    },
+  }
+  const db = await openCommunityDb(input.ctx.env, repo, input.communityId)
+  try {
+    const assetId = decodePublicAssetId(input.assetId)
+    const now = new Date().toISOString()
+    await db.client.batch([
+      {
+        sql: `
+          UPDATE assets
+          SET royalty_allocation_status = 'verified',
+              updated_at = ?2
+          WHERE asset_id = ?1
+        `,
+        args: [assetId, now],
+      },
+      {
+        sql: `
+          UPDATE initial_royalty_allocations
+          SET distribution_status = 'verified'
+          WHERE asset_id = ?1
+        `,
+        args: [assetId],
+      },
+    ])
+  } finally {
+    db.close()
+  }
 }
 
 beforeEach(() => {
@@ -231,6 +286,7 @@ describe("song artifact donation routes", () => {
     expect(lockedPostCreate.status).toBe(201)
     const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
     const assetId = lockedPostBody.asset as string
+    await markAssetRoyaltyAllocationVerified({ ctx, communityId, assetId })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
@@ -449,6 +505,7 @@ describe("song artifact donation routes", () => {
     expect(postCreate.status).toBe(201)
     const postBody = await json(postCreate) as { asset?: string | null }
     const assetId = postBody.asset as string
+    await markAssetRoyaltyAllocationVerified({ ctx, communityId, assetId })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
@@ -679,6 +736,7 @@ describe("song artifact donation routes", () => {
     expect(lockedPostCreate.status).toBe(201)
     const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
     const assetId = lockedPostBody.asset as string
+    await markAssetRoyaltyAllocationVerified({ ctx, communityId, assetId })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
@@ -892,6 +950,7 @@ describe("song artifact donation routes", () => {
     expect(lockedPostCreate.status).toBe(201)
     const lockedPostBody = await json(lockedPostCreate) as { asset?: string | null }
     const assetId = lockedPostBody.asset as string
+    await markAssetRoyaltyAllocationVerified({ ctx, communityId, assetId })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,

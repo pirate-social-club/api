@@ -28,6 +28,7 @@ import {
 } from "../../../src/lib/communities/commerce/public-wallet-proof"
 import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
+import { decodePublicAssetId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
@@ -109,6 +110,41 @@ async function markGeneratedPreviewFailed(input: {
     previewError: input.previewError,
     updatedAt: new Date().toISOString(),
   })
+}
+
+async function markAssetRoyaltyAllocationVerified(input: {
+  communityDbRoot: string
+  communityId: string
+  assetId: string
+}): Promise<void> {
+  const communityDb = createClient({
+    url: `file:${buildLocalCommunityDbPath(input.communityDbRoot, input.communityId)}`,
+  })
+  try {
+    const assetId = decodePublicAssetId(input.assetId)
+    const now = new Date().toISOString()
+    await communityDb.batch([
+      {
+        sql: `
+          UPDATE assets
+          SET royalty_allocation_status = 'verified',
+              updated_at = ?2
+          WHERE asset_id = ?1
+        `,
+        args: [assetId, now],
+      },
+      {
+        sql: `
+          UPDATE initial_royalty_allocations
+          SET distribution_status = 'verified'
+          WHERE asset_id = ?1
+        `,
+        args: [assetId],
+      },
+    ])
+  } finally {
+    communityDb.close()
+  }
 }
 
 beforeEach(() => {
@@ -1677,6 +1713,12 @@ describe("song artifact locked routes", () => {
     const ciphertextBeforePurchase = new Uint8Array(await buyerCiphertextBeforePurchase.arrayBuffer())
     expect(ciphertextBeforePurchase).not.toEqual(primaryBytes)
 
+    await markAssetRoyaltyAllocationVerified({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      assetId,
+    })
+
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
@@ -2645,6 +2687,12 @@ describe("song artifact locked routes", () => {
     expect(assetBody.story_royalty_registration_status).toBe("registered")
     expect(assetBody.locked_delivery_status).toBe("ready")
 
+    await markAssetRoyaltyAllocationVerified({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      assetId,
+    })
+
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
       {
@@ -3196,6 +3244,12 @@ describe("song artifact locked routes", () => {
       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     ])
+
+    await markAssetRoyaltyAllocationVerified({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      assetId: remix.asset,
+    })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
@@ -3940,6 +3994,12 @@ describe("song artifact locked routes", () => {
     expect(assetBody.story_ip).toBe("0x3030303030303030303030303030303030303030")
     expect(assetBody.story_license_terms).toBe("19")
     expect(assetBody.story_royalty_registration_status).toBe("registered")
+
+    await markAssetRoyaltyAllocationVerified({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      assetId: postBody.asset,
+    })
 
     const listingCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/listings`,
