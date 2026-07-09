@@ -72,6 +72,7 @@ jobs:
           bun-version: 1.2.21
 
       - name: Install API dependencies
+        id: install-api-dependencies
         working-directory: services/api
         run: bun install --frozen-lockfile
 
@@ -311,7 +312,7 @@ jobs:
       - name: Run bookings production-path real-Postgres test
         # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
         # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
-        if: success() || failure()
+        if: always() && steps.install-api-dependencies.outcome == 'success'
         working-directory: services/api
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core

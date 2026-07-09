@@ -146,7 +146,7 @@ const assetInsertFor = (assetId: string, fingerprint: string): InStatement => ({
   args: [assetId, "com_1", ROYALTY_ALLOCATION_VERSION, fingerprint],
 })
 
-const snapshot = { walletAddressNormalized: CREATOR, walletAttachmentId: "wa_1" }
+const snapshot = { walletAddressNormalized: CREATOR, walletAddressDisplay: CREATOR, walletAttachmentId: "wa_1" }
 
 async function insertAllocationAsset(client: LibsqlClient, assetId: string, allocations = split()): Promise<void> {
   const fingerprint = await fingerprintForRequest(allocations, AENEID)
