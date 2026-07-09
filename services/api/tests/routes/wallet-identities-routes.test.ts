@@ -48,7 +48,7 @@ async function insertWalletPublicName(input: {
         settings_snapshot_json,
         created_at,
         updated_at
-      ) VALUES (?1, ?2, ?3, 'claimed', 'wallet', ?4, ?5, 500, 'USD', 'test', 900, ?6, ?6, ?6, '0xtest', '0xtest', NULL, ?6, ?6)
+      ) VALUES (?1, ?2, ?3, 'claimed', 'wallet', ?4, ?5, 500, 'USD', 'test', 900, ?6, ?6, ?6, ?7, ?7, NULL, ?6, ?6)
     `,
     args: [
       `pnq_${input.id}`,
@@ -57,6 +57,7 @@ async function insertWalletPublicName(input: {
       input.buyerWallet.toLowerCase(),
       chainRef,
       now,
+      `0xtest${input.id}`,
     ],
   })
   await input.ctx.client.execute({

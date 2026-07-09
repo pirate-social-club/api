@@ -12,7 +12,6 @@ import { makeId } from "../helpers"
 import { getPostKaraokePayload } from "../posts/post-karaoke-service"
 import type { ReadClient } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
-import { materializeStudyStreak } from "../posts/post-study-service"
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env, Profile, SongKaraokePayload } from "../../types"
 import { decodePublicSongArtifactBundleId, publicCommunityId, publicPostId } from "../public-ids"
@@ -289,6 +288,104 @@ async function insertedAttemptExists(input: {
   return Boolean(row)
 }
 
+type ComputedStreak = {
+  bestStreak: number
+  currentStreak: number
+  lastQualifiedDate: string
+  streakStartedDate: string
+  totalQualifiedDays: number
+}
+
+function dayOrdinal(date: string): number {
+  const parsed = Date.parse(`${date}T00:00:00.000Z`)
+  return Number.isFinite(parsed) ? Math.floor(parsed / 86_400_000) : NaN
+}
+
+function computeStreakFromQualifiedDates(dates: string[]): ComputedStreak | null {
+  const uniqueDates = Array.from(new Set(dates.map((date) => date.trim()).filter(Boolean))).sort()
+  if (uniqueDates.length === 0) return null
+
+  let bestStreak = 0
+  let runLength = 0
+  let runStart = uniqueDates[0]
+  let previousOrdinal: number | null = null
+  let currentRunStart = uniqueDates[0]
+
+  for (const date of uniqueDates) {
+    const ordinal = dayOrdinal(date)
+    if (!Number.isFinite(ordinal)) continue
+    if (previousOrdinal != null && ordinal === previousOrdinal + 1) {
+      runLength += 1
+    } else {
+      runLength = 1
+      currentRunStart = date
+    }
+    if (runLength > bestStreak) bestStreak = runLength
+    previousOrdinal = ordinal
+    runStart = currentRunStart
+  }
+
+  if (previousOrdinal == null) return null
+  return {
+    bestStreak,
+    currentStreak: runLength,
+    lastQualifiedDate: uniqueDates[uniqueDates.length - 1],
+    streakStartedDate: runStart,
+    totalQualifiedDays: uniqueDates.length,
+  }
+}
+
+async function materializeKaraokeStreakFromLedger(input: {
+  client: ReadClient
+  communityId: string
+  now: string
+  postId: string
+  userId: string
+}): Promise<void> {
+  const rows = await input.client.execute({
+    sql: `
+      SELECT activity_date
+      FROM song_engagement_days
+      WHERE user_id = ?1
+        AND post_id = ?2
+        AND qualified = 1
+      ORDER BY activity_date ASC
+    `,
+    args: [input.userId, input.postId],
+  })
+  const computed = computeStreakFromQualifiedDates(rows.rows.map((row) => stringOrNull(rowValue(row, "activity_date")) ?? ""))
+  if (!computed) return
+
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+      ON CONFLICT(user_id, post_id) DO UPDATE SET
+        current_streak = ?4,
+        best_streak = MAX(song_streaks.best_streak, ?5),
+        last_qualified_date = ?6,
+        streak_started_date = ?7,
+        total_qualified_days = ?8,
+        updated_at = ?9
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.communityId,
+      computed.currentStreak,
+      computed.bestStreak,
+      computed.lastQualifiedDate,
+      computed.streakStartedDate,
+      computed.totalQualifiedDays,
+      input.now,
+    ],
+  })
+}
+
 export async function recordKaraokeAttempt(input: {
   activityDate: string
   client: ReadClient
@@ -384,10 +481,7 @@ export async function recordKaraokeAttempt(input: {
       )
       VALUES (?1, ?2, ?3, ?4, 0, 0, 10, 1, 1, ?5, ?5)
       ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
-        karaoke_pass_count = CASE
-          WHEN song_engagement_days.karaoke_pass_count > 0 THEN song_engagement_days.karaoke_pass_count
-          ELSE 1
-        END,
+        karaoke_pass_count = song_engagement_days.karaoke_pass_count + 1,
         qualified = 1,
         updated_at = ?5
     `,
@@ -399,9 +493,9 @@ export async function recordKaraokeAttempt(input: {
       input.completedAt,
     ],
   })
-  await materializeStudyStreak({
-    activityDate: input.activityDate,
+  await materializeKaraokeStreakFromLedger({
     client: input.client,
+    communityId: input.communityId,
     now: input.completedAt,
     postId: input.postId,
     userId: input.userId,

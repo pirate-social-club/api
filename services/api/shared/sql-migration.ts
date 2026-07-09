@@ -212,9 +212,16 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     // The API no longer writes it, so make it nullable (and drop the value CHECK) so
     // backend-less inserts succeed. chk_d1_fields still passes: a NULL backend makes
     // the whole predicate NULL, which SQLite treats as a satisfied CHECK.
+    // Migration 0125 drops community_database_bindings. SQLite cannot drop the FK
+    // embedded in this original CREATE TABLE, so remove that Turso-only reference
+    // from the local mirror up front.
     sqliteCompat = sqliteCompat.replace(
       /backend\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*backend\s+IN\s*\('turso',\s*'d1'\)\s*\)/i,
       "backend TEXT",
+    )
+    sqliteCompat = sqliteCompat.replace(
+      /,\s*FOREIGN KEY\s*\(turso_database_binding_id\)\s+REFERENCES\s+community_database_bindings\s*\(community_database_binding_id\)/i,
+      "",
     )
   }
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")

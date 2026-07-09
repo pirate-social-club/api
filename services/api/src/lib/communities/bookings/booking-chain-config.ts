@@ -19,50 +19,102 @@ const CANONICAL_USDC_BY_CHAIN: ReadonlyMap<number, string> = new Map([
   [BASE_SEPOLIA_CHAIN_ID, getAddress(BASE_SEPOLIA_USDC)],
 ])
 
-function readRequiredPositiveInt(raw: string | undefined, name: string): number {
+type SettlementOperatorKind = "booking" | "rewards"
+
+function readRequiredPositiveInt(raw: string | undefined, name: string, label: string): number {
   const parsed = Number(String(raw || "").trim())
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw badRequestError(`${name} is required for booking settlement`)
+    throw badRequestError(`${name} is required for ${label} settlement`)
   }
   return parsed
 }
 
-export function resolveBookingSettlementChainId(env: Env): number {
-  const chainId = readRequiredPositiveInt(env.PIRATE_BOOKING_SETTLEMENT_CHAIN_ID, "PIRATE_BOOKING_SETTLEMENT_CHAIN_ID")
+function envNames(kind: SettlementOperatorKind): {
+  label: string
+  chainId: keyof Env
+  rpcUrl: keyof Env
+  usdcToken: keyof Env
+  allowTokenOverride: keyof Env
+  operatorPrivateKey: keyof Env
+  operatorAddress: keyof Env
+} {
+  if (kind === "rewards") {
+    return {
+      label: "rewards",
+      chainId: "PIRATE_REWARDS_SETTLEMENT_CHAIN_ID",
+      rpcUrl: "PIRATE_REWARDS_SETTLEMENT_RPC_URL",
+      usdcToken: "PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS",
+      allowTokenOverride: "PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE",
+      operatorPrivateKey: "PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY",
+      operatorAddress: "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS",
+    }
+  }
+  return {
+    label: "booking",
+    chainId: "PIRATE_BOOKING_SETTLEMENT_CHAIN_ID",
+    rpcUrl: "PIRATE_BOOKING_SETTLEMENT_RPC_URL",
+    usdcToken: "PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS",
+    allowTokenOverride: "PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE",
+    operatorPrivateKey: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY",
+    operatorAddress: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS",
+  }
+}
+
+function resolveSettlementChainId(env: Env, kind: SettlementOperatorKind): number {
+  const names = envNames(kind)
+  const chainId = readRequiredPositiveInt(env[names.chainId] as string | undefined, names.chainId, names.label)
   if (!ALLOWED_CHAIN_IDS.has(chainId)) {
-    throw badRequestError(`PIRATE_BOOKING_SETTLEMENT_CHAIN_ID ${chainId} is not an allowlisted booking settlement chain`)
+    throw badRequestError(`${names.chainId} ${chainId} is not an allowlisted ${names.label} settlement chain`)
   }
   return chainId
+}
+
+export function resolveBookingSettlementChainId(env: Env): number {
+  return resolveSettlementChainId(env, "booking")
+}
+
+export function resolveRewardsSettlementChainId(env: Env): number {
+  return resolveSettlementChainId(env, "rewards")
 }
 
 export function resolveBookingSettlementChainName(chainId: number): string {
   return resolvePirateCheckoutSourceChainName(chainId)
 }
 
-export function resolveBookingSettlementUsdcTokenAddress(env: Env): string {
-  const chainId = resolveBookingSettlementChainId(env)
+function resolveSettlementUsdcTokenAddress(env: Env, kind: SettlementOperatorKind): string {
+  const names = envNames(kind)
+  const chainId = resolveSettlementChainId(env, kind)
   const canonical = CANONICAL_USDC_BY_CHAIN.get(chainId) ?? null
 
-  const explicit = parseExpectedEvmAddress(env.PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS)
+  const explicit = parseExpectedEvmAddress(env[names.usdcToken] as string | undefined)
   if (explicit) {
     const override = getAddress(explicit)
-    const overrideAllowed = String(env.PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE || "").trim().toLowerCase() === "true"
+    const overrideAllowed = String(env[names.allowTokenOverride] || "").trim().toLowerCase() === "true"
     if (canonical && override !== canonical && !overrideAllowed) {
-      throw badRequestError("PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS does not match the canonical USDC for this chain")
+      throw badRequestError(`${names.usdcToken} does not match the canonical USDC for this chain`)
     }
     return override
   }
 
   if (canonical) return canonical
 
-  throw badRequestError("PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS is required for booking settlement")
+  throw badRequestError(`${names.usdcToken} is required for ${names.label} settlement`)
 }
 
-export function resolveBookingSettlementRpcUrl(env: Env): string {
-  const explicit = String(env.PIRATE_BOOKING_SETTLEMENT_RPC_URL || "").trim()
+export function resolveBookingSettlementUsdcTokenAddress(env: Env): string {
+  return resolveSettlementUsdcTokenAddress(env, "booking")
+}
+
+export function resolveRewardsSettlementUsdcTokenAddress(env: Env): string {
+  return resolveSettlementUsdcTokenAddress(env, "rewards")
+}
+
+function resolveSettlementRpcUrl(env: Env, kind: SettlementOperatorKind): string {
+  const names = envNames(kind)
+  const explicit = String(env[names.rpcUrl] || "").trim()
   if (explicit) return explicit
 
-  const chainId = resolveBookingSettlementChainId(env)
+  const chainId = resolveSettlementChainId(env, kind)
   if (chainId === BASE_MAINNET_CHAIN_ID) {
     const baseMainnetRpc = String(env.BASE_MAINNET_RPC_URL || "").trim()
     if (baseMainnetRpc) return baseMainnetRpc
@@ -72,18 +124,36 @@ export function resolveBookingSettlementRpcUrl(env: Env): string {
     if (baseSepoliaRpc) return baseSepoliaRpc
   }
 
-  throw badRequestError("PIRATE_BOOKING_SETTLEMENT_RPC_URL is required for booking settlement")
+  throw badRequestError(`${names.rpcUrl} is required for ${names.label} settlement`)
 }
 
-export function resolveBookingSettlementOperatorPrivateKey(env: Env): string {
-  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY || "").trim())
-  if (!privateKey) throw badRequestError("PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY is invalid")
+export function resolveBookingSettlementRpcUrl(env: Env): string {
+  return resolveSettlementRpcUrl(env, "booking")
+}
+
+export function resolveRewardsSettlementRpcUrl(env: Env): string {
+  return resolveSettlementRpcUrl(env, "rewards")
+}
+
+function resolveSettlementOperatorPrivateKey(env: Env, kind: SettlementOperatorKind): string {
+  const names = envNames(kind)
+  const privateKey = normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
+  if (!privateKey) throw badRequestError(`${names.operatorPrivateKey} is invalid`)
   return privateKey
 }
 
-export function resolveBookingSettlementOperatorAddress(env: Env): string {
-  const explicit = parseExpectedEvmAddress(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS)
-  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY || "").trim())
+export function resolveBookingSettlementOperatorPrivateKey(env: Env): string {
+  return resolveSettlementOperatorPrivateKey(env, "booking")
+}
+
+export function resolveRewardsSettlementOperatorPrivateKey(env: Env): string {
+  return resolveSettlementOperatorPrivateKey(env, "rewards")
+}
+
+function resolveSettlementOperatorAddress(env: Env, kind: SettlementOperatorKind): string {
+  const names = envNames(kind)
+  const explicit = parseExpectedEvmAddress(env[names.operatorAddress] as string | undefined)
+  const privateKey = normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
 
   if (explicit) {
     const expected = getAddress(explicit)
@@ -94,7 +164,7 @@ export function resolveBookingSettlementOperatorAddress(env: Env): string {
       assertPrivateKeyMatchesExpectedAddress({
         privateKey,
         expectedAddress: expected,
-        expectedField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS",
+        expectedField: names.operatorAddress,
       })
     }
     return expected
@@ -102,5 +172,13 @@ export function resolveBookingSettlementOperatorAddress(env: Env): string {
 
   if (privateKey) return getAddress(new Wallet(privateKey).address)
 
-  throw badRequestError("PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS is required for booking settlement")
+  throw badRequestError(`${names.operatorAddress} is required for ${names.label} settlement`)
+}
+
+export function resolveBookingSettlementOperatorAddress(env: Env): string {
+  return resolveSettlementOperatorAddress(env, "booking")
+}
+
+export function resolveRewardsSettlementOperatorAddress(env: Env): string {
+  return resolveSettlementOperatorAddress(env, "rewards")
 }

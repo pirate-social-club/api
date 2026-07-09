@@ -2,7 +2,96 @@ import { describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
 
-import { karaokeAttemptServiceTestHooks } from "../../../src/lib/karaoke/karaoke-attempt-service"
+import { karaokeAttemptServiceTestHooks, recordKaraokeAttempt } from "../../../src/lib/karaoke/karaoke-attempt-service"
+
+async function createKaraokeAttemptSchema(client: ReturnType<typeof createClient>): Promise<void> {
+  await client.execute(`
+    CREATE TABLE karaoke_attempt (
+      id TEXT NOT NULL PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      community_id TEXT NOT NULL,
+      karaoke_revision_id TEXT NOT NULL,
+      scoring_version INTEGER NOT NULL,
+      scoring_provider TEXT NOT NULL,
+      scoring_model TEXT NOT NULL,
+      final_score INTEGER NOT NULL,
+      lyrics_score INTEGER NOT NULL,
+      timing_score INTEGER,
+      timing_trend TEXT NOT NULL CHECK (
+        timing_trend IN ('early', 'late', 'mixed', 'on_time')
+      ),
+      scored_line_count INTEGER NOT NULL,
+      line_count INTEGER NOT NULL,
+      uncertain_line_count INTEGER NOT NULL,
+      no_recognition_line_count INTEGER NOT NULL,
+      low_confidence_line_count INTEGER NOT NULL,
+      completion_reason TEXT NOT NULL CHECK (
+        completion_reason IN ('completed', 'session_error', 'provider_unavailable', 'abandoned')
+      ),
+      rank_eligible INTEGER NOT NULL CHECK (rank_eligible IN (0, 1)),
+      activity_date TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(session_id, attempt_id)
+    )
+  `)
+}
+
+async function createSongStreakSchema(client: ReturnType<typeof createClient>): Promise<void> {
+  await client.execute(`
+    CREATE TABLE song_engagement_days (
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      community_id TEXT NOT NULL,
+      activity_date TEXT NOT NULL,
+      study_attempt_count INTEGER NOT NULL DEFAULT 0,
+      study_correct_count INTEGER NOT NULL DEFAULT 0,
+      study_target_count INTEGER NOT NULL DEFAULT 10,
+      karaoke_pass_count INTEGER NOT NULL DEFAULT 0,
+      qualified INTEGER NOT NULL DEFAULT 0 CHECK (qualified IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id, activity_date)
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE song_streaks (
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      community_id TEXT NOT NULL,
+      current_streak INTEGER NOT NULL,
+      best_streak INTEGER NOT NULL,
+      last_qualified_date TEXT NOT NULL,
+      streak_started_date TEXT NOT NULL,
+      total_qualified_days INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id)
+    )
+  `)
+}
+
+function passingSummary() {
+  return {
+    confidenceMean: 0.95,
+    finalScore: 0.92,
+    lineCount: 10,
+    lowConfidenceLineCount: 0,
+    lyricsScore: 0.9,
+    missedWords: [],
+    noRecognitionLineCount: 0,
+    phoneticUnavailableLineCount: 0,
+    scoredLineCount: 10,
+    strongestLines: [],
+    timingScore: 0.88,
+    timingTrend: "on_time" as const,
+    uncertainLineCount: 0,
+    weakestLines: [],
+  }
+}
 
 describe("karaoke attempt leaderboard ranking", () => {
   test("excludes banned community members before ranking", async () => {
@@ -83,6 +172,94 @@ describe("karaoke attempt leaderboard ranking", () => {
         { user_id: "usr_viewer", final_score: 9100, rank: 1, total_ranked: 2 },
         { user_id: "usr_peer", final_score: 8800, rank: 2, total_ranked: 2 },
       ])
+    } finally {
+      client.close()
+    }
+  })
+})
+
+describe("recordKaraokeAttempt streak persistence", () => {
+  test("recomputes a bridged streak when a delayed passing karaoke attempt lands", async () => {
+    const client = createClient({ url: ":memory:" })
+    try {
+      await createKaraokeAttemptSchema(client)
+      await createSongStreakSchema(client)
+      await client.batch([
+        {
+          sql: `
+            INSERT INTO song_engagement_days (
+              user_id, post_id, community_id, activity_date,
+              study_attempt_count, study_correct_count, study_target_count,
+              karaoke_pass_count, qualified, created_at, updated_at
+            )
+            VALUES
+              ('usr_karaoke', 'pst_song', 'cmt_karaoke', '2026-07-09', 10, 10, 10, 0, 1, '2026-07-09T10:00:00.000Z', '2026-07-09T10:00:00.000Z'),
+              ('usr_karaoke', 'pst_song', 'cmt_karaoke', '2026-07-11', 10, 10, 10, 0, 1, '2026-07-11T10:00:00.000Z', '2026-07-11T10:00:00.000Z')
+          `,
+          args: [],
+        },
+        {
+          sql: `
+            INSERT INTO song_streaks (
+              user_id, post_id, community_id, current_streak, best_streak,
+              last_qualified_date, streak_started_date, total_qualified_days, created_at, updated_at
+            )
+            VALUES ('usr_karaoke', 'pst_song', 'cmt_karaoke', 1, 1, '2026-07-11', '2026-07-11', 2, '2026-07-11T10:00:00.000Z', '2026-07-11T10:00:00.000Z')
+          `,
+          args: [],
+        },
+      ])
+
+      const result = await recordKaraokeAttempt({
+        activityDate: "2026-07-10",
+        client,
+        communityId: "cmt_karaoke",
+        completedAt: "2026-07-10T23:58:00.000Z",
+        completionReason: "completed",
+        karaokeRevisionId: "krv_current",
+        postId: "pst_song",
+        scoringModel: "text-timing-v1",
+        scoringProvider: "pirate-karaoke-runtime",
+        sessionId: "session_bridge",
+        attemptId: "attempt_bridge",
+        summary: passingSummary(),
+        userId: "usr_karaoke",
+      })
+
+      expect(result).toEqual({
+        inserted: true,
+        rankEligible: true,
+        streakCredited: true,
+      })
+      const streak = await client.execute("SELECT current_streak, best_streak, last_qualified_date, streak_started_date, total_qualified_days FROM song_streaks")
+      expect(streak.rows[0]).toEqual({
+        current_streak: 3,
+        best_streak: 3,
+        last_qualified_date: "2026-07-11",
+        streak_started_date: "2026-07-09",
+        total_qualified_days: 3,
+      })
+      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days WHERE activity_date = '2026-07-10'")
+      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+
+      const replay = await recordKaraokeAttempt({
+        activityDate: "2026-07-10",
+        client,
+        communityId: "cmt_karaoke",
+        completedAt: "2026-07-10T23:58:00.000Z",
+        completionReason: "completed",
+        karaokeRevisionId: "krv_current",
+        postId: "pst_song",
+        scoringModel: "text-timing-v1",
+        scoringProvider: "pirate-karaoke-runtime",
+        sessionId: "session_bridge",
+        attemptId: "attempt_bridge",
+        summary: passingSummary(),
+        userId: "usr_karaoke",
+      })
+      expect(replay.inserted).toBe(false)
+      const replayDay = await client.execute("SELECT karaoke_pass_count FROM song_engagement_days WHERE activity_date = '2026-07-10'")
+      expect(replayDay.rows[0]).toEqual({ karaoke_pass_count: 1 })
     } finally {
       client.close()
     }

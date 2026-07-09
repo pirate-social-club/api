@@ -26,6 +26,7 @@ import publicNamespaces from "./routes/public-namespaces"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
+import rewards from "./routes/rewards"
 import hostBookings from "./routes/host-bookings"
 import telegram from "./routes/telegram"
 import users from "./routes/users"
@@ -54,6 +55,8 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
+import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
+import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import { logPipelineError } from "./lib/observability/pipeline-log"
@@ -231,6 +234,7 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
+app.route("/", rewards)
 app.route("/host-bookings", hostBookings)
 app.route("/telegram", telegram)
 app.route("/wallet-identities", walletIdentities)
@@ -595,6 +599,59 @@ async function reconcileScheduledCommunityMembershipProjections(env: Env): Promi
   }
 }
 
+async function reconcileScheduledSongPracticeRewards(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileSongPracticeRewards({
+      env,
+      communityRepository,
+      controlPlaneClient: getControlPlaneClient(env),
+      maxCommunities: 50,
+      maxQualifiedDaysPerCommunity: 500,
+    })
+    if (
+      summary.enabled
+      && (
+        summary.credited_events > 0
+        || summary.skipped_cap_cents > 0
+        || summary.failed_communities > 0
+      )
+    ) {
+      console.info("[rewards] reconciled song practice rewards", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[rewards] reconciliation failed", error)
+    await captureScheduledError(env, error, "song_practice_rewards_reconciliation")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
+async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
+  try {
+    const summary = await reconcileSubmittedRewardPayouts({
+      env,
+      client: getControlPlaneClient(env),
+      limit: 50,
+      confirmPollMs: [],
+    })
+    if (
+      summary.enabled
+      && (
+        summary.confirmed > 0
+        || summary.failed > 0
+        || summary.pending > 0
+        || summary.errors > 0
+      )
+    ) {
+      console.info("[rewards] reconciled submitted reward payouts", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[rewards] payout reconciliation failed", error)
+    await captureScheduledError(env, error, "reward_payout_reconciliation")
+  }
+}
+
 // The cron fires every minute. Each scheduled job opens its OWN control-plane
 // connection (via withRequestControlPlaneClients) — one connection, opened and
 // closed independently, to respect Workers' 15-min waitUntil limit. Running all
@@ -653,6 +710,8 @@ const handler: ExportedHandler<Env> = {
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
       { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
+      { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
+      { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
       { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },

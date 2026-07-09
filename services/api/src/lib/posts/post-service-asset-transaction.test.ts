@@ -324,9 +324,29 @@ function createTestClient(label: string): TestClient {
   return createClient({ url: `file:${path}` })
 }
 
+type PostCommunityWriteOpenerForTest = (
+  env: Parameters<typeof realCommunityDbFactory.openCommunityDb>[0],
+  repo: Parameters<typeof realCommunityDbFactory.openCommunityDb>[1],
+  communityId: string,
+) => ReturnType<typeof realCommunityDbFactory.openCommunityDb>
+
+function postCommunityWriteOpener(): PostCommunityWriteOpenerForTest {
+  return async (...args) => {
+    if (!activeClient) {
+      return await realCommunityDbFactorySnapshot.openCommunityDb(...args)
+    }
+    return {
+      client: wrapClient(activeClient),
+      close: () => {},
+      databaseUrl: "file::memory:",
+    }
+  }
+}
+
 afterEach(async () => {
-  const { setPostAssetCreatorsForTests } = await import("./post-service")
+  const { setPostAssetCreatorsForTests, setPostCommunityWriteOpenerForTests } = await import("./post-service")
   setPostAssetCreatorsForTests(null)
+  setPostCommunityWriteOpenerForTests(null)
   activeClient = null
   events = []
   for (const client of clients.splice(0)) {
@@ -422,7 +442,8 @@ describe("createPost", () => {
     activeClient = client
     await createPostTables(client)
 
-    const { createPost, setPostAssetCreatorsForTests } = await import("./post-service")
+    const { createPost, setPostAssetCreatorsForTests, setPostCommunityWriteOpenerForTests } = await import("./post-service")
+    setPostCommunityWriteOpenerForTests(postCommunityWriteOpener())
     setPostAssetCreatorsForTests({
       createAssetForPost: async (input) => {
         events.push("asset:create")
@@ -531,7 +552,8 @@ describe("createPost", () => {
     activeClient = client
     await createPostTables(client)
 
-    const { createPost, setPostAssetCreatorsForTests } = await import("./post-service")
+    const { createPost, setPostAssetCreatorsForTests, setPostCommunityWriteOpenerForTests } = await import("./post-service")
+    setPostCommunityWriteOpenerForTests(postCommunityWriteOpener())
     setPostAssetCreatorsForTests({
       createSongAssetForPost: async (input) => {
         events.push("asset:create")
