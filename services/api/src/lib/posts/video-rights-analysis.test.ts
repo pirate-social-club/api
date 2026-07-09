@@ -109,7 +109,7 @@ describe("computeVideoRightsOutcome", () => {
     expect(decision.caseTrigger).toBe("acrcloud_match")
   })
 
-  test("declared-and-verified wins over a simultaneous commercial match", () => {
+  test("commercial catalog match outranks a simultaneous declared-and-verified platform match", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_1"], declaredAssetIds: ["ast_1"] }),
       acr: acr({
@@ -117,9 +117,11 @@ describe("computeVideoRightsOutcome", () => {
         musicMatches: [{ title: "Same Song, Commercial Release" }],
       }),
       audioTrackPresent: true,
+      blockCommercialMusicMatches: true,
     })
-    expect(decision.outcome).toBe("allow")
-    expect(decision.policyReasonCode).toBe("declared_reference_verified")
+    expect(decision.outcome).toBe("blocked")
+    expect(decision.policyReasonCode).toBe("commercial_catalog_match")
+    expect(decision.caseTrigger).toBe("acrcloud_match")
   })
 
   test("no match with a declaration allows (covers do not fingerprint)", () => {

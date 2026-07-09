@@ -105,6 +105,22 @@ export function computeVideoRightsOutcome(input: {
   const hasCustomMatch = input.acr.customMatches.length > 0
   const hasMusicMatch = input.acr.musicMatches.length > 0
 
+  if (hasMusicMatch) {
+    if (!input.blockCommercialMusicMatches) {
+      return {
+        outcome: "review_required",
+        policyReasonCode: "commercial_catalog_match",
+        policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
+        caseTrigger: "acrcloud_match",
+      }
+    }
+    return {
+      outcome: "blocked",
+      policyReasonCode: "commercial_catalog_match",
+      policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
+      caseTrigger: "acrcloud_match",
+    }
+  }
   if (hasCustomMatch && matchedBundleIds.length > 0 && undeclaredMatches.length === 0 && declaredBundleIds.size > 0) {
     return {
       outcome: "allow",
@@ -136,22 +152,6 @@ export function computeVideoRightsOutcome(input: {
       outcome: "allow_with_required_reference",
       policyReasonCode: "undeclared_catalog_match",
       policyReason: "Soundtrack matches a published catalog song but the post declares no source.",
-      caseTrigger: "acrcloud_match",
-    }
-  }
-  if (hasMusicMatch) {
-    if (!input.blockCommercialMusicMatches) {
-      return {
-        outcome: "review_required",
-        policyReasonCode: "commercial_catalog_match",
-        policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
-        caseTrigger: "acrcloud_match",
-      }
-    }
-    return {
-      outcome: "blocked",
-      policyReasonCode: "commercial_catalog_match",
-      policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
       caseTrigger: "acrcloud_match",
     }
   }
