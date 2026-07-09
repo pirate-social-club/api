@@ -29,7 +29,7 @@ describe("assertAssetReadyForStoryRoyaltyCommerce", () => {
     }, productionEnv)).toThrow("Asset royalty allocation is not verified")
   })
 
-  test("local Story fallback still requires allocation verification", () => {
+  test("local Story fallback bypasses allocation verification for fake Story paths only", () => {
     const localFallbackAsset = {
       ...readyAsset,
       story_ip_id: null,
@@ -44,6 +44,18 @@ describe("assertAssetReadyForStoryRoyaltyCommerce", () => {
 
     expect(() => assertAssetReadyForStoryRoyaltyCommerce({
       ...localFallbackAsset,
+      royalty_allocation_status: "verification_pending" as const,
+    }, { ENVIRONMENT: "test" })).not.toThrow()
+
+    expect(() => assertAssetReadyForStoryRoyaltyCommerce({
+      ...readyAsset,
+      locked_delivery_status: "none" as const,
+      royalty_allocation_status: "verification_pending" as const,
+    }, { ENVIRONMENT: "test" })).not.toThrow()
+
+    expect(() => assertAssetReadyForStoryRoyaltyCommerce({
+      ...readyAsset,
+      story_status: "none" as const,
       royalty_allocation_status: "verification_pending" as const,
     }, { ENVIRONMENT: "test" })).toThrow("Asset royalty allocation is not verified")
   })
