@@ -308,6 +308,64 @@ describe("rewards routes", () => {
     expect(settleCount).toBe(0)
   })
 
+  test("does not accept ZKPassport as the configured reward identity namespace", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "zkpassport",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-zkpassport-namespace-user")
+    const now = "2026-07-09T12:00:00.000Z"
+    let settleCount = 0
+    setRewardSettlementCoordinatorForTests({
+      settle: async (req) => {
+        settleCount += 1
+        return { idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xshouldnotsettle", nonce: 1, state: "broadcast" }
+      },
+      confirm: async (req, txHash) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash, nonce: 1, state: "confirmed" }),
+      reconcile: async (req) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xshouldnotsettle", nonce: 1, state: "broadcast" }),
+    })
+    await addWallet(ctx, session.userId, now)
+    await addRewardEvent(ctx, session.userId, 150, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash, status,
+          first_seen_at, created_at, updated_at
+        ) VALUES (
+          'idn_rewards_zkpassport', ?1, 'zkpassport', 'zkpassport-unique-identifier',
+          'reward-zkpassport-nullifier', 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [session.userId, JSON.stringify({
+        unique_human: {
+          state: "verified",
+          provider: "zkpassport",
+          proof_type: "unique_human",
+          mechanism: "zkpassport-unique-identifier",
+          verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
+    })
+
+    const response = await app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100, idempotency_key: "reward-cashout-zkpassport-only" }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(403)
+    expect(settleCount).toBe(0)
+  })
+
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
