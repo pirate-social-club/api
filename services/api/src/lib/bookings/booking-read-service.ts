@@ -2,6 +2,7 @@ import type { InStatement, QueryResult } from "../sql-client";
 import { BOOKING_COLUMNS, decodeBooking } from "./booking-row";
 import type { Booking } from "./types";
 import type { ProfileRepository } from "../auth/repositories";
+import { getProfilePublicHandleLabel } from "../auth/auth-serializers";
 
 export type BookingViewerRole = "host" | "booker";
 export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
@@ -39,6 +40,7 @@ export interface BookingView {
   viewer_role: BookingViewerRole;
   counterparty: {
     user_id: string;
+    public_handle: string | null;
     display_name: string | null;
     avatar_ref: string | null;
   };
@@ -145,7 +147,7 @@ function toView(booking: Booking, actorUserId: string): BookingView {
     created_at: booking.createdAt,
     updated_at: booking.updatedAt,
     viewer_role: viewerRole,
-    counterparty: { user_id: counterpartyUserId, display_name: null, avatar_ref: null },
+    counterparty: { user_id: counterpartyUserId, public_handle: null, display_name: null, avatar_ref: null },
   };
 }
 
@@ -163,6 +165,7 @@ export async function enrichGlobalBookingCounterparties(input: {
       ...booking,
       counterparty: {
         user_id: booking.counterparty.user_id,
+        public_handle: profile ? getProfilePublicHandleLabel(profile) : null,
         display_name: profile?.display_name ?? null,
         avatar_ref: profile?.avatar_ref ?? null,
       },

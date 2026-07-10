@@ -29,7 +29,7 @@ function booking(patch: Partial<BookingView> = {}): BookingView {
     created_at: "2026-07-10T09:00:00.000Z",
     updated_at: "2026-07-10T09:00:00.000Z",
     viewer_role: "booker",
-    counterparty: { user_id: "usr_host", display_name: null, avatar_ref: null },
+    counterparty: { user_id: "usr_host", public_handle: null, display_name: null, avatar_ref: null },
     ...patch,
   };
 }
@@ -42,15 +42,20 @@ describe("enrichGlobalBookingCounterparties", () => {
       profileRepository: {
         listProfilesByUserIds: async (userIds: string[]) => {
           requested.push(userIds);
-          return new Map([["usr_host", { display_name: "Host Name", avatar_ref: "avatar-ref" } as never]]);
+          return new Map([["usr_host", {
+            display_name: "Host Name",
+            avatar_ref: "avatar-ref",
+            global_handle: { label: "host.pirate" },
+            primary_public_handle: { label: "host.eth" },
+          } as never]]);
         },
       } as never,
     });
 
     expect(requested).toEqual([["usr_host"]]);
     expect(result.map((item) => item.counterparty)).toEqual([
-      { user_id: "usr_host", display_name: "Host Name", avatar_ref: "avatar-ref" },
-      { user_id: "usr_host", display_name: "Host Name", avatar_ref: "avatar-ref" },
+      { user_id: "usr_host", public_handle: "host.eth", display_name: "Host Name", avatar_ref: "avatar-ref" },
+      { user_id: "usr_host", public_handle: "host.eth", display_name: "Host Name", avatar_ref: "avatar-ref" },
     ]);
   });
 
@@ -62,18 +67,24 @@ describe("enrichGlobalBookingCounterparties", () => {
         booking({
           booking_id: "bkg_host_view",
           viewer_role: "host",
-          counterparty: { user_id: "usr_booker", display_name: null, avatar_ref: null },
+          counterparty: { user_id: "usr_booker", public_handle: null, display_name: null, avatar_ref: null },
         }),
       ],
       profileRepository: {
         getProfileByUserId: async (userId: string) => {
           requested.push(userId);
-          return { display_name: userId === "usr_host" ? "Host Name" : "Booker Name", avatar_ref: null } as never;
+          return {
+            display_name: userId === "usr_host" ? "Host Name" : "Booker Name",
+            avatar_ref: null,
+            global_handle: { label: `${userId}.pirate` },
+            primary_public_handle: null,
+          } as never;
         },
       } as never,
     });
 
     expect(requested).toEqual(["usr_host", "usr_booker"]);
     expect(result.map((item) => item.counterparty.display_name)).toEqual(["Host Name", "Booker Name"]);
+    expect(result.map((item) => item.counterparty.public_handle)).toEqual(["usr_host.pirate", "usr_booker.pirate"]);
   });
 });
