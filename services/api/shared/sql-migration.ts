@@ -157,6 +157,16 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
+  // PostgreSQL trigger functions and EXECUTE FUNCTION triggers have no SQLite
+  // equivalent. Local mirrors exercise application behavior; the canonical
+  // PostgreSQL migration suite verifies these database-only guards.
+  if (normalized.startsWith("CREATE FUNCTION ")) {
+    return []
+  }
+  if (normalized.startsWith("CREATE TRIGGER ") && normalized.includes(" EXECUTE FUNCTION ")) {
+    return []
+  }
+
   if (normalized.startsWith("GRANT ")) {
     return []
   }

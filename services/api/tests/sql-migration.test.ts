@@ -2,6 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("skips PostgreSQL function-backed triggers for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      CREATE FUNCTION reject_term_changes()
+      RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;
+    `)).toEqual([])
+    expect(toSqliteCompatibleStatements(`
+      CREATE TRIGGER immutable_terms BEFORE UPDATE ON campaigns
+      FOR EACH ROW EXECUTE FUNCTION reject_term_changes();
+    `)).toEqual([])
+  })
+
   test("keeps dollar-quoted DO blocks intact so they can be skipped later", () => {
     const sql = `
       CREATE TABLE example (id TEXT PRIMARY KEY);
