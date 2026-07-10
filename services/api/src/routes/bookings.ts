@@ -6,7 +6,7 @@ import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   requireOperatorScope,
 } from "../lib/operator-credential-auth"
-import { getUserRepository as getRealUserRepository } from "../lib/auth/repositories"
+import { getProfileRepository as getRealProfileRepository, getUserRepository as getRealUserRepository } from "../lib/auth/repositories"
 import {
   confirmGlobalBookingHold as realConfirmGlobalBookingHold,
   quoteGlobalBookingHold as realQuoteGlobalBookingHold,
@@ -29,6 +29,7 @@ import { resolveGlobalBookingByParty as realResolveGlobalBookingByParty } from "
 import {
   getGlobalBookingSettlementReview as realGetGlobalBookingSettlementReview,
   getGlobalBookingForParty as realGetGlobalBookingForParty,
+  enrichGlobalBookingCounterparties as realEnrichGlobalBookingCounterparties,
   InvalidBookingSettlementReviewCursorError,
   listPendingGlobalBookingSettlementReviews as realListPendingGlobalBookingSettlementReviews,
   listGlobalBookingsForUser as realListGlobalBookingsForUser,
@@ -37,6 +38,7 @@ import {
 import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runtime-deps"
 import { decodePublicUserId } from "../lib/public-ids"
 import { requireJsonBody } from "./communities-route-helpers"
+import { logBodylessBookingCancellation, parseOptionalExpectedRefundCents } from "./booking-cancellation-compat"
 
 const DEFAULT_WINDOW_DAYS = 14
 const SETTLEMENT_REVIEW_RESOLUTIONS = new Set(["completed", "no_show_host", "no_show_booker"])
@@ -64,6 +66,8 @@ type BookingContext = Context<AuthenticatedEnv>
 export type GlobalBookingRouteServices = {
   getControlPlaneClient: typeof getRealControlPlaneClient
   getUserRepository: typeof getRealUserRepository
+  getProfileRepository: typeof getRealProfileRepository
+  enrichGlobalBookingCounterparties: typeof realEnrichGlobalBookingCounterparties
   resolveGlobalBookingAvailability: typeof realResolveGlobalBookingAvailability
   createGlobalBookingHold: typeof realCreateGlobalBookingHold
   quoteGlobalBookingHold: typeof realQuoteGlobalBookingHold
@@ -86,6 +90,8 @@ export type GlobalBookingRouteServices = {
 const realServices: GlobalBookingRouteServices = {
   getControlPlaneClient: getRealControlPlaneClient,
   getUserRepository: getRealUserRepository,
+  getProfileRepository: getRealProfileRepository,
+  enrichGlobalBookingCounterparties: realEnrichGlobalBookingCounterparties,
   resolveGlobalBookingAvailability: realResolveGlobalBookingAvailability,
   createGlobalBookingHold: realCreateGlobalBookingHold,
   quoteGlobalBookingHold: realQuoteGlobalBookingHold,
@@ -251,7 +257,11 @@ bookings.get("/", async (c) => {
     sourceCommunityId,
     statuses,
   })
-  return c.json({ object: "list", data, has_more: false }, 200)
+  const enriched = await routeServices().enrichGlobalBookingCounterparties({
+    bookings: data,
+    profileRepository: routeServices().getProfileRepository(c.env),
+  })
+  return c.json({ object: "list", data: enriched, has_more: false }, 200)
 })
 
 bookings.get("/hosts/:hostUserId/slots", slotsHandler)
@@ -299,7 +309,11 @@ bookings.get("/:bookingId", async (c) => {
     actorUserId: c.get("actor").userId,
   })
   if (!booking) return c.json({ error: "not_found" }, 404)
-  return c.json({ booking }, 200)
+  const [enriched] = await routeServices().enrichGlobalBookingCounterparties({
+    bookings: [booking],
+    profileRepository: routeServices().getProfileRepository(c.env),
+  })
+  return c.json({ booking: enriched }, 200)
 })
 
 bookings.get("/:bookingId/cancellation-preview", async (c) => {
@@ -379,18 +393,18 @@ bookings.post("/:bookingId/settlement-review/resolve", async (c) => {
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {
-  const body = await requireJsonBody<{ expected_refund_cents?: unknown }>(c, "expected_refund_cents is required")
-  const expectedRefundCents = Number(body.expected_refund_cents)
-  if (!Number.isSafeInteger(expectedRefundCents) || expectedRefundCents < 0) {
+  const terms = await parseOptionalExpectedRefundCents(() => c.req.text())
+  if (!terms.ok) {
     return c.json({ error: "invalid_expected_refund_cents" }, 400)
   }
+  const bookingId = routeParam(c, "bookingId")
   const result = await routeServices().cancelGlobalBooking({
     env: c.env,
     executor: executor(c),
-    bookingId: routeParam(c, "bookingId"),
+    bookingId,
     actorUserId: c.get("actor").userId,
     nowUtc: new Date().toISOString(),
-    expectedRefundCents,
+    expectedRefundCents: terms.provided ? terms.expectedRefundCents : undefined,
   })
   if (!result.ok) {
     if (result.reason === "cancellation_terms_changed") {
@@ -398,6 +412,7 @@ bookings.post("/:bookingId/cancel", async (c) => {
     }
     return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
   }
+  if (!terms.provided) logBodylessBookingCancellation({ bookingId, actorRole: result.cancelledBy })
   return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
 })
 

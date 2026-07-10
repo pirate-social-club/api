@@ -18,6 +18,8 @@ const dummyUserRepository = {
   getWalletAttachmentsByUserId: async () => [],
 }
 
+const dummyProfileRepository = {}
+
 const bookingView = {
   object: "booking",
   booking_id: "bkg_route",
@@ -194,6 +196,8 @@ function routeServices(): GlobalBookingRouteServices {
   return {
     getControlPlaneClient: () => dummyExecutor,
     getUserRepository: () => dummyUserRepository,
+    getProfileRepository: () => dummyProfileRepository,
+    enrichGlobalBookingCounterparties: async ({ bookings }: { bookings: unknown[] }) => bookings,
     getGlobalBookingForParty: async (input: unknown) => {
       calls.getBooking.push(input)
       return getBookingResult
@@ -497,7 +501,7 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "not_found" })
   })
 
-  test("returns authoritative cancellation terms and requires them when cancelling", async () => {
+  test("returns authoritative cancellation terms and accepts protected or legacy cancellation", async () => {
     const app = loadApp()
     const preview = await app.request("http://pirate.test/bookings/bkg_route/cancellation-preview", {
       headers: adminHeaders(),
@@ -505,12 +509,13 @@ describe("/bookings routes", () => {
     expect(preview.status).toBe(200)
     expect(await json(preview)).toMatchObject({ refund_cents: 5000, host_payout_cents: 0 })
 
-    const missingTerms = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+    const legacy = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
       headers: adminHeaders({ "content-type": "application/json" }),
       body: "{}",
     }, env())
-    expect(missingTerms.status).toBe(400)
+    expect(legacy.status).toBe(200)
+    expect(calls.cancel[0]).toMatchObject({ expectedRefundCents: undefined })
 
     const cancelled = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
@@ -518,12 +523,26 @@ describe("/bookings routes", () => {
       body: JSON.stringify({ expected_refund_cents: 5000 }),
     }, env())
     expect(cancelled.status).toBe(200)
-    expect(calls.cancel[0]).toMatchObject({
+    expect(calls.cancel[1]).toMatchObject({
       executor: dummyExecutor,
       bookingId: "bkg_route",
       actorUserId: "actor_route",
       expectedRefundCents: 5000,
     })
+
+    const malformed = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ expected_refund_cents: "5000" }),
+    }, env())
+    expect(malformed.status).toBe(400)
+
+    const invalidJson = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: "{",
+    }, env())
+    expect(invalidJson.status).toBe(400)
   })
 
   test("returns refreshed cancellation terms when the policy boundary changed", async () => {

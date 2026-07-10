@@ -1,6 +1,7 @@
 import type { InStatement, QueryResult } from "../sql-client";
 import { BOOKING_COLUMNS, decodeBooking } from "./booking-row";
 import type { Booking } from "./types";
+import type { ProfileRepository } from "../auth/repositories";
 
 export type BookingViewerRole = "host" | "booker";
 export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
@@ -36,6 +37,11 @@ export interface BookingView {
   created_at: string;
   updated_at: string;
   viewer_role: BookingViewerRole;
+  counterparty: {
+    user_id: string;
+    display_name: string | null;
+    avatar_ref: string | null;
+  };
 }
 
 export interface BookingSettlementReviewView {
@@ -111,6 +117,8 @@ function decodeCursor(cursor: string | null | undefined): { updatedAt: string; b
 }
 
 function toView(booking: Booking, actorUserId: string): BookingView {
+  const viewerRole = actorUserId === booking.hostUserId ? "host" : "booker";
+  const counterpartyUserId = viewerRole === "host" ? booking.bookerUserId : booking.hostUserId;
   return {
     object: "booking",
     booking_id: booking.bookingId,
@@ -136,8 +144,30 @@ function toView(booking: Booking, actorUserId: string): BookingView {
     cancelled_at: booking.cancelledAt,
     created_at: booking.createdAt,
     updated_at: booking.updatedAt,
-    viewer_role: actorUserId === booking.hostUserId ? "host" : "booker",
+    viewer_role: viewerRole,
+    counterparty: { user_id: counterpartyUserId, display_name: null, avatar_ref: null },
   };
+}
+
+export async function enrichGlobalBookingCounterparties(input: {
+  bookings: BookingView[];
+  profileRepository: ProfileRepository;
+}): Promise<BookingView[]> {
+  const userIds = Array.from(new Set(input.bookings.map((booking) => booking.counterparty.user_id)));
+  const profiles = input.profileRepository.listProfilesByUserIds
+    ? await input.profileRepository.listProfilesByUserIds(userIds)
+    : new Map(await Promise.all(userIds.map(async (userId) => [userId, await input.profileRepository.getProfileByUserId(userId)] as const)));
+  return input.bookings.map((booking) => {
+    const profile = profiles.get(booking.counterparty.user_id);
+    return {
+      ...booking,
+      counterparty: {
+        user_id: booking.counterparty.user_id,
+        display_name: profile?.display_name ?? null,
+        avatar_ref: profile?.avatar_ref ?? null,
+      },
+    };
+  });
 }
 
 function settlementStatus(booking: Booking): BookingSettlementStatus {

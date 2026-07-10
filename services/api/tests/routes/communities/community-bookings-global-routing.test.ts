@@ -28,15 +28,19 @@ const bookingView = {
 let globalListResult: unknown
 let globalGetResult: unknown
 let globalQuoteResult: unknown
+let globalCancelResult: unknown
+let communityCancelResult: unknown
 let throwMissingSchema = false
 
 const calls: Record<string, unknown[]> = {
   globalList: [],
   globalGet: [],
   globalQuote: [],
+  globalCancel: [],
   communityList: [],
   communityGet: [],
   communityQuote: [],
+  communityCancel: [],
 }
 
 function resetMocks(): void {
@@ -47,6 +51,8 @@ function resetMocks(): void {
     ok: true,
     quote: { hold_id: "hld_global", gross_cents: 5000 },
   }
+  globalCancelResult = { ok: true, already: false, cancelledBy: "booker", booking: bookingView }
+  communityCancelResult = { ok: true, already: false, cancelledBy: "booker", booking: bookingView }
   throwMissingSchema = false
 }
 
@@ -67,6 +73,7 @@ function routeServices(): CommunityBookingsRouteServices {
       profileRepository: {},
     }),
     getControlPlaneClient: () => dummyExecutor,
+    enrichGlobalBookingCounterparties: async ({ bookings }: { bookings: unknown[] }) => bookings,
     resolveCommunityBookingAvailability: async () => ({ bookable: false }),
     listCommunityBookingsForUser: async (input: unknown) => {
       calls.communityList.push(input)
@@ -82,7 +89,10 @@ function routeServices(): CommunityBookingsRouteServices {
       return { ok: true, quote: { hold_id: "hld_legacy", gross_cents: 5000 } }
     },
     confirmCommunityBookingHold: async () => ({ ok: false, reason: "hold_not_found" }),
-    cancelCommunityBooking: async () => ({ ok: false, reason: "not_found" }),
+    cancelCommunityBooking: async (input: unknown) => {
+      calls.communityCancel.push(input)
+      return communityCancelResult
+    },
     startCommunityBookingSession: async () => ({ ok: false, reason: "not_found" }),
     completeCommunityBooking: async () => ({ ok: false, reason: "not_found" }),
     noShowCommunityBooking: async () => ({ ok: false, reason: "not_found" }),
@@ -106,7 +116,11 @@ function routeServices(): CommunityBookingsRouteServices {
       return globalQuoteResult
     },
     confirmGlobalBookingHold: async () => ({ ok: false, reason: "hold_not_found" }),
-    cancelGlobalBooking: async () => ({ ok: false, reason: "not_found" }),
+    cancelGlobalBooking: async (input: unknown) => {
+      missingSchemaIfRequested()
+      calls.globalCancel.push(input)
+      return globalCancelResult
+    },
     startGlobalBookingSession: async () => ({ ok: false, reason: "not_found" }),
     completeGlobalBooking: async () => ({ ok: false, reason: "not_found" }),
     noShowGlobalBooking: async () => ({ ok: false, reason: "not_found" }),
@@ -175,6 +189,30 @@ describe("community booking global routing", () => {
     expect(calls.communityQuote).toHaveLength(0)
   })
 
+  test("forwards optional cancellation terms and rejects malformed values", async () => {
+    const protectedCancel = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_global/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expected_refund_cents: 5000 }),
+    }, env())
+    expect(protectedCancel.status).toBe(200)
+    expect(calls.globalCancel[0]).toMatchObject({ expectedRefundCents: 5000 })
+
+    const bodylessCancel = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_global/cancel", {
+      method: "POST",
+    }, env())
+    expect(bodylessCancel.status).toBe(200)
+    expect(calls.globalCancel[1]).toMatchObject({ expectedRefundCents: undefined })
+
+    const malformed = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_global/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expected_refund_cents: "5000" }),
+    }, env())
+    expect(malformed.status).toBe(400)
+    expect(calls.globalCancel).toHaveLength(2)
+  })
+
   test("keeps the legacy fallback when the global bookings schema is not migrated", async () => {
     throwMissingSchema = true
     const res = await loadApp().request("http://pirate.test/cmt_route/bookings", {}, env())
@@ -182,5 +220,22 @@ describe("community booking global routing", () => {
     expect(res.status).toBe(200)
     expect(await json(res)).toMatchObject({ object: "list", data: [{ booking_id: "bkg_legacy" }] })
     expect(calls.communityList).toHaveLength(1)
+  })
+
+  test("preserves cancellation term protection in the legacy fallback", async () => {
+    throwMissingSchema = true
+    communityCancelResult = {
+      ok: false,
+      reason: "cancellation_terms_changed",
+      preview: { object: "booking_cancellation_preview", booking_id: "bkg_legacy", refund_cents: 0 },
+    }
+    const res = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_legacy/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expected_refund_cents: 5000 }),
+    }, env())
+    expect(res.status).toBe(409)
+    expect(await json(res)).toMatchObject({ error: "cancellation_terms_changed", preview: { refund_cents: 0 } })
+    expect(calls.communityCancel[0]).toMatchObject({ expectedRefundCents: 5000 })
   })
 })
