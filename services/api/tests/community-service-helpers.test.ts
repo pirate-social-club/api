@@ -72,6 +72,7 @@ function gateRuleToAtom(rule: Record<string, unknown>): Record<string, unknown> 
       type: "erc721_holding",
       chain_namespace: rule.chain_namespace,
       contract_address: config?.contract_address,
+      min_count: config?.min_count,
     }
   }
   if (rule.gate_type === "erc721_inventory_match") {
@@ -285,6 +286,23 @@ describe("community helper functions", () => {
       ).not.toThrow()
     })
 
+    test("allows erc721_holding gate family with min_count", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0x1111111111111111111111111111111111111111",
+              min_count: 3,
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
     test("allows Courtyard erc721 inventory match gate with valid Polygon config", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
@@ -321,6 +339,30 @@ describe("community helper functions", () => {
                 brand: "rolex",
                 model: "submariner",
                 reference: "124060",
+              },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).not.toThrow()
+    })
+
+    test("allows Courtyard inventory match gates with per-key allowlists", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 2,
+              match: {
+                category: "trading_card",
+                franchise: "pokemon",
+                subject: ["charizard", "gengar"],
+                grade: ["psa 9", "psa 10"],
               },
             },
           }],
@@ -423,6 +465,66 @@ describe("community helper functions", () => {
       ).toThrow("erc721_inventory_match must include category plus a supported matching field")
     })
 
+    test("rejects Courtyard inventory gate with empty allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: { category: "trading_card", subject: [] },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
+    })
+
+    test("rejects Courtyard inventory gate with too many allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: {
+                category: "trading_card",
+                subject: ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven"],
+              },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
+    })
+
+    test("rejects Courtyard inventory gate with duplicate allowlist values", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_inventory_match",
+            chain_namespace: "eip155:137",
+            gate_config: {
+              contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+              inventory_provider: "courtyard",
+              min_quantity: 1,
+              match: { category: "trading_card", subject: ["Charizard", "charizard"] },
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_inventory_match values must be non-empty strings or arrays of 1 to 10 unique non-empty strings")
+    })
+
     test("rejects erc721_holding gate with invalid chain namespace", () => {
       expect(() =>
         assertCreateRequest(makeCreateBody({
@@ -435,6 +537,23 @@ describe("community helper functions", () => {
           }],
         }), { ageOver18Verified: false }),
       ).toThrow("erc721_holding gate must target Ethereum mainnet (eip155:1)")
+    })
+
+    test("rejects erc721_holding gate with invalid min_count", () => {
+      expect(() =>
+        assertCreateRequest(makeCreateBody({
+          gate_rules: [{
+            scope: "membership",
+            gate_family: "token_holding",
+            gate_type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            gate_config: {
+              contract_address: "0x1111111111111111111111111111111111111111",
+              min_count: 0,
+            },
+          }],
+        }), { ageOver18Verified: false }),
+      ).toThrow("erc721_holding gate min_count must be from 1 to 100")
     })
 
     test("allows gender gate in public v0 with valid self config", () => {

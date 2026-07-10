@@ -5,18 +5,19 @@ import { normalizeEthereumAddress } from "./community-token-gates"
 
 export type Erc721InventoryProvider = "courtyard"
 export type Erc721InventoryAssetCategory = "trading_card" | "watch"
+export type Erc721InventoryMatchValue = string | string[]
 export type Erc721InventoryAssetMatch = {
-  category?: Erc721InventoryAssetCategory
-  franchise?: string
-  subject?: string
-  brand?: string
-  model?: string
-  reference?: string
-  set?: string
-  year?: string
-  grader?: string
-  grade?: string
-  condition?: string
+  category?: Erc721InventoryAssetCategory | Erc721InventoryAssetCategory[]
+  franchise?: Erc721InventoryMatchValue
+  subject?: Erc721InventoryMatchValue
+  brand?: Erc721InventoryMatchValue
+  model?: Erc721InventoryMatchValue
+  reference?: Erc721InventoryMatchValue
+  set?: Erc721InventoryMatchValue
+  year?: Erc721InventoryMatchValue
+  grader?: Erc721InventoryMatchValue
+  grade?: Erc721InventoryMatchValue
+  condition?: Erc721InventoryMatchValue
 }
 export type Erc721InventoryAssetFilter = Erc721InventoryAssetMatch
 
@@ -117,6 +118,7 @@ const DEFAULT_COURTYARD_WALLET_INVENTORY_GROUP_CACHE_TTL_MS = 30_000
 const DEFAULT_COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS = 8_000
 const DEFAULT_COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET = 1_000
 const MAX_COURTYARD_INVENTORY_CACHE_ENTRIES = 1_000
+export const MAX_INVENTORY_MATCH_VALUES_PER_KEY = 10
 
 export function setErc721InventoryMatcherForTests(
   matcher: ((input: {
@@ -228,15 +230,15 @@ export function normalizeAssetMatch(value: unknown): Erc721InventoryAssetMatch |
     return null
   }
 
-  const category = normalizeInventoryText(raw.category)
-  if (category !== "trading_card" && category !== "watch") {
+  const category = normalizeInventoryCategoryMatchValue(raw.category)
+  if (!category) {
     return null
   }
 
   const filter: Erc721InventoryAssetMatch = { category }
   for (const key of INVENTORY_MATCH_KEYS) {
     if (key === "category") continue
-    const normalized = normalizeInventoryText(raw[key])
+    const normalized = normalizeInventoryMatchValue(raw[key])
     if (normalized) {
       filter[key] = normalized
     }
@@ -245,10 +247,10 @@ export function normalizeAssetMatch(value: unknown): Erc721InventoryAssetMatch |
   if (Object.keys(filter).length <= 1) {
     return null
   }
-  if (category === "trading_card" && !filter.franchise && !filter.subject) {
+  if (matchValueIncludes(category, "trading_card") && !filter.franchise && !filter.subject) {
     return null
   }
-  if (category === "watch" && !filter.brand && !filter.model) {
+  if (matchValueIncludes(category, "watch") && !filter.brand && !filter.model) {
     return null
   }
 
@@ -258,9 +260,48 @@ export function normalizeAssetMatch(value: unknown): Erc721InventoryAssetMatch |
 export function formatAssetFilterLabel(filter: Erc721InventoryAssetMatch): string {
   const values = INVENTORY_MATCH_KEYS
     .filter((key) => key !== "category")
-    .map((key) => filter[key])
+    .flatMap((key) => matchValueList(filter[key]))
     .filter((value): value is string => Boolean(value))
   return values.join(" ")
+}
+
+export function normalizeInventoryMatchValue(value: unknown): Erc721InventoryMatchValue | null {
+  const values = Array.isArray(value) ? value : [value]
+  if (values.length === 0 || values.length > MAX_INVENTORY_MATCH_VALUES_PER_KEY) {
+    return null
+  }
+  const normalizedValues: string[] = []
+  for (const raw of values) {
+    const normalized = normalizeInventoryText(raw)
+    if (!normalized || normalizedValues.includes(normalized)) {
+      return null
+    }
+    normalizedValues.push(normalized)
+  }
+  return Array.isArray(value) ? normalizedValues : normalizedValues[0]!
+}
+
+function normalizeInventoryCategoryMatchValue(value: unknown): Erc721InventoryAssetCategory | Erc721InventoryAssetCategory[] | null {
+  const normalized = normalizeInventoryMatchValue(value)
+  if (!normalized) {
+    return null
+  }
+  const values = matchValueList(normalized)
+  if (values.some((category) => category !== "trading_card" && category !== "watch")) {
+    return null
+  }
+  return Array.isArray(normalized) ? values as Erc721InventoryAssetCategory[] : values[0] as Erc721InventoryAssetCategory
+}
+
+function matchValueList(value: Erc721InventoryMatchValue | Erc721InventoryAssetCategory | Erc721InventoryAssetCategory[] | undefined): string[] {
+  if (!value) {
+    return []
+  }
+  return Array.isArray(value) ? value : [value]
+}
+
+function matchValueIncludes(value: Erc721InventoryMatchValue | Erc721InventoryAssetCategory | Erc721InventoryAssetCategory[] | undefined, candidate: string): boolean {
+  return matchValueList(value).includes(candidate)
 }
 
 function readRawInventoryAttributes(attributes: RawInventoryAttribute[] | undefined): Record<string, string> {
@@ -359,18 +400,32 @@ function normalizeCourtyardChainNamespace(chain: string | undefined): string {
 }
 
 function assetMatchesFilter(asset: Erc721InventoryAsset, filter: Erc721InventoryAssetMatch): boolean {
-  if (filter.category && asset.category !== filter.category) return false
-  if (filter.franchise && asset.franchise !== filter.franchise) return false
-  if (filter.subject && !asset.subject?.includes(filter.subject)) return false
-  if (filter.brand && asset.brand !== filter.brand) return false
-  if (filter.model && !asset.model?.includes(filter.model)) return false
-  if (filter.reference && asset.reference !== filter.reference) return false
-  if (filter.set && asset.set !== filter.set) return false
-  if (filter.year && asset.year !== filter.year) return false
-  if (filter.grader && asset.grader !== filter.grader) return false
-  if (filter.grade && asset.grade !== filter.grade) return false
-  if (filter.condition && asset.condition !== filter.condition) return false
+  if (filter.category && !matchExact(asset.category, filter.category)) return false
+  if (filter.franchise && !matchExact(asset.franchise, filter.franchise)) return false
+  if (filter.subject && !matchContains(asset.subject, filter.subject)) return false
+  if (filter.brand && !matchExact(asset.brand, filter.brand)) return false
+  if (filter.model && !matchContains(asset.model, filter.model)) return false
+  if (filter.reference && !matchExact(asset.reference, filter.reference)) return false
+  if (filter.set && !matchExact(asset.set, filter.set)) return false
+  if (filter.year && !matchExact(asset.year, filter.year)) return false
+  if (filter.grader && !matchExact(asset.grader, filter.grader)) return false
+  if (filter.grade && !matchExact(asset.grade, filter.grade)) return false
+  if (filter.condition && !matchExact(asset.condition, filter.condition)) return false
   return true
+}
+
+function matchExact(assetValue: string | null, filterValue: Erc721InventoryMatchValue | Erc721InventoryAssetCategory | Erc721InventoryAssetCategory[]): boolean {
+  if (!assetValue) {
+    return false
+  }
+  return matchValueList(filterValue).includes(assetValue)
+}
+
+function matchContains(assetValue: string | null, filterValue: Erc721InventoryMatchValue): boolean {
+  if (!assetValue) {
+    return false
+  }
+  return matchValueList(filterValue).some((candidate) => assetValue.includes(candidate))
 }
 
 function toTitleWords(value: string): string {

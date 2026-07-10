@@ -44,6 +44,10 @@ export async function evaluateTokenGateRule(input: {
   if (!contractAddress) {
     return ["unsupported_gate_config"]
   }
+  const minCount = readErc721MinCount(gateConfig)
+  if (minCount == null) {
+    return ["unsupported_gate_config"]
+  }
   if (!hasEthereumRpcConfig(env)) {
     console.error("[community-gate] Ethereum RPC is not configured", {
       gate_type: rule.gate_type,
@@ -55,6 +59,7 @@ export async function evaluateTokenGateRule(input: {
   const ownership = await evaluateAttachedEthereumWalletErc721CollectionOwnership({
     contractAddress,
     env,
+    minCount,
     walletAttachments,
   })
   if (ownership.unavailable) {
@@ -63,4 +68,12 @@ export async function evaluateTokenGateRule(input: {
     mismatchReasons.push("erc721_holding_required")
   }
   return mismatchReasons
+}
+
+function readErc721MinCount(gateConfig: Record<string, unknown> | null): number | null {
+  const raw = gateConfig?.min_count
+  if (raw == null) {
+    return 1
+  }
+  return Number.isInteger(raw) && (raw as number) >= 1 && (raw as number) <= 100 ? raw as number : null
 }

@@ -23,7 +23,7 @@ type CommunityGateRuleRow = {
   status: "active" | "disabled"
 }
 
-function makeErc721Rule(contractAddress: string): CommunityGateRuleRow {
+function makeErc721Rule(contractAddress: string, config: Record<string, unknown> = {}): CommunityGateRuleRow {
   return {
     gate_rule_id: "gr_erc721",
     scope: "membership",
@@ -31,7 +31,7 @@ function makeErc721Rule(contractAddress: string): CommunityGateRuleRow {
     gate_type: "erc721_holding",
     proof_requirements_json: null,
     chain_namespace: "eip155:1",
-    gate_config_json: JSON.stringify({ contract_address: contractAddress }),
+    gate_config_json: JSON.stringify({ contract_address: contractAddress, ...config }),
     status: "active",
   }
 }
@@ -154,6 +154,44 @@ describe("erc721 gate evaluation", () => {
 
     expect(result.satisfied).toBe(true)
     expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("returns satisfied when attached wallets aggregate enough ERC-721 collection balance", async () => {
+    setErc721OwnershipCheckerForTests(async ({ walletAddress }) => (
+      walletAddress === "0x2222222222222222222222222222222222222222" ? 1 : 2
+    ))
+
+    const result = await evaluateMembershipGateRules({
+      env: { ETHEREUM_RPC_URL: "https://example.invalid" },
+      rules: [makeErc721Rule("0x1111111111111111111111111111111111111111", { min_count: 3 })],
+      user: makeUser(),
+      walletAttachments: [
+        ...walletAttachments,
+        {
+          wallet_attachment: "wal_eth_2",
+          chain_namespace: "eip155:1",
+          wallet_address: "0x4444444444444444444444444444444444444444",
+          is_primary: false,
+        },
+      ],
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("returns erc721_holding_required when ERC-721 collection balance is below min_count", async () => {
+    setErc721OwnershipCheckerForTests(async () => 1)
+
+    const result = await evaluateMembershipGateRules({
+      env: { ETHEREUM_RPC_URL: "https://example.invalid" },
+      rules: [makeErc721Rule("0x1111111111111111111111111111111111111111", { min_count: 3 })],
+      user: makeUser(),
+      walletAttachments,
+    })
+
+    expect(result.satisfied).toBe(false)
+    expect(result.mismatchReasons).toContain("erc721_holding_required")
   })
 
   test("builds erc721 inventory match summary with public metadata", () => {
@@ -295,6 +333,125 @@ describe("erc721 gate evaluation", () => {
 
     expect(result.satisfied).toBe(true)
     expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("matches Courtyard inventory when a facet value is in an allowlist", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Graded Cards",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Charizard V",
+        token_id: "charizard-token",
+        attributes: [
+          { name: "Category", value: "Pokemon" },
+          { name: "Title/Subject", value: "Charizard V" },
+        ],
+      }],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 1,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Charizard"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
+    })
+  })
+
+  test("does not match Courtyard inventory when no allowlist value matches", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 1,
+      assets: [{
+        chain: "polygon",
+        collection: "Graded Cards",
+        contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+        owner: { address: "0x3333333333333333333333333333333333333333" },
+        title: "Charizard V",
+        token_id: "charizard-token",
+        attributes: [
+          { name: "Category", value: "Pokemon" },
+          { name: "Title/Subject", value: "Charizard V" },
+        ],
+      }],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 1,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Pikachu"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(false)
+      expect(result.mismatchReasons).toContain("erc721_inventory_match_required")
+    })
+  })
+
+  test("counts any matching allowlist value toward min_quantity", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      total: 2,
+      assets: [
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Charizard V",
+          token_id: "charizard-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Charizard V" },
+          ],
+        },
+        {
+          chain: "polygon",
+          collection: "Graded Cards",
+          contract: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          owner: { address: "0x3333333333333333333333333333333333333333" },
+          title: "Gengar V",
+          token_id: "gengar-token",
+          attributes: [
+            { name: "Category", value: "Pokemon" },
+            { name: "Title/Subject", value: "Gengar V" },
+          ],
+        },
+      ],
+    })) as Response, async () => {
+      const result = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        rules: [makeCourtyardInventoryRule({
+          min_quantity: 2,
+          asset_filter: undefined,
+          match: {
+            category: "trading_card",
+            subject: ["Gengar", "Charizard"],
+          },
+        })],
+        user: makeUser(),
+        walletAttachments,
+      })
+
+      expect(result.satisfied).toBe(true)
+      expect(result.mismatchReasons).toEqual([])
+    })
   })
 
   test("fails closed when the inventory provider is unavailable", async () => {
