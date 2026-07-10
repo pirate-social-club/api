@@ -140,6 +140,7 @@ jobs:
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+          REWARD_CAMPAIGN_PG_CI_REQUIRED: "true"
         run: |
           echo "::group::host-config repository PG"
           timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts

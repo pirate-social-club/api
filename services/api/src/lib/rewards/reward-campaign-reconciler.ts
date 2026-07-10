@@ -353,15 +353,23 @@ export async function reconcileRewardCampaigns(input: {
   const since = new Date(Date.parse(now) - Math.max(1, Math.trunc(input.lookbackDays ?? 45)) * 86_400_000).toISOString()
   const maxCredits = Math.max(1, Math.trunc(input.maxCredits ?? 500))
   const pageSize = Math.min(500, maxCredits)
-  let offset = 0
+  let cursor: { qualifiedAt: string; communityId: string; shardSequence: number } | null = null
   while (summary.credited_events < maxCredits) {
+    const cursorClause = cursor
+      ? `AND (
+          q.qualified_at > ?3
+          OR (q.qualified_at = ?3 AND q.community_id > ?4)
+          OR (q.qualified_at = ?3 AND q.community_id = ?4 AND q.shard_sequence > ?5)
+        )`
+      : ""
     const rows = await input.controlPlaneClient.execute({
       sql: `
-        SELECT q.reward_qualification_event_id, q.user_id, q.community_id, q.post_id,
+        SELECT q.reward_qualification_event_id, q.shard_sequence, q.user_id, q.community_id, q.post_id,
           q.song_artifact_bundle_id, q.activity, q.qualified_at, q.reward_period_key,
           q.qualification_policy_version
         FROM reward_qualification_events q
         WHERE q.qualified_at >= ?1
+          ${cursorClause}
           AND EXISTS (
             SELECT 1 FROM reward_campaigns c
             WHERE c.community_id = q.community_id AND c.post_id = q.post_id
@@ -387,9 +395,11 @@ export async function reconcileRewardCampaigns(input: {
               AND c.starts_at <= q.qualified_at AND c.ends_at >= q.qualified_at
           )
         ORDER BY q.qualified_at ASC, q.community_id ASC, q.shard_sequence ASC
-        LIMIT ?2 OFFSET ?3
+        LIMIT ?2
       `,
-      args: [since, pageSize, offset],
+      args: cursor
+        ? [since, pageSize, cursor.qualifiedAt, cursor.communityId, cursor.shardSequence]
+        : [since, pageSize],
     })
     for (const row of rows.rows) {
       summary.scanned_qualifications += 1
@@ -408,7 +418,12 @@ export async function reconcileRewardCampaigns(input: {
       if (summary.credited_events >= maxCredits) break
     }
     if (rows.rows.length < pageSize || summary.credited_events >= maxCredits) break
-    offset += rows.rows.length
+    const last = qualification(rows.rows[rows.rows.length - 1] as QueryResultRow)
+    const shardSequence = Number(rowValue(rows.rows[rows.rows.length - 1] as QueryResultRow, "shard_sequence"))
+    if (!Number.isSafeInteger(shardSequence) || shardSequence <= 0) {
+      throw new Error("Reward qualification shard sequence is invalid")
+    }
+    cursor = { qualifiedAt: last.qualifiedAt, communityId: last.communityId, shardSequence }
   }
   return summary
 }

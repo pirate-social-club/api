@@ -14,6 +14,9 @@ import {
 import { creditRewardCampaignQualification } from "./reward-campaign-reconciler"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
+if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for reward campaign PostgreSQL CI")
+}
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "reward_campaign_credit_test"
 const NOW = "2026-07-10T12:00:00.000Z"

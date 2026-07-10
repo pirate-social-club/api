@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { reconcileRewardCampaigns } from "../../src/lib/rewards/reward-campaign-reconciler"
+import {
+  creditRewardCampaignQualification,
+  reconcileRewardCampaigns,
+} from "../../src/lib/rewards/reward-campaign-reconciler"
 import { getRewardsSummaryForUser } from "../../src/lib/rewards/reward-read-service"
 import { createRouteTestContext, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
@@ -53,6 +56,7 @@ describe("reward campaign reconciler", () => {
     const ctx = await createRouteTestContext(env())
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "campaign-reconciler-user")
+    const unverifiedSession = await exchangeJwt(ctx.env, "campaign-reconciler-unverified-user")
     const now = "2026-07-10T12:00:00.000Z"
     await ctx.client.execute({
       sql: `
@@ -166,19 +170,42 @@ describe("reward campaign reconciler", () => {
         })
       }
 
+      // The first page contains an unverified candidate that remains eligible and a
+      // verified candidate that disappears after credit. A third candidate must
+      // still be reached on page two; OFFSET pagination skipped it when page one
+      // shrank the eligible result set.
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_qualification_events (
+            reward_qualification_event_id, community_id, shard_sequence, user_id,
+            post_id, song_artifact_bundle_id, activity, qualified_at,
+            reward_period_key, qualification_policy_version, evidence_summary_json,
+            ingested_at
+          ) VALUES
+            ('rqe_unverified_cursor', 'cmt_campaign_reconcile', 100, ?1,
+              'pst_campaign_reconcile', 'sab_campaign_reconcile', 'study',
+              '2026-07-10T11:00:00.000Z', '2026-07-10', 'policy-v1', '{}', ?3),
+            ('rqe_next_period_cursor', 'cmt_campaign_reconcile', 101, ?2,
+              'pst_campaign_reconcile', 'sab_campaign_reconcile', 'study',
+              '2026-07-11T12:00:00.000Z', '2026-07-11', 'policy-v1', '{}', ?3)
+        `,
+        args: [unverifiedSession.userId, session.userId, now],
+      })
+
       const first = await reconcileRewardCampaigns({
         env: ctx.env,
         communityRepository: jobRepository,
         controlPlaneClient: ctx.client,
         maxCommunities: 5,
-        maxCredits: 10,
+        maxCredits: 2,
         outboxBatchSize: 1,
       })
       expect(first).toMatchObject({
         enabled: true,
         ingested_qualifications: 1,
-        credited_events: 1,
-        credited_cents: 40,
+        credited_events: 2,
+        credited_cents: 80,
+        skipped_identity: 1,
       })
       const effects = await ctx.client.execute(`
         SELECT r.status, r.amount_cents, r.qualification_basis, e.reward_kind,
@@ -187,15 +214,14 @@ describe("reward campaign reconciler", () => {
         JOIN reward_events e ON e.reward_event_id = r.reward_event_id
         JOIN reward_campaigns c ON c.reward_campaign_id = r.reward_campaign_id
       `)
-      expect(effects.rows).toEqual([{
-        status: "credited",
-        amount_cents: 40,
-        qualification_basis: "study",
-        reward_kind: "campaign_practice_day",
-        reserved_cents: 0,
-        credited_cents: 40,
-        campaign_status: "active",
-      }])
+      expect(effects.rows).toHaveLength(2)
+      expect(effects.rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          status: "credited", amount_cents: 40, qualification_basis: "study",
+          reward_kind: "campaign_practice_day", reserved_cents: 0,
+          credited_cents: 80, campaign_status: "exhausted",
+        }),
+      ]))
       let checkpoint = await ctx.client.execute("SELECT last_shard_sequence FROM reward_qualification_checkpoints")
       expect(checkpoint.rows).toEqual([{ last_shard_sequence: 1 }])
       const secondActivity = await reconcileRewardCampaigns({
@@ -219,18 +245,6 @@ describe("reward campaign reconciler", () => {
       })
       expect(replay).toMatchObject({ ingested_qualifications: 0, credited_events: 0, credited_cents: 0 })
 
-      await db.client.execute({
-        sql: `
-          INSERT INTO reward_qualification_outbox (
-            event_id, user_id, community_id, post_id, song_artifact_bundle_id,
-            activity, qualified_at, reward_period_key, qualification_policy_version,
-            evidence_summary_json, created_at
-          ) VALUES ('rqo_next_period', ?1, 'cmt_campaign_reconcile', 'pst_campaign_reconcile',
-            'sab_campaign_reconcile', 'study', '2026-07-11T12:00:00.000Z',
-            '2026-07-11', 'policy-v1', '{}', '2026-07-11T12:00:00.000Z')
-        `,
-        args: [session.userId],
-      })
       const exhausted = await reconcileRewardCampaigns({
         env: ctx.env,
         communityRepository: jobRepository,
@@ -239,11 +253,37 @@ describe("reward campaign reconciler", () => {
         maxCredits: 10,
         outboxBatchSize: 1,
       })
-      expect(exhausted).toMatchObject({ ingested_qualifications: 1, credited_events: 1, credited_cents: 40 })
+      expect(exhausted).toMatchObject({ ingested_qualifications: 0, credited_events: 0, credited_cents: 0 })
       const exhaustedCampaign = await ctx.client.execute(
         "SELECT status, credited_cents, reserved_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_reconcile'",
       )
       expect(exhaustedCampaign.rows).toEqual([{ status: "exhausted", credited_cents: 80, reserved_cents: 0 }])
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_song_owner_policies (
+            community_id, post_id, song_owner_user_id, third_party_rewards,
+            created_at, updated_at
+          ) VALUES ('cmt_campaign_reconcile', 'pst_campaign_reconcile', ?1, 'blocked', ?2, ?2)
+        `,
+        args: [session.userId, now],
+      })
+      const blockedAtReservation = await creditRewardCampaignQualification({
+        env: ctx.env,
+        client: ctx.client,
+        now,
+        candidate: {
+          eventId: "rqe_owner_blocked",
+          userId: session.userId,
+          communityId: "cmt_campaign_reconcile",
+          postId: "pst_campaign_reconcile",
+          artifactBundleId: "sab_campaign_reconcile",
+          activity: "study",
+          qualifiedAt: "2026-07-12T12:00:00.000Z",
+          periodKey: "2026-07-12",
+          policyVersion: "policy-v1",
+        },
+      })
+      expect(blockedAtReservation).toEqual({ result: "campaign", amountCents: 0 })
       const rewards = await getRewardsSummaryForUser({
         env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
         userId: session.userId,
@@ -253,23 +293,23 @@ describe("reward campaign reconciler", () => {
       expect(rewards).toMatchObject({
         balance_cents: 80,
         today_earned_cents: 40,
-        recent_events: [
-          {
+      })
+      expect(rewards.recent_events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
             reward_kind: "campaign_practice_day",
             reward_campaign_id: "rcp_reconcile",
             reward_period_key: "2026-07-11",
             qualification_basis: "study",
             amount_cents: 40,
-          },
-          {
+          }),
+          expect.objectContaining({
             reward_kind: "campaign_practice_day",
             reward_campaign_id: "rcp_reconcile",
             reward_period_key: "2026-07-10",
             qualification_basis: "study",
             amount_cents: 40,
-          },
-        ],
-      })
+          }),
+        ]))
       const reconciliation = await ctx.client.execute("SELECT counters_match FROM reward_campaign_accounting_reconciliation")
       expect(reconciliation.rows[0]?.counters_match).toBe(1)
     } finally {
