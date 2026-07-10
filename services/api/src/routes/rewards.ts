@@ -9,6 +9,9 @@ import {
   createRewardCampaign,
   createRewardCampaignFundingQuote,
   getRewardCampaign,
+  getPublicActiveRewardCampaign,
+  getRewardSongOwnerPolicy,
+  setRewardSongOwnerPolicy,
   type RewardCampaignCreateInput,
   type RewardCampaignTarget,
 } from "../lib/rewards/reward-campaign-service"
@@ -24,6 +27,7 @@ rewards.use("/me/rewards", authenticate)
 rewards.use("/me/rewards/*", authenticate)
 rewards.use("/reward_campaigns", authenticate)
 rewards.use("/reward_campaigns/*", authenticate)
+rewards.use("/reward_song_policies/*", authenticate)
 
 async function resolveCampaignTarget(env: AuthenticatedEnv["Bindings"], communityId: string, postId: string): Promise<RewardCampaignTarget> {
   const handle = await openCommunityReadClient(env, getCommunityRepository(env), communityId)
@@ -54,6 +58,29 @@ async function resolveCampaignTarget(env: AuthenticatedEnv["Bindings"], communit
   }
 }
 
+async function canModerateCommunity(
+  env: AuthenticatedEnv["Bindings"],
+  communityId: string,
+  userId: string,
+): Promise<boolean> {
+  const handle = await openCommunityReadClient(env, getCommunityRepository(env), communityId)
+  try {
+    const result = await handle.client.execute({
+      sql: `
+        SELECT 1 AS allowed
+        FROM community_roles
+        WHERE community_id = ?1 AND user_id = ?2 AND status = 'active'
+          AND role IN ('owner', 'admin', 'moderator')
+        LIMIT 1
+      `,
+      args: [communityId, userId],
+    })
+    return result.rows.length > 0
+  } finally {
+    await handle.close()
+  }
+}
+
 rewards.get("/me/rewards", async (c) => {
   const actor = c.get("actor")
   const result = await getRewardsSummaryForUser({
@@ -63,6 +90,15 @@ rewards.get("/me/rewards", async (c) => {
   return c.json(result, 200, {
     "cache-control": "no-store",
   })
+})
+
+rewards.get("/public/reward_campaigns/:campaignId", async (c) => {
+  const result = await getPublicActiveRewardCampaign({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    campaignId: c.req.param("campaignId"),
+  })
+  return c.json(result, 200, { "cache-control": "public, max-age=15" })
 })
 
 rewards.post("/me/rewards/cashouts", async (c) => {
@@ -120,10 +156,40 @@ rewards.post("/reward_campaigns", async (c) => {
 })
 
 rewards.get("/reward_campaigns/:campaignId", async (c) => {
+  const actor = c.get("actor")
   const result = await getRewardCampaign({
     env: c.env,
     client: getControlPlaneClient(c.env),
     campaignId: c.req.param("campaignId"),
+    userId: actor.userId,
+    canModerateCommunity: (communityId) => canModerateCommunity(c.env, communityId, actor.userId),
+  })
+  return c.json(result, 200, { "cache-control": "no-store" })
+})
+
+rewards.get("/reward_song_policies/:communityId/:postId", async (c) => {
+  const target = await resolveCampaignTarget(c.env, c.req.param("communityId"), c.req.param("postId"))
+  const result = await getRewardSongOwnerPolicy({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    target,
+  })
+  return c.json(result, 200, { "cache-control": "no-store" })
+})
+
+rewards.put("/reward_song_policies/:communityId/:postId", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<{ third_party_rewards?: unknown }>().catch(() => null)
+  if (!body || (body.third_party_rewards !== "allowed" && body.third_party_rewards !== "blocked")) {
+    throw badRequestError("Invalid reward song policy payload")
+  }
+  const target = await resolveCampaignTarget(c.env, c.req.param("communityId"), c.req.param("postId"))
+  const result = await setRewardSongOwnerPolicy({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    userId: actor.userId,
+    target,
+    thirdPartyRewards: body.third_party_rewards,
   })
   return c.json(result, 200, { "cache-control": "no-store" })
 })

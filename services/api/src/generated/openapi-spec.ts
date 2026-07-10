@@ -6812,6 +6812,109 @@ const spec = {
         }
       }
     },
+    "/reward_song_policies/{community_id}/{post_id}": {
+      "parameters": [
+        {
+          "name": "community_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "post_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "reward_song_policies_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get a song owner's third-party reward policy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSongOwnerPolicy"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "reward_song_policies_update",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Update a song owner's third-party reward policy",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardSongOwnerPolicyUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSongOwnerPolicy"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/reward_campaigns/{campaign_id}": {
       "parameters": [
         {
@@ -6829,6 +6932,47 @@ const spec = {
           "Rewards"
         ],
         "summary": "Retrieve a song-practice reward campaign",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/public/reward_campaigns/{campaign_id}": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "public_reward_campaigns_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Retrieve a currently active public song-practice offer",
         "responses": {
           "200": {
             "content": {
@@ -16075,6 +16219,48 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RewardSongOwnerPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "song_owner",
+          "third_party_rewards"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "RewardSongOwnerPolicyUpdateRequest": {
+        "type": "object",
+        "required": [
+          "third_party_rewards"
+        ],
+        "properties": {
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
           }
         }
       },

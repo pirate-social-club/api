@@ -2700,6 +2700,17 @@ export type RewardCampaignStatus = "draft" | "funding_quoted" | "funding_confirm
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
+export type RewardSongOwnerPolicy = {
+  community: string;
+  post: string;
+  song_owner: string;
+  third_party_rewards: "allowed" | "blocked";
+};
+
+export type RewardSongOwnerPolicyUpdateRequest = {
+  third_party_rewards: "allowed" | "blocked";
+};
+
 export type RewardCampaign = {
   id: string;
   object: "reward_campaign";
@@ -4213,7 +4224,9 @@ export const apiRoutes = {
   meRewards: "/me/rewards",
   meRewardsCashouts: "/me/rewards/cashouts",
   rewardCampaigns: "/reward_campaigns",
+  rewardSongPolicies: (communityId: string, postId: string) => `/reward_song_policies/${communityId}/${postId}`,
   rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
+  publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
   rewardCampaignFundingQuotes: (campaignId: string) => `/reward_campaigns/${campaignId}/funding_quotes`,
   rewardCampaignFundingQuoteConfirm: (campaignId: string, fundingQuoteId: string) => `/reward_campaigns/${campaignId}/funding_quotes/${fundingQuoteId}/confirm`,
 } as const
