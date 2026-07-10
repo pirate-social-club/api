@@ -45,7 +45,6 @@ import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
-import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
@@ -59,13 +58,13 @@ import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconc
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
-import { logPipelineError } from "./lib/observability/pipeline-log"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
 import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
 import type { Env } from "./env"
 import publicReadApp from "./routes/public-read-app"
+import { apiErrorHandler } from "./routes/api-error-handler"
 
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
@@ -256,34 +255,7 @@ app.post("/__debug/ops-alert", async (c) => {
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
-app.onError((error, c) => {
-  if (!(error instanceof HttpError) || error.status >= 500) {
-    console.error("[api-worker]", error)
-    const details = error instanceof HttpError ? error.details : null
-    const causeDetails = details?.cause_details && typeof details.cause_details === "object"
-      ? details.cause_details as Record<string, unknown>
-      : null
-    logPipelineError("[api-worker] unhandled request error", {
-      route: c.req.path,
-      method: c.req.method,
-      status: error instanceof HttpError ? String(error.status) : "500",
-      ...(typeof details?.community_id === "string" ? { community_id: details.community_id } : {}),
-      ...(typeof details?.job_id === "string" ? { job_id: details.job_id } : {}),
-      ...(typeof causeDetails?.operator_error_code === "string" ? { operator_error_code: causeDetails.operator_error_code } : {}),
-      ...(typeof causeDetails?.operator_request_id === "string" ? { operator_request_id: causeDetails.operator_request_id } : {}),
-      ...(typeof causeDetails?.operator_step === "string" ? { operator_step: causeDetails.operator_step } : {}),
-      ...(typeof causeDetails?.operator_message === "string" ? { operator_message: causeDetails.operator_message } : {}),
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
-  const response = errorResponse(error)
-  return new Response(JSON.stringify(response.body), {
-    status: response.status,
-    headers: {
-      "content-type": "application/json",
-    },
-  })
-})
+app.onError(apiErrorHandler)
 
 async function fetchPublicRead(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const forwarded = buildPublicReadEntrypointRequest(req)
