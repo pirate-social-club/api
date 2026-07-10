@@ -35,7 +35,7 @@ import {
 } from "./agent-ownership-service"
 import type { Client } from "../sql-client"
 
-export interface AgentOwnershipRepository {
+interface AgentOwnershipRepository {
   createAgentOwnershipPairingCode(input: {
     userId: string
   }): Promise<AgentOwnershipPairing>

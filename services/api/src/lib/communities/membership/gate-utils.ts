@@ -1,7 +1,7 @@
 import type { JoinEligibility } from "../../../types"
 import type { RequiredActionNode, RequiredActionSet } from "./gate-types"
 
-export function flattenRequiredActions(actionSet: RequiredActionSet | null): RequiredActionNode[] {
+function flattenRequiredActions(actionSet: RequiredActionSet | null): RequiredActionNode[] {
   if (!actionSet) {
     return []
   }

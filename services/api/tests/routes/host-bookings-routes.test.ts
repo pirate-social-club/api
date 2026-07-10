@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { app } from "../../src/index"
+import { setBookingHostConfigRepositoriesForTests } from "../../src/lib/bookings/host-authoring-service"
+import type {
+  BookingHostConfigReadRepository,
+  BookingHostConfigWriteRepository,
+} from "../../src/lib/bookings/host-config-repository"
+import type {
+  AvailabilityException,
+  AvailabilityRule,
+  BookingProfile,
+  PriceRule,
+} from "../../src/lib/bookings/types"
 import { json, resetRuntimeCaches, createRouteTestContext } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -9,10 +20,168 @@ setDefaultTimeout(20_000)
 
 let cleanup: (() => Promise<void>) | null = null
 
+function createInMemoryHostConfigRepositories() {
+  const profiles = new Map<string, BookingProfile>()
+  const rules = new Map<string, AvailabilityRule>()
+  const exceptions = new Map<string, AvailabilityException>()
+  const prices = new Map<string, PriceRule>()
+
+  const read: BookingHostConfigReadRepository = {
+    getProfile: async (hostUserId: string) => profiles.get(hostUserId) ?? null,
+    listAvailabilityRules: async (hostUserId: string) => [...rules.values()]
+      .filter((rule) => rule.hostUserId === hostUserId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.ruleId.localeCompare(b.ruleId)),
+    listAvailabilityExceptions: async (hostUserId: string) => [...exceptions.values()]
+      .filter((exception) => exception.hostUserId === hostUserId)
+      .sort((a, b) => a.startUtc.localeCompare(b.startUtc) || a.exceptionId.localeCompare(b.exceptionId)),
+    listPriceRules: async (hostUserId: string) => [...prices.values()]
+      .filter((price) => price.hostUserId === hostUserId)
+      .sort((a, b) => b.priority - a.priority || a.priceRuleId.localeCompare(b.priceRuleId)),
+    getHostConfiguration: async (hostUserId: string) => {
+      const profile = profiles.get(hostUserId)
+      if (!profile) return null
+      return {
+        profile,
+        availabilityRules: await read.listAvailabilityRules(hostUserId),
+        availabilityExceptions: await read.listAvailabilityExceptions(hostUserId),
+        priceRules: await read.listPriceRules(hostUserId),
+      }
+    },
+  }
+
+  const write: BookingHostConfigWriteRepository = {
+    createProfile: async (input) => {
+      const profile: BookingProfile = {
+        hostUserId: input.hostUserId,
+        displayHeadline: input.displayHeadline ?? null,
+        bio: input.bio ?? null,
+        topics: input.topics ?? null,
+        introVideoRef: input.introVideoRef ?? null,
+        hostTimezone: input.hostTimezone,
+        basePriceCents: input.basePriceCents,
+        defaultSlotDurationSeconds: input.defaultSlotDurationSeconds,
+        platformFeeBps: input.platformFeeBps ?? 1000,
+        payoutWalletAddress: input.payoutWalletAddress ?? null,
+        isPublished: input.isPublished ?? false,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      }
+      profiles.set(profile.hostUserId, profile)
+      return profile
+    },
+    upsertProfile: async (input) => {
+      const existing = profiles.get(input.hostUserId)
+      if (!existing) return write.createProfile(input)
+      const profile = {
+        ...existing,
+        ...input,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      }
+      profiles.set(input.hostUserId, profile)
+      return profile
+    },
+    updateProfile: async (hostUserId, input) => {
+      const existing = profiles.get(hostUserId)
+      if (!existing) return null
+      const profile = { ...existing, ...input }
+      profiles.set(hostUserId, profile)
+      return profile
+    },
+    publishProfile: async (hostUserId: string, updatedAt: string) => {
+      const existing = profiles.get(hostUserId)
+      if (!existing) return null
+      const profile = { ...existing, isPublished: true, updatedAt }
+      profiles.set(hostUserId, profile)
+      return profile
+    },
+    unpublishProfile: async (hostUserId: string, updatedAt: string) => {
+      const existing = profiles.get(hostUserId)
+      if (!existing) return null
+      const profile = { ...existing, isPublished: false, updatedAt }
+      profiles.set(hostUserId, profile)
+      return profile
+    },
+    createAvailabilityRule: async (input) => {
+      const rule: AvailabilityRule = {
+        ruleId: input.ruleId,
+        hostUserId: input.hostUserId,
+        byWeekday: input.byWeekday,
+        startLocal: input.startLocal,
+        endLocal: input.endLocal,
+        slotDurationSeconds: input.slotDurationSeconds,
+        effectiveFromUtc: input.effectiveFromUtc ?? null,
+        effectiveUntilUtc: input.effectiveUntilUtc ?? null,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      }
+      rules.set(rule.ruleId, rule)
+      return rule
+    },
+    updateAvailabilityRule: async (hostUserId, ruleId, input) => {
+      const existing = rules.get(ruleId)
+      if (!existing || existing.hostUserId !== hostUserId) return null
+      const rule = { ...existing, ...input }
+      rules.set(ruleId, rule)
+      return rule
+    },
+    deleteAvailabilityRule: async (hostUserId: string, ruleId: string) => {
+      const existing = rules.get(ruleId)
+      return existing?.hostUserId === hostUserId ? rules.delete(ruleId) : false
+    },
+    createAvailabilityException: async (input) => {
+      const exception: AvailabilityException = { ...input }
+      exceptions.set(exception.exceptionId, exception)
+      return exception
+    },
+    updateAvailabilityException: async (hostUserId, exceptionId, input) => {
+      const existing = exceptions.get(exceptionId)
+      if (!existing || existing.hostUserId !== hostUserId) return null
+      const exception = { ...existing, ...input }
+      exceptions.set(exceptionId, exception)
+      return exception
+    },
+    deleteAvailabilityException: async (hostUserId: string, exceptionId: string) => {
+      const existing = exceptions.get(exceptionId)
+      return existing?.hostUserId === hostUserId ? exceptions.delete(exceptionId) : false
+    },
+    createPriceRule: async (input) => {
+      const price: PriceRule = {
+        priceRuleId: input.priceRuleId,
+        hostUserId: input.hostUserId,
+        matchWeekday: input.matchWeekday ?? null,
+        matchLocalStart: input.matchLocalStart ?? null,
+        matchLocalEnd: input.matchLocalEnd ?? null,
+        matchDurationSeconds: input.matchDurationSeconds ?? null,
+        priceCents: input.priceCents,
+        priority: input.priority ?? 0,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt ?? input.createdAt,
+      }
+      prices.set(price.priceRuleId, price)
+      return price
+    },
+    updatePriceRule: async (hostUserId, priceRuleId, input) => {
+      const existing = prices.get(priceRuleId)
+      if (!existing || existing.hostUserId !== hostUserId) return null
+      const price = { ...existing, ...input }
+      prices.set(priceRuleId, price)
+      return price
+    },
+    deletePriceRule: async (hostUserId: string, priceRuleId: string) => {
+      const existing = prices.get(priceRuleId)
+      return existing?.hostUserId === hostUserId ? prices.delete(priceRuleId) : false
+    },
+  }
+
+  return { read, write }
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
+  setBookingHostConfigRepositoriesForTests(createInMemoryHostConfigRepositories())
 })
 afterEach(async () => {
+  setBookingHostConfigRepositoriesForTests(null)
   if (cleanup) { await cleanup(); cleanup = null }
 })
 

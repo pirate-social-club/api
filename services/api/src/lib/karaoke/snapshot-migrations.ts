@@ -27,5 +27,3 @@ export const KARAOKE_OUTBOX_INDEX_DDL = `
 CREATE INDEX IF NOT EXISTS karaoke_session_outbox_pending_idx
   ON karaoke_session_outbox (session_id, attempt_id, delivered_at, sequence);
 `;
-
-export const KARAOKE_SNAPSHOT_MIGRATION_TAG = "v1_karaoke_session_runtime" as const;

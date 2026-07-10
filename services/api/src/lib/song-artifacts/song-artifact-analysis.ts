@@ -466,7 +466,21 @@ export async function identifyAudioSampleWithAcrCloud(input: {
 async function evaluateAudioIdentification(input: {
   env: Env
   primaryAudioUpload: SongArtifactUpload
+  skipAcrIdentification?: boolean
 }): Promise<AudioIdentificationOutcome> {
+  if (input.skipAcrIdentification === true) {
+    return {
+      analysisState: "allow",
+      moderationStatus: "completed",
+      moderationError: null,
+      moderationResult: {
+        provider: "acrcloud",
+        skipped: true,
+        acr_skipped_reason: "staging_bypass",
+      },
+    }
+  }
+
   const providerResult = await identifyAudioWithAcrCloud({
     env: input.env,
     upload: input.primaryAudioUpload,
@@ -677,6 +691,7 @@ export async function analyzeSongBundle(input: {
   env: Env
   lyrics: string
   primaryAudioUpload: SongArtifactUpload
+  skipAcrIdentification?: boolean
 }): Promise<SongBundleAnalysisResult> {
   const startedAt = Date.now()
   console.info("[song-artifacts] song analysis started", {
@@ -696,6 +711,7 @@ export async function analyzeSongBundle(input: {
   }, () => evaluateAudioIdentification({
     env: input.env,
     primaryAudioUpload: input.primaryAudioUpload,
+    skipAcrIdentification: input.skipAcrIdentification,
   }))
   const alignment = await withSongAnalysisStep("forced alignment", {
     lyrics_length: input.lyrics.length,

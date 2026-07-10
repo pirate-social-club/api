@@ -1,25 +1,23 @@
-import { createClient as createLibsqlClient } from "@libsql/client"
-import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
 import { Pool, neonConfig } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
 
-// Use the LOCAL neonConfig singleton (same instance as Pool imported above).
-// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
-// configuring from there has no effect on Pool here.
+// The transport package exposes its configuration through `neonConfig`, even when the actual
+// PostgreSQL provider is PlanetScale. Keep configuration beside the Pool import so both use the
+// same package singleton.
 // poolQueryViaFetch is safe for all Postgres providers: routes pool.query() through HTTP
 // instead of persistent WebSocket connections, preventing slot exhaustion.
 neonConfig.poolQueryViaFetch = true
 
-const _defaultFetchEndpoint = neonConfig.fetchEndpoint
-const _defaultWsProxy = neonConfig.wsProxy
-const _defaultPipelineConnect = neonConfig.pipelineConnect
+const defaultPostgresFetchEndpoint = neonConfig.fetchEndpoint
+const defaultPostgresWsProxy = neonConfig.wsProxy
+const defaultPostgresPipelineConnect = neonConfig.pipelineConnect
 
-export function configureLocalNeonForUrl(url: string): void {
+export function configureWorkerPostgresTransportForUrl(url: string): void {
   if (!isPlanetScalePostgresUrl(url)) {
-    neonConfig.fetchEndpoint = _defaultFetchEndpoint
-    neonConfig.wsProxy = _defaultWsProxy
-    neonConfig.pipelineConnect = _defaultPipelineConnect
+    neonConfig.fetchEndpoint = defaultPostgresFetchEndpoint
+    neonConfig.wsProxy = defaultPostgresWsProxy
+    neonConfig.pipelineConnect = defaultPostgresPipelineConnect
     return
   }
   neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`
@@ -35,23 +33,27 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
 }
 
-// Structural pool shape the Postgres adapter depends on, so a test can substitute a non-Neon pool.
+// Structural pool shape the Postgres adapter depends on, so tests can substitute an in-memory pool.
 type PostgresPoolLike = PostgresQueryable & {
   connect: () => Promise<PostgresQueryable & { release: () => void }>
   end: () => Promise<void>
 }
 
-// Test-only seam: override how the request-scoped CONTROL-PLANE Postgres pool is built. Default (null)
-// constructs today's Neon pool unchanged. This affects only the Postgres path, never libSQL, and must
-// never be set in production.
+// Test-only seam: override how the request-scoped control-plane Postgres pool is built.
 type ControlPlanePostgresPoolFactory = (url: string) => PostgresPoolLike
 let controlPlanePostgresPoolFactoryForTests: ControlPlanePostgresPoolFactory | null = null
 export function setControlPlanePostgresPoolFactoryForTests(factory: ControlPlanePostgresPoolFactory | null): void {
   controlPlanePostgresPoolFactoryForTests = factory
 }
 
-const LIBSQL_BUSY_RETRY_TIMEOUT_MS = 5000
-const LIBSQL_BUSY_RETRY_DELAY_MS = 50
+type NonPostgresControlPlaneClientFactory = (url: string) => Client
+let nonPostgresControlPlaneClientFactoryForTests: NonPostgresControlPlaneClientFactory | null = null
+
+export function setNonPostgresControlPlaneClientFactoryForTests(
+  factory: NonPostgresControlPlaneClientFactory | null,
+): void {
+  nonPostgresControlPlaneClientFactoryForTests = factory
+}
 
 type RequestControlPlaneStore = {
   clients: Map<string, Client>
@@ -167,109 +169,6 @@ async function executePostgresStatement(queryable: PostgresQueryable, statement:
   return {
     rows: normalizeRows(result.rows),
     rowsAffected: result.rowCount ?? undefined,
-  }
-}
-
-function isLibsqlBusyError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false
-  }
-
-  const code = "code" in error ? String((error as { code?: unknown }).code) : ""
-  const extendedCode = "extendedCode" in error ? String((error as { extendedCode?: unknown }).extendedCode) : ""
-  const rawCode = "rawCode" in error ? Number((error as { rawCode?: unknown }).rawCode) : NaN
-  return code === "SQLITE_BUSY" || extendedCode === "SQLITE_BUSY" || rawCode === 5
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function withLibsqlBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
-  const startedAt = Date.now()
-  let delayMs = LIBSQL_BUSY_RETRY_DELAY_MS
-
-  while (true) {
-    try {
-      return await operation()
-    } catch (error) {
-      if (!isLibsqlBusyError(error) || Date.now() - startedAt >= LIBSQL_BUSY_RETRY_TIMEOUT_MS) {
-        throw error
-      }
-
-      await sleep(delayMs)
-      delayMs = Math.min(delayMs * 2, 250)
-    }
-  }
-}
-
-class LibsqlTransactionAdapter implements Transaction {
-  constructor(private readonly tx: LibsqlTransaction) {}
-
-  async execute(statement: InStatement | string): Promise<QueryResult> {
-    const result = await this.tx.execute(statement as never)
-    return {
-      rows: result.rows as QueryResultRow[],
-      rowsAffected: result.rowsAffected,
-      lastInsertRowid: result.lastInsertRowid,
-    }
-  }
-
-  async batch(statements: InStatement[], _mode: "read" | "write" = "write"): Promise<QueryResult[]> {
-    const results = await this.tx.batch(statements as never)
-    return results.map((result) => ({
-      rows: result.rows as QueryResultRow[],
-      rowsAffected: result.rowsAffected,
-      lastInsertRowid: result.lastInsertRowid,
-    }))
-  }
-
-  async commit(): Promise<void> {
-    await this.tx.commit()
-  }
-
-  async rollback(): Promise<void> {
-    await this.tx.rollback()
-  }
-
-  close(): void {
-    this.tx.close()
-  }
-}
-
-class LibsqlClientAdapter implements Client {
-  constructor(
-    private readonly client: LibsqlClient,
-    private readonly shouldCloseClient = true,
-  ) {}
-
-  async execute(statement: InStatement | string): Promise<QueryResult> {
-    const result = await withLibsqlBusyRetry(() => this.client.execute(statement as never))
-    return {
-      rows: result.rows as QueryResultRow[],
-      rowsAffected: result.rowsAffected,
-      lastInsertRowid: result.lastInsertRowid,
-    }
-  }
-
-  async batch(statements: InStatement[], mode: "read" | "write" = "write"): Promise<QueryResult[]> {
-    const results = await withLibsqlBusyRetry(() => this.client.batch(statements as never, mode))
-    return results.map((result) => ({
-      rows: result.rows as QueryResultRow[],
-      rowsAffected: result.rowsAffected,
-      lastInsertRowid: result.lastInsertRowid,
-    }))
-  }
-
-  async transaction(mode: "read" | "write" = "write"): Promise<Transaction> {
-    const tx = await withLibsqlBusyRetry(() => this.client.transaction(mode))
-    return new LibsqlTransactionAdapter(tx)
-  }
-
-  close(): void {
-    if (this.shouldCloseClient) {
-      this.client.close()
-    }
   }
 }
 
@@ -398,7 +297,7 @@ export async function withStandaloneControlPlaneClient<T>(
     return await operation(getControlPlaneClient(env))
   }
 
-  configureLocalNeonForUrl(url)
+  configureWorkerPostgresTransportForUrl(url)
   const client = new PostgresClientAdapter(new Pool({
     connectionString: normalizePostgresConnectionStringForDriver(url),
     max: 1,
@@ -418,9 +317,9 @@ function getRequestScopedPostgresClient(url: string): Client | null {
     return null
   }
 
-  // The test seam substitutes the pool and bypasses Neon entirely; the production path is unchanged.
+  // The test seam substitutes the pool and bypasses the real Worker transport.
   if (!controlPlanePostgresPoolFactoryForTests) {
-    configureLocalNeonForUrl(url)
+    configureWorkerPostgresTransportForUrl(url)
   }
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
@@ -450,7 +349,7 @@ function getControlPlaneClient(env: Env): Client {
   const url = requireControlPlaneDbUrl(env)
   if (isPostgresControlPlaneUrl(url)) {
     // In Cloudflare Workers, Postgres I/O objects must stay request-scoped.
-    // Reusing a cached Neon pool across requests can trigger cross-request I/O failures.
+    // Reusing a cached network pool across requests can trigger cross-request I/O failures.
     const requestScopedClient = getRequestScopedPostgresClient(url)
     if (requestScopedClient) {
       return requestScopedClient
@@ -462,10 +361,13 @@ function getControlPlaneClient(env: Env): Client {
     )
   }
 
-  const cacheKey = `cp:${getControlPlaneCacheKey(env)}`
-  return globalSingleton("controlPlaneClient", cacheKey, () => new LibsqlClientAdapter(createLibsqlClient({
-    url,
-  }), false))
+  const testFactory = nonPostgresControlPlaneClientFactoryForTests
+  if (env.ENVIRONMENT !== "test" || !testFactory) {
+    throw new Error("Non-Postgres control-plane URLs are supported only by the explicit test adapter")
+  }
+
+  const cacheKey = `test-cp:${getControlPlaneCacheKey(env)}`
+  return globalSingleton("controlPlaneClient", cacheKey, () => testFactory(url))
 }
 
 export { getControlPlaneClient }

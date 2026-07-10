@@ -1,8 +1,8 @@
 import type { Post } from "../../types"
 
 export type RightsReviewCaseStatus = "open" | "under_review" | "resolved" | "blocked"
-export type RightsReviewSubjectType = "asset" | "post" | "live_room" | "replay_asset"
-export type RightsReviewTriggerSource =
+type RightsReviewSubjectType = "asset" | "post" | "live_room" | "replay_asset"
+type RightsReviewTriggerSource =
   | "acrcloud_match"
   | "declared_reference_mismatch"
   | "manual_report"

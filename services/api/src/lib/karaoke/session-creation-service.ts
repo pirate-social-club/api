@@ -20,11 +20,11 @@ import type {
   RotateKaraokeGatewayClaimsResult,
 } from "./session-creation-repository"
 
-export const KARAOKE_SESSION_TTL_SECONDS = 3600 as const
+const KARAOKE_SESSION_TTL_SECONDS = 3600 as const
 const KARAOKE_CREATION_PENDING_TTL_SECONDS = 30
 const KARAOKE_CREATION_FAILED_TTL_SECONDS = 60
 
-export type KaraokeSessionCreateErrorCode =
+type KaraokeSessionCreateErrorCode =
   | "karaoke_scoring_disabled"
   | "karaoke_unavailable"
   | "karaoke_runtime_unavailable"

@@ -4,6 +4,7 @@ import { Wallet } from "ethers";
 import type { Env } from "../../env";
 import {
   resolveBookingSettlementOperatorAddress,
+  resolveBookingSettlementOperatorPrivateKey,
   resolveBookingSettlementChainId,
   resolveBookingSettlementUsdcTokenAddress,
 } from "./booking-settlement-config";
@@ -46,5 +47,9 @@ describe("global booking settlement config guards", () => {
       PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: privateKey,
       PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: "0x0000000000000000000000000000000000000001",
     } as Env)).toThrow(/mismatch/);
+    expect(resolveBookingSettlementOperatorPrivateKey({
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY: privateKey,
+    } as Env)).toBe(privateKey);
+    expect(() => resolveBookingSettlementOperatorPrivateKey({} as Env)).toThrow(/invalid/);
   });
 });

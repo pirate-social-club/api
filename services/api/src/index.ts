@@ -47,11 +47,11 @@ import {
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
-import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabled, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
+import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { HttpError, errorResponse } from "./lib/errors"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
@@ -64,8 +64,8 @@ import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-fundin
 import { makeSentryOptions, captureScheduledError, captureScheduledWarning } from "./lib/sentry"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
-import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
-import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
+import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/bookings/operator-signing-coordinator-do"
+import { realChain as operatorRealChain } from "./lib/bookings/operator-chain-real"
 import type { Env } from "./env"
 import {
   publicReadCacheFillRequests,
@@ -543,6 +543,24 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         },
       )
     }
+    const reconciledPostPublishFinalize = await reconcileStuckPostPublishFinalizeJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxPostsPerCommunity: 25,
+    })
+    if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
+      console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
+      captureScheduledWarning(
+        env,
+        "Post publish finalize reconciliation marked stuck posts failed",
+        "community_jobs_post_publish_finalize_reconciliation",
+        reconciledPostPublishFinalize,
+        {
+          urgency: reconciledPostPublishFinalize.failed_posts > 5 ? "high" : "low",
+        },
+      )
+    }
     const summary = await processAvailableCommunityJobs({
       env,
       communityRepository,
@@ -604,28 +622,19 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
   if (!isGlobalBookingSettlementCronEnabled(env)) return
   let globalSummary = emptyGlobalBookingSettlementSummary(true)
-  const communityRepository = getCommunityRepository(env)
-  const legacyCommunitySweepEnabled = String(env.LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED ?? "").trim().toLowerCase() === "true"
-  let summary = emptyBookingSettlementSummary(legacyCommunitySweepEnabled)
   try {
     globalSummary = await sweepGlobalBookingSettlements({ env, client: getControlPlaneClient(env), maxBookings: 100, deadlineMs: 20_000 })
-    if (legacyCommunitySweepEnabled) {
-      summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
-    }
     // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
     // generic marker (no raw message/object reaches Sentry from coordinator/RPC paths).
     if (globalSummary.fatal) captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
-    if (summary.fatal) captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
   } catch (error) {
     // Defense: an unexpected throw past the sweep still yields a fatal summary (no raw error logged).
-    summary.errors += 1
-    summary.fatal = true
-    captureScheduledError(env, error, "booking_settlement_reconciliation")
+    globalSummary.errors += 1
+    globalSummary.fatal = true
+    captureScheduledError(env, error, "global_booking_settlement_reconciliation")
   } finally {
     // One structured summary for EVERY enabled run — including zero-work AND fatal runs.
     console.info("[global-booking-settlements] swept", JSON.stringify(globalSummary))
-    console.info("[booking-settlements] swept", JSON.stringify(summary))
-    await communityRepository.close?.()
   }
 }
 

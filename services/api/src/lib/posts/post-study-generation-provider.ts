@@ -12,7 +12,7 @@ export type StudyGeneratedLine = {
   distractors: string[]
 }
 
-export type StudyGenerationSkippedLine = {
+type StudyGenerationSkippedLine = {
   lineId: string | null
   reason: "schema_shape" | "schema_line_id" | "schema_missing_distractors" | "schema_invalid_distractors" | "schema_source_mismatch"
 }

@@ -1,9 +1,7 @@
 export type {
   Asset,
   AssetAccessResponse,
-  AuthProof,
   AgentHandle,
-  AgentHandleStatus,
   CommunityCreateAcceptedResponse,
   CommunityListing,
   CommunityListingListResponse,
@@ -32,22 +30,13 @@ export type {
   CommunityHandleRevokeRequest,
   UpdateCommunityHandlePolicyRequest,
   CommunityPricingPolicy,
-  CompleteNamespaceVerificationSessionRequest,
-	  CompleteVerificationSessionRequest,
-	  RefreshPassportWalletScoreRequest,
-	  RefreshPassportWalletScoreResponse,
-  CommentVoteResponse,
   CreateModerationActionRequest,
-  CreateRightsReviewActionRequest,
   CreateUserReportRequest,
   CreateCommunityRequest,
   CreateCommunityListingRequest,
-  CreateCommentRequest,
   CreateSongArtifactBundleRequest,
   CreateSongArtifactUploadRequest,
   ClaimableRoyaltiesResponse,
-  DismissTaskRequest,
-  ErrorResponse,
   GateFailureDetails,
   HomeFeedCommunitySummary,
   HomeFeedItem,
@@ -57,40 +46,24 @@ export type {
   Job,
   JoinEligibility,
   LinkedHandle,
-  MarkNotificationsReadRequest,
   MembershipRequestListResponse,
-  MembershipRequestStatus,
   MembershipRequestSummary,
   MembershipGateSummary,
-  ModerationAction,
-  ModerationCase,
-  ModerationCaseDetail,
-  ModerationCaseListResponse,
-  ModerationSignal,
-  MediaAnalysisResult,
   NamespaceVerification,
   NamespaceVerificationAssertions,
   NamespaceVerificationCapabilities,
   NamespaceVerificationSession,
-  NotificationEvent,
   NotificationEventType,
   NotificationFeedItem,
   NotificationFeedResponse,
-  NotificationReceipt,
   NotificationSummary,
   NotificationTasksResponse,
   OnboardingStatus,
-  PostPublishFailureCode,
   Profile,
   PublicAgentResolution,
   RedditImportSummary,
   RedditVerification,
   RequestedVerificationCapability,
-  RightsReviewCase,
-  RightsReviewCaseDetail,
-  RightsReviewCaseListItem,
-  RightsReviewCaseListResponse,
-  RoyaltyActivityItem,
   RoyaltyActivityResponse,
   RoyaltyClaimHistoryResponse,
   RoyaltyClaimRecord,
@@ -103,13 +76,9 @@ export type {
   SongArtifactBundle,
   SongArtifactBundleListResponse,
   SongArtifactUpload,
-  StartNamespaceVerificationSessionRequest,
-  StartVerificationSessionRequest,
   UpdateCommunityListingRequest,
   UpdateCommunityMoneyPolicyRequest,
   UpdateCommunityPricingPolicyRequest,
-  UpdateAgentHandleRequest,
-  UserReport,
   UserTask,
   UserTaskStatus,
   UserTaskType,
@@ -146,14 +115,14 @@ export type DerivativeSourceListResponse = {
   next_cursor: string | null
 }
 
-export type CommunityPurchaseSettlementEffectKind =
+type CommunityPurchaseSettlementEffectKind =
   | "buyer_funding_receipt"
   | "charity_payout"
   | "story_royalty_payment"
   | "story_parent_royalty_vault_transfer"
   | "story_entitlement_mint"
 
-export type CommunityPurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
+type CommunityPurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
 
 export type CommunityPurchaseSettlementEffect = {
   object: "purchase_settlement_effect"
@@ -322,7 +291,7 @@ export type CommentListItem = {
   source_hash: string
 }
 
-export type LocalizedPostEmbedTranslation = {
+type LocalizedPostEmbedTranslation = {
   embed_key: string
   translated_question?: string | null
   translated_title?: string | null
@@ -365,7 +334,7 @@ export type PostLabel = {
   status: "active" | "archived"
 }
 
-export type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
+type PostLabelAssignmentStatus = "pending" | "assigned" | "failed" | "skipped"
 
 export type SongPresentationDownloadableAudio = {
   kind: "original" | "instrumental" | "vocals"
@@ -382,7 +351,7 @@ export type SongPresentationDownloadableAudio = {
   } | null
 }
 
-export type SongPresentation = {
+type SongPresentation = {
   title: string | null
   cover_art_ref: string | null
   duration_ms: number | null
@@ -420,9 +389,9 @@ export type SongKaraokePayload = {
   raw_lines?: Array<Record<string, unknown>> | null
 }
 
-export type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable"
+type CrosspostSourceStatus = "available" | "deleted" | "removed" | "unavailable"
 
-export type CrosspostSource = {
+type CrosspostSource = {
   status: CrosspostSourceStatus
   post_id: string
   community_id: string
@@ -449,7 +418,7 @@ export type PostEventPlace = {
   city?: string | null
 }
 
-export type PostEvent = {
+type PostEvent = {
   starts_at: number
   ends_at?: number | null
   timezone: string
@@ -599,7 +568,7 @@ export type CreatePostRequest = CreatePostRequestBase & {
   | { post_type: "image"; media_refs: Array<MediaDescriptor> }
   | { post_type: "video"; media_refs: Array<MediaDescriptor> }
   | { post_type: "link"; link_url: string }
-  | { post_type: "song"; identity_mode: "public"; media_refs?: Array<MediaDescriptor> }
+  | { post_type: "song"; media_refs?: Array<MediaDescriptor> }
   | { post_type: "crosspost"; title: string; source_post: string; source_community: string }
 )
 

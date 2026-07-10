@@ -8,6 +8,8 @@ const POST_ID = "post_async_song"
 const ASSET_ID = "asset_async_song"
 
 type State = {
+  analyzeCalls: Array<{ skipAcrIdentification?: boolean }>
+  analyzeResultState: Post["analysis_state"]
   assetCalls: number
   bundle: SongArtifactBundle
   consumed: number
@@ -18,6 +20,7 @@ type State = {
   primaryUploadAvailable: boolean
   projectionPayloads: string[]
   projectionStatuses: string[]
+  reconcileRows: Array<{ post_id: string }>
   requestStatuses: string[]
   throwAssetError: boolean
   throwCatalogError: boolean
@@ -82,6 +85,8 @@ function readyBundle(overrides: Partial<SongArtifactBundle> = {}): SongArtifactB
 }
 
 const state: State = {
+  analyzeCalls: [],
+  analyzeResultState: "allow",
   assetCalls: 0,
   bundle: readyBundle(),
   consumed: 0,
@@ -92,6 +97,7 @@ const state: State = {
   primaryUploadAvailable: true,
   projectionPayloads: [],
   projectionStatuses: [],
+  reconcileRows: [],
   requestStatuses: [],
   throwAssetError: false,
   throwCatalogError: false,
@@ -99,7 +105,12 @@ const state: State = {
 }
 
 const client = {
-  execute: mock(async () => ({ rows: [] })),
+  execute: mock(async (query?: { sql?: string }) => {
+    if (typeof query?.sql === "string" && query.sql.includes("FROM posts")) {
+      return { rows: state.reconcileRows }
+    }
+    return { rows: [] }
+  }),
 }
 
 mock.module("../community-read-access", () => ({
@@ -126,7 +137,10 @@ mock.module("../../posts/community-post-mutation-store", () => ({
     }
     return state.post
   }),
-  markPostPublishFailed: mock(async (input: { failureCode: string; retryable: boolean }) => {
+  markPostPublishFailed: mock(async (input: { failureCode: string; onlyIfStatus?: Post["status"] | null; retryable: boolean }) => {
+    if (input.onlyIfStatus && state.post.status !== input.onlyIfStatus) {
+      return state.post
+    }
     state.markedFailed.push({
       failureCode: input.failureCode,
       retryable: input.retryable,
@@ -156,8 +170,23 @@ mock.module("../../runtime-deps", () => ({
 }))
 
 mock.module("../../song-artifacts/song-artifact-analysis", () => ({
-  analyzeSongBundle: mock(async () => {
-    throw new Error("analysis should not run for ready bundle")
+  analyzeSongBundle: mock(async (input: { skipAcrIdentification?: boolean }) => {
+    state.analyzeCalls.push({ skipAcrIdentification: input.skipAcrIdentification })
+    return {
+      ageGatePolicy: "none",
+      alignmentError: null,
+      alignmentStatus: "completed",
+      analysisState: state.analyzeResultState,
+      contentSafetyState: "safe",
+      moderationError: null,
+      moderationResult: {
+        age_gate_policy: "none",
+        analysis_state: state.analyzeResultState,
+        content_safety_state: "safe",
+      },
+      moderationStatus: "completed",
+      timedLyrics: null,
+    }
   }),
 }))
 
@@ -171,7 +200,13 @@ mock.module("../../song-artifacts/song-artifact-post-resolution-service", () => 
 }))
 
 mock.module("../../song-artifacts/song-artifact-repository", () => ({
-  finalizeSongArtifactBundle: mock(async () => readyBundle()),
+  finalizeSongArtifactBundle: mock(async () => readyBundle({
+    moderation_result: {
+      age_gate_policy: "none",
+      analysis_state: state.analyzeResultState,
+      content_safety_state: "safe",
+    },
+  })),
   findUploadedSongArtifactByStorageRef: mock(async () => state.primaryUploadAvailable ? { id: "sau_1" } : null),
   getSongArtifactBundle: mock(async () => state.bundle),
 }))
@@ -213,18 +248,22 @@ mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
 
-const { runPostPublishFinalize } = await import("./post-publish-finalize-handler")
+const { reconcileStuckPostPublishFinalizeJobs, runPostPublishFinalize } = await import("./post-publish-finalize-handler")
+
+function communityRepository() {
+  return {
+    updateCommunityPostProjectionPayload: mock(async (input: { projectedPayloadJson: string }) => {
+      state.projectionPayloads.push(input.projectedPayloadJson)
+    }),
+    updateCommunityPostProjectionStatus: mock(async (input: { status: string }) => {
+      state.projectionStatuses.push(input.status)
+    }),
+  }
+}
 
 function handlerInput() {
   return {
-    communityRepository: {
-      updateCommunityPostProjectionPayload: mock(async (input: { projectedPayloadJson: string }) => {
-        state.projectionPayloads.push(input.projectedPayloadJson)
-      }),
-      updateCommunityPostProjectionStatus: mock(async (input: { status: string }) => {
-        state.projectionStatuses.push(input.status)
-      }),
-    },
+    communityRepository: communityRepository(),
     env: {},
     job: {
       community_id: COMMUNITY_ID,
@@ -234,7 +273,21 @@ function handlerInput() {
   } as never
 }
 
+function handlerInputWithEnv(env: Record<string, string>) {
+  return {
+    communityRepository: communityRepository(),
+    env,
+    job: {
+      community_id: COMMUNITY_ID,
+      payload_json: JSON.stringify({ post_id: POST_ID }),
+      subject_id: POST_ID,
+    },
+  } as never
+}
+
 beforeEach(() => {
+  state.analyzeCalls = []
+  state.analyzeResultState = "allow"
   state.assetCalls = 0
   state.bundle = readyBundle()
   state.consumed = 0
@@ -245,6 +298,7 @@ beforeEach(() => {
   state.primaryUploadAvailable = true
   state.projectionPayloads = []
   state.projectionStatuses = []
+  state.reconcileRows = []
   state.requestStatuses = []
   state.throwAssetError = false
   state.throwCatalogError = false
@@ -336,6 +390,36 @@ describe("runPostPublishFinalize integration", () => {
     })
   })
 
+  test("passes the staging ACR bypass into deferred song analysis for allowlisted communities", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+
+    await expect(runPostPublishFinalize(handlerInputWithEnv({
+      ENVIRONMENT: "staging",
+      SONG_ACR_BYPASS_COMMUNITY_IDS: `com_${COMMUNITY_ID}`,
+    }))).resolves.toBe(POST_ID)
+
+    expect(state.analyzeCalls).toEqual([{ skipAcrIdentification: true }])
+    expect(state.markedFailed).toEqual([])
+    expect(state.markedPublished).toBe(1)
+  })
+
+  test("does not bypass ACR in production even when the community is allowlisted", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.analyzeResultState = "allow_with_required_reference"
+
+    await expect(runPostPublishFinalize(handlerInputWithEnv({
+      ENVIRONMENT: "production",
+      SONG_ACR_BYPASS_COMMUNITY_IDS: `com_${COMMUNITY_ID}`,
+    }))).resolves.toBe(`failed:post_publish_finalize:${POST_ID}`)
+
+    expect(state.analyzeCalls).toEqual([{ skipAcrIdentification: false }])
+    expect(state.markedFailed).toEqual([{
+      failureCode: "song_rights_reference_required",
+      retryable: false,
+    }])
+    expect(state.markedPublished).toBe(0)
+  })
+
   test("fails terminally when server-side listing creation fails after asset creation", async () => {
     state.listingDraft = {
       price_cents: 499,
@@ -360,5 +444,60 @@ describe("runPostPublishFinalize integration", () => {
       consumed: 1,
       retryable: true,
     })
+  })
+
+  test("reconciles stuck processing posts through the shared failed-state path", async () => {
+    state.reconcileRows = [{ post_id: POST_ID }]
+
+    const summary = await reconcileStuckPostPublishFinalizeJobs({
+      communityIds: [COMMUNITY_ID],
+      communityRepository: communityRepository(),
+      env: {},
+      maxPostsPerCommunity: 25,
+      now: "2026-07-06T12:00:00.000Z",
+    } as never)
+
+    expect(summary).toEqual({
+      checked_communities: 1,
+      failed_posts: 1,
+      communities: [{
+        community_id: COMMUNITY_ID,
+        failed_posts: 1,
+        has_more: false,
+      }],
+      failed_communities: [],
+    })
+    expect(state.markedFailed).toEqual([{ failureCode: "internal_error", retryable: true }])
+    expect(state.requestStatuses).toEqual(["failed"])
+    expect(state.projectionStatuses).toEqual(["failed"])
+    expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
+      post_id: POST_ID,
+      publish_failure_code: "internal_error",
+      publish_failure_retryable: true,
+      status: "failed",
+    })
+  })
+
+  test("does not downgrade a post that publishes after the stuck scan", async () => {
+    state.reconcileRows = [{ post_id: POST_ID }]
+    state.post = basePost({ status: "published" })
+
+    const summary = await reconcileStuckPostPublishFinalizeJobs({
+      communityIds: [COMMUNITY_ID],
+      communityRepository: communityRepository(),
+      env: {},
+      maxPostsPerCommunity: 25,
+      now: "2026-07-06T12:00:00.000Z",
+    } as never)
+
+    expect(summary).toEqual({
+      checked_communities: 1,
+      failed_posts: 0,
+      communities: [],
+      failed_communities: [],
+    })
+    expect(state.markedFailed).toEqual([])
+    expect(state.requestStatuses).toEqual([])
+    expect(state.projectionStatuses).toEqual([])
   })
 })

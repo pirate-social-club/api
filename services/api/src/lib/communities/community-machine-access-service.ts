@@ -45,9 +45,9 @@ export type CommunityMachineAccessPolicyPatch = {
   included_surfaces?: Partial<CommunityMachineAccessPolicy["included_surfaces"]>
 }
 
-export type MachineAccessSurface = keyof CommunityMachineAccessPolicy["included_surfaces"]
+type MachineAccessSurface = keyof CommunityMachineAccessPolicy["included_surfaces"]
 export type ConfigurableMachineAccessSurface = Exclude<MachineAccessSurface, "community_identity">
-export type OmittedStructuredSurfaceReason =
+type OmittedStructuredSurfaceReason =
   | "community_opt_out"
   | "platform_disabled"
   | "not_visible"
@@ -274,7 +274,7 @@ function applyMachineAccessPlatformOverrides(input: {
   return effectivePolicy
 }
 
-export function omittedSurface(
+function omittedSurface(
   surface: ConfigurableMachineAccessSurface,
   reason: OmittedStructuredSurfaceReason = "community_opt_out",
 ): OmittedStructuredSurface {
@@ -358,7 +358,7 @@ export async function getCommunityMachineAccessPolicy(input: {
   })
 }
 
-export async function getResolvedCommunityMachineAccessPolicy(input: {
+async function getResolvedCommunityMachineAccessPolicy(input: {
   env: Env
   communityRepository: CommunityMachineAccessRepository
   communityId: string

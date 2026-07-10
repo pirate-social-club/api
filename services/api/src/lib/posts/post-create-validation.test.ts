@@ -43,6 +43,16 @@ function lockedVideoRequest(royalty_allocations?: RoyaltyAllocationRequest[] | n
   } as CreatePostRequest
 }
 
+function freeVideoRequest(): CreatePostRequest {
+  return {
+    idempotency_key: "idem_video_free",
+    post_type: "video",
+    identity_mode: "public",
+    media_refs: [{ storage_ref: "s_1", mime_type: "video/mp4" }],
+    access_mode: "public",
+  } as CreatePostRequest
+}
+
 function linkRequest(link_url: string): CreatePostRequest {
   return {
     idempotency_key: "idem_link",
@@ -61,6 +71,29 @@ describe("assertPostCreateRequest link_url scheme", () => {
   })
   test("accepts a normal https URL", () => {
     expect(() => assertPostCreateRequest(linkRequest("https://example.com/article"), COMMUNITY_ID)).not.toThrow()
+  })
+})
+
+describe("assertPostCreateRequest anonymous asset posts", () => {
+  test("accepts anonymous song posts", () => {
+    const request = songRequest(validSplit())
+    request.identity_mode = "anonymous"
+    request.anonymous_scope = "community_stable"
+
+    expect(() => assertPostCreateRequest(request, COMMUNITY_ID)).not.toThrow()
+  })
+
+  test("accepts anonymous free and locked video posts", () => {
+    const freeVideo = freeVideoRequest()
+    freeVideo.identity_mode = "anonymous"
+    freeVideo.anonymous_scope = "community_stable"
+
+    const lockedVideo = lockedVideoRequest(validSplit())
+    lockedVideo.identity_mode = "anonymous"
+    lockedVideo.anonymous_scope = "community_stable"
+
+    expect(() => assertPostCreateRequest(freeVideo, COMMUNITY_ID)).not.toThrow()
+    expect(() => assertPostCreateRequest(lockedVideo, COMMUNITY_ID)).not.toThrow()
   })
 })
 

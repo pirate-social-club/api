@@ -1,8 +1,10 @@
 import { badRequestError } from "../../errors"
 import { decodePublicAssetId, decodePublicSongArtifactBundleId, decodePublicUserId, publicId } from "../../public-ids"
+import type { Post } from "../../../types"
 import type {
   CreateLiveRoomRequest,
   LiveRoomAccessMode,
+  LiveRoomAudienceGate,
   LiveRoomKind,
   LiveRoomRightsBasis,
   LiveRoomRightsStatus,
@@ -13,9 +15,15 @@ import type {
 export type PreparedLiveRoomCreate = {
   title: string
   description: string | null
+  storeUrl: string | null
+  storeLabel: string | null
+  identityMode: Post["identity_mode"]
+  anonymousScope: Post["anonymous_scope"]
+  disclosedQualifierIds: string[] | null
   roomKind: LiveRoomKind
   accessMode: LiveRoomAccessMode
   visibility: LiveRoomVisibility
+  audienceGate: LiveRoomAudienceGate | null
   guestUserId: string | null
   eventStartAt: number | null
   coverRef: string | null
@@ -44,9 +52,13 @@ export function normalizeLiveRoomCreateRequest(input: {
 }): PreparedLiveRoomCreate {
   const title = requireTitle(input.body.title)
   const description = optionalDescription(input.body.description)
+  const identity = normalizeIdentity(input.body)
+  const storeUrl = optionalStoreUrl(input.body.store_url)
+  const storeLabel = optionalStoreLabel(input.body.store_label)
   const roomKind = normalizeRoomKind(input.body.room_kind)
   const accessMode = normalizeAccessMode(input.body.access_mode)
   const visibility = normalizeVisibility(input.body.visibility, accessMode)
+  const audienceGate = normalizeAudienceGate(input.body.audience_gate, accessMode)
   const guestUserId = input.body.guest_user ? normalizeUserId(input.body.guest_user, "guest_user") : null
   const eventStartAt = normalizeEventStartAt(input.body.event_start_at)
   if (roomKind === "duet" && !guestUserId) {
@@ -58,9 +70,15 @@ export function normalizeLiveRoomCreateRequest(input: {
   return {
     title,
     description,
+    storeUrl,
+    storeLabel,
+    identityMode: identity.identityMode,
+    anonymousScope: identity.anonymousScope,
+    disclosedQualifierIds: identity.disclosedQualifierIds,
     roomKind,
     accessMode,
     visibility,
+    audienceGate,
     guestUserId,
     eventStartAt,
     coverRef: cleanString(input.body.cover_ref),
@@ -73,6 +91,55 @@ export function normalizeLiveRoomCreateRequest(input: {
     }),
     setlist: normalizeSetlist(input.body),
   }
+}
+
+function normalizeIdentity(body: CreateLiveRoomRequest): {
+  identityMode: Post["identity_mode"]
+  anonymousScope: Post["anonymous_scope"]
+  disclosedQualifierIds: string[] | null
+} {
+  const identityMode = body.identity_mode ?? "public"
+  if (identityMode !== "public" && identityMode !== "anonymous") {
+    throw badRequestError("identity_mode must be public or anonymous")
+  }
+  if (identityMode !== "anonymous" && body.anonymous_scope) {
+    throw badRequestError("anonymous_scope is only allowed for anonymous posts")
+  }
+  if (identityMode === "anonymous" && !body.anonymous_scope) {
+    throw badRequestError("anonymous_scope is required for anonymous posts")
+  }
+  if (
+    body.anonymous_scope
+    && body.anonymous_scope !== "community_stable"
+    && body.anonymous_scope !== "thread_stable"
+    && body.anonymous_scope !== "post_ephemeral"
+  ) {
+    throw badRequestError("anonymous_scope is invalid")
+  }
+  if (identityMode !== "anonymous" && body.disclosed_qualifier_ids?.length) {
+    throw badRequestError("disclosed_qualifier_ids are only allowed for anonymous posts")
+  }
+
+  const disclosedQualifierIds = normalizeDisclosedQualifierIds(body.disclosed_qualifier_ids)
+  return {
+    identityMode,
+    anonymousScope: identityMode === "anonymous" ? body.anonymous_scope ?? null : null,
+    disclosedQualifierIds: identityMode === "anonymous" ? disclosedQualifierIds : null,
+  }
+}
+
+function normalizeDisclosedQualifierIds(value: unknown): string[] | null {
+  if (value == null) return null
+  if (!Array.isArray(value)) {
+    throw badRequestError("disclosed_qualifier_ids must be an array")
+  }
+  const ids = [...new Set(value.map((item) => {
+    if (typeof item !== "string") {
+      throw badRequestError("disclosed_qualifier_ids must be strings")
+    }
+    return item.trim()
+  }).filter(Boolean))]
+  return ids.length > 0 ? ids : null
 }
 
 function normalizeRecordingEnabled(value: unknown): boolean {
@@ -106,6 +173,40 @@ function optionalDescription(value: unknown): string | null {
   return description
 }
 
+function optionalStoreUrl(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value !== "string") {
+    throw badRequestError("store_url must be a URL")
+  }
+  const storeUrl = cleanString(value)
+  if (!storeUrl) return null
+  try {
+    const parsed = new URL(storeUrl)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw badRequestError("store_url must be an http or https URL")
+    }
+  } catch (error) {
+    if (error && typeof error === "object" && "status" in error) {
+      throw error
+    }
+    throw badRequestError("store_url must be a URL")
+  }
+  return storeUrl
+}
+
+function optionalStoreLabel(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value !== "string") {
+    throw badRequestError("store_label must be a string")
+  }
+  const storeLabel = cleanString(value)
+  if (!storeLabel) return null
+  if (storeLabel.length > 80) {
+    throw badRequestError("store_label must be 80 characters or fewer")
+  }
+  return storeLabel
+}
+
 function normalizeRoomKind(value: unknown): LiveRoomKind {
   if (value == null || value === "") return "solo"
   if (value === "solo" || value === "duet") return value
@@ -127,6 +228,75 @@ function normalizeVisibility(value: unknown, accessMode: LiveRoomAccessMode): Li
     throw badRequestError("paid live rooms must be public")
   }
   return visibility
+}
+
+function normalizeAudienceGate(value: unknown, accessMode: LiveRoomAccessMode): LiveRoomAudienceGate | null {
+  if (accessMode !== "gated") {
+    if (value == null) return null
+    throw badRequestError("audience_gate is only supported for gated live rooms")
+  }
+  if (value == null) {
+    return {
+      version: 1,
+      match: "any",
+      segments: [{ type: "community_members" }],
+    }
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("audience_gate must be an object")
+  }
+  const gate = value as { version?: unknown; segments?: unknown; match?: unknown }
+  if (gate.version !== 1) {
+    throw badRequestError("audience_gate.version must be 1")
+  }
+  if (gate.match !== "any") {
+    throw badRequestError("audience_gate.match must be any")
+  }
+  if (!Array.isArray(gate.segments) || gate.segments.length === 0) {
+    throw badRequestError("audience_gate.segments is required")
+  }
+  if (gate.segments.length > 8) {
+    throw badRequestError("audience_gate.segments must include 8 entries or fewer")
+  }
+  return {
+    version: 1,
+    match: "any",
+    segments: gate.segments.map(normalizeAudienceGateSegment),
+  }
+}
+
+function normalizeAudienceGateSegment(value: unknown): LiveRoomAudienceGate["segments"][number] {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) {
+    throw badRequestError("audience_gate segment must be an object")
+  }
+  const segment = value as { type?: unknown; entitlement_kind?: unknown; target_refs?: unknown }
+  if (segment.type === "community_members") {
+    return { type: "community_members" }
+  }
+  if (segment.type === "purchase_entitlement") {
+    if (segment.entitlement_kind !== "asset_access") {
+      throw badRequestError("audience_gate purchase_entitlement only supports asset_access")
+    }
+    if (!Array.isArray(segment.target_refs) || segment.target_refs.length === 0) {
+      throw badRequestError("audience_gate purchase_entitlement target_refs is required")
+    }
+    if (segment.target_refs.length > 25) {
+      throw badRequestError("audience_gate purchase_entitlement target_refs must include 25 entries or fewer")
+    }
+    const seen = new Set<string>()
+    const targetRefs = segment.target_refs.map((targetRef) => {
+      const assetId = normalizeAssetId(targetRef, "audience_gate purchase_entitlement target_ref")
+      if (seen.has(assetId)) return null
+      seen.add(assetId)
+      return assetId
+    }).filter((targetRef): targetRef is string => targetRef != null)
+    return {
+      type: "purchase_entitlement",
+      entitlement_kind: "asset_access",
+      target_refs: targetRefs,
+    }
+  }
+  throw badRequestError("audience_gate segment type is not supported")
 }
 
 function normalizeSetlistStatus(value: unknown): LiveRoomSetlistStatus {
@@ -183,11 +353,16 @@ function normalizeSourceAssetRef(value: unknown): string | null {
     throw badRequestError("setlist item source_asset_ref must be a Story asset ref")
   }
   const assetRef = sourceAssetRef.slice("story:asset:".length)
-  const decodedAssetId = decodePublicAssetId(assetRef)
-  if (!/^ast_[a-zA-Z0-9_]+$/.test(decodedAssetId)) {
-    throw badRequestError("setlist item source_asset_ref must reference a Pirate asset")
+  return `story:asset:${publicId(normalizeAssetId(assetRef, "setlist item source_asset_ref"), "asset")}`
+}
+
+function normalizeAssetId(value: unknown, field: string): string {
+  const rawAssetId = cleanString(value)
+  const decodedAssetId = rawAssetId ? decodePublicAssetId(rawAssetId) : null
+  if (!decodedAssetId || !/^ast_[a-zA-Z0-9_]+$/.test(decodedAssetId)) {
+    throw badRequestError(`${field} must reference a Pirate asset`)
   }
-  return `story:asset:${publicId(decodedAssetId, "asset")}`
+  return decodedAssetId
 }
 
 function normalizeAllocations(input: {

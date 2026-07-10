@@ -58,21 +58,6 @@ export function resolvePurchaseSettlementMode(input: {
     : "delivery_only_story_settlement"
 }
 
-export function parseQuoteSettlementAmountAtomic(quote: PurchaseQuoteRow): bigint {
-  const raw = String(quote.destination_settlement_amount_atomic || "").trim()
-  if (raw) {
-    try {
-      const parsed = BigInt(raw)
-      if (parsed > 0n) {
-        return parsed
-      }
-    } catch {
-      // Fall through to the derived amount below.
-    }
-  }
-  return BigInt(resolveSettlementAmountSnapshot(quote.final_price_usd).amountAtomic)
-}
-
 export function resolveAllocationSettlementAmountAtomic(input: {
   allocations: PurchaseAllocationLegRow[] | Array<{
     amount_usd: number

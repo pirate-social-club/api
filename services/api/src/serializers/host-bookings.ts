@@ -1,4 +1,4 @@
-import { asNumber, isTruthyFlag, parseJsonArray } from "../lib/communities/bookings/booking-shared-helpers"
+import { asNumber, isTruthyFlag, parseJsonArray } from "../lib/bookings/booking-shared-helpers"
 import { nullableUnixSeconds, unixSeconds } from "./time"
 
 export interface BookingProfileResponse {

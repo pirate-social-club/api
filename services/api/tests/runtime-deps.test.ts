@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { neonConfig } from "@neondatabase/serverless"
-import { configureLocalNeonForUrl, postgresifySql } from "../src/lib/runtime-deps"
+import {
+  configureWorkerPostgresTransportForUrl,
+  getControlPlaneClient,
+  postgresifySql,
+} from "../src/lib/runtime-deps"
+import type { Env } from "../src/env"
 
-// The local neonConfig singleton is configured per control-plane URL (just before
-// each connection opens), not globally at module load — so drive it with a
+// The transport package's config singleton is configured per control-plane URL (just before each
+// connection opens), not globally at module load — so drive it with a
 // PlanetScale Postgres URL the way the open path does before asserting.
 const PLANETSCALE_URL = "postgres://user:pass@us-east-3.pg.psdb.cloud/control"
 
@@ -62,9 +67,18 @@ describe("postgresifySql", () => {
   })
 })
 
-describe("neonConfig.fetchEndpoint", () => {
+describe("control-plane transport selection", () => {
+  test("rejects non-Postgres URLs outside the explicit test environment", () => {
+    expect(() => getControlPlaneClient({
+      CONTROL_PLANE_DATABASE_URL: "file:/tmp/control-plane.db",
+      ENVIRONMENT: "production",
+    } as Env)).toThrow("Non-Postgres control-plane URLs are supported only by the explicit test adapter")
+  })
+})
+
+describe("Worker Postgres transport HTTP endpoint", () => {
   test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
-    configureLocalNeonForUrl(PLANETSCALE_URL)
+    configureWorkerPostgresTransportForUrl(PLANETSCALE_URL)
     const fetchEndpoint = neonConfig.fetchEndpoint
     expect(typeof fetchEndpoint).toBe("function")
     expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
@@ -72,9 +86,9 @@ describe("neonConfig.fetchEndpoint", () => {
   })
 })
 
-describe("neonConfig WebSocket settings", () => {
+describe("Worker Postgres transport WebSocket settings", () => {
   test("uses PlanetScale's WebSocket proxy for interactive transactions", () => {
-    configureLocalNeonForUrl(PLANETSCALE_URL)
+    configureWorkerPostgresTransportForUrl(PLANETSCALE_URL)
     const wsProxy = neonConfig.wsProxy
     expect(neonConfig.pipelineConnect).toBe(false)
     expect(typeof wsProxy).toBe("function")

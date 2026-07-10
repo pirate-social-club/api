@@ -7,7 +7,6 @@ import { getControlPlaneClient } from "../runtime-deps"
 import type { Client, InStatement, ReadClient } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
-import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
 import {
   routeCommunityRead,
@@ -113,13 +112,27 @@ function shouldUseTestLocalCommunityDb(env: Env): boolean {
   return env.ENVIRONMENT === "test" && !env.COMMUNITY_D1_SHARD
 }
 
+type TestLocalCommunityDbOpener = (
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  communityId: string,
+) => Promise<CommunityWriteHandle>
+
+let testLocalCommunityDbOpener: TestLocalCommunityDbOpener | null = null
+
+export function setTestLocalCommunityDbOpener(opener: TestLocalCommunityDbOpener | null): void {
+  testLocalCommunityDbOpener = opener
+}
+
 async function openTestLocalCommunityDb(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<CommunityWriteHandle> {
-  const handle = await openCommunityDb(env, repo, communityId)
-  return { client: handle.client, close: () => handle.close() }
+  if (!testLocalCommunityDbOpener) {
+    throw new Error("Local community databases require the explicit test adapter")
+  }
+  return testLocalCommunityDbOpener(env, repo, communityId)
 }
 
 export type CommunityReadAccessDeps = {

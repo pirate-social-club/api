@@ -16,7 +16,7 @@ rtk bun run --cwd services/api check
 rtk bun test services/api/tests/routes/path/to/touched.test.ts
 ```
 
-The API service, contracts, CLI, agent connector, and issuer checks use the TypeScript 7 native preview compiler (`tsgo`). They are faster than the old `tsc` checks, but the repo-level `rtk bun run check` still chains multiple package checks; use it only when broad repo verification is needed or explicitly requested.
+The API service, contracts, CLI, agent connector, and issuer checks use the TypeScript 7 native compiler (`tsc`). The repo-level `rtk bun run check` still chains multiple package checks; use it only when broad repo verification is needed or explicitly requested.
 
 For focused route work, run the smallest touched route suite after typecheck. For CLI changes, run `rtk bun run check:cli` after `services/cli` dependencies are installed. Use full `agent-ci` only after the focused checks are green.
 

@@ -10,7 +10,7 @@ type StateMachine<State extends string> = {
   transitions: Readonly<Record<State, readonly State[]>>
 }
 
-export const AGENT_OWNERSHIP_SESSION_STATUS_MACHINE = {
+const AGENT_OWNERSHIP_SESSION_STATUS_MACHINE = {
   initial: ["pending", "awaiting_owner"],
   transitions: {
     pending: ["awaiting_owner", "failed", "expired", "cancelled"],
@@ -23,7 +23,7 @@ export const AGENT_OWNERSHIP_SESSION_STATUS_MACHINE = {
   },
 } as const satisfies StateMachine<AgentOwnershipSessionStatus>
 
-export const AGENT_OWNERSHIP_RECORD_STATE_MACHINE = {
+const AGENT_OWNERSHIP_RECORD_STATE_MACHINE = {
   initial: ["pending", "verified"],
   transitions: {
     pending: ["verified"],
@@ -34,7 +34,7 @@ export const AGENT_OWNERSHIP_RECORD_STATE_MACHINE = {
   },
 } as const satisfies StateMachine<AgentOwnershipState>
 
-export const USER_AGENT_STATUS_MACHINE = {
+const USER_AGENT_STATUS_MACHINE = {
   initial: ["pending", "active"],
   transitions: {
     pending: ["active", "deregistered"],

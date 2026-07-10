@@ -74,6 +74,24 @@ function studyDisabledExecutor(input: {
   } as DbExecutor
 }
 
+function studyEnabledMissingStudySchemaExecutor(): DbExecutor {
+  return {
+    async execute(query) {
+      const sql = typeof query === "string" ? query : query.sql
+      if (String(sql).includes("PRAGMA table_info(communities)")) {
+        return { rows: [{ name: "study_enabled" }] }
+      }
+      if (String(sql).includes("SELECT study_enabled") && String(sql).includes("FROM communities")) {
+        return { rows: [{ study_enabled: 1 }] }
+      }
+      if (String(sql).includes("FROM song_study_unit")) {
+        throw new Error("no such table: song_study_unit")
+      }
+      return { rows: [] }
+    },
+  } as DbExecutor
+}
+
 function studyPolicyCountingExecutor(input: {
   studyEnabled?: boolean
 } = {}): { executor: DbExecutor; studyPolicyQueryCount: () => number } {
@@ -459,5 +477,25 @@ describe("buildLocalizedPostResponse", () => {
     })
 
     expect(response.study_capability).toBeNull()
+  })
+
+  test("omits study capability when a study-enabled community has not applied the study schema", async () => {
+    const originalConsoleError = console.error
+    console.error = () => undefined
+    try {
+      const response = await buildLocalizedPostResponse({
+        executor: studyEnabledMissingStudySchemaExecutor(),
+        post: {
+          ...makeSongPost(),
+          lyrics: "Line one",
+        },
+        studyElevenLabsCredentialResolver: activeElevenLabsCredential,
+      })
+
+      expect(response.post.post_id).toBe("pst_song")
+      expect(response.study_capability).toBeNull()
+    } finally {
+      console.error = originalConsoleError
+    }
   })
 })

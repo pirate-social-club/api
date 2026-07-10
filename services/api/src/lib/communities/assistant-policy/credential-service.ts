@@ -25,7 +25,7 @@ import {
 } from "./access"
 import type { Env } from "../../../env"
 
-export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
+type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 
 const OPENROUTER_PROVIDER = "openrouter" as const
 const ELEVENLABS_PROVIDER = "elevenlabs" as const
@@ -198,7 +198,7 @@ async function hasActiveCredential(input: {
   return Boolean(row)
 }
 
-export async function getCommunityAssistantCredentialStatus(input: {
+async function getCommunityAssistantCredentialStatus(input: {
   env: Env
   communityId: string
   provider: CommunityAssistantCredentialProvider
@@ -351,7 +351,7 @@ export async function saveCommunityAssistantCredential(input: {
   })
 }
 
-export async function decryptActiveCommunityAssistantCredential(input: {
+async function decryptActiveCommunityAssistantCredential(input: {
   env: Env
   communityId: string
   missingCredentialMessage?: string

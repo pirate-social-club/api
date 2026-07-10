@@ -5,7 +5,7 @@ import type { Client, QueryResultRow } from "../sql-client"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import { unixSeconds } from "../../serializers/time"
 
-export type WalletIdentityPublicName = {
+type WalletIdentityPublicName = {
   id: string
   label: string
   label_normalized: string

@@ -13,7 +13,7 @@ export const BOOKING_COLUMNS =
   "settlement_review_operator_credential_id, settlement_review_operator_actor_id, settlement_review_note, " +
   "settlement_review_version, created_at, updated_at";
 
-export function decodeBookingStatus(value: unknown): BookingStatus {
+function decodeBookingStatus(value: unknown): BookingStatus {
   const status = textFromRow(value);
   if (
     status !== "hold" &&

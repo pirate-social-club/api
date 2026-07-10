@@ -28,11 +28,10 @@ import type {
 } from "./home-feed-types"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
-export type { HomeFeedCommunityIdentity, HomeFeedWaitUntil } from "./home-feed-community-reader"
+export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
 export type {
   HomeFeedCommunityRepository,
   HomeFeedProjectionRow,
-  HomeFeedTimeRange,
   InternalHomeFeedCommunitySummary,
 } from "./home-feed-types"
 
@@ -556,22 +555,47 @@ export async function listHomeFeed(input: {
 
   phaseStartedAt = performance.now()
   const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
-    const result = await readHomeFeedCommunityItems({
-      env: input.env,
-      communityId,
-      rows,
-      baseCommunity: communitySummaryById[communityId],
-      memberCommunityIdSet,
-      communityRepository: input.communityRepository,
-      profileRepository: input.profileRepository,
-      userId: input.userId,
-      locale: input.locale,
-      ageGateState,
-      waitUntil: input.waitUntil,
-    })
-    communityIdentityById.set(communityId, result.identity)
-    communityTimings.push(result.timing)
-    return result.items
+    const communityStartedAt = performance.now()
+    try {
+      const result = await readHomeFeedCommunityItems({
+        env: input.env,
+        communityId,
+        rows,
+        baseCommunity: communitySummaryById[communityId],
+        memberCommunityIdSet,
+        communityRepository: input.communityRepository,
+        profileRepository: input.profileRepository,
+        userId: input.userId,
+        locale: input.locale,
+        ageGateState,
+        waitUntil: input.waitUntil,
+      })
+      communityIdentityById.set(communityId, result.identity)
+      communityTimings.push(result.timing)
+      return result.items
+    } catch (error) {
+      console.error("[home-feed] community fanout failed", {
+        communityId,
+        error,
+        rows: rows.length,
+        sourcePostIds: rows.map((row) => row.source_post_id),
+      })
+      communityIdentityById.set(communityId, null)
+      communityTimings.push({
+        community_id: communityId,
+        rows: rows.length,
+        returned_items: 0,
+        total_ms: elapsedMs(communityStartedAt),
+        open_ms: 0,
+        identity_ms: 0,
+        posts_ms: 0,
+        snapshots_ms: 0,
+        votes_ms: 0,
+        localize_ms: 0,
+        enqueue_ms: 0,
+      })
+      return []
+    }
   })
   phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
   const items = communityItemGroups.flat()

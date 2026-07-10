@@ -10,7 +10,7 @@ import { persistProvisionedD1Binding } from "./repository"
 import { runReconciliationSweep, type ReconcilerDeps, type StuckBinding } from "./reconciler"
 
 /** Grace window: a 'provisioning' routing row is only reconciled after this long. */
-export const RECONCILER_GRACE_MS = 15 * 60 * 1000
+const RECONCILER_GRACE_MS = 15 * 60 * 1000
 
 /** Cap on errors logged/returned per sweep so a mass-failure tick doesn't emit a huge payload. */
 const MAX_LOGGED_ERRORS = 20
@@ -30,7 +30,7 @@ function shardDatabaseUrl(bindingName: string): string {
  *      its real URL). The pool row's `last_error` is already NULL here — the
  *      loadSnapshot success path clears it atomically with `last_loaded_at`.
  */
-export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): ReconcilerDeps {
+function buildReconcilerDeps(env: Env, client: Client, nowIso: string): ReconcilerDeps {
   const adminToken = String(env.SHARD_ADMIN_TOKEN ?? "")
   const shard = env.COMMUNITY_D1_SHARD!
   const cutoffIso = new Date(Date.parse(nowIso) - RECONCILER_GRACE_MS).toISOString()

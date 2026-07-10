@@ -20,3 +20,14 @@ mock.module("cloudflare:workers", () => ({
   RpcStub: class {},
   RpcTarget: class {},
 }))
+
+const { setNonPostgresControlPlaneClientFactoryForTests } = await import("../../src/lib/runtime-deps")
+const { setTestLocalCommunityDbOpener } = await import("../../src/lib/communities/community-read-access")
+const { openCommunityDb } = await import("../../src/lib/communities/community-db-factory")
+const { createLibsqlTestClientAdapter } = await import("../support/libsql-test-client-adapter")
+
+setNonPostgresControlPlaneClientFactoryForTests(createLibsqlTestClientAdapter)
+setTestLocalCommunityDbOpener(async (env, repository, communityId) => {
+  const handle = await openCommunityDb(env, repository, communityId)
+  return { client: handle.client, close: handle.close }
+})

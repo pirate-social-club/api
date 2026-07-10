@@ -1570,6 +1570,29 @@ const spec = {
         "operationId": "post_profiles_me"
       }
     },
+    "/profiles/me/courtyard-inventory": {
+      "get": {
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "List Courtyard inventory facets from the current user's linked wallets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourtyardWalletInventoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        },
+        "operationId": "get_profiles_me_courtyard_inventory"
+      }
+    },
     "/profiles/me/xmtp-inbox": {
       "post": {
         "tags": [
@@ -9136,6 +9159,24 @@ const spec = {
           }
         }
       },
+      "CourtyardWalletInventoryResponse": {
+        "type": "object",
+        "required": [
+          "groups",
+          "unavailable"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourtyardWalletInventoryGroup"
+            }
+          },
+          "unavailable": {
+            "type": "boolean"
+          }
+        }
+      },
       "GlobalHandle": {
         "type": "object",
         "required": [
@@ -12308,6 +12349,14 @@ const spec = {
             ],
             "default": "public"
           },
+          "age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ],
+            "nullable": true
+          },
           "access_mode": {
             "type": "string",
             "enum": [
@@ -12527,6 +12576,11 @@ const spec = {
           },
           "publish_failure_retryable": {
             "type": "boolean",
+            "nullable": true
+          },
+          "publish_failed_at": {
+            "type": "integer",
+            "format": "int64",
             "nullable": true
           },
           "title": {
@@ -13273,6 +13327,9 @@ const spec = {
           "selected_option_id": {
             "type": "string"
           },
+          "target_language": {
+            "type": "string"
+          },
           "transcript": {
             "type": "string"
           }
@@ -13343,6 +13400,37 @@ const spec = {
               "good",
               "easy"
             ]
+          },
+          "study_progress": {
+            "type": "object",
+            "properties": {
+              "study_attempt_count": {
+                "type": "integer"
+              },
+              "study_correct_count": {
+                "type": "integer"
+              },
+              "study_target_count": {
+                "type": "integer"
+              },
+              "qualified_today": {
+                "type": "boolean"
+              },
+              "current_streak": {
+                "type": "integer"
+              },
+              "next_due_at": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "study_attempt_count",
+              "study_correct_count",
+              "study_target_count",
+              "qualified_today",
+              "current_streak"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -15824,6 +15912,76 @@ const spec = {
           },
           "wallet_score": {
             "$ref": "#/components/schemas/WalletScoreCapabilityState"
+          }
+        }
+      },
+      "CourtyardWalletInventoryGroup": {
+        "type": "object",
+        "required": [
+          "category",
+          "chain_namespace",
+          "contract_address",
+          "display_label",
+          "display_detail",
+          "count"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "trading_card",
+              "watch"
+            ]
+          },
+          "chain_namespace": {
+            "type": "string",
+            "enum": [
+              "eip155:1",
+              "eip155:137"
+            ]
+          },
+          "contract_address": {
+            "type": "string"
+          },
+          "franchise": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "set": {
+            "type": "string"
+          },
+          "year": {
+            "type": "string"
+          },
+          "grader": {
+            "type": "string"
+          },
+          "grade": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "display_label": {
+            "type": "string"
+          },
+          "display_detail": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

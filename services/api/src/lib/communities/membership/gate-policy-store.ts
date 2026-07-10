@@ -2,7 +2,7 @@ import type { ReadClient } from "../../sql-client"
 import { validateGatePolicy } from "./gate-policy-validation"
 import type { CommunityGateScope, GatePolicy } from "./gate-types"
 
-export async function getGatePolicy(
+async function getGatePolicy(
   client: ReadClient,
   communityId: string,
   scope: CommunityGateScope,

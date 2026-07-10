@@ -5,7 +5,7 @@ import type { VerificationCapabilities } from "../../types"
 
 const PASSPORT_API_URL = "https://api.passport.xyz"
 const PASSPORT_TIMEOUT_MS = 15_000
-export const PASSPORT_WALLET_SCORE_TTL_MS = 24 * 60 * 60 * 1000
+const PASSPORT_WALLET_SCORE_TTL_MS = 24 * 60 * 60 * 1000
 
 type WalletScoreCapability = VerificationCapabilities["wallet_score"]
 

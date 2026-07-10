@@ -16,13 +16,13 @@ type ClawkeyRegisterStatusResponse = {
   registration?: unknown
 }
 
-export type ClawkeyStartRegistrationResult = {
+type ClawkeyStartRegistrationResult = {
   sessionId: string
   registrationUrl: string
   expiresAt: string | null
 }
 
-export type ClawkeyRegistrationStatusResult =
+type ClawkeyRegistrationStatusResult =
   | { status: "pending" }
   | { status: "completed"; deviceId: string | null; publicKey: string | null; registeredAt: string | null }
   | { status: "expired" }

@@ -22,7 +22,7 @@ import { withTransaction } from "../transactions"
 import { logPipelineError } from "../observability/pipeline-log"
 import { sameLanguageLocale } from "../localization/content-locale"
 
-export type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
+type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
 type AttemptOutcome = "correct" | "incorrect" | "revealed"
 type FsrsRating = "again" | "hard" | "good" | "easy"
@@ -180,7 +180,7 @@ type StudyReviewSchedule = {
   state: StudyReviewStateRow["state"]
 }
 
-export type SongStudyExercise =
+type SongStudyExercise =
   | {
       id: string
       line_id: string
@@ -202,7 +202,7 @@ export type SongStudyExercise =
       type: "translation_choice"
     }
 
-export type SongStudySessionSummary = {
+type SongStudySessionSummary = {
   due_count: number
   next_due_at?: number
   served_count: number
@@ -290,14 +290,14 @@ export type SongStudyTranscriptionResponse = {
   text: string
 }
 
-export type SongStreakLeaderboardIdentity = {
+type SongStreakLeaderboardIdentity = {
   avatar_ref?: string | null
   display_name?: string | null
   handle?: string | null
   user_id: string
 }
 
-export type SongStreakLeaderboardEntry = {
+type SongStreakLeaderboardEntry = {
   best_streak: number
   current_streak: number
   identity: SongStreakLeaderboardIdentity
@@ -308,7 +308,7 @@ export type SongStreakLeaderboardEntry = {
   total_qualified_days: number
 }
 
-export type SongStreakViewerStanding = {
+type SongStreakViewerStanding = {
   alive: boolean
   best_streak: number
   current_streak: number
@@ -2335,7 +2335,7 @@ async function upsertReviewState(input: {
   return input.rating
 }
 
-export async function upsertStudyEngagementDay(input: {
+async function upsertStudyEngagementDay(input: {
   client: ReadClient
   communityId: string
   isCorrect: boolean
@@ -2376,7 +2376,7 @@ export async function upsertStudyEngagementDay(input: {
   })
 }
 
-export async function materializeStudyStreak(input: {
+async function materializeStudyStreak(input: {
   client: ReadClient
   now: string
   postId: string

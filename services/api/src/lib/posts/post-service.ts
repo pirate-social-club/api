@@ -76,7 +76,6 @@ export {
   deletePost,
   removePostAsModerator,
   setPostCommentLock,
-  type DeletePostResult,
 } from "./post-moderation-actions"
 
 export {

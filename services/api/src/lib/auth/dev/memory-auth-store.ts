@@ -38,14 +38,14 @@ export type MemoryGlobalHandle = {
   replaced_at: string | null
 }
 
-export type MemoryLinkedHandle = {
+type MemoryLinkedHandle = {
   linked_handle_id: string
   label: string
   kind: "pirate" | "ens"
   verification_state: "unverified" | "verified" | "stale"
 }
 
-export type MemoryProfile = {
+type MemoryProfile = {
   user_id: string
   display_name: string | null
   avatar_ref: string | null
@@ -119,7 +119,7 @@ export function exposeMemoryWalletAttachments(attachments: MemoryWalletAttachmen
   }))
 }
 
-export function exposeMemoryUser(user: User): SessionExchangeResponse["user"] {
+function exposeMemoryUser(user: User): SessionExchangeResponse["user"] {
   return {
     id: `usr_${user.user_id}`,
     object: "user",

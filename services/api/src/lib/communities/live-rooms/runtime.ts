@@ -5,7 +5,7 @@ import { conflictError, internalError } from "../../errors"
 import type { LiveRoom } from "./types"
 
 export type LiveRoomSeat = "host" | "guest"
-export type LiveRoomAudienceSeat = "viewer"
+type LiveRoomAudienceSeat = "viewer"
 
 export type LiveRoomRuntimeAttachResponse = {
   runtime: {
@@ -403,7 +403,7 @@ function endMeta(meta: RuntimeMeta): LiveRoomRuntimeEndResponse {
   }
 }
 
-export function liveRoomRuntimeTokenTtlSeconds(env: Env): number {
+function liveRoomRuntimeTokenTtlSeconds(env: Env): number {
   const parsed = Number(env.LIVE_ROOM_AGORA_TOKEN_TTL_SECONDS)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_TOKEN_TTL_SECONDS
 }

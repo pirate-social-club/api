@@ -10,7 +10,7 @@ export type PurchaseSettlementEffectKind =
   | "story_parent_royalty_vault_transfer"
   | "story_entitlement_mint"
 
-export type PurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
+type PurchaseSettlementEffectStatus = "submitted" | "confirmed" | "failed"
 
 export type PurchaseSettlementEffectRow = {
   purchase_settlement_effect_id: string
@@ -58,7 +58,7 @@ function toSettlementEffectRow(row: unknown): PurchaseSettlementEffectRow {
   }
 }
 
-export async function getPurchaseSettlementEffectByIdempotencyKey(input: {
+async function getPurchaseSettlementEffectByIdempotencyKey(input: {
   client: DbExecutor
   idempotencyKey: string
 }): Promise<PurchaseSettlementEffectRow | null> {

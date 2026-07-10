@@ -29,6 +29,7 @@ Options:
   --origin <url>       Pirate API origin. Defaults to https://api.pirate.sc.
   --web-origin <url>   Origin header. Defaults from --origin.
   --sort <value>       Feed sort. Defaults to best.
+  --time-range <value> Feed time_range query value. Omitted by default.
   --locale <value>     Feed locale. Defaults to en.
   --cache-bust         Use a unique query param to force a cold cache key.
   --dedupe             Run two concurrent cold requests and check x-pirate-cache-deduped.
@@ -43,11 +44,13 @@ function defaultWebOrigin(apiOrigin: string): string {
 function buildFeedUrl(input: {
   origin: string
   sort: string
+  timeRange: string | null
   locale: string
   cacheBust: string | null
 }): string {
   const url = new URL("/feed/home/public", input.origin)
   url.searchParams.set("sort", input.sort)
+  if (input.timeRange) url.searchParams.set("time_range", input.timeRange)
   url.searchParams.set("locale", input.locale)
   if (input.cacheBust) url.searchParams.set("smoke", input.cacheBust)
   return url.toString()
@@ -89,6 +92,7 @@ async function main(): Promise<void> {
   const origin = (readArg("--origin") ?? "https://api.pirate.sc").replace(/\/+$/, "")
   const webOrigin = readArg("--web-origin") ?? defaultWebOrigin(origin)
   const sort = readArg("--sort") ?? "best"
+  const timeRange = readArg("--time-range")
   const locale = readArg("--locale") ?? "en"
   const maxHitMs = Number(readArg("--max-hit-ms") ?? "1000")
   if (!Number.isFinite(maxHitMs) || maxHitMs <= 0) throw new Error("--max-hit-ms must be a positive number")
@@ -96,7 +100,7 @@ async function main(): Promise<void> {
   const cacheBust = hasFlag("--cache-bust") || hasFlag("--dedupe")
     ? `public-feed-cache-${Date.now()}`
     : null
-  const url = buildFeedUrl({ origin, sort, locale, cacheBust })
+  const url = buildFeedUrl({ origin, sort, timeRange, locale, cacheBust })
 
   let concurrent: SmokeResult[] | null = null
   if (hasFlag("--dedupe")) {
@@ -128,6 +132,7 @@ async function main(): Promise<void> {
     origin,
     web_origin: webOrigin,
     sort,
+    time_range: timeRange,
     locale,
     cache_bust: cacheBust,
     concurrent,

@@ -228,12 +228,6 @@ export type Env = {
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
-  // Legacy community-scoped booking settlement sweep. The global booking path is canonical; this
-  // remains fail-closed unless an operator explicitly opts into sweeping old community D1 rows.
-  LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
-  // When true, attendance-ambiguous due bookings are moved to disputed/pending operator review
-  // instead of being left untouched by the settlement cron.
-  BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED?: string
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string
@@ -319,6 +313,7 @@ export type Env = {
   ACRCLOUD_PERSONAL_ACCESS_TOKEN?: string
   ACRCLOUD_BUCKET_ID?: string
   ACRCLOUD_CONSOLE_BASE_URL?: string
+  SONG_ACR_BYPASS_COMMUNITY_IDS?: string
 
   // Namespace verifiers
   SPACES_VERIFIER_BASE_URL?: string

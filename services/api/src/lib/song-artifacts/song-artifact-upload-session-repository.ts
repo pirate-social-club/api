@@ -13,7 +13,7 @@ export type SongArtifactUploadSessionStatus =
   | "aborting"
   | "aborted"
 
-export type SongArtifactUploadMode = "proxy" | "direct_multipart"
+type SongArtifactUploadMode = "proxy" | "direct_multipart"
 
 export type SongArtifactUploadSessionRow = {
   song_artifact_upload_session_id: string
@@ -214,14 +214,6 @@ export async function createSongArtifactUploadSession(input: {
     throw internalError("Song artifact upload session is missing after insert")
   }
   return created
-}
-
-export async function getSongArtifactUploadSession(input: {
-  client: Client
-  communityId: string
-  sessionId: string
-}): Promise<SongArtifactUploadSessionRow | null> {
-  return await getSessionRow(input)
 }
 
 export async function requireSongArtifactUploadSession(input: {

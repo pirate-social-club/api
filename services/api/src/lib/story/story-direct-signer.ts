@@ -15,7 +15,7 @@ export function normalizeDirectSignerPrivateKey(raw: string | null | undefined):
   return /^0x[a-fA-F0-9]{64}$/.test(withPrefix) ? withPrefix : null
 }
 
-export function resolveStoryDirectSignerConfig(params: {
+function resolveStoryDirectSignerConfig(params: {
   privateKeyValue: string | null | undefined
   privateKeyField: string
   expectedAddressValue?: string | null | undefined

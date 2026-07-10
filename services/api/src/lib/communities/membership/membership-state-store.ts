@@ -14,7 +14,6 @@ export type CommunityMembershipRow = {
 
 export const ANY_COMMUNITY_ROLE = ["owner", "admin", "moderator"] as const satisfies readonly CommunityRole[]
 export const OWNER_OR_ADMIN_ROLE = ["owner", "admin"] as const satisfies readonly CommunityRole[]
-export const OWNER_ROLE = ["owner"] as const satisfies readonly CommunityRole[]
 
 export async function getCommunityMembershipState(
   client: MembershipExecutor,

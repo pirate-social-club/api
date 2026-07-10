@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto"
 import type { Env } from "../../../env"
 import { providerUnavailable } from "../../errors"
-import { sha256Hex } from "../../crypto"
 import { buildS3SignedRequest, EMPTY_SHA256_HEX, type S3SigningConfig } from "../../storage/s3-signing"
 
 export type LiveRoomRecordingRawArtifactRef = {
@@ -27,7 +27,7 @@ export async function ingestAgoraRecordingToPrivateStorage(input: {
   if (!sourceObjectKey) {
     throw providerUnavailable("Agora recording stop response did not include a replay media file")
   }
-  const source = await fetchCaptureObjectBytes({
+  const source = await hashCaptureObject({
     env: input.env,
     objectKey: sourceObjectKey,
     maxBytes: LIVE_ROOM_REPLAY_RAW_MAX_BYTES,
@@ -39,10 +39,10 @@ export async function ingestAgoraRecordingToPrivateStorage(input: {
     bucket: captureConfig.bucket,
     object_key: sourceObjectKey,
     endpoint: captureConfig.endpoint.toString(),
-    content_hash: `0x${await sha256Hex(source)}`,
+    content_hash: `0x${source.sha256}`,
     ipfs_cid: null,
     mime_type: mimeType,
-    size_bytes: source.byteLength,
+    size_bytes: source.sizeBytes,
   }
 }
 
@@ -93,11 +93,11 @@ function looksLikeRecordingFile(value: string): boolean {
   return /\.(mp4|m3u8|aac|ts)$/i.test(value.trim())
 }
 
-async function fetchCaptureObjectBytes(input: {
+async function hashCaptureObject(input: {
   env: Env
   objectKey: string
   maxBytes?: number
-}): Promise<Uint8Array> {
+}): Promise<{ sha256: string; sizeBytes: number }> {
   const response = await fetchLiveRoomRecordingCaptureObject({
     env: input.env,
     objectKey: input.objectKey,
@@ -112,11 +112,30 @@ async function fetchCaptureObjectBytes(input: {
   if (input.maxBytes && Number.isFinite(contentLength) && contentLength > input.maxBytes) {
     throw providerUnavailable(`Replay recording exceeds the ${Math.floor(input.maxBytes / (1024 * 1024))}MB limit`)
   }
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  if (input.maxBytes && bytes.byteLength > input.maxBytes) {
-    throw providerUnavailable(`Replay recording exceeds the ${Math.floor(input.maxBytes / (1024 * 1024))}MB limit`)
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw providerUnavailable("Agora capture artifact response did not include a body")
   }
-  return bytes
+
+  const hash = createHash("sha256")
+  let sizeBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      sizeBytes += value.byteLength
+      if (input.maxBytes && sizeBytes > input.maxBytes) {
+        await reader.cancel()
+        throw providerUnavailable(`Replay recording exceeds the ${Math.floor(input.maxBytes / (1024 * 1024))}MB limit`)
+      }
+      hash.update(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return { sha256: hash.digest("hex"), sizeBytes }
 }
 
 export async function fetchLiveRoomRecordingCaptureObject(input: {

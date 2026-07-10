@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   setOperatorChainPrimitivesForTests,
   type OperatorSettleRequest,
-} from "../../src/lib/communities/bookings/operator-signing-coordinator-do"
+} from "../../src/lib/bookings/operator-signing-coordinator-do"
 
 // Real workerd + real DO SQLite storage + real RPC input gates. The chain seam is injected INSIDE
 // the DO isolate via runInDurableObject so the signer/RPC is faked while everything else (nonce

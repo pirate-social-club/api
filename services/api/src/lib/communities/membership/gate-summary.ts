@@ -107,7 +107,7 @@ export function getGatePolicyMatchMode(policy: GatePolicy | null): "all" | "any"
   return policy?.expression.op === "or" ? "any" : "all"
 }
 
-export function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSummary {
+function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSummary {
   const summary: MembershipGateSummary = {
     gate_type: atom.type as MembershipGateSummary["gate_type"],
   }

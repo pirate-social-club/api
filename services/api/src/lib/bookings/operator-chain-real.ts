@@ -1,14 +1,14 @@
 import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
-import type { Env } from "../../../env"
-import { badRequestError } from "../../errors"
-import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
+import type { Env } from "../../env"
+import { badRequestError } from "../errors"
+import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../evm-signer"
 import {
   resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorPrivateKey,
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
-} from "./booking-chain-config"
+} from "./booking-settlement-config"
 import type { ChainPrimitives } from "./operator-signing-coordinator-do"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so

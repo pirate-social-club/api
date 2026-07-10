@@ -32,7 +32,7 @@ import {
   type StoryRuntimeSignerName,
 } from "./story-runtime-funding"
 
-export const STORY_RUNTIME_FUNDING_WATCHDOG_TASK = "story_runtime_funding_watchdog"
+const STORY_RUNTIME_FUNDING_WATCHDOG_TASK = "story_runtime_funding_watchdog"
 
 // Don't hit the Story RPC more than this often even though the cron fires every
 // minute. A slow-draining wallet does not need sub-5-minute detection.
@@ -41,7 +41,7 @@ const DEFAULT_WATCHDOG_INTERVAL_MS = 300_000
 // before hitting the floor. 3 gives an operator comfortable lead time.
 const DEFAULT_WATCHDOG_TX_MARGIN = 3n
 
-export type StoryRuntimeFundingWatchdogSignerReport = {
+type StoryRuntimeFundingWatchdogSignerReport = {
   name: StoryRuntimeSignerName
   address: `0x${string}`
   balanceWei: bigint
@@ -184,6 +184,9 @@ export async function runStoryRuntimeFundingWatchdog(
     }
     alerts.push(report)
 
+    const topUpToWarnThresholdWei = warnThresholdWei > balance.balanceWei
+      ? warnThresholdWei - balance.balanceWei
+      : 0n
     const structured = {
       signer: balance.name,
       address: balance.address,
@@ -194,6 +197,7 @@ export async function runStoryRuntimeFundingWatchdog(
       warn_threshold_ip: formatEther(warnThresholdWei),
       worst_case_tx_ip: formatEther(worstCaseTxWei),
       balance_minus_floor_ip: formatEther(balanceMinusFloorWei),
+      top_up_to_warn_threshold_ip: formatEther(topUpToWarnThresholdWei),
       tx_headroom: txHeadroom,
     }
     // Distinct greppable prefix so it doesn't drown in the general cron noise.
@@ -204,8 +208,8 @@ export async function runStoryRuntimeFundingWatchdog(
     captureScheduledWarning(
       env,
       severity === "critical"
-        ? `Story signer ${balance.name} is BELOW its funding floor — registrations are failing`
-        : `Story signer ${balance.name} funding runway is low`,
+        ? `Story signer ${balance.name} ${balance.address} is BELOW floor: ${formatEther(balance.balanceWei)} IP < ${formatEther(enforcedFloorWei)} IP; top up at least ${formatEther(topUpToWarnThresholdWei)} IP`
+        : `Story signer ${balance.name} ${balance.address} runway low: ${formatEther(balance.balanceWei)} IP < ${formatEther(warnThresholdWei)} IP; top up at least ${formatEther(topUpToWarnThresholdWei)} IP`,
       STORY_RUNTIME_FUNDING_WATCHDOG_TASK,
       structured,
       { signer: balance.name, urgency: severity === "critical" ? "high" : "low" },

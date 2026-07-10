@@ -46,7 +46,7 @@ function createdAtMs(community: { created_at?: string | null }): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-export function selectScheduledCommunityJobPollIds(
+function selectScheduledCommunityJobPollIds(
   communities: Array<{ community_id: string; created_at?: string | null }>,
   maxCommunities: number,
   nowMs: number = Date.now(),

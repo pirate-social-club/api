@@ -21,8 +21,8 @@ import {
 } from "./host-config-repository"
 import type { AvailabilityException, AvailabilityRule, BookingProfile, PriceRule } from "./types"
 
-export type ServiceOk<T> = { ok: true; data: T }
-export type ServiceErr = { ok: false; reason: string; fields?: ValidationError[] }
+type ServiceOk<T> = { ok: true; data: T }
+type ServiceErr = { ok: false; reason: string; fields?: ValidationError[] }
 export type ServiceResult<T> = ServiceOk<T> | ServiceErr
 
 export type ProfileRow = BookingProfile

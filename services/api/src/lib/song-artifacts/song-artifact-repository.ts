@@ -112,7 +112,7 @@ export async function createSongArtifactUploadIntent(input: {
   return serializeSongArtifactUpload(created)
 }
 
-export async function getSongArtifactUpload(
+async function getSongArtifactUpload(
   client: DbExecutor,
   communityId: string,
   songArtifactUploadId: string,

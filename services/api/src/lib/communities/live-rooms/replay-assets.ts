@@ -5,7 +5,7 @@ import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-
 import type { LiveRoomExecutor } from "./store"
 
 export type LiveRoomReplayAssetAccessMode = "free" | "included_with_ticket" | "paid"
-export type LiveRoomReplayAssetPublicationStatus = "draft" | "published" | "failed"
+type LiveRoomReplayAssetPublicationStatus = "draft" | "published" | "failed"
 
 export type LiveRoomReplayAsset = {
   replay_asset_id: string

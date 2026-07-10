@@ -13,7 +13,7 @@ import type { RoyaltyAllocationRequest } from "../../../types"
 export const ROYALTY_ALLOCATION_VERSION = 1
 
 // Story networks that attach a royalty vault (where RTs can distribute): Aeneid + mainnet.
-export const SUPPORTED_STORY_ALLOCATION_CHAIN_IDS = new Set<number>([1315, 1514])
+const SUPPORTED_STORY_ALLOCATION_CHAIN_IDS = new Set<number>([1315, 1514])
 
 // Resolve the Story chain from runtime config and validate it is a supported EVM chain.
 // Fingerprints and persisted allocation rows are bound to this resolved id.

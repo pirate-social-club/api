@@ -248,7 +248,7 @@ jobs:
         #
         # PINNED to a SHA, not the mutable `release/karaoke-web` branch. That branch drifts
         # independently of this repo: commit cd4b93fb added a required `uncertainLineCount` field to
-        # KaraokeSessionSummary, which breaks `tsgo` against the (un-updated) api karaoke test in
+        # KaraokeSessionSummary, which breaks `tsc` against the (un-updated) api karaoke test in
         # tests/lib/karaoke/session-do.test.ts — a time-dependent failure with no change in this repo.
         # de5eafa2 is the last commit on release/karaoke-web before cd4b93fb (last type-compatible
         # with the current api karaoke test).

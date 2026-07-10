@@ -94,3 +94,9 @@ export function resolveBookingSettlementOperatorAddress(env: Env): string {
   }
   return expected;
 }
+
+export function resolveBookingSettlementOperatorPrivateKey(env: Env): string {
+  const privateKey = normalizeDirectSignerPrivateKey(String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY || "").trim());
+  if (!privateKey) throw badRequestError("PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY is invalid");
+  return privateKey;
+}

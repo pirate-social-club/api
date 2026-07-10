@@ -24,7 +24,7 @@ import type { DbExecutor } from "../../db-helpers"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
 
-export type VideoMediaAnalysisJobPayload = {
+type VideoMediaAnalysisJobPayload = {
   post_id: string
   storage_object_key: string
   mime_type?: string | null
@@ -36,8 +36,6 @@ type VideoAudioSampleExtractor = (input: {
   objectKey: string
   window: VideoAudioSampleWindow
 }) => Promise<VideoAudioSampleResult>
-
-type AudioSampleIdentifier = typeof identifyAudioSampleWithAcrCloud
 
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 180_000
 
@@ -85,17 +83,6 @@ const defaultExtractor: VideoAudioSampleExtractor = async (input) => {
     window: input.window,
     timeoutMs: DEFAULT_EXTRACTION_TIMEOUT_MS,
   })
-}
-
-let videoAudioSampleExtractor: VideoAudioSampleExtractor | null = null
-let audioSampleIdentifier: AudioSampleIdentifier | null = null
-
-export function setVideoMediaAnalysisProvidersForTests(input: {
-  extractor?: VideoAudioSampleExtractor | null
-  identifier?: AudioSampleIdentifier | null
-} | null): void {
-  videoAudioSampleExtractor = input?.extractor ?? null
-  audioSampleIdentifier = input?.identifier ?? null
 }
 
 export function chooseVideoSampleWindow(durationMs: number | null | undefined): VideoAudioSampleWindow {
@@ -242,7 +229,7 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
     })
 
     const window = chooseVideoSampleWindow(payload?.duration_ms)
-    const extractor = videoAudioSampleExtractor ?? defaultExtractor
+    const extractor = defaultExtractor
     const sample = await extractor({ env: input.env, objectKey: storageObjectKey, window })
 
     let acr: VideoRightsAcrEvaluation = {
@@ -259,7 +246,7 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
     } else if (sample.kind === "skipped") {
       analysisSkippedReason = sample.reason
     } else {
-      const identify = audioSampleIdentifier ?? identifyAudioSampleWithAcrCloud
+      const identify = identifyAudioSampleWithAcrCloud
       acr = parseAcrEvaluation(await identify({
         env: input.env,
         sampleBytes: sample.bytes,

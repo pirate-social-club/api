@@ -16,7 +16,7 @@ const TOOL_THREAD_EXCERPT_CHARS = 1_000
 const TOOL_ACTIVITY_EXCERPT_CHARS = 280
 
 export const MAX_TOOL_ROUNDS = 3
-export const MAX_TOOL_RESULT_CHARS = 2_000
+const MAX_TOOL_RESULT_CHARS = 2_000
 export const MAX_TOTAL_TOOL_RESULT_CHARS = 6_000
 
 export type CommunityAssistantToolDefinition = {
@@ -28,7 +28,7 @@ export type CommunityAssistantToolDefinition = {
   }
 }
 
-export type CommunityAssistantToolName = "search_board" | "get_thread" | "get_my_activity"
+type CommunityAssistantToolName = "search_board" | "get_thread" | "get_my_activity"
 
 export type CommunityAssistantToolCall = {
   id: string
@@ -148,10 +148,6 @@ function clipToolResult(value: unknown, maxChars: number): string {
     return text
   }
   return `${text.slice(0, Math.max(0, maxChars - 24)).trimEnd()}... [tool result truncated]`
-}
-
-export function clipAssistantToolResult(value: unknown, maxChars = MAX_TOOL_RESULT_CHARS): string {
-  return clipToolResult(value, maxChars)
 }
 
 function toolError(message: string) {

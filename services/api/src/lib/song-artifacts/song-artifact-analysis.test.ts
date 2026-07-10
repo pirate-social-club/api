@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { analyzeSongBundle } from "./song-artifact-analysis"
 
 describe("song artifact analysis", () => {
-  test("skips lyric moderation and alignment for instrumental bundles", async () => {
+  test("marks ACR identification as skipped when staging bypass is requested", async () => {
     const result = await analyzeSongBundle({
       env: {},
       lyrics: "",
@@ -12,11 +12,16 @@ describe("song artifact analysis", () => {
         mime_type: "audio/mpeg",
         size_bytes: 8,
         storage_object_key: "songs/instrumental.mp3",
-      },
+      } as never,
       skipAcrIdentification: true,
-    } as never)
+    })
 
     expect(result.analysisState).toBe("allow")
+    expect(result.moderationResult?.audio_identification).toEqual({
+      provider: "acrcloud",
+      skipped: true,
+      acr_skipped_reason: "staging_bypass",
+    })
     expect(result.alignmentStatus).toBe("completed")
     expect(result.timedLyrics).toBeNull()
     expect(result.moderationResult?.lyrics).toEqual({

@@ -12,7 +12,7 @@ export interface BookingFinalizationSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-export interface FinalizeBookingInput {
+interface FinalizeBookingInput {
   bookingId?: string;
   holdId: string;
   paymentIntentId: string;
@@ -24,7 +24,7 @@ export interface FinalizeBookingInput {
   nowUtc: string;
 }
 
-export type FinalizeBookingResult =
+type FinalizeBookingResult =
   | { ok: true; already: boolean; booking: Booking }
   | { ok: false; reason: "finalization-conflict" | "replay-conflict" };
 

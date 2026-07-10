@@ -6,13 +6,13 @@ import type { Client } from "../sql-client"
 // need a human open a rights_review_cases row for moderators. Enforcement
 // stays with the existing moderation tools.
 
-export type VideoRightsOutcome =
+type VideoRightsOutcome =
   | "allow"
   | "allow_with_required_reference"
   | "review_required"
   | "blocked"
 
-export type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
+type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
 
 export type VideoRightsAcrCustomMatch = {
   song_artifact_bundle_id: string | null

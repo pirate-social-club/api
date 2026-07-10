@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers"
 
-import type { Env } from "../../../env"
-import { badRequestError, conflictError } from "../../errors"
+import type { Env } from "../../env"
+import { badRequestError, conflictError } from "../errors"
 
 const SIGNING_CLAIM_TTL_MS = 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
-export type OperatorEffectKind = "booking_payout" | "booking_refund"
+type OperatorEffectKind = "booking_payout" | "booking_refund"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number): string {
   const a = String(operatorAddress || "").trim()
@@ -24,7 +24,7 @@ export interface OperatorSettleRequest {
   recipientAddress: string
 }
 
-export type OperatorSettleState =
+type OperatorSettleState =
   | "reserving"
   | "prepared"
   | "broadcast"
@@ -41,8 +41,8 @@ export interface OperatorSettleResult {
   state: OperatorSettleState
 }
 
-export interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
-export type TxLiveness = "success" | "failed" | "pending" | "absent"
+interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
+type TxLiveness = "success" | "failed" | "pending" | "absent"
 export interface ChainPrimitives {
   pendingNonce: (env: Env) => Promise<number>
   latestNonce: (env: Env) => Promise<number>

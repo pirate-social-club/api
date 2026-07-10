@@ -42,7 +42,7 @@ type SettlementIntentState = "cancelled_by_host" | "cancelled_by_booker" | "comp
 type FinalSettlementState = "settled" | "refunded";
 export type GlobalBookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
 
-export interface GlobalBookingOperatorEffect {
+interface GlobalBookingOperatorEffect {
   kind: "payout" | "refund";
   toUserId: string;
   recipientAddress: string;

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import handler, { app } from "../../src/index"
 import {
   buildMaterializedPublicHomeFeedTarget,
   parseMaterializedPublicHomeFeedBody,
 } from "../../src/lib/feed/materialized-public-feed"
+import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import {
   completeUniqueHumanVerification,
@@ -215,6 +217,95 @@ describe("feed routes", () => {
     expect(Array.isArray(body.items[0]?.post.viewer_gate_state?.membership_gate_summaries)).toBe(true)
     expect(body.top_communities.map((community) => community.display_name)).toContain("Feed Reader Club")
     expect(body.next_cursor).toBeNull()
+  })
+
+  test("GET /feed/home/public skips a community slice when its database read fails", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "feed-route-fanout-isolation")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    async function createCommunityPost(input: {
+      communityName: string
+      idempotencyKey: string
+      postTitle: string
+    }): Promise<{ communityId: string; postId: string }> {
+      const communityCreate = await requestJson("http://pirate.test/communities", {
+        display_name: input.communityName,
+        membership_mode: "request",
+        handle_policy: {
+          policy_template: "standard",
+        },
+      }, ctx.env, session.accessToken)
+      expect(communityCreate.status).toBe(202)
+      const communityCreateBody = await json(communityCreate) as {
+        community: {
+          id: string
+        }
+      }
+      const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+      const createdPost = await requestJson(
+        `http://pirate.test/communities/${communityId}/posts`,
+        {
+          post_type: "text",
+          title: input.postTitle,
+          body: "This post is projected into the public feed.",
+          idempotency_key: input.idempotencyKey,
+        },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(createdPost.status).toBe(201)
+      const createdPostBody = await json(createdPost) as {
+        id: string
+      }
+      return { communityId, postId: createdPostBody.id }
+    }
+
+    const good = await createCommunityPost({
+      communityName: "Healthy Feed Club",
+      idempotencyKey: "feed-route-fanout-good-post",
+      postTitle: "Healthy feed item",
+    })
+    const broken = await createCommunityPost({
+      communityName: "Broken Feed Club",
+      idempotencyKey: "feed-route-fanout-broken-post",
+      postTitle: "Broken feed item",
+    })
+
+    const brokenCommunityClient = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, broken.communityId),
+    })
+    try {
+      await brokenCommunityClient.execute("DROP TABLE posts")
+    } finally {
+      brokenCommunityClient.close()
+    }
+
+    const originalConsoleError = console.error
+    console.error = () => undefined
+    try {
+      const response = await app.request("http://pirate.test/feed/home/public?sort=new&locale=en", {}, ctx.env)
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        items: Array<{
+          post: {
+            post: {
+              id: string
+              title: string | null
+            }
+          }
+        }>
+      }
+
+      const postIds = body.items.map((item) => item.post.post.id)
+      expect(postIds).toContain(good.postId)
+      expect(postIds).not.toContain(broken.postId)
+      expect(body.items.map((item) => item.post.post.title)).toContain("Healthy feed item")
+    } finally {
+      console.error = originalConsoleError
+    }
   })
 
   test("GET /feed/home stamps the public author handle so feed bylines match the community read", async () => {

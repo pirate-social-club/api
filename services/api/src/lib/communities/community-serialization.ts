@@ -117,7 +117,7 @@ export function parseStoredReferenceLinks(
   }).sort((left, right) => left.position - right.position)
 }
 
-export function parseStoredCommunityStore(
+function parseStoredCommunityStore(
   storedSettings: Record<string, unknown>,
 ): Pick<Community, "store_url" | "store_label"> {
   const rawUrl = storedSettings.store_url

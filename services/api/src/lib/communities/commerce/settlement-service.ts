@@ -113,7 +113,7 @@ type ExistingPurchaseSettlementLookup = {
   missingConfirmedCharityPayouts: string[]
 }
 
-export type RoyaltyEarningEventForNotification = {
+type RoyaltyEarningEventForNotification = {
   recipientUserId: string
   communityId: string
   assetId: string
@@ -129,8 +129,6 @@ export type SettleCommunityPurchaseResult = {
   settlement: CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement
   royaltyEarningEvents: RoyaltyEarningEventForNotification[]
 }
-
-export type { PublicCommunityPurchaseSettlement } from "./purchase-settlement-serialization"
 
 export type PublicCommunityPurchaseSettlementRequest = {
   quote: string

@@ -23,13 +23,13 @@ export type AgentChallenge = {
   timestamp: number
 }
 
-export type SelfAgentOwnershipLaunch = {
+type SelfAgentOwnershipLaunch = {
   deep_link?: string | null
   qr_ref?: string | null
   session_token_ref?: string | null
 }
 
-export type ClawkeyRegistrationLaunch = {
+type ClawkeyRegistrationLaunch = {
   session_id: string
   registration_url: string
   expires_at?: string | null
@@ -57,14 +57,6 @@ export type AgentOwnershipRecord = {
   evidence_ref: string | null
   created_at: string
   updated_at: string
-}
-
-export type AgentDelegatedCredentialIssueRequest = {
-  current_ownership_record_id?: string | null
-}
-
-export type AgentDelegatedCredentialRefreshRequest = {
-  refresh_token: string
 }
 
 export type AgentDelegatedCredential = {

@@ -38,7 +38,7 @@ type ZkPassportSessionRef = {
   validitySeconds: number
 }
 
-export type ZkPassportStartResult = {
+type ZkPassportStartResult = {
   upstreamSessionRef: string
   launch: NonNullable<VerificationSessionLaunch["zkpassport"]>
 }

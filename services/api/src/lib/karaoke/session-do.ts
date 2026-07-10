@@ -38,7 +38,7 @@ const TRUSTED_GATEWAY_HEADERS = [
 ] as const;
 const SESSION_EXPIRED_CLOSE_CODE = 4001;
 
-export interface InitializeRequest {
+interface InitializeRequest {
   sessionId: string;
   attemptId: string;
   subjectUserId: string;
@@ -60,7 +60,7 @@ interface SqlStorageLike {
   ): SqlStorageCursorLike<T>;
 }
 
-export interface DurableObjectStorage {
+interface DurableObjectStorage {
   sql: SqlStorageLike;
   transactionSync?<T>(callback: () => T): T;
   setAlarm?(scheduledTime: number | Date): Promise<void>;
@@ -75,12 +75,12 @@ export interface DurableObjectContextLike {
   blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
 }
 
-export interface SqliteOutboxStoreOptions {
+interface SqliteOutboxStoreOptions {
   storage: DurableObjectStorage;
   now?: () => number;
 }
 
-export class SqliteOutboxStore implements OutboxStore {
+class SqliteOutboxStore implements OutboxStore {
   private readonly storage: DurableObjectStorage;
   private readonly now: () => number;
 

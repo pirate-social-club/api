@@ -7,7 +7,7 @@ import { upsertLinkEnrichmentUsage } from "./repository-usages"
 import { buildLinkEnrichmentSnapshot } from "./snapshot"
 import type { LinkEnrichmentRecord } from "./types"
 
-export async function materializeLinkEnrichmentSnapshot(input: {
+async function materializeLinkEnrichmentSnapshot(input: {
   client: DbExecutor
   controlPlaneClient?: Client | null
   communityId?: string | null
@@ -38,7 +38,7 @@ export async function materializeLinkEnrichmentSnapshot(input: {
   }
 }
 
-export async function enqueueLinkSummaryIfNeeded(input: {
+async function enqueueLinkSummaryIfNeeded(input: {
   communityClient: DbExecutor
   communityId?: string | null
   postId: string
@@ -65,7 +65,7 @@ export async function enqueueLinkSummaryIfNeeded(input: {
   })
 }
 
-export async function enqueueLinkSummaryTranslationsIfNeeded(input: {
+async function enqueueLinkSummaryTranslationsIfNeeded(input: {
   communityClient: DbExecutor
   communityId?: string | null
   postId: string

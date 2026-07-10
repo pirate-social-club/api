@@ -417,14 +417,23 @@ async function buildStudyCapability(input: {
     return null
   }
 
-  return resolvePostStudyCapability({
-    client: input.executor,
-    env: input.env,
-    hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
-    post: input.post,
-    targetLanguage: input.resolvedLocale,
-    viewerUserId: input.viewerUserId,
-  })
+  try {
+    return await resolvePostStudyCapability({
+      client: input.executor,
+      env: input.env,
+      hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
+      post: input.post,
+      targetLanguage: input.resolvedLocale,
+      viewerUserId: input.viewerUserId,
+    })
+  } catch (error) {
+    console.error("[post-localization] failed to resolve study capability", {
+      communityId: input.post.community_id,
+      error,
+      postId: input.post.post_id,
+    })
+    return null
+  }
 }
 
 type PredictionMarketEmbed = NonNullable<Post["embeds"]>[number] & {

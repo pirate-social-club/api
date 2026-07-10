@@ -243,7 +243,7 @@ export function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommu
   }
 }
 
-export async function getHomeFeedCommunityIdentity(
+async function getHomeFeedCommunityIdentity(
   client: DbExecutor,
   communityId: string,
 ): Promise<HomeFeedCommunityIdentity | null> {

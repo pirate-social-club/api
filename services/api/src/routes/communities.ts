@@ -4,7 +4,6 @@ import {
   type AuthenticatedEnv,
 } from "../lib/auth-middleware"
 import { registerCommunityAdminRoutes } from "./communities-admin-routes"
-import { registerCommunityBookingsRoutes } from "./communities-bookings"
 import { registerCommunityAssistantRoutes } from "./communities-assistant-routes"
 import { registerCommunityCommerceRoutes } from "./communities-commerce"
 import { registerCommunityContentRoutes } from "./communities-content-routes"
@@ -33,9 +32,6 @@ communityAuthPolicy.get("/:communityId/telegram-bot-username", publicAccess)
 communityAuthPolicy.get("/:communityId/posts/:postId/karaoke", publicAccess)
 communityAuthPolicy.post("/:communityId/posts", agentDelegatedAccess)
 communityAuthPolicy.post("/:communityId/posts/:postId/comments", agentDelegatedAccess)
-communityAuthPolicy.get("/:communityId/bookings/settlement-review/pending", publicAccess)
-communityAuthPolicy.get("/:communityId/bookings/:bookingId/settlement-review", publicAccess)
-communityAuthPolicy.post("/:communityId/bookings/:bookingId/settlement-review/resolve", publicAccess)
 
 function communityPath(url: string): string {
   const pathname = new URL(url).pathname
@@ -90,7 +86,6 @@ registerCommunityModerationRoutes(communities)
 registerCommunityRightsReviewRoutes(communities)
 registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
-registerCommunityBookingsRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
 registerCommunityKaraokeSessionRoutes(communities)

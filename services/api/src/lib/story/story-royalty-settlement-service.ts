@@ -226,26 +226,3 @@ export async function mintStoryRoyaltyPurchaseEntitlement(input: {
   }
   return entitlementTxHash
 }
-
-export async function settlePurchaseViaStoryRoyalty(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPurchaseSettlementResult> {
-  const royalty = await payStoryRoyaltyOnBehalfForPurchase(input)
-  if (input.entitlementTokenId == null || royalty.entitlementHandled) {
-    return {
-      royaltyTxHash: royalty.royaltyTxHash,
-      entitlementTxHash: royalty.entitlementTxHash,
-      settlementTxHash: royalty.settlementTxHash,
-    }
-  }
-
-  const entitlementTxHash = await mintStoryRoyaltyPurchaseEntitlement({
-    env: input.env,
-    purchaseRef: input.purchaseRef,
-    buyerAddress: input.buyerAddress,
-    entitlementTokenId: input.entitlementTokenId,
-  })
-  return {
-    royaltyTxHash: royalty.royaltyTxHash,
-    entitlementTxHash,
-    settlementTxHash: royalty.settlementTxHash,
-  }
-}

@@ -3,8 +3,8 @@ import type { WalletAttachmentSummary } from "../../types"
 import { DEFAULT_COURTYARD_API_URL, COURTYARD_REGISTRIES } from "./courtyard-registry-config"
 import { normalizeEthereumAddress } from "./community-token-gates"
 
-export type Erc721InventoryProvider = "courtyard"
-export type Erc721InventoryAssetCategory = "trading_card" | "watch"
+type Erc721InventoryProvider = "courtyard"
+type Erc721InventoryAssetCategory = "trading_card" | "watch"
 export type Erc721InventoryAssetMatch = {
   category?: Erc721InventoryAssetCategory
   franchise?: string
@@ -18,8 +18,6 @@ export type Erc721InventoryAssetMatch = {
   grade?: string
   condition?: string
 }
-export type Erc721InventoryAssetFilter = Erc721InventoryAssetMatch
-
 export type Erc721InventoryMatchConfig = {
   chainNamespace: "eip155:1" | "eip155:137"
   contractAddress: string
@@ -28,7 +26,7 @@ export type Erc721InventoryMatchConfig = {
   assetFilter: Erc721InventoryAssetMatch
 }
 
-export type Erc721InventoryAsset = {
+type Erc721InventoryAsset = {
   chainNamespace: string
   contractAddress: string
   tokenId: string

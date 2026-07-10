@@ -207,9 +207,6 @@ export type BookingPaymentVerification =
   | { kind: "pending" } // not yet mined / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
 
-let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expected: BookingPaymentExpectation; rpcUrl?: string }) => Promise<BookingPaymentVerification>) | null = null
-export function setBookingPaymentVerifierForTests(fn: typeof testBookingPaymentVerifier): void { testBookingPaymentVerifier = fn }
-
 // Pure receipt evaluation (no RPC) so the matching/amount rules are directly unit-testable.
 interface MinimalReceipt { status: number; logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string>; data: string }> }
 export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, expected: BookingPaymentExpectation, txRef: string): BookingPaymentVerification {
@@ -242,7 +239,6 @@ export async function classifyBookingPaymentReceipt(input: {
   expected: BookingPaymentExpectation
   rpcUrl?: string
 }): Promise<BookingPaymentVerification> {
-  if (testBookingPaymentVerifier) return testBookingPaymentVerifier(input)
   const provider = new JsonRpcProvider(input.rpcUrl ?? resolvePirateCheckoutRpcUrl(input.env), input.expected.chainId)
   let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
   try {

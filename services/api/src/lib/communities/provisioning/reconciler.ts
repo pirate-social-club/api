@@ -53,7 +53,7 @@ export type ReconcilerDeps = {
   markRoutingDegraded(binding: StuckBinding, reason: string): Promise<void>
 }
 
-export type ReconcilerOutcome = "advanced" | "released" | "error"
+type ReconcilerOutcome = "advanced" | "released" | "error"
 
 export type ReconcilerResult = {
   scanned: number

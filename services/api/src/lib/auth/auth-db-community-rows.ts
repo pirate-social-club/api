@@ -136,26 +136,6 @@ export function toCommunityRow(row: unknown): CommunityRow {
   }
 }
 
-export function toCommunityDatabaseBindingRow(row: unknown): CommunityDatabaseBindingRow {
-  return {
-    community_database_binding_id: requiredString(row, "community_database_binding_id"),
-    community_id: requiredString(row, "community_id"),
-    binding_role: requiredString(row, "binding_role") as CommunityDatabaseBindingRow["binding_role"],
-    organization_slug: requiredString(row, "organization_slug"),
-    group_name: requiredString(row, "group_name"),
-    group_id: stringOrNull(rowValue(row, "group_id")),
-    database_name: requiredString(row, "database_name"),
-    database_id: stringOrNull(rowValue(row, "database_id")),
-    database_url: requiredString(row, "database_url"),
-    location: stringOrNull(rowValue(row, "location")),
-    requires_credentials: requiredNumber(row, "requires_credentials") === 1,
-    status: requiredString(row, "status") as CommunityDatabaseBindingRow["status"],
-    transferred_at: stringOrNull(rowValue(row, "transferred_at")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
-  }
-}
-
 export function toJobRow(row: unknown): JobRow {
   return {
     job_id: requiredString(row, "job_id"),

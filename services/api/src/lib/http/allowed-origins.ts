@@ -40,7 +40,7 @@ function normalizeExactOrigin(value: string): string | null {
   }
 }
 
-export function isTrustedHnsWebOrigin(origin: string): boolean {
+function isTrustedHnsWebOrigin(origin: string): boolean {
   let url: URL
   try {
     url = new URL(origin)

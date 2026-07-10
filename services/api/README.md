@@ -45,7 +45,7 @@ Current auth support:
 Current persistence mode:
 
 - control-plane DB via the shared `sql-client` abstraction when `DEV_MEMORY_STORE_ENABLED=false`
-- libsql/local-file control-plane URLs and PostgreSQL control-plane URLs both work through the same repository layer
+- PostgreSQL is the only production control-plane transport; local SQLite/libSQL support is confined to the test harness
 - in-memory repository only when `DEV_MEMORY_STORE_ENABLED=true`
 
 ## Internal Layout

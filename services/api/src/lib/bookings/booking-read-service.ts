@@ -3,7 +3,7 @@ import { BOOKING_COLUMNS, decodeBooking } from "./booking-row";
 import type { Booking } from "./types";
 
 export type BookingViewerRole = "host" | "booker";
-export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
+type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
 
 export interface BookingReadSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;

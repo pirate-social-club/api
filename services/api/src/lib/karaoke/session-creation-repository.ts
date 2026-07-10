@@ -3,7 +3,7 @@ import { internalError } from "../errors"
 import { numberOrNull, rowValue, stringOrNull } from "../sql-row"
 import type { Client } from "../sql-client"
 
-export type KaraokeSessionCreationStatus = "pending" | "initialized" | "failed"
+type KaraokeSessionCreationStatus = "pending" | "initialized" | "failed"
 
 export interface KaraokeSessionCreationKey {
   subjectUserId: string

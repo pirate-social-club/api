@@ -63,7 +63,7 @@ export function normalizeEthereumAddress(value: unknown): string | null {
   }
 }
 
-export function listEthereumMainnetWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+function listEthereumMainnetWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
@@ -82,14 +82,6 @@ export function listEthereumMainnetWalletAddresses(walletAttachments: WalletAtta
   }
 
   return addresses
-}
-
-export async function anyAttachedEthereumWalletOwnsErc721Collection(input: {
-  contractAddress: string
-  env: Env
-  walletAttachments: WalletAttachmentSummary[]
-}): Promise<boolean> {
-  return (await evaluateAttachedEthereumWalletErc721CollectionOwnership(input)).owns
 }
 
 export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(input: {

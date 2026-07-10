@@ -289,9 +289,6 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("video access_mode must be public or locked")
     }
-    if (body.access_mode && (body.identity_mode ?? "public") !== "public") {
-      throw badRequestError("video commerce posts must use public identity")
-    }
     if (body.access_mode !== "locked" && (body.license_preset || body.commercial_rev_share_pct != null)) {
       throw badRequestError("license_preset is only supported for locked video asset posts")
     }
@@ -356,9 +353,6 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     }
   }
   if (body.post_type === "song") {
-    if ((body.identity_mode ?? "public") !== "public") {
-      throw badRequestError("song posts must use public identity")
-    }
     if (!body.song_artifact_bundle?.trim()) {
       throw badRequestError("song_artifact_bundle is required for song posts")
     }

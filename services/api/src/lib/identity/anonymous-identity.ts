@@ -70,7 +70,7 @@ export function buildAnonymousLabel(input: {
   return `anon_${adjective}-${noun}-${suffix}`
 }
 
-export function formatDisclosedQualifierLabel(qualifierTemplateId: string): string {
+function formatDisclosedQualifierLabel(qualifierTemplateId: string): string {
   const trimmed = qualifierTemplateId.trim()
   if (!trimmed) {
     return "Qualifier"

@@ -308,13 +308,7 @@ describe("openCommunityDb", () => {
     expect(beforePostColumns).not.toContain("top_level_comment_count")
     expect(beforePostColumns).not.toContain("last_comment_at")
 
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_partial",
-    )
+    const db = await openCommunityDb({}, buildRepository(databasePath), "cmt_partial")
 
     db.close()
 
@@ -394,13 +388,7 @@ describe("openCommunityDb", () => {
     const beforePostColumns = await getTableColumns(databasePath, "posts")
     expect(beforePostColumns).not.toContain("crosspost_source_json")
 
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_partial",
-    )
+    const db = await openCommunityDb({}, buildRepository(databasePath), "cmt_partial")
     db.close()
 
     const afterPostColumns = await getTableColumns(databasePath, "posts")
@@ -432,13 +420,7 @@ describe("openCommunityDb", () => {
       client.close()
     }
 
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_partial",
-    )
+    const db = await openCommunityDb({}, buildRepository(databasePath), "cmt_partial")
     db.close()
 
     const migrationsDir = resolveCoreRepoPath("db/community-template/migrations", {
@@ -471,13 +453,7 @@ describe("openCommunityDb", () => {
       client.close()
     }
 
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_partial",
-    )
+    const db = await openCommunityDb({}, buildRepository(databasePath), "cmt_partial")
     db.close()
 
     const migrationsDir = resolveCoreRepoPath("db/community-template/migrations", {
@@ -816,13 +792,7 @@ describe("openCommunityDb", () => {
     const databasePath = join(rootDir, `${randomUUID()}.db`)
     await applyPartialCommunitySchema(databasePath)
 
-    const db = await openCommunityDb(
-      {
-        LOCAL_COMMUNITY_DB_ROOT: rootDir,
-      },
-      buildRepository(databasePath),
-      "cmt_partial",
-    )
+    const db = await openCommunityDb({}, buildRepository(databasePath), "cmt_partial")
 
     try {
       const now = new Date().toISOString()

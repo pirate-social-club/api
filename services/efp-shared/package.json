@@ -8,13 +8,12 @@
   },
   "types": "./src/index.ts",
   "scripts": {
-    "check": "tsgo --noEmit"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "viem": "^2.48.1"
   },
   "devDependencies": {
-    "@typescript/native-preview": "^7.0.0-dev.20260421.2",
-    "typescript": "^5.8.3"
+    "typescript": "^7.0.2"
   }
 }

@@ -29,7 +29,7 @@ const ROUTING_ROW_COLUMNS = `
   created_at, updated_at
 `
 
-export function toCommunityDatabaseRoutingRow(row: unknown): CommunityDatabaseRoutingRow {
+function toCommunityDatabaseRoutingRow(row: unknown): CommunityDatabaseRoutingRow {
   return {
     community_id: requiredString(row, "community_id"),
     provisioning_state: requiredString(row, "provisioning_state") as CommunityProvisioningState,

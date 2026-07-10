@@ -258,6 +258,7 @@ function fakeCreateClient() {
         }
         return { rows: [] }
       },
+      batch: async () => [],
       commit: async () => undefined,
       rollback: async () => undefined,
       close: () => undefined,

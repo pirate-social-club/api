@@ -1,7 +1,6 @@
 // Global booking quote/confirm service backed by bookings.* Postgres repositories.
 //
-// This is the Phase-2 service boundary for moving paid booking confirmation out of community D1.
-// It keeps the existing route response shape (snake_case payment instructions / booking snapshot)
+// It keeps the route response shape stable (snake_case payment instructions / booking snapshot)
 // while delegating durable row semantics to the repository layer.
 import type { Env } from "../../env";
 import type { UserRepository } from "../auth/repositories";
@@ -109,7 +108,7 @@ function replayMatches(input: {
   return true;
 }
 
-export interface BookingPaymentExpectation {
+interface BookingPaymentExpectation {
   chainId: number;
   tokenAddress: string;
   recipientAddress: string;
@@ -117,7 +116,7 @@ export interface BookingPaymentExpectation {
   senderAddress: string;
 }
 
-export type BookingPaymentVerification =
+type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
   | { kind: "pending" }
   | { kind: "rejected"; reason: string };
@@ -191,7 +190,7 @@ async function createOrGetIntent(input: {
   return { intent: result.intent, ...snapshot };
 }
 
-export interface PaymentInstructions {
+interface PaymentInstructions {
   payment_intent_id: string;
   version: number;
   chain_id: number;
@@ -206,7 +205,7 @@ export interface PaymentInstructions {
   wallet_attachment_required: boolean;
 }
 
-export interface BookingSnapshot {
+interface BookingSnapshot {
   booking_id: string;
   hold_id: string;
   host_user_id: string;

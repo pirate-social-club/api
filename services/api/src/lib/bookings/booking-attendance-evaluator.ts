@@ -1,4 +1,4 @@
-// Pure attendance → outcome decision for the post-slot settlement evaluator (Slice D4).
+// Pure attendance → outcome decision for the global post-slot settlement evaluator.
 // No I/O: given each party's liveness sample timestamps (attach + heartbeats + last_seen) and the
 // booked slot window, decide the settlement outcome. Two rules baked in:
 //   1. Attendance is CLIPPED to [slotStart, slotEnd] — early attaches (allowed while confirmed)
@@ -15,7 +15,7 @@ export interface AttendanceConfig {
   minSoloAttendanceMs: number // sustained in-window presence required to count as "attended"
 }
 
-export const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
+const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
   staleMs: 90_000, // heartbeats every 30s; 3 missed = stale
   minOverlapMs: 10 * 60_000, // 10 minutes
   overlapSlotFraction: 0.5, // or 50% of the slot, whichever is smaller

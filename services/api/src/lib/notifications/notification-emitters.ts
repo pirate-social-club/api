@@ -154,7 +154,7 @@ export async function emitPostCommented(input: {
   }
 }
 
-export async function emitRoyaltyEarned(input: {
+async function emitRoyaltyEarned(input: {
   env: Env
   recipientUserId: string
   communityId: string

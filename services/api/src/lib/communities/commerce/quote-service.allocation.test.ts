@@ -15,8 +15,6 @@ function replayAllocation(shareBps: number, index: number): ReplayAllocation {
     share_bps: shareBps,
     rights_basis: "performer_default",
     approval_status: "approved",
-    created_at: "2026-07-09T00:00:00.000Z",
-    updated_at: "2026-07-09T00:00:00.000Z",
   }
 }
 
