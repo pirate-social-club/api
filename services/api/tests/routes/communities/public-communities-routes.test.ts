@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import publicReadApp from "../../../src/routes/public-read-app"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt, requestJson } from "./community-routes-test-helpers"
 
@@ -17,6 +18,19 @@ afterEach(async () => {
 })
 
 describe("public community routes", () => {
+  test("returns not found for a punycode handle missing the @ prefix", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const response = await publicReadApp.request(
+      "http://pirate.test/public-communities/xn--tl8h",
+      {},
+      ctx.env,
+    )
+
+    expect(response.status).toBe(404)
+  })
+
   test("community search requires a non-empty query", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
