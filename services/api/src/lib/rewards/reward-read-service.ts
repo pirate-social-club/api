@@ -1,12 +1,13 @@
 import type { Env } from "../../env"
 import type { Client, QueryResultRow } from "../sql-client"
 import { executeFirst } from "../db-helpers"
-import { numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
+import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import { getControlPlaneClient } from "../runtime-deps"
 import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import type {
   RewardEventKind,
   RewardEventSummary,
+  RewardPayoutSummary,
   RewardsSummaryResponse,
   RewardVerificationState,
 } from "../../types"
@@ -47,6 +48,21 @@ function serializeRewardEvent(row: QueryResultRow): RewardEventSummary {
   }
 }
 
+function serializeRewardPayout(row: QueryResultRow): RewardPayoutSummary {
+  const status = requiredString(row, "status")
+  if (status !== "submitted" && status !== "confirmed" && status !== "failed") {
+    throw new Error(`unexpected_reward_payout_status:${status}`)
+  }
+  return {
+    id: requiredString(row, "reward_payout_effect_id"),
+    amount_cents: requiredNumber(row, "amount_cents"),
+    recipient_address: requiredString(row, "recipient_address"),
+    status,
+    settlement_ref: stringOrNull(rowValue(row, "settlement_ref")),
+    failure_reason: stringOrNull(rowValue(row, "failure_reason")),
+  }
+}
+
 function resolveVerificationState(hasNullifier: boolean): RewardVerificationState {
   return hasNullifier ? "verified" : "unverified"
 }
@@ -72,10 +88,11 @@ export async function getRewardsSummaryForUser(input: {
         min_cents: minCashoutCents,
         verification_state: "unverified",
       },
+      latest_in_flight_cashout: null,
     }
   }
 
-  const [creditRow, payoutRow, todayRow, eventRows, hasNullifier] = await Promise.all([
+  const [creditRow, payoutRow, todayRow, eventRows, latestInFlightRow, hasNullifier] = await Promise.all([
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS credit_cents
@@ -113,6 +130,16 @@ export async function getRewardsSummaryForUser(input: {
       `,
       args: [input.userId, recentLimit],
     }),
+    executeFirst(client, {
+      sql: `
+        SELECT reward_payout_effect_id, amount_cents, recipient_address, status, settlement_ref, failure_reason
+        FROM reward_payout_effects
+        WHERE user_id = ?1 AND status = 'submitted'
+        ORDER BY updated_at DESC, reward_payout_effect_id DESC
+        LIMIT 1
+      `,
+      args: [input.userId],
+    }),
     hasActiveUniqueHumanNullifier(client, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)),
   ])
 
@@ -131,5 +158,6 @@ export async function getRewardsSummaryForUser(input: {
       min_cents: minCashoutCents,
       verification_state: verificationState,
     },
+    latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow) : null,
   }
 }

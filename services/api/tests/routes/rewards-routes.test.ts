@@ -225,12 +225,18 @@ describe("rewards routes", () => {
     const verifiedBody = await json(verified) as {
       balance_cents: number
       cashout: { eligible: boolean; min_cents: number; verification_state: string }
+      latest_in_flight_cashout: { id: string; amount_cents: number; status: string } | null
     }
     expect(verifiedBody.balance_cents).toBe(90)
     expect(verifiedBody.cashout).toEqual({
       eligible: false,
       min_cents: 100,
       verification_state: "verified",
+    })
+    expect(verifiedBody.latest_in_flight_cashout).toMatchObject({
+      id: "rpe_route_pending",
+      amount_cents: 10,
+      status: "submitted",
     })
 
     ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
@@ -286,6 +292,7 @@ describe("rewards routes", () => {
         min_cents: 100,
         verification_state: "unverified",
       },
+      latest_in_flight_cashout: null,
     })
 
     const cashout = await app.request(
@@ -298,6 +305,64 @@ describe("rewards routes", () => {
       ctx.env,
     )
     expect(cashout.status).toBe(403)
+    expect(settleCount).toBe(0)
+  })
+
+  test("does not accept ZKPassport as the configured reward identity namespace", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "zkpassport",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-zkpassport-namespace-user")
+    const now = "2026-07-09T12:00:00.000Z"
+    let settleCount = 0
+    setRewardSettlementCoordinatorForTests({
+      settle: async (req) => {
+        settleCount += 1
+        return { idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xshouldnotsettle", nonce: 1, state: "broadcast" }
+      },
+      confirm: async (req, txHash) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash, nonce: 1, state: "confirmed" }),
+      reconcile: async (req) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xshouldnotsettle", nonce: 1, state: "broadcast" }),
+    })
+    await addWallet(ctx, session.userId, now)
+    await addRewardEvent(ctx, session.userId, 150, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash, status,
+          first_seen_at, created_at, updated_at
+        ) VALUES (
+          'idn_rewards_zkpassport', ?1, 'zkpassport', 'zkpassport-unique-identifier',
+          'reward-zkpassport-nullifier', 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [session.userId, JSON.stringify({
+        unique_human: {
+          state: "verified",
+          provider: "zkpassport",
+          proof_type: "unique_human",
+          mechanism: "zkpassport-unique-identifier",
+          verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
+    })
+
+    const response = await app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100, idempotency_key: "reward-cashout-zkpassport-only" }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(403)
     expect(settleCount).toBe(0)
   })
 
@@ -450,6 +515,70 @@ describe("rewards routes", () => {
       ctx.env,
     )
     expect(otherUserCannotReadCashout.status).toBe(404)
+  })
+
+  test("deduplicates different idempotency keys while one cashout is submitted", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-cashout-inflight-user")
+    const now = "2026-07-09T12:00:00.000Z"
+    let settleCount = 0
+    setRewardSettlementConfirmPollPlanForTests([])
+    setRewardSettlementCoordinatorForTests({
+      settle: async (req) => {
+        settleCount += 1
+        return { idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xinflight", nonce: 14, state: "broadcast" }
+      },
+      confirm: async (req, txHash) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash, nonce: 14, state: "broadcast" }),
+      reconcile: async (req) => ({ idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]), txHash: "0xinflight", nonce: 14, state: "broadcast" }),
+    })
+    await addWallet(ctx, session.userId, now)
+    await addNullifier(ctx, session.userId, now)
+    await addRewardEvent(ctx, session.userId, 250, now)
+
+    const postCashout = (amountCents: number, idempotencyKey: string) => app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: amountCents, idempotency_key: idempotencyKey }),
+      },
+      ctx.env,
+    )
+    const first = await postCashout(100, "reward-cashout-inflight-tab-a")
+    const second = await postCashout(100, "reward-cashout-inflight-tab-b")
+    expect(first.status).toBe(202)
+    expect(second.status).toBe(202)
+    const firstBody = await json(first) as { payout: { id: string; status: string } }
+    const secondBody = await json(second) as { payout: { id: string; status: string } }
+    expect(firstBody.payout.status).toBe("submitted")
+    expect(secondBody.payout.id).toBe(firstBody.payout.id)
+    expect(settleCount).toBe(2)
+
+    const differentAmount = await postCashout(110, "reward-cashout-inflight-tab-c")
+    expect(differentAmount.status).toBe(409)
+    const count = await ctx.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM reward_payout_effects WHERE user_id = ?1",
+      args: [session.userId],
+    })
+    expect(count.rows[0]?.count).toBe(1)
+    await expect(ctx.client.execute({
+      sql: `
+        INSERT INTO reward_payout_effects (
+          reward_payout_effect_id, user_id, amount_cents, recipient_address,
+          idempotency_key, status, submitted_at, created_at, updated_at
+        ) VALUES (
+          'rpe_route_duplicate_submitted', ?1, 100,
+          '0x1000000000000000000000000000000000000001',
+          'reward-cashout-raw-duplicate', 'submitted', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })).rejects.toThrow()
   })
 
   test("POST /me/rewards/cashouts can attach a verified Privy wallet at claim time", async () => {

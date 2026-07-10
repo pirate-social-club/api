@@ -170,6 +170,23 @@ async function getPayoutByUserIdAndEffectId(
   return result.rows[0] ? decodePayoutEffect(result.rows[0]) : null
 }
 
+async function getSubmittedPayoutForUser(
+  exec: Pick<Client | Transaction, "execute">,
+  userId: string,
+): Promise<RewardPayoutEffect | null> {
+  const result = await exec.execute({
+    sql: `
+      SELECT ${PAYOUT_COLUMNS}
+      FROM reward_payout_effects
+      WHERE user_id = ?1 AND status = 'submitted'
+      ORDER BY updated_at DESC, reward_payout_effect_id DESC
+      LIMIT 1
+    `,
+    args: [userId],
+  })
+  return result.rows[0] ? decodePayoutEffect(result.rows[0]) : null
+}
+
 async function resolveCashoutRecipient(exec: Pick<Client | Transaction, "execute">, userId: string): Promise<string> {
   const result = await exec.execute({
     sql: `
@@ -272,6 +289,14 @@ async function reserveCashoutEffect(input: {
     if (existing) {
       assertReplayMatches({ effect: existing, userId: input.userId, amountCents: input.amountCents })
       return { effect: existing, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
+    }
+
+    const submitted = await getSubmittedPayoutForUser(tx, input.userId)
+    if (submitted) {
+      if (submitted.amountCents !== input.amountCents) {
+        throw conflictError("A different rewards cashout is already in progress")
+      }
+      return { effect: submitted, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
     }
 
     if (!(await hasActiveUniqueHumanNullifier(tx, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)))) {
