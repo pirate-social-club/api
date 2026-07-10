@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import type { JoinEligibility } from "../../types"
 import { getUserRepository } from "../auth/repositories"
 import { getJoinEligibility } from "../communities/membership/eligibility-service"
 import type { CommunityMembershipRepository } from "../communities/membership/types"
@@ -361,6 +362,7 @@ function promptText(input: {
   communityId: string
   reason: "unmapped" | "verification_required" | "not_joinable"
   missingCapabilities?: TelegramJoinMissingCapability[]
+  failureReason?: JoinEligibility["failure_reason"]
 }): string {
   const url = communityJoinUrl(input.env, input.communityId)
   if (input.reason === "unmapped") {
@@ -368,6 +370,18 @@ function promptText(input: {
   }
   if (input.reason === "verification_required") {
     return `This community requires ${verificationPromptRequirement(input.missingCapabilities ?? [])} before Telegram access can be approved:\n${url}\n\nAfter verification, try joining the group again.`
+  }
+  if (input.failureReason === "nationality_mismatch") {
+    return `Your verified nationality does not satisfy this community requirement:\n${url}`
+  }
+  if (input.failureReason === "gender_mismatch") {
+    return `Your verified document sex marker does not satisfy this community requirement:\n${url}`
+  }
+  if (input.failureReason === "minimum_age_mismatch") {
+    return `Your verified age does not satisfy this community requirement:\n${url}`
+  }
+  if (input.failureReason === "wallet_score_too_low") {
+    return `Your Passport score does not satisfy this community requirement:\n${url}`
   }
   return `Pirate cannot approve this Telegram join request yet:\n${url}`
 }
@@ -417,6 +431,7 @@ async function promptDecision(input: {
   communityId: string
   reason: "unmapped" | "verification_required" | "not_joinable"
   missingCapabilities?: TelegramJoinMissingCapability[]
+  failureReason?: JoinEligibility["failure_reason"]
   onboardingWebAppUrl?: string | null
 }): Promise<TelegramJoinRequestDecision> {
   try {
@@ -429,6 +444,7 @@ async function promptDecision(input: {
         communityId: input.communityId,
         reason: input.reason,
         missingCapabilities: input.missingCapabilities,
+        failureReason: input.failureReason,
       }),
       ...(input.onboardingWebAppUrl
         ? { replyMarkup: telegramOnboardingWebAppReplyMarkup(input.onboardingWebAppUrl, "Open Pirate") }
@@ -594,6 +610,7 @@ export async function evaluateTelegramChatJoinRequest(input: {
     communityId: linkedChat.communityId,
     reason: eligibility.status === "verification_required" ? "verification_required" : "not_joinable",
     missingCapabilities,
+    failureReason: eligibility.failure_reason,
     onboardingWebAppUrl,
   })
 }

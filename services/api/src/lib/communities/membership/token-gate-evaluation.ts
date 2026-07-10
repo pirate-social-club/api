@@ -45,7 +45,11 @@ export async function evaluateTokenGateRule(input: {
     return ["unsupported_gate_config"]
   }
   if (!hasEthereumRpcConfig(env)) {
-    return ["token_inventory_unavailable"]
+    console.error("[community-gate] Ethereum RPC is not configured", {
+      gate_type: rule.gate_type,
+      chain_namespace: rule.chain_namespace,
+    })
+    return ["ethereum_rpc_not_configured"]
   }
 
   const ownership = await evaluateAttachedEthereumWalletErc721CollectionOwnership({

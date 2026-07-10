@@ -1,17 +1,25 @@
 import type { Env } from "../../../env"
 import type { User, WalletAttachmentSummary } from "../../../types"
-import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
+import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateEvaluationOutcome, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
 import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope, type VerifiedAltchaProof } from "../../verification/altcha-provider"
 
 type AtomEvaluation = {
+  outcome: GateEvaluationOutcome
   passed: boolean
   trace: GateTraceNode
   requiredAction: RequiredAction | null
 }
 
-export type EvaluationMode = "preview" | "enforce"
+type ExpressionEvaluation = {
+  outcome: GateEvaluationOutcome
+  passed: boolean
+  trace: GateTraceNode
+  requiredActionSet: RequiredActionSet | null
+}
+
+export type EvaluationMode = "preview" | "enforce" | "diagnose"
 
 function getDocumentAcceptedProviders(
   atom: Extract<GateAtom, { type: "minimum_age" | "nationality" | "gender" }>,
@@ -36,6 +44,7 @@ export async function evaluateMembershipGatePolicy(input: {
   if (!input.policy) {
     return {
       satisfied: false,
+      outcome: "terminal_mismatch",
       trace: { kind: "op", op: "and", passed: false, children: [] },
       requiredActionSet: { kind: "set", mode: "all", items: [] },
     }
@@ -54,6 +63,7 @@ export async function evaluateMembershipGatePolicy(input: {
 
   return {
     satisfied: result.passed,
+    outcome: result.outcome,
     trace: result.trace,
     requiredActionSet: result.passed ? null : result.requiredActionSet,
   }
@@ -68,11 +78,12 @@ async function evaluateExpression(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
-}): Promise<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> {
+}): Promise<ExpressionEvaluation> {
   const { expression } = input
   if (expression.op === "gate") {
     const result = await evaluateAtom({ ...input, atom: expression.gate })
     return {
+      outcome: result.outcome,
       passed: result.passed,
       trace: result.trace,
       requiredActionSet: result.passed || !result.requiredAction
@@ -82,7 +93,7 @@ async function evaluateExpression(input: {
   }
 
   const children = input.mode === "enforce"
-    ? await evaluateChildrenSequentially({ ...input, expression })
+    ? await evaluateChildrenForEnforcement({ ...input, expression })
     : await Promise.all(expression.children.map((child) =>
         evaluateExpression({ ...input, expression: child }),
       ))
@@ -91,10 +102,13 @@ async function evaluateExpression(input: {
     : children.some((child) => child.passed)
   const failedChildren = children.filter((child) => !child.passed)
   const requiredItems = failedChildren
+    .filter((child) => child.outcome === "action_required")
     .map((child) => child.requiredActionSet)
     .filter((item): item is RequiredActionSet => item != null)
+  const outcome = composeExpressionOutcome(expression.op, children)
 
   return {
+    outcome,
     passed,
     trace: {
       kind: "op",
@@ -102,7 +116,7 @@ async function evaluateExpression(input: {
       passed,
       children: children.map((child) => child.trace),
     },
-    requiredActionSet: passed
+    requiredActionSet: outcome !== "action_required"
       ? null
       : collapseActionSet({
         kind: "set",
@@ -112,7 +126,7 @@ async function evaluateExpression(input: {
   }
 }
 
-async function evaluateChildrenSequentially(input: {
+async function evaluateChildrenForEnforcement(input: {
   env: Env
   expression: Extract<GateExpression, { op: "and" | "or" }>
   user: User
@@ -121,19 +135,41 @@ async function evaluateChildrenSequentially(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
-}): Promise<Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }>> {
-  const children: Array<{ passed: boolean; trace: GateTraceNode; requiredActionSet: RequiredActionSet | null }> = []
-  for (const childExpression of input.expression.children) {
+}): Promise<ExpressionEvaluation[]> {
+  const children: ExpressionEvaluation[] = []
+  for (const [index, childExpression] of input.expression.children.entries()) {
     const child = await evaluateExpression({ ...input, expression: childExpression })
     children.push(child)
     if (input.expression.op === "or" && child.passed) {
       break
     }
     if (input.expression.op === "and" && !child.passed) {
+      const remaining = input.expression.children.slice(index + 1)
+      children.push(...await Promise.all(remaining.map((expression) =>
+        evaluateExpression({ ...input, expression, mode: "diagnose", altchaProof: undefined }),
+      )))
       break
     }
   }
   return children
+}
+
+function composeExpressionOutcome(
+  op: "and" | "or",
+  children: readonly ExpressionEvaluation[],
+): GateEvaluationOutcome {
+  const outcomes = new Set(children.map((child) => child.outcome))
+  if (op === "or") {
+    if (outcomes.has("passed")) return "passed"
+    if (outcomes.has("action_required")) return "action_required"
+    if (outcomes.has("provider_unavailable")) return "provider_unavailable"
+    return "terminal_mismatch"
+  }
+
+  if (outcomes.has("terminal_mismatch")) return "terminal_mismatch"
+  if (outcomes.has("provider_unavailable")) return "provider_unavailable"
+  if (outcomes.has("action_required")) return "action_required"
+  return "passed"
 }
 
 function collapseActionSet(set: RequiredActionSet): RequiredActionSet {
@@ -238,8 +274,9 @@ async function evaluateAltchaAtom(input: {
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<AtomEvaluation> {
-  if (input.mode === "preview") {
+  if (input.mode !== "enforce") {
     return {
+      outcome: "action_required",
       passed: false,
       trace: {
         kind: "gate",
@@ -263,6 +300,7 @@ async function evaluateAltchaAtom(input: {
     && input.verifiedAltchaProof.action === input.altchaProof?.action
   ) {
     return {
+      outcome: "passed",
       passed: true,
       trace: {
         kind: "gate",
@@ -280,6 +318,7 @@ async function evaluateAltchaAtom(input: {
     proof: input.altchaProof,
   })
   return {
+    outcome: result.verified ? "passed" : "action_required",
     passed: result.verified,
     trace: {
       kind: "gate",
@@ -309,7 +348,10 @@ function evaluateIdentityAtom(
   const row = buildIdentityRow(input.atom, proofRequirements)
   const result = evaluateIdentityGateRule({ rule: row, user: input.user, suggestedProvider: null })
   const passed = result.missingCapabilities.length === 0 && result.mismatchReasons.length === 0
+  const actionRequired = result.missingCapabilities.length > 0
+    || result.mismatchReasons.includes("provider_not_accepted")
   return {
+    outcome: passed ? "passed" : actionRequired ? "action_required" : "terminal_mismatch",
     passed,
     trace: {
       kind: "gate",
@@ -319,7 +361,7 @@ function evaluateIdentityAtom(
       reason: passed ? undefined : (result.mismatchReasons[0] ?? result.missingCapabilities[0] ?? "missing_verification"),
       ...traceFields,
     },
-    requiredAction: passed ? null : requiredAction,
+    requiredAction: actionRequired ? requiredAction : null,
   }
 }
 
@@ -335,22 +377,25 @@ function evaluateGenderAtom(input: {
   const normalizedValue = capability.value === "M" || capability.value === "F" ? capability.value : null
   const passed = providerAccepted && normalizedValue != null && input.atom.allowed.includes(normalizedValue)
   const missing = capability.state !== "verified"
+  const providerMismatch = capability.state === "verified" && !providerAccepted
+  const actionRequired = missing || providerMismatch
   return {
+    outcome: passed ? "passed" : actionRequired ? "action_required" : "terminal_mismatch",
     passed,
     trace: {
       kind: "gate",
       gate_type: "gender",
       provider: input.atom.provider,
       passed,
-      reason: passed ? undefined : missing ? "gender" : "gender_mismatch",
+      reason: passed ? undefined : missing ? "gender" : providerMismatch ? "provider_not_accepted" : "gender_mismatch",
     },
-    requiredAction: passed ? null : {
+    requiredAction: actionRequired ? {
       kind: "action",
       provider: preferredProvider,
       accepted_providers: acceptedProviders,
       capability: "gender",
       allowed_markers: input.atom.allowed,
-    },
+    } : null,
   }
 }
 
@@ -366,16 +411,23 @@ async function evaluateTokenAtom(input: {
     walletAttachments: input.walletAttachments,
   })
   const passed = mismatchReasons.length === 0
+  const reason = mismatchReasons[0] ?? "wallet_verification_required"
+  const unavailable = reason === "ethereum_rpc_not_configured"
+    || reason === "token_inventory_unavailable"
+    || reason === "unsupported_gate_config"
+    || reason === "unsupported_chain_namespace"
+    || reason.startsWith("unsupported_gate_type:")
   return {
+    outcome: passed ? "passed" : unavailable ? "provider_unavailable" : "action_required",
     passed,
     trace: {
       kind: "gate",
       gate_type: input.atom.type,
       provider: input.atom.type === "erc721_inventory_match" ? "courtyard" : "wallet",
       passed,
-      reason: passed ? undefined : mismatchReasons[0] ?? "wallet_verification_required",
+      reason: passed ? undefined : reason,
     },
-    requiredAction: passed ? null : input.atom.type === "erc721_holding"
+    requiredAction: passed || unavailable ? null : input.atom.type === "erc721_holding"
       ? {
         kind: "action",
         provider: "wallet",

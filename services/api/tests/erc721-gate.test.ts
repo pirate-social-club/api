@@ -92,12 +92,14 @@ const walletAttachments: WalletAttachmentSummary[] = [
 ]
 
 const originalConsoleWarn = console.warn
+const originalConsoleError = console.error
 
 afterEach(() => {
   setErc721OwnershipCheckerForTests(null)
   setErc721InventoryMatcherForTests(null)
   clearErc721InventoryMatchCacheForTests()
   console.warn = originalConsoleWarn
+  console.error = originalConsoleError
 })
 
 describe("erc721 gate evaluation", () => {
@@ -122,7 +124,9 @@ describe("erc721 gate evaluation", () => {
     expect(result.mismatchReasons).toContain("erc721_holding_required")
   })
 
-  test("returns token_inventory_unavailable when ERC-721 ownership lookup cannot run", async () => {
+  test("distinguishes missing Ethereum RPC configuration from provider outages", async () => {
+    const operatorErrors: unknown[][] = []
+    console.error = (...args: unknown[]) => operatorErrors.push(args)
     const result = await evaluateMembershipGateRules({
       env: {},
       rules: [makeErc721Rule("0x1111111111111111111111111111111111111111")],
@@ -131,8 +135,9 @@ describe("erc721 gate evaluation", () => {
     })
 
     expect(result.satisfied).toBe(false)
-    expect(result.mismatchReasons).toContain("token_inventory_unavailable")
+    expect(result.mismatchReasons).toContain("ethereum_rpc_not_configured")
     expect(result.mismatchReasons).not.toContain("erc721_holding_required")
+    expect(operatorErrors).toHaveLength(1)
   })
 
   test("returns satisfied when an attached wallet holds the collection", async () => {

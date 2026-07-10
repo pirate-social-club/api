@@ -118,7 +118,7 @@ describe("community gender and request gate routes", () => {
       details: { failure_reason: string; membership_gate_summaries: Array<{ gate_type: string }> }
     }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.details.failure_reason).toBe("missing_verification")
+    expect(deniedBody.details.failure_reason).toBe("gender_mismatch")
     expect(deniedBody.details.membership_gate_summaries[0].gate_type).toBe("gender")
   })
 

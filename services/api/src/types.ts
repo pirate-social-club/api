@@ -62,6 +62,7 @@ export type {
   MembershipRequestStatus,
   MembershipRequestSummary,
   MembershipGateSummary,
+  MembershipGateExpressionSummary,
   ModerationAction,
   ModerationCase,
   ModerationCaseDetail,
@@ -302,6 +303,7 @@ type RootPostQuotaByTrustTier = NonNullable<ContractCommunity["root_post_quota_b
 
 export type CommunityRoleSummary = ContractCommunityRoleSummary
 type MembershipGateSummary = ContractCommunityPreview["membership_gate_summaries"][number]
+type MembershipGateExpressionSummary = NonNullable<ContractCommunityPreview["membership_gate_expression"]>
 
 export type AgentActionProof = {
   nonce: string
@@ -891,6 +893,7 @@ export type CommunityPreview = {
   moderators: Array<CommunityRoleSummary>
   reference_links?: Array<CommunityReferenceLinkPublic> | null
   membership_gate_summaries: Array<MembershipGateSummary>
+  membership_gate_expression?: MembershipGateExpressionSummary | null
   gate_match_mode?: "all" | "any" | null
   rules: Array<CommunityRule>
   viewer_membership_status?: "member" | "not_member" | "banned" | null

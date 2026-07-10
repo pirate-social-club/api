@@ -81,6 +81,9 @@ const spec = {
       "name": "Notifications"
     },
     {
+      "name": "Rewards"
+    },
+    {
       "name": "Jobs"
     }
   ],
@@ -6649,6 +6652,97 @@ const spec = {
         }
       }
     },
+    "/me/rewards": {
+      "get": {
+        "operationId": "me_rewards",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get the current user's rewards ledger summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardsSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/rewards/cashouts": {
+      "post": {
+        "operationId": "me_rewards_cashouts",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Claim off-chain reward credits to the user's wallet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCashoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCashoutResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/rewards/cashouts/{cashout_id}": {
+      "parameters": [
+        {
+          "name": "cashout_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "me_rewards_cashouts_by_cashout_id",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get an authoritative reward cashout status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCashoutResponse"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "cashout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/jobs/{job_id}": {
       "get": {
         "tags": [
@@ -11551,6 +11645,10 @@ const spec = {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
+          },
           "gate_match_mode": {
             "type": "string",
             "enum": [
@@ -11638,6 +11736,10 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
+          },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
           },
           "missing_capabilities": {
             "type": "array",
@@ -12138,8 +12240,7 @@ const spec = {
           },
           {
             "required": [
-              "post_type",
-              "identity_mode"
+              "post_type"
             ],
             "anyOf": [
               {
@@ -12167,12 +12268,6 @@ const spec = {
                 "type": "string",
                 "enum": [
                   "song"
-                ]
-              },
-              "identity_mode": {
-                "type": "string",
-                "enum": [
-                  "public"
                 ]
               },
               "access_mode": {
@@ -15423,6 +15518,71 @@ const spec = {
           }
         }
       },
+      "RewardsSummaryResponse": {
+        "type": "object",
+        "required": [
+          "balance_cents",
+          "today_earned_cents",
+          "recent_events",
+          "cashout",
+          "latest_in_flight_cashout"
+        ],
+        "properties": {
+          "balance_cents": {
+            "type": "integer"
+          },
+          "today_earned_cents": {
+            "type": "integer"
+          },
+          "recent_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardEventSummary"
+            }
+          },
+          "cashout": {
+            "$ref": "#/components/schemas/RewardsCashoutSummary"
+          },
+          "latest_in_flight_cashout": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardPayoutSummary"
+          }
+        }
+      },
+      "RewardCashoutRequest": {
+        "type": "object",
+        "required": [
+          "amount_cents",
+          "idempotency_key"
+        ],
+        "properties": {
+          "amount_cents": {
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "wallet_proof": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardCashoutWalletProof"
+          }
+        }
+      },
+      "RewardCashoutResponse": {
+        "type": "object",
+        "required": [
+          "payout",
+          "balance_cents"
+        ],
+        "properties": {
+          "payout": {
+            "$ref": "#/components/schemas/RewardPayoutSummary"
+          },
+          "balance_cents": {
+            "type": "integer"
+          }
+        }
+      },
       "Job": {
         "type": "object",
         "required": [
@@ -17593,6 +17753,16 @@ const spec = {
           }
         }
       },
+      "MembershipGateExpressionSummary": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/MembershipGateExpressionGate"
+          },
+          {
+            "$ref": "#/components/schemas/MembershipGateExpressionGroup"
+          }
+        ]
+      },
       "CommunityRule": {
         "type": "object",
         "required": [
@@ -19390,6 +19560,10 @@ const spec = {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
+          },
           "gate_match_mode": {
             "type": "string",
             "enum": [
@@ -19766,6 +19940,120 @@ const spec = {
           "completed",
           "dismissed"
         ]
+      },
+      "RewardEventSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "community_id",
+          "post_id",
+          "activity_date",
+          "reward_kind",
+          "amount_cents",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "activity_date": {
+            "type": "string"
+          },
+          "reward_kind": {
+            "$ref": "#/components/schemas/RewardEventKind"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardsCashoutSummary": {
+        "type": "object",
+        "required": [
+          "eligible",
+          "min_cents",
+          "verification_state"
+        ],
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "min_cents": {
+            "type": "integer"
+          },
+          "verification_state": {
+            "$ref": "#/components/schemas/RewardVerificationState"
+          }
+        }
+      },
+      "RewardPayoutSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "amount_cents",
+          "recipient_address",
+          "status",
+          "settlement_ref",
+          "failure_reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "recipient_address": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardPayoutStatus"
+          },
+          "settlement_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "failure_reason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RewardCashoutWalletProof": {
+        "type": "object",
+        "required": [
+          "type",
+          "privy_access_token"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "privy_access_token"
+            ]
+          },
+          "privy_access_token": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string",
+            "nullable": true
+          }
+        }
       },
       "PublicCommunityIdentity": {
         "type": "object",
@@ -21410,6 +21698,49 @@ const spec = {
           }
         }
       },
+      "MembershipGateExpressionGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "gate"
+        ],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "gate"
+            ]
+          },
+          "gate": {
+            "$ref": "#/components/schemas/MembershipGateSummary"
+          }
+        }
+      },
+      "MembershipGateExpressionGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "children"
+        ],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "and",
+              "or"
+            ]
+          },
+          "children": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/MembershipGateExpressionSummary"
+            }
+          }
+        }
+      },
       "GateTraceNode": {
         "type": "object",
         "required": [
@@ -22196,6 +22527,30 @@ const spec = {
             "format": "int64"
           }
         }
+      },
+      "RewardEventKind": {
+        "type": "string",
+        "enum": [
+          "study_streak_day",
+          "study_streak_milestone_7",
+          "study_streak_milestone_30"
+        ]
+      },
+      "RewardVerificationState": {
+        "type": "string",
+        "enum": [
+          "unverified",
+          "verified",
+          "conflict"
+        ]
+      },
+      "RewardPayoutStatus": {
+        "type": "string",
+        "enum": [
+          "submitted",
+          "confirmed",
+          "failed"
+        ]
       },
       "StructuredAccessLink": {
         "type": "object",

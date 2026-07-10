@@ -27,6 +27,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
     const result = catchGateFailure({
       evaluation: {
         satisfied: false,
+        outcome: "action_required",
         trace: { kind: "op", op: "and", passed: false, children: [] },
         requiredActionSet: {
           kind: "set",
@@ -47,6 +48,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
     const result = catchGateFailure({
       evaluation: {
         satisfied: false,
+        outcome: "action_required",
         trace: { kind: "op", op: "and", passed: false, children: [] },
         requiredActionSet: {
           kind: "set",
@@ -67,6 +69,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
     const result = catchGateFailure({
       evaluation: {
         satisfied: false,
+        outcome: "action_required",
         trace: { kind: "op", op: "and", passed: false, children: [] },
         requiredActionSet: {
           kind: "set",
@@ -88,6 +91,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
     const result = catchGateFailure({
       evaluation: {
         satisfied: false,
+        outcome: "action_required",
         trace: { kind: "op", op: "and", passed: false, children: [] },
         requiredActionSet: {
           kind: "set",
@@ -108,6 +112,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
     const result = catchGateFailure({
       evaluation: {
         satisfied: false,
+        outcome: "action_required",
         trace: { kind: "op", op: "and", passed: false, children: [] },
         requiredActionSet: {
           kind: "set",
@@ -127,6 +132,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
   test("maps provider_not_accepted trace reason to provider failure details", () => {
     const evaluation = {
       satisfied: false,
+      outcome: "terminal_mismatch",
       trace: {
         kind: "gate",
         gate_type: "nationality",
@@ -146,5 +152,71 @@ describe("throwUnsatisfiedMembershipGate", () => {
     expect(gateFailureReasonFromPolicyEvaluation(evaluation)).toBe("provider_not_accepted")
     expect(result.message).toBe("Your verification method does not satisfy this community requirement")
     expect(result.details.failure_reason).toBe("provider_not_accepted")
+  })
+
+  test("keeps NFT failures actionable with wallet-specific remediation", () => {
+    const result = catchGateFailure({
+      evaluation: {
+        satisfied: false,
+        outcome: "action_required",
+        trace: {
+          kind: "gate",
+          gate_type: "erc721_holding",
+          provider: "wallet",
+          passed: false,
+          reason: "erc721_holding_required",
+        },
+        requiredActionSet: {
+          kind: "set",
+          mode: "all",
+          items: [{
+            kind: "action",
+            provider: "wallet",
+            capability: "erc721_holding",
+            chain_namespace: "eip155:1",
+            contract_address: "0x0000000000000000000000000000000000000001",
+          }],
+        },
+      },
+      gateSummaries: [{
+        gate_type: "erc721_holding",
+        chain_namespace: "eip155:1",
+        contract_address: "0x0000000000000000000000000000000000000001",
+      }],
+      walletScoreStatus: null,
+      altchaScope: "post_create",
+    })
+
+    expect(result.message).toBe("Connect a wallet holding the required collectible to post in this community")
+    expect(result.details.failure_reason).toBe("erc721_holding_required")
+  })
+
+  test("renders missing RPC configuration as a provider outage", () => {
+    const evaluation = {
+      satisfied: false,
+      outcome: "provider_unavailable",
+      trace: {
+        kind: "gate",
+        gate_type: "erc721_holding",
+        provider: "wallet",
+        passed: false,
+        reason: "ethereum_rpc_not_configured",
+      },
+      requiredActionSet: null,
+    } as const
+
+    const result = catchGateFailure({
+      evaluation,
+      gateSummaries: [{
+        gate_type: "erc721_holding",
+        chain_namespace: "eip155:1",
+        contract_address: "0x0000000000000000000000000000000000000001",
+      }],
+      walletScoreStatus: null,
+    })
+
+    expect(gateFailureReasonFromPolicyEvaluation(evaluation)).toBe("token_inventory_unavailable")
+    expect(result.message).toBe("Collectible inventory could not be checked right now")
+    expect(result.details.failure_reason).toBe("token_inventory_unavailable")
   })
 })

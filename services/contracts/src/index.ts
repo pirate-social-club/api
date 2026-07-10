@@ -2385,6 +2385,8 @@ export type MembershipGateSummary = {
   asset_category?: string | null;
 };
 
+export type MembershipGateExpressionSummary = (MembershipGateExpressionGate | MembershipGateExpressionGroup);
+
 export type CommunityPreview = {
   id: string;
   object: "community_preview";
@@ -2419,6 +2421,7 @@ export type CommunityPreview = {
   moderators: Array<CommunityRoleSummary>;
   reference_links?: Array<CommunityReferenceLinkPublic> | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
+  membership_gate_expression?: MembershipGateExpressionSummary | null;
   gate_match_mode?: "all" | "any" | null;
   rules: Array<CommunityRule>;
   viewer_membership_status?: "member" | "not_member" | "banned" | null;
@@ -2434,6 +2437,7 @@ export type JoinEligibility = {
   joinable_now: boolean;
   status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
+  membership_gate_expression?: MembershipGateExpressionSummary | null;
   missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow">;
   suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
@@ -2469,6 +2473,7 @@ export type MembershipRequestListResponse = {
 export type GateFailureDetails = {
   human_verification_lane?: HumanVerificationLane;
   membership_gate_summaries?: Array<MembershipGateSummary> | null;
+  membership_gate_expression?: MembershipGateExpressionSummary | null;
   missing_capabilities?: Array<string> | null;
   suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
@@ -3544,6 +3549,16 @@ type MediaDescriptor = {
   preview_video?: SongVideoArtifactDescriptor | null;
 };
 
+type MembershipGateExpressionGate = {
+  op: "gate";
+  gate: MembershipGateSummary;
+};
+
+type MembershipGateExpressionGroup = {
+  op: "and" | "or";
+  children: Array<MembershipGateExpressionSummary>;
+};
+
 type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed";
 
 type ModerationCaseStatus = "open" | "resolved";
@@ -3646,6 +3661,7 @@ type PostViewerGateState = {
   viewer_community_role: "owner" | "admin" | "moderator" | null;
   viewer_membership_status: "member" | "not_member" | "banned" | null;
   membership_gate_summaries: Array<MembershipGateSummary>;
+  membership_gate_expression?: MembershipGateExpressionSummary | null;
   gate_match_mode?: "all" | "any" | null;
 };
 
