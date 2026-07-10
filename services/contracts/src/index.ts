@@ -1187,6 +1187,9 @@ export type ConfirmBookingHoldRequest = {
 export type Booking = {
   booking_id: string;
   status: BookingStatus;
+  outcome?: BookingOutcome;
+  settlement_status?: BookingSettlementStatus;
+  counterparty?: BookingCounterparty;
   host_user_id: string;
   booker_user_id: string;
   slot_start_utc: string;
@@ -2677,6 +2680,84 @@ export type RewardCashoutResponse = {
   balance_cents: number;
 };
 
+export type RewardCampaignStatus = "draft" | "funding_quoted" | "funding_confirming" | "scheduled" | "active" | "paused" | "exhausted" | "ended" | "canceled";
+
+export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
+
+export type RewardCampaign = {
+  id: string;
+  object: "reward_campaign";
+  rewarder: string;
+  community: string;
+  post: string;
+  song_artifact_bundle: string;
+  song_owner: string;
+  status: RewardCampaignStatus;
+  eligible_activity: RewardCampaignEligibleActivity;
+  daily_reward_cents: number;
+  milestone_7_cents: number;
+  milestone_30_cents: number;
+  reward_period_cap_cents: number;
+  budget_cents: number;
+  funded_cents: number;
+  reserved_cents: number;
+  credited_cents: number;
+  paid_cents: number;
+  refunded_cents: number;
+  remaining_cents: number;
+  starts_at: number;
+  ends_at: number;
+  activated_at?: number | null;
+  exhausted_at?: number | null;
+  ended_at?: number | null;
+  canceled_at?: number | null;
+  created: number;
+};
+
+export type RewardCampaignCreateRequest = {
+  community: string;
+  post: string;
+  eligible_activity: RewardCampaignEligibleActivity;
+  daily_reward_cents: number;
+  milestone_7_cents: number;
+  milestone_30_cents: number;
+  reward_period_cap_cents: number;
+  budget_cents: number;
+  starts_at: number;
+  ends_at: number;
+  idempotency_key: string;
+};
+
+export type RewardCampaignFundingStatus = "quoted" | "confirming" | "confirmed" | "failed" | "refunded";
+
+export type RewardCampaignFundingQuote = {
+  id: string;
+  object: "reward_campaign_funding_quote";
+  campaign: string;
+  funder: string;
+  chain_id: number;
+  token_address: string;
+  amount_cents: number;
+  amount_atomic: string;
+  sender_address: string;
+  treasury_address: string;
+  tx_hash?: string | null;
+  status: RewardCampaignFundingStatus;
+  failure_reason?: string | null;
+  expires_at: number;
+  confirmed_at?: number | null;
+  created: number;
+};
+
+export type RewardCampaignFundingQuoteRequest = {
+  amount_cents: number;
+  idempotency_key: string;
+};
+
+export type RewardCampaignFundingConfirmRequest = {
+  tx_hash: string;
+};
+
 export type ClaimableRoyaltyItem = {
   ip: string;
   claimable_wip_wei: string;
@@ -2749,6 +2830,14 @@ type AudioMediaDescriptor = {
   duration_ms?: number | null;
 };
 
+type BookingCounterparty = {
+  user_id: string;
+  display_name: string | null;
+  avatar_ref: string | null;
+};
+
+type BookingOutcome = "completed" | "no_show_host" | "no_show_booker" | "cancelled_by_host" | "cancelled_by_booker" | null;
+
 type BookingPaymentInstructions = {
   payment_intent_id: string;
   version: number;
@@ -2769,6 +2858,8 @@ type BookingProfileEmpty = {
   exists: false;
   host: string;
 };
+
+type BookingSettlementStatus = "pending" | "live" | "settling" | "settled" | "refunded" | "disputed";
 
 type BookingStatus = "hold" | "quoted" | "pending_payment" | "confirmed" | "live" | "completed" | "settled" | "expired_hold" | "cancelled_before_payment" | "cancelled_by_host" | "cancelled_by_booker" | "no_show_host" | "no_show_booker" | "refunded" | "disputed";
 
@@ -4104,4 +4195,8 @@ export const apiRoutes = {
   notificationsDismissTask: "/notifications/dismiss-task",
   meRewards: "/me/rewards",
   meRewardsCashouts: "/me/rewards/cashouts",
+  rewardCampaigns: "/reward_campaigns",
+  rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
+  rewardCampaignFundingQuotes: (campaignId: string) => `/reward_campaigns/${campaignId}/funding_quotes`,
+  rewardCampaignFundingQuoteConfirm: (campaignId: string, fundingQuoteId: string) => `/reward_campaigns/${campaignId}/funding_quotes/${fundingQuoteId}/confirm`,
 } as const

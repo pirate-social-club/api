@@ -5147,6 +5147,42 @@ const spec = {
         ]
       }
     },
+    "/bookings/{booking_id}/cancellation-preview": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Preview the authoritative financial result of cancelling a booking",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingCancellationPreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id_cancellation_preview",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/bookings/{booking_id}/settlement-review": {
       "get": {
         "tags": [
@@ -5251,22 +5287,24 @@ const spec = {
         "tags": [
           "Bookings"
         ],
-        "summary": "Mutate a booking lifecycle state",
+        "summary": "Cancel a booking, checking previously confirmed financial terms when supplied",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBookingRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
+                  "additionalProperties": true
                 }
               }
             }
@@ -6734,6 +6772,196 @@ const spec = {
         "parameters": [
           {
             "name": "cashout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns": {
+      "post": {
+        "operationId": "reward_campaigns_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Create a draft, budget-backed song-practice campaign",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "409": {}
+        }
+      }
+    },
+    "/reward_campaigns/{campaign_id}": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "reward_campaigns_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Retrieve a song-practice reward campaign",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns/{campaign_id}/funding_quotes": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaign_funding_quotes_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Quote a direct Base USDC campaign funding transfer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignFundingQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignFundingQuote"
+                }
+              }
+            }
+          },
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns/{campaign_id}/funding_quotes/{funding_quote_id}/confirm": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "funding_quote_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaign_funding_quotes_confirm",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Verify and uniquely bind a Base USDC receipt to a campaign",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignFundingConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignFundingQuote"
+                }
+              }
+            }
+          },
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "funding_quote_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "campaign_id",
             "in": "path",
             "required": true,
             "schema": {
@@ -14447,6 +14675,15 @@ const spec = {
           "status": {
             "$ref": "#/BookingStatus"
           },
+          "outcome": {
+            "$ref": "#/BookingOutcome"
+          },
+          "settlement_status": {
+            "$ref": "#/BookingSettlementStatus"
+          },
+          "counterparty": {
+            "$ref": "#/BookingCounterparty"
+          },
           "host_user_id": {
             "type": "string"
           },
@@ -14579,6 +14816,60 @@ const spec = {
           }
         }
       },
+      "BookingCancellationPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "booking_id",
+          "cancelled_by",
+          "gross_cents",
+          "refund_cents",
+          "host_payout_cents",
+          "platform_fee_cents",
+          "previewed_at",
+          "policy_cutoff_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "booking_cancellation_preview"
+            ]
+          },
+          "booking_id": {
+            "type": "string"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "enum": [
+              "host",
+              "booker"
+            ]
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "refund_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "previewed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "policy_cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
       "ResolveBookingSettlementReviewRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -14631,6 +14922,16 @@ const spec = {
           },
           "replayed": {
             "type": "boolean"
+          }
+        }
+      },
+      "CancelBookingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expected_refund_cents": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -15580,6 +15881,305 @@ const spec = {
           },
           "balance_cents": {
             "type": "integer"
+          }
+        }
+      },
+      "RewardCampaignCreateRequest": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "eligible_activity",
+          "daily_reward_cents",
+          "milestone_7_cents",
+          "milestone_30_cents",
+          "reward_period_cap_cents",
+          "budget_cents",
+          "starts_at",
+          "ends_at",
+          "idempotency_key"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "milestone_7_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "milestone_30_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reward_period_cap_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "starts_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "RewardCampaign": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "rewarder",
+          "community",
+          "post",
+          "song_artifact_bundle",
+          "song_owner",
+          "status",
+          "eligible_activity",
+          "daily_reward_cents",
+          "milestone_7_cents",
+          "milestone_30_cents",
+          "reward_period_cap_cents",
+          "budget_cents",
+          "funded_cents",
+          "reserved_cents",
+          "credited_cents",
+          "paid_cents",
+          "refunded_cents",
+          "remaining_cents",
+          "starts_at",
+          "ends_at",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "reward_campaign"
+            ]
+          },
+          "rewarder": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_artifact_bundle": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardCampaignStatus"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "milestone_7_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "milestone_30_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reward_period_cap_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "funded_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reserved_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "credited_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refunded_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "starts_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "activated_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "exhausted_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "ended_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "canceled_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardCampaignFundingQuoteRequest": {
+        "type": "object",
+        "required": [
+          "amount_cents",
+          "idempotency_key"
+        ],
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "RewardCampaignFundingQuote": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "campaign",
+          "funder",
+          "chain_id",
+          "token_address",
+          "amount_cents",
+          "amount_atomic",
+          "sender_address",
+          "treasury_address",
+          "status",
+          "expires_at",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "reward_campaign_funding_quote"
+            ]
+          },
+          "campaign": {
+            "type": "string"
+          },
+          "funder": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "token_address": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "amount_atomic": {
+            "type": "string"
+          },
+          "sender_address": {
+            "type": "string"
+          },
+          "treasury_address": {
+            "type": "string"
+          },
+          "tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardCampaignFundingStatus"
+          },
+          "failure_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "confirmed_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardCampaignFundingConfirmRequest": {
+        "type": "object",
+        "required": [
+          "tx_hash"
+        ],
+        "properties": {
+          "tx_hash": {
+            "type": "string"
           }
         }
       },
@@ -20054,6 +20654,38 @@ const spec = {
             "nullable": true
           }
         }
+      },
+      "RewardCampaignEligibleActivity": {
+        "type": "string",
+        "enum": [
+          "study",
+          "karaoke",
+          "either"
+        ]
+      },
+      "RewardCampaignStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "funding_quoted",
+          "funding_confirming",
+          "scheduled",
+          "active",
+          "paused",
+          "exhausted",
+          "ended",
+          "canceled"
+        ]
+      },
+      "RewardCampaignFundingStatus": {
+        "type": "string",
+        "enum": [
+          "quoted",
+          "confirming",
+          "confirmed",
+          "failed",
+          "refunded"
+        ]
       },
       "PublicCommunityIdentity": {
         "type": "object",
