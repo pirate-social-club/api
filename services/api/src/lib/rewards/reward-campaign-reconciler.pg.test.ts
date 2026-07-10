@@ -1,0 +1,210 @@
+// Real-Postgres concurrency coverage for funded reward crediting. Runs only when
+// BOOKINGS_REPO_TEST_ADMIN_URL is set. It drives the production Postgres client and
+// transaction adapters against an isolated database, proving the campaign row lock
+// and reservation key admit one credit for one human/song/UTC period.
+import { SQL } from "bun"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import type { Env } from "../../env"
+import {
+  getControlPlaneClient,
+  setControlPlanePostgresPoolFactoryForTests,
+  withRequestControlPlaneClients,
+} from "../runtime-deps"
+import { creditRewardCampaignQualification } from "./reward-campaign-reconciler"
+
+const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
+const RUN = Boolean(ADMIN_URL)
+const TEST_DB = "reward_campaign_credit_test"
+const NOW = "2026-07-10T12:00:00.000Z"
+const PG_ENV = {
+  CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
+  REWARDS_IDENTITY_PROVIDER: "self",
+} as unknown as Env
+
+function urlFor(db?: string): string {
+  const url = new URL(ADMIN_URL as string)
+  if (db) url.pathname = `/${db}`
+  if (!url.searchParams.get("sslmode")) url.searchParams.set("sslmode", "disable")
+  return url.toString()
+}
+
+function connect(db?: string, max = 4): SQL {
+  return new SQL({ url: urlFor(db), tls: false, max, connectionTimeout: 5 } as Record<string, unknown>)
+}
+
+describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
+  beforeAll(async () => {
+    const root = connect(undefined, 1)
+    await root.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`)
+    await root.unsafe(`CREATE DATABASE ${TEST_DB}`)
+    await root.end()
+
+    const db = connect(TEST_DB, 1)
+    await db.unsafe(`
+      CREATE TABLE users (
+        user_id TEXT PRIMARY KEY,
+        verification_capabilities_json TEXT NOT NULL
+      );
+      CREATE TABLE identity_nullifiers (
+        identity_nullifier_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        mechanism TEXT NOT NULL,
+        nullifier_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        first_seen_at TEXT NOT NULL
+      );
+      CREATE TABLE reward_campaigns (
+        reward_campaign_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        song_artifact_bundle_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        eligible_activity TEXT NOT NULL,
+        daily_reward_cents INTEGER NOT NULL,
+        reward_period_cap_cents INTEGER NOT NULL,
+        funded_cents INTEGER NOT NULL,
+        reserved_cents INTEGER NOT NULL,
+        credited_cents INTEGER NOT NULL,
+        refunded_cents INTEGER NOT NULL,
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        terms_version INTEGER NOT NULL,
+        exhausted_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE reward_song_owner_policies (
+        community_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        third_party_rewards TEXT NOT NULL
+      );
+      CREATE TABLE reward_campaign_reservations (
+        reward_campaign_reservation_id TEXT PRIMARY KEY,
+        reward_campaign_id TEXT NOT NULL,
+        reward_identity_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        reward_period_key TEXT NOT NULL,
+        reward_kind TEXT NOT NULL,
+        qualification_basis TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        reward_event_id TEXT,
+        reserved_at TEXT NOT NULL,
+        credited_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (reward_campaign_id, reward_identity_id, reward_period_key, reward_kind)
+      );
+      CREATE TABLE reward_events (
+        reward_event_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        community_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        activity_date TEXT NOT NULL,
+        reward_kind TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        reward_campaign_id TEXT NOT NULL,
+        reward_campaign_reservation_id TEXT NOT NULL UNIQUE,
+        reward_identity_id TEXT NOT NULL,
+        reward_period_key TEXT NOT NULL,
+        qualification_basis TEXT NOT NULL,
+        campaign_terms_version INTEGER NOT NULL,
+        campaign_rate_snapshot_json TEXT NOT NULL
+      );
+      CREATE TABLE reward_user_days (
+        user_id TEXT NOT NULL,
+        activity_date TEXT NOT NULL,
+        credited_cents INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, activity_date)
+      );
+    `)
+    await db.unsafe(
+      `INSERT INTO users VALUES ($1, $2)`,
+      ["usr_reward_pg", JSON.stringify({
+        unique_human: {
+          state: "verified", provider: "self", proof_type: "passport",
+          mechanism: "passport", verified_at: NOW,
+        },
+      })],
+    )
+    await db.unsafe(
+      `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4)`,
+      ["idn_reward_pg", "usr_reward_pg", "stable-nullifier", NOW],
+    )
+    await db.unsafe(`
+      INSERT INTO reward_campaigns VALUES (
+        'rcp_reward_pg', 'cmt_reward_pg', 'pst_reward_pg', 'sab_reward_pg',
+        'active', 'either', 40, 40, 100, 0, 0, 0,
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', 1, NULL, $1
+      )
+    `, [NOW])
+    await db.end()
+  })
+
+  afterAll(async () => {
+    setControlPlanePostgresPoolFactoryForTests(null)
+    const root = connect(undefined, 1)
+    await root.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`).catch(() => {})
+    await root.end()
+  })
+
+  test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
+    const base = connect(TEST_DB, 4)
+    setControlPlanePostgresPoolFactoryForTests(() => ({
+      query: async (sql, values) => ({
+        rows: (await base.unsafe(sql, values ?? [])) as Record<string, unknown>[],
+        rowCount: null,
+      }),
+      connect: async () => {
+        const dedicated = connect(TEST_DB, 1)
+        return {
+          query: async (sql, values) => ({
+            rows: (await dedicated.unsafe(sql, values ?? [])) as Record<string, unknown>[],
+            rowCount: null,
+          }),
+          release: () => { void dedicated.end() },
+        }
+      },
+      end: async () => { await base.end() },
+    }))
+    try {
+      await withRequestControlPlaneClients(async () => {
+        const client = getControlPlaneClient(PG_ENV)
+        const candidate = {
+          eventId: "rqe_reward_pg",
+          userId: "usr_reward_pg",
+          communityId: "cmt_reward_pg",
+          postId: "pst_reward_pg",
+          artifactBundleId: "sab_reward_pg",
+          activity: "study" as const,
+          qualifiedAt: NOW,
+          periodKey: "2026-07-10",
+          policyVersion: "study-completed-set-v1",
+        }
+        const results = await Promise.all([
+          creditRewardCampaignQualification({ env: PG_ENV, client, candidate, now: NOW }),
+          creditRewardCampaignQualification({ env: PG_ENV, client, candidate, now: NOW }),
+        ])
+        expect(results.map((result) => result.result).sort()).toEqual(["credited", "duplicate"])
+      })
+    } finally {
+      setControlPlanePostgresPoolFactoryForTests(null)
+    }
+
+    const verify = connect(TEST_DB, 1)
+    const reservations = await verify.unsafe(
+      `SELECT status, amount_cents FROM reward_campaign_reservations ORDER BY reward_campaign_reservation_id`,
+    ) as Array<{ status: string; amount_cents: number }>
+    const events = await verify.unsafe(`SELECT amount_cents FROM reward_events`) as Array<{ amount_cents: number }>
+    const campaigns = await verify.unsafe(
+      `SELECT funded_cents, reserved_cents, credited_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_reward_pg'`,
+    ) as Array<{ funded_cents: number; reserved_cents: number; credited_cents: number }>
+    await verify.end()
+    expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
+    expect(events).toEqual([{ amount_cents: 40 }])
+    expect(campaigns).toEqual([{ funded_cents: 100, reserved_cents: 0, credited_cents: 40 }])
+  })
+})

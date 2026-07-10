@@ -11,7 +11,7 @@ import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 
-type QualificationRow = {
+export type RewardQualificationCandidate = {
   eventId: string
   userId: string
   communityId: string
@@ -65,7 +65,7 @@ function text(row: QueryResultRow, key: string): string {
   return value
 }
 
-function qualification(row: QueryResultRow): QualificationRow {
+function qualification(row: QueryResultRow): RewardQualificationCandidate {
   const activity = text(row, "activity")
   if (activity !== "study" && activity !== "karaoke") throw new Error("Reward qualification activity is invalid")
   return {
@@ -155,10 +155,10 @@ async function ingestCommunity(input: {
 
 type CreditResult = "credited" | "duplicate" | "identity" | "campaign" | "budget" | "cap"
 
-async function creditQualification(input: {
+export async function creditRewardCampaignQualification(input: {
   env: Env
   client: Client
-  candidate: QualificationRow
+  candidate: RewardQualificationCandidate
   now: string
 }): Promise<{ result: CreditResult; amountCents: number }> {
   const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
@@ -394,7 +394,7 @@ export async function reconcileRewardCampaigns(input: {
     for (const row of rows.rows) {
       summary.scanned_qualifications += 1
       try {
-        const result = await creditQualification({ env: input.env, client: input.controlPlaneClient, candidate: qualification(row), now })
+        const result = await creditRewardCampaignQualification({ env: input.env, client: input.controlPlaneClient, candidate: qualification(row), now })
         if (result.result === "credited") {
           summary.credited_events += 1
           summary.credited_cents += result.amountCents
