@@ -58,7 +58,13 @@ export type ShardFailure = {
   binding_name: string
   database_name: string
   stage: "schema" | "policy"
-  error: string
+  error_code: "timeout" | "wrangler_exit" | "invalid_json" | "d1_query_failed" | "unexpected_error"
+}
+
+class InventoryError extends Error {
+  constructor(readonly code: ShardFailure["error_code"], message: string) {
+    super(message)
+  }
 }
 
 type D1Result = { results?: unknown[]; success?: boolean; error?: string }
@@ -167,14 +173,14 @@ export function parseWranglerRows<T>(stdout: string): T[] {
   try {
     parsed = JSON.parse(stdout) as unknown
   } catch {
-    throw new Error(`wrangler returned invalid JSON (${stdout.length} bytes)`)
+    throw new InventoryError("invalid_json", `wrangler returned invalid JSON (${stdout.length} bytes)`)
   }
   const envelopes = Array.isArray(parsed) ? parsed : [parsed]
   const rows: T[] = []
   for (const envelope of envelopes) {
     if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) continue
     const result = envelope as D1Result
-    if (result.success === false) throw new Error(result.error || "D1 query failed")
+    if (result.success === false) throw new InventoryError("d1_query_failed", "D1 query failed")
     if (Array.isArray(result.results)) rows.push(...result.results as T[])
   }
   return rows
@@ -197,16 +203,20 @@ async function runWranglerD1(databaseName: string, sql: string, timeoutMs: numbe
     timedOut = true
     process.kill()
   }, timeoutMs)
-  const [stdout, stderr, exitCode] = await Promise.all([
+  const [stdout, , exitCode] = await Promise.all([
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
     process.exited,
   ]).finally(() => clearTimeout(timer))
-  if (timedOut) throw new Error(`wrangler timed out after ${timeoutMs}ms`)
+  if (timedOut) throw new InventoryError("timeout", `wrangler timed out after ${timeoutMs}ms`)
   if (exitCode !== 0) {
-    throw new Error((stderr || `wrangler exited ${exitCode}`).trim().slice(0, 500))
+    throw new InventoryError("wrangler_exit", `wrangler exited ${exitCode}`)
   }
   return stdout
+}
+
+function errorCode(error: unknown): ShardFailure["error_code"] {
+  return error instanceof InventoryError ? error.code : "unexpected_error"
 }
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<R[]> {
@@ -279,7 +289,7 @@ async function main(): Promise<void> {
           binding_name: poolRow.binding_name,
           database_name: databaseName,
           stage: "policy",
-          error: error instanceof Error ? error.message : String(error),
+          error_code: errorCode(error),
         })
       }
     } catch (error) {
@@ -288,7 +298,7 @@ async function main(): Promise<void> {
         binding_name: poolRow.binding_name,
         database_name: databaseName,
         stage: "schema",
-        error: error instanceof Error ? error.message : String(error),
+        error_code: errorCode(error),
       })
     }
     return null

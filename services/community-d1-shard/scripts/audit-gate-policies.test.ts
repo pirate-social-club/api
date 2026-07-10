@@ -36,6 +36,7 @@ describe("gate policy shard audit", () => {
     expect(parseWranglerRows<{ id: string }>(JSON.stringify([
       { success: true, results: [{ id: "one" }] },
     ]))).toEqual([{ id: "one" }])
+    expect(() => parseWranglerRows("not-json")).toThrow("wrangler returned invalid JSON")
   })
 
   test("implements the authoritative captcha-alone assignment", () => {
