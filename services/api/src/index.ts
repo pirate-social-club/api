@@ -56,6 +56,7 @@ import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/schedule
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
+import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
@@ -624,6 +625,34 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const summary = await reconcileRewardCampaigns({
+      env,
+      communityRepository,
+      controlPlaneClient: getControlPlaneClient(env),
+      maxCommunities: 50,
+      maxCredits: 500,
+      outboxBatchSize: 500,
+    })
+    if (summary.enabled && (
+      summary.ingested_qualifications > 0
+      || summary.credited_events > 0
+      || summary.skipped_budget > 0
+      || summary.failed_communities > 0
+      || summary.errors > 0
+    )) {
+      console.info("[reward-campaigns] reconciled", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[reward-campaigns] reconciliation failed", error)
+    await captureScheduledError(env, error, "reward_campaign_reconciliation")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
 // The cron fires every minute. Each scheduled job opens its OWN control-plane
 // connection (via withRequestControlPlaneClients) — one connection, opened and
 // closed independently, to respect Workers' 15-min waitUntil limit. Running all
@@ -683,6 +712,7 @@ const handler: ExportedHandler<Env> = {
       { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
+      { name: "reconcile_reward_campaigns", run: () => reconcileScheduledRewardCampaigns(env) },
       { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },

@@ -224,6 +224,7 @@ function repository() {
 function env(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "true",
     REWARDS_DAILY_STREAK_CENTS: "10",
     REWARDS_DAILY_USER_CAP_CENTS: "300",
     REWARDS_STREAK_MILESTONE_7_CENTS: "50",
@@ -258,6 +259,7 @@ describe("song practice rewards reconciler", () => {
   test("invalid money knobs resolve to zero credits", () => {
     const config = resolveRewardConfig({
       REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "true",
       REWARDS_DAILY_STREAK_CENTS: "0.10",
       REWARDS_DAILY_USER_CAP_CENTS: "-30",
       REWARDS_STREAK_MILESTONE_7_CENTS: "fifty",
@@ -276,6 +278,7 @@ describe("song practice rewards reconciler", () => {
   test("fails accrual closed when the cap cannot cover a daily reward plus the largest milestone", () => {
     const config = resolveRewardConfig({
       REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "true",
       REWARDS_DAILY_STREAK_CENTS: "10",
       REWARDS_DAILY_USER_CAP_CENTS: "209",
       REWARDS_STREAK_MILESTONE_7_CENTS: "50",
@@ -284,6 +287,16 @@ describe("song practice rewards reconciler", () => {
 
     expect(config.enabled).toBe(false)
     expect(config.dailyUserCapCents).toBe(209)
+  })
+
+  test("does not let campaign accrual implicitly enable legacy platform rewards", () => {
+    expect(resolveRewardConfig({
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_DAILY_STREAK_CENTS: "10",
+      REWARDS_DAILY_USER_CAP_CENTS: "10",
+      REWARDS_STREAK_MILESTONE_7_CENTS: "0",
+      REWARDS_STREAK_MILESTONE_30_CENTS: "0",
+    }).enabled).toBe(false)
   })
 
   test("disabled reconciliation does not enumerate communities", async () => {

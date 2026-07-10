@@ -186,6 +186,9 @@ export type RewardEventKind =
   | "study_streak_day"
   | "study_streak_milestone_7"
   | "study_streak_milestone_30"
+  | "campaign_practice_day"
+  | "campaign_milestone_7"
+  | "campaign_milestone_30"
 
 export type RewardEventSummary = {
   id: string
@@ -195,6 +198,9 @@ export type RewardEventSummary = {
   activity_date: string
   reward_kind: RewardEventKind
   amount_cents: number
+  reward_campaign_id?: string | null
+  reward_period_key?: string | null
+  qualification_basis?: "study" | "karaoke" | "both" | null
   created_at: number
 }
 
