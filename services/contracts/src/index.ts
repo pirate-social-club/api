@@ -1187,6 +1187,9 @@ export type ConfirmBookingHoldRequest = {
 export type Booking = {
   booking_id: string;
   status: BookingStatus;
+  outcome?: BookingOutcome;
+  settlement_status?: BookingSettlementStatus;
+  counterparty?: BookingCounterparty;
   host_user_id: string;
   booker_user_id: string;
   slot_start_utc: string;
@@ -2827,6 +2830,14 @@ type AudioMediaDescriptor = {
   duration_ms?: number | null;
 };
 
+type BookingCounterparty = {
+  user_id: string;
+  display_name: string | null;
+  avatar_ref: string | null;
+};
+
+type BookingOutcome = "completed" | "no_show_host" | "no_show_booker" | "cancelled_by_host" | "cancelled_by_booker" | null;
+
 type BookingPaymentInstructions = {
   payment_intent_id: string;
   version: number;
@@ -2847,6 +2858,8 @@ type BookingProfileEmpty = {
   exists: false;
   host: string;
 };
+
+type BookingSettlementStatus = "pending" | "live" | "settling" | "settled" | "refunded" | "disputed";
 
 type BookingStatus = "hold" | "quoted" | "pending_payment" | "confirmed" | "live" | "completed" | "settled" | "expired_hold" | "cancelled_before_payment" | "cancelled_by_host" | "cancelled_by_booker" | "no_show_host" | "no_show_booker" | "refunded" | "disputed";
 

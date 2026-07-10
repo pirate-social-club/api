@@ -5147,6 +5147,42 @@ const spec = {
         ]
       }
     },
+    "/bookings/{booking_id}/cancellation-preview": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Preview the authoritative financial result of cancelling a booking",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingCancellationPreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id_cancellation_preview",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/bookings/{booking_id}/settlement-review": {
       "get": {
         "tags": [
@@ -5251,22 +5287,24 @@ const spec = {
         "tags": [
           "Bookings"
         ],
-        "summary": "Mutate a booking lifecycle state",
+        "summary": "Cancel a booking, checking previously confirmed financial terms when supplied",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBookingRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
+                  "additionalProperties": true
                 }
               }
             }
@@ -14637,6 +14675,15 @@ const spec = {
           "status": {
             "$ref": "#/BookingStatus"
           },
+          "outcome": {
+            "$ref": "#/BookingOutcome"
+          },
+          "settlement_status": {
+            "$ref": "#/BookingSettlementStatus"
+          },
+          "counterparty": {
+            "$ref": "#/BookingCounterparty"
+          },
           "host_user_id": {
             "type": "string"
           },
@@ -14769,6 +14816,60 @@ const spec = {
           }
         }
       },
+      "BookingCancellationPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "booking_id",
+          "cancelled_by",
+          "gross_cents",
+          "refund_cents",
+          "host_payout_cents",
+          "platform_fee_cents",
+          "previewed_at",
+          "policy_cutoff_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "booking_cancellation_preview"
+            ]
+          },
+          "booking_id": {
+            "type": "string"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "enum": [
+              "host",
+              "booker"
+            ]
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "refund_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "previewed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "policy_cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
       "ResolveBookingSettlementReviewRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -14821,6 +14922,16 @@ const spec = {
           },
           "replayed": {
             "type": "boolean"
+          }
+        }
+      },
+      "CancelBookingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expected_refund_cents": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
