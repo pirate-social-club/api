@@ -11,7 +11,7 @@ export const BOOKING_COLUMNS =
   "source_community_id, confirmed_at, completed_at, settled_at, cancelled_at, settlement_review_status, " +
   "settlement_review_reason, settlement_review_resolution, settlement_review_opened_at, settlement_review_resolved_at, " +
   "settlement_review_operator_credential_id, settlement_review_operator_actor_id, settlement_review_note, " +
-  "settlement_review_version, created_at, updated_at";
+  "settlement_review_version, outcome, created_at, updated_at";
 
 export function decodeBookingStatus(value: unknown): BookingStatus {
   const status = textFromRow(value);
@@ -75,6 +75,7 @@ export function decodeBooking(row: QueryResultRow): Booking {
     hostPayoutCents: intFromRow(row.host_payout_cents),
     refundCents: intFromRowNullable(row.refund_cents),
     status: decodeBookingStatus(row.status),
+    outcome: decodeBookingOutcome(row.outcome),
     fundingTxRef: textFromRowNullable(row.funding_tx_ref),
     payoutTxRef: textFromRowNullable(row.payout_tx_ref),
     refundTxRef: textFromRowNullable(row.refund_tx_ref),
@@ -98,4 +99,19 @@ export function decodeBooking(row: QueryResultRow): Booking {
     createdAt: isoUtcFromRow(row.created_at),
     updatedAt: isoUtcFromRow(row.updated_at),
   };
+}
+
+function decodeBookingOutcome(value: unknown): Booking["outcome"] {
+  const outcome = textFromRowNullable(value);
+  if (
+    outcome !== null &&
+    outcome !== "completed" &&
+    outcome !== "no_show_host" &&
+    outcome !== "no_show_booker" &&
+    outcome !== "cancelled_by_host" &&
+    outcome !== "cancelled_by_booker"
+  ) {
+    throw new TypeError(`decodeBookingOutcome: bad outcome ${outcome}`);
+  }
+  return outcome;
 }

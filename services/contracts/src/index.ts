@@ -1184,6 +1184,22 @@ export type ConfirmBookingHoldRequest = {
   wallet_attachment_id: string;
 };
 
+export type BookingCancellationPreview = {
+  object: "booking_cancellation_preview";
+  booking_id: string;
+  cancelled_by: "host" | "booker";
+  gross_cents: number;
+  refund_cents: number;
+  host_payout_cents: number;
+  platform_fee_cents: number;
+  previewed_at: string;
+  policy_cutoff_at: string | null;
+};
+
+export type CancelBookingRequest = {
+  expected_refund_cents?: number;
+};
+
 export type Booking = {
   booking_id: string;
   status: BookingStatus;
@@ -4121,6 +4137,7 @@ export const apiRoutes = {
   bookingHoldQuote: (holdId: string) => `/bookings/holds/${holdId}/quote`,
   bookingHoldConfirm: (holdId: string) => `/bookings/holds/${holdId}/confirm`,
   booking: (bookingId: string) => `/bookings/${bookingId}`,
+  bookingCancellationPreview: (bookingId: string) => `/bookings/${bookingId}/cancellation-preview`,
   bookingCancel: (bookingId: string) => `/bookings/${bookingId}/cancel`,
   bookingStart: (bookingId: string) => `/bookings/${bookingId}/start`,
   bookingComplete: (bookingId: string) => `/bookings/${bookingId}/complete`,

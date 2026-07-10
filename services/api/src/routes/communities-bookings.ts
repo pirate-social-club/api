@@ -48,6 +48,7 @@ import {
   startGlobalBookingSession as startGlobalBookingSessionReal,
 } from "../lib/bookings/booking-lifecycle-service"
 import {
+  enrichGlobalBookingCounterparties as enrichGlobalBookingCounterpartiesReal,
   getGlobalBookingForParty as getGlobalBookingForPartyReal,
   listGlobalBookingsForUser as listGlobalBookingsForUserReal,
 } from "../lib/bookings/booking-read-service"
@@ -56,6 +57,7 @@ import {
   getResolvedCommunityRouteContext as getResolvedCommunityRouteContextReal,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { logBodylessBookingCancellation, parseOptionalExpectedRefundCents } from "./booking-cancellation-compat"
 
 const DEFAULT_WINDOW_DAYS = 14
 const SETTLEMENT_REVIEW_RESOLUTIONS = new Set<string>(["completed", "no_show_host", "no_show_booker"])
@@ -80,6 +82,7 @@ export type CommunityBookingsRouteServices = {
   resolveGlobalBookingAvailability: typeof resolveGlobalBookingAvailabilityReal
   listGlobalBookingsForUser: typeof listGlobalBookingsForUserReal
   getGlobalBookingForParty: typeof getGlobalBookingForPartyReal
+  enrichGlobalBookingCounterparties: typeof enrichGlobalBookingCounterpartiesReal
   createGlobalBookingHold: typeof createGlobalBookingHoldReal
   quoteGlobalBookingHold: typeof quoteGlobalBookingHoldReal
   confirmGlobalBookingHold: typeof confirmGlobalBookingHoldReal
@@ -109,6 +112,7 @@ const realCommunityBookingsRouteServices: CommunityBookingsRouteServices = {
   resolveGlobalBookingAvailability: resolveGlobalBookingAvailabilityReal,
   listGlobalBookingsForUser: listGlobalBookingsForUserReal,
   getGlobalBookingForParty: getGlobalBookingForPartyReal,
+  enrichGlobalBookingCounterparties: enrichGlobalBookingCounterpartiesReal,
   createGlobalBookingHold: createGlobalBookingHoldReal,
   quoteGlobalBookingHold: quoteGlobalBookingHoldReal,
   confirmGlobalBookingHold: confirmGlobalBookingHoldReal,
@@ -223,7 +227,7 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // source for booking management — never trust browser-local cache for this.
   communities.get("/:communityId/bookings", async (c) => {
     const services = routeServices()
-    const { actor, communityId, communityRepository } = await services.getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, profileRepository } = await services.getResolvedCommunityRouteContext(c)
     const url = new URL(c.req.url)
     const role: BookingViewerRole = url.searchParams.get("role") === "host" ? "host" : "booker"
     const statusParam = url.searchParams.get("status")
@@ -238,7 +242,8 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       })
     )
     if (globalData.available) {
-      return c.json({ object: "list", data: globalData.value, has_more: false }, 200)
+      const data = await services.enrichGlobalBookingCounterparties({ bookings: globalData.value, profileRepository })
+      return c.json({ object: "list", data, has_more: false }, 200)
     }
     const data = await services.listCommunityBookingsForUser({ env: c.env, communityRepository, communityId, actorUserId: actor.userId, role, statuses })
     return c.json({ object: "list", data, has_more: false }, 200)
@@ -281,7 +286,7 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
   // Read: retrieve a single booking — only if the caller is a party (host or booker), else 404.
   communities.get("/:communityId/bookings/:bookingId", async (c) => {
     const services = routeServices()
-    const { actor, communityId, communityRepository } = await services.getResolvedCommunityRouteContext(c)
+    const { actor, communityId, communityRepository, profileRepository } = await services.getResolvedCommunityRouteContext(c)
     const bookingId = c.req.param("bookingId")
     const globalBooking = await tryGlobalBookings(c.env, (executor) =>
       services.getGlobalBookingForParty({
@@ -292,7 +297,8 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     )
     if (globalBooking.available) {
       if (!globalBooking.value) return c.json({ error: "not_found" }, 404)
-      return c.json({ booking: globalBooking.value }, 200)
+      const [booking] = await services.enrichGlobalBookingCounterparties({ bookings: [globalBooking.value], profileRepository })
+      return c.json({ booking }, 200)
     }
     const booking = await services.getCommunityBookingForParty({ env: c.env, communityRepository, communityId, bookingId, actorUserId: actor.userId })
     if (!booking) return c.json({ error: "not_found" }, 404)
@@ -466,6 +472,8 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     const services = routeServices()
     const { actor, communityId, communityRepository } = await services.getResolvedCommunityRouteContext(c)
     const bookingId = c.req.param("bookingId")
+    const terms = await parseOptionalExpectedRefundCents(() => c.req.text())
+    if (!terms.ok) return c.json({ error: "invalid_expected_refund_cents" }, 400)
     const nowUtc = new Date().toISOString()
     const globalResult = await tryGlobalBookings(c.env, (executor) =>
       services.cancelGlobalBooking({
@@ -474,11 +482,16 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
         bookingId,
         actorUserId: actor.userId,
         nowUtc,
+        expectedRefundCents: terms.provided ? terms.expectedRefundCents : undefined,
       })
     )
     if (globalResult.available) {
       if (globalResult.value.ok) {
+        if (!terms.provided) logBodylessBookingCancellation({ bookingId, actorRole: globalResult.value.cancelledBy })
         return c.json({ booking: globalResult.value.booking, cancelled_by: globalResult.value.cancelledBy, already_cancelled: globalResult.value.already }, 200)
+      }
+      if (globalResult.value.reason === "cancellation_terms_changed") {
+        return c.json({ error: globalResult.value.reason, preview: globalResult.value.preview }, 409)
       }
       return c.json({ error: globalResult.value.reason }, globalResult.value.reason === "not_found" ? 404 : 409)
     }
@@ -489,10 +502,15 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       bookingId,
       actorUserId: actor.userId,
       nowUtc,
+      expectedRefundCents: terms.provided ? terms.expectedRefundCents : undefined,
     })
     if (!result.ok) {
+      if (result.reason === "cancellation_terms_changed") {
+        return c.json({ error: result.reason, preview: result.preview }, 409)
+      }
       return c.json({ error: result.reason }, result.reason === "not_found" ? 404 : 409)
     }
+    if (!terms.provided) logBodylessBookingCancellation({ bookingId, actorRole: result.cancelledBy })
     return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
   })
 

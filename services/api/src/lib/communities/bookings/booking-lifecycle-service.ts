@@ -497,6 +497,7 @@ export interface LifecycleInput {
   actorUserId: string
   nowUtc: string
   confirmPollMs?: number[]
+  expectedRefundCents?: number
   // The unattended settlement evaluator (D4) drives the same transitions for ALREADY-PAST sessions
   // based on recorded attendance, so it bypasses the user-facing schedule windows. Never set this on
   // a request-initiated call.
@@ -522,6 +523,17 @@ function epochMs(iso: string): number { return Date.parse(iso) }
 type CancelBy = "host" | "booker"
 export type CancelBookingResult =
   | { ok: false; reason: "not_found" | "illegal_transition" }
+  | { ok: false; reason: "cancellation_terms_changed"; preview: {
+      object: "booking_cancellation_preview"
+      booking_id: string
+      cancelled_by: CancelBy
+      gross_cents: number
+      refund_cents: number
+      host_payout_cents: number
+      platform_fee_cents: number
+      previewed_at: string
+      policy_cutoff_at: string | null
+    } }
   | { ok: true; already: boolean; cancelledBy: CancelBy; booking: BookingLifecycleSnapshot }
 
 /** Start the 1:1 session: confirmed → live. Either party may start; no money moves. */
@@ -580,6 +592,24 @@ export async function cancelBooking(input: LifecycleInput): Promise<CancelBookin
       state: intentState, cancelledBy: cancelBy, slotStartUtc: booking.slot_start_utc,
       nowUtc: input.nowUtc, policy, allocation: computeAllocation(booking.gross_cents, policy),
     }).refundCents
+  }
+
+  const hostPayoutCents = retainedHostPayout(booking.gross_cents, refundCents, booking.platform_fee_bps)
+  const preview = {
+    object: "booking_cancellation_preview" as const,
+    booking_id: booking.booking_id,
+    cancelled_by: cancelBy,
+    gross_cents: booking.gross_cents,
+    refund_cents: refundCents,
+    host_payout_cents: hostPayoutCents,
+    platform_fee_cents: booking.gross_cents - refundCents - hostPayoutCents,
+    previewed_at: input.nowUtc,
+    policy_cutoff_at: cancelBy === "booker"
+      ? new Date(epochMs(booking.slot_start_utc) - lifecyclePolicy(booking.platform_fee_bps).cancellationWindowSeconds * 1000).toISOString()
+      : null,
+  }
+  if (input.expectedRefundCents !== undefined && input.expectedRefundCents !== refundCents) {
+    return { ok: false, reason: "cancellation_terms_changed", preview }
   }
 
   const settled = await executeSettlement(ctxOf(input), booking, "confirmed", intentState, refundCents)

@@ -225,6 +225,7 @@ async function reserveBookingSettlementIntent(
   const res = await exec.execute({
     sql: `UPDATE bookings.bookings
           SET status = ?3,
+              outcome = ?3,
               refund_cents = ?4,
               cancelled_at = CASE WHEN ?3 IN ('cancelled_by_host', 'cancelled_by_booker') THEN ?5::timestamptz ELSE cancelled_at END,
               completed_at = CASE WHEN ?3 = 'completed' THEN ?5::timestamptz ELSE completed_at END,
@@ -306,6 +307,7 @@ async function resolveBookingSettlementReview(
   const res = await exec.execute({
     sql: `UPDATE bookings.bookings
           SET status = ?2,
+              outcome = ?2,
               refund_cents = ?3,
               settlement_review_status = 'resolved',
               settlement_review_resolution = ?2,
