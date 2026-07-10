@@ -26,6 +26,7 @@ import { withTransaction } from "../transactions"
 import { logPipelineError } from "../observability/pipeline-log"
 import { sameLanguageLocale } from "../localization/content-locale"
 import { rowValue } from "../sql-row"
+import { emitStudyQualificationIfComplete } from "../rewards/reward-qualification-outbox"
 
 export type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
@@ -2636,6 +2637,8 @@ export async function submitPostStudyAttempt(input: {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
     const streakWritesEnabled = studyStreakWritesEnabled(input.env)
+    const rewardQualificationWritesEnabled = envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
+      && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false)
     timingStreakWritesEnabled = streakWritesEnabled
     const streakTargetLanguage = readString(input.body.target_language)
       ? normalizeStudyTargetLanguage(input.body.target_language)
@@ -2669,7 +2672,7 @@ export async function submitPostStudyAttempt(input: {
       : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
     const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
-    const studyStreakTarget = streakWritesEnabled
+    const studyStreakTarget = streakWritesEnabled || rewardQualificationWritesEnabled
       ? await resolveStudyStreakTargetCount({
         client: db.client,
         communityId: input.communityId,
@@ -2732,6 +2735,16 @@ export async function submitPostStudyAttempt(input: {
           postId: input.postId,
           studyTargetCount: studyStreakTarget.count,
           studyTimezone: input.studyTimezone,
+          userId: input.actor.userId,
+        })
+      }
+      if (rewardQualificationWritesEnabled && studyStreakTarget != null) {
+        await emitStudyQualificationIfComplete({
+          client: tx,
+          communityId: input.communityId,
+          now,
+          postId: input.postId,
+          targetCount: studyStreakTarget.count,
           userId: input.actor.userId,
         })
       }

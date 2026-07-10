@@ -6,6 +6,7 @@ import { HttpError, internalError, notFoundError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Env } from "../../env"
+import { envFlag } from "../helpers"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import {
   recordKaraokeAttempt,
@@ -168,6 +169,8 @@ export async function finalizeKaraokeAttempt(input: {
         sessionId: input.payload.sessionId,
         summary: input.payload.summary,
         userId: creation.subjectUserId,
+        emitRewardQualification: envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
+          && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false),
       })
       await tx.commit()
       return {
