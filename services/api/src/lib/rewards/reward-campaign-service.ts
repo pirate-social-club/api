@@ -9,7 +9,7 @@ import type {
 
 import type { Env } from "../../env"
 import { executeFirst } from "../db-helpers"
-import { badRequestError, conflictError, notFoundError, structuredSurfaceDisabled } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, notFoundError, rateLimited, structuredSurfaceDisabled } from "../errors"
 import { classifyBookingPaymentReceipt, type BookingPaymentVerification } from "../communities/commerce/funding-proof-service"
 import { hasUniqueConstraintName } from "../auth/auth-db-query-helpers"
 import { makeId, nowIso } from "../helpers"
@@ -30,6 +30,13 @@ export type RewardCampaignCreateInput = RewardCampaignCreateRequest
 
 type CampaignRow = QueryResultRow
 type FundingRow = QueryResultRow
+
+export type RewardSongOwnerPolicy = {
+  community: string
+  post: string
+  song_owner: string
+  third_party_rewards: "allowed" | "blocked"
+}
 
 const CAMPAIGN_COLUMNS = `
   reward_campaign_id, rewarder_user_id, community_id, post_id,
@@ -219,6 +226,92 @@ async function selectFunding(exec: Pick<Client | Transaction, "execute">, fundin
   }))
 }
 
+async function thirdPartyRewardsAllowed(
+  exec: Pick<Client | Transaction, "execute">,
+  communityId: string,
+  postId: string,
+): Promise<boolean> {
+  const row = await executeFirst(exec, {
+    sql: `SELECT third_party_rewards FROM reward_song_owner_policies WHERE community_id = ?1 AND post_id = ?2 LIMIT 1`,
+    args: [communityId, postId],
+  })
+  return stringOrNull(rowValue(row, "third_party_rewards")) !== "blocked"
+}
+
+async function requireThirdPartyRewardsAllowed(
+  exec: Pick<Client | Transaction, "execute">,
+  communityId: string,
+  postId: string,
+): Promise<void> {
+  if (!await thirdPartyRewardsAllowed(exec, communityId, postId)) {
+    throw eligibilityFailed("The song owner has disabled third-party rewards")
+  }
+}
+
+export async function getRewardSongOwnerPolicy(input: {
+  env: Env
+  client: Client
+  target: RewardCampaignTarget
+}): Promise<RewardSongOwnerPolicy> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  return {
+    community: input.target.communityId,
+    post: input.target.postId,
+    song_owner: input.target.songOwnerUserId,
+    third_party_rewards: await thirdPartyRewardsAllowed(input.client, input.target.communityId, input.target.postId)
+      ? "allowed"
+      : "blocked",
+  }
+}
+
+export async function setRewardSongOwnerPolicy(input: {
+  env: Env
+  client: Client
+  userId: string
+  target: RewardCampaignTarget
+  thirdPartyRewards: "allowed" | "blocked"
+  now?: string
+}): Promise<RewardSongOwnerPolicy> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  if (input.userId !== input.target.songOwnerUserId) {
+    throw notFoundError("Reward song policy not found")
+  }
+  if (!(["allowed", "blocked"] as const).includes(input.thirdPartyRewards)) {
+    throw badRequestError("third_party_rewards is invalid")
+  }
+  const now = input.now ?? nowIso()
+  await withTransaction(input.client, "write", async (tx) => {
+    await tx.execute({
+      sql: `
+        INSERT INTO reward_song_owner_policies (
+          community_id, post_id, song_owner_user_id, third_party_rewards, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+        ON CONFLICT (community_id, post_id) DO UPDATE SET
+          song_owner_user_id = excluded.song_owner_user_id,
+          third_party_rewards = excluded.third_party_rewards,
+          updated_at = excluded.updated_at
+      `,
+      args: [input.target.communityId, input.target.postId, input.target.songOwnerUserId, input.thirdPartyRewards, now],
+    })
+    if (input.thirdPartyRewards === "blocked") {
+      await tx.execute({
+        sql: `
+          UPDATE reward_campaigns
+          SET status = 'paused', updated_at = ?3
+          WHERE community_id = ?1 AND post_id = ?2 AND status IN ('scheduled', 'active')
+        `,
+        args: [input.target.communityId, input.target.postId, now],
+      })
+    }
+  })
+  return {
+    community: input.target.communityId,
+    post: input.target.postId,
+    song_owner: input.target.songOwnerUserId,
+    third_party_rewards: input.thirdPartyRewards,
+  }
+}
+
 export async function createRewardCampaign(input: {
   env: Env
   client: Client
@@ -250,9 +343,31 @@ export async function createRewardCampaign(input: {
       return campaignResource(replay)
     }
 
-    const campaignId = makeId("rcp")
+    await requireThirdPartyRewardsAllowed(tx, target.communityId, target.postId)
+    const windowStart = `${now.slice(0, 13)}:00:00.000Z`
     await tx.execute({
       sql: `
+        INSERT INTO reward_campaign_creation_rate_limits (
+          rewarder_user_id, window_start, request_count, updated_at
+        ) VALUES (?1, ?2, 1, ?3)
+        ON CONFLICT (rewarder_user_id, window_start) DO UPDATE SET
+          request_count = reward_campaign_creation_rate_limits.request_count + 1,
+          updated_at = excluded.updated_at
+      `,
+      args: [input.userId, windowStart, now],
+    })
+    const rateRow = await executeFirst(tx, {
+      sql: `SELECT request_count FROM reward_campaign_creation_rate_limits WHERE rewarder_user_id = ?1 AND window_start = ?2`,
+      args: [input.userId, windowStart],
+    })
+    if (integer(rowValue(rateRow, "request_count")) > 10) {
+      throw rateLimited("Reward campaign creation is rate limited")
+    }
+
+    const campaignId = makeId("rcp")
+    try {
+      await tx.execute({
+        sql: `
         INSERT INTO reward_campaigns (
           reward_campaign_id, campaign_kind, rewarder_user_id, creation_idempotency_key,
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
@@ -265,14 +380,23 @@ export async function createRewardCampaign(input: {
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
-      args: [
+        args: [
         campaignId, input.userId, body.idempotency_key, target.communityId, target.postId,
         target.songArtifactBundleId, target.songOwnerUserId, body.eligible_activity,
         body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
         body.reward_period_cap_cents, body.budget_cents, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
-      ],
-    })
+        ],
+      })
+    } catch (error) {
+      if (
+        hasUniqueConstraintName(error, "reward_campaigns_one_open_per_rewarder_song")
+        || (error instanceof Error && error.message.includes("reward_campaigns.rewarder_user_id, reward_campaigns.community_id, reward_campaigns.post_id"))
+      ) {
+        throw conflictError("An unfinished campaign already exists for this rewarder and song")
+      }
+      throw error
+    }
     const created = queryResultRow(await executeFirst(tx, {
       sql: `SELECT ${CAMPAIGN_COLUMNS}, terms_hash FROM reward_campaigns WHERE rewarder_user_id = ?1 AND creation_idempotency_key = ?2 LIMIT 1`,
       args: [input.userId, body.idempotency_key],
@@ -289,10 +413,33 @@ export async function getRewardCampaign(input: {
   env: Env
   client: Client
   campaignId: string
+  userId: string
+  canModerateCommunity?: (communityId: string) => Promise<boolean>
 }): Promise<RewardCampaign> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
   if (!row) throw notFoundError("Reward campaign not found")
+  const status = requiredString(row, "status")
+  const ownsCampaign = requiredString(row, "rewarder_user_id") === input.userId
+    || requiredString(row, "song_owner_user_id") === input.userId
+  const isPublicOffer = status === "active"
+  const canModerate = !isPublicOffer && !ownsCampaign && input.canModerateCommunity
+    ? await input.canModerateCommunity(requiredString(row, "community_id"))
+    : false
+  if (!isPublicOffer && !ownsCampaign && !canModerate) throw notFoundError("Reward campaign not found")
+  return campaignResource(row)
+}
+
+export async function getPublicActiveRewardCampaign(input: {
+  env: Env
+  client: Client
+  campaignId: string
+}): Promise<RewardCampaign> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
+  if (!row || requiredString(row, "status") !== "active") {
+    throw notFoundError("Active reward campaign not found")
+  }
   return campaignResource(row)
 }
 
@@ -352,6 +499,11 @@ export async function createRewardCampaignFundingQuote(input: {
 
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
+    await requireThirdPartyRewardsAllowed(
+      tx,
+      requiredString(campaign, "community_id"),
+      requiredString(campaign, "post_id"),
+    )
     const status = requiredString(campaign, "status") as RewardCampaignStatus
     if (!["draft", "funding_quoted", "funding_confirming"].includes(status)) {
       throw conflictError("Reward campaign no longer accepts initial funding")
@@ -447,6 +599,10 @@ export async function confirmRewardCampaignFunding(input: {
       if (existingTx !== txHash) throw conflictError("Funding quote was confirmed with a different transaction")
       return effect
     }
+    if (status === "failed") {
+      if (existingTx !== txHash) throw conflictError("Failed funding quote already claimed a different transaction")
+      return effect
+    }
     if (status === "refunded") throw conflictError("Funding quote was already refunded")
     if (existingTx && existingTx !== txHash) throw conflictError("Funding quote already claimed a different transaction")
     if (Date.parse(requiredString(effect, "expires_at")) <= Date.parse(now) && status === "quoted") {
@@ -488,7 +644,7 @@ export async function confirmRewardCampaignFunding(input: {
     })
     return (await selectFunding(tx, input.fundingId)) ?? effect
   })
-  if (requiredString(claimed, "status") === "confirmed") return fundingResource(claimed)
+  if (["confirmed", "failed"].includes(requiredString(claimed, "status"))) return fundingResource(claimed)
 
   const expected = {
     chainId: integer(rowValue(claimed, "chain_id")),
@@ -526,6 +682,7 @@ export async function confirmRewardCampaignFunding(input: {
                   SELECT 1 FROM reward_campaign_funding_effects
                   WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
                 ) THEN 'funding_quoted'
+                WHEN funded_cents > 0 THEN 'funding_quoted'
                 ELSE 'draft'
               END,
               updated_at = ?2
@@ -547,7 +704,14 @@ export async function confirmRewardCampaignFunding(input: {
     const startMillis = Date.parse(requiredString(campaign, "starts_at"))
     const endMillis = Date.parse(requiredString(campaign, "ends_at"))
     const nowMillis = Date.parse(now)
-    const nextStatus: RewardCampaignStatus = nextFunded < budget
+    const ownerAllowsRewards = await thirdPartyRewardsAllowed(
+      tx,
+      requiredString(campaign, "community_id"),
+      requiredString(campaign, "post_id"),
+    )
+    const nextStatus: RewardCampaignStatus = !ownerAllowsRewards
+      ? "paused"
+      : nextFunded < budget
       ? "funding_quoted"
       : nowMillis < startMillis
         ? "scheduled"

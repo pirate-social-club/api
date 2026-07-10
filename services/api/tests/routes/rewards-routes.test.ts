@@ -324,6 +324,21 @@ describe("rewards routes", () => {
       funded_cents: 100000,
       remaining_cents: 100000,
     })
+    const publicOffer = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
+    expect(publicOffer.status).toBe(200)
+    expect(await json(publicOffer)).toMatchObject({ id: campaign.id, status: "active" })
+    const ownerBlocksActive = await app.request(
+      "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song",
+      {
+        method: "PUT",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ third_party_rewards: "blocked" }),
+      },
+      ctx.env,
+    )
+    expect(ownerBlocksActive.status).toBe(200)
+    const noLongerPublic = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
+    expect(noLongerPublic.status).toBe(404)
 
     await seedCampaignSong(ctx, session.userId, "pst_reward_campaign_song_two")
     const secondCreate = await app.request("http://pirate.test/reward_campaigns", {
@@ -352,6 +367,238 @@ describe("rewards routes", () => {
     )
     expect(reusedReceipt.status).toBe(409)
     expect(verificationCalls).toBe(1)
+  })
+
+  test("enforces song-owner opt-out and hides non-public campaign states", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-policy-owner")
+    const booster = await exchangeJwt(ctx.env, "reward-policy-booster")
+    const outsider = await exchangeJwt(ctx.env, "reward-policy-outsider")
+    await seedCampaignSong(ctx, owner.userId)
+    await addWallet(ctx, booster.userId, new Date().toISOString())
+    const policyUrl = "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song"
+
+    const unauthorizedPolicy = await app.request(policyUrl, {
+      method: "PUT",
+      headers: { ...authHeaders(outsider.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ third_party_rewards: "blocked" }),
+    }, ctx.env)
+    expect(unauthorizedPolicy.status).toBe(404)
+
+    const block = await app.request(policyUrl, {
+      method: "PUT",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ third_party_rewards: "blocked" }),
+    }, ctx.env)
+    expect(block.status).toBe(200)
+    expect(await json(block)).toMatchObject({ song_owner: owner.userId, third_party_rewards: "blocked" })
+
+    const blockedCreate = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "blocked-campaign" })),
+    }, ctx.env)
+    expect(blockedCreate.status).toBe(403)
+
+    await app.request(policyUrl, {
+      method: "PUT",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ third_party_rewards: "allowed" }),
+    }, ctx.env)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "allowed-campaign" })),
+    }, ctx.env)
+    expect(create.status).toBe(201)
+    const campaign = await json(create) as { id: string }
+    const duplicateDraft = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "second-open-draft" })),
+    }, ctx.env)
+    expect(duplicateDraft.status).toBe(409)
+
+    const hiddenDraft = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(outsider.accessToken),
+    }, ctx.env)
+    expect(hiddenDraft.status).toBe(404)
+    const ownerCanInspect = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(ownerCanInspect.status).toBe(200)
+
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "owner-block-inflight" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+    await app.request(policyUrl, {
+      method: "PUT",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ third_party_rewards: "blocked" }),
+    }, ctx.env)
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    const confirmed = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"b".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(confirmed.status).toBe(200)
+    expect(await json(confirmed)).toMatchObject({ status: "confirmed" })
+    const paused = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(booster.accessToken),
+    }, ctx.env)
+    expect(await json(paused)).toMatchObject({ status: "paused", funded_cents: 100000 })
+  })
+
+  test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-funding-adversarial")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "funding-adversarial-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quote = async (amountCents: number, key: string) => {
+      const response = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: amountCents, idempotency_key: key }),
+      }, ctx.env)
+      expect(response.status).toBe(201)
+      return await json(response) as { id: string }
+    }
+    const confirm = (fundingId: string, hex: string) => app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${fundingId}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${hex.repeat(64)}` }),
+      },
+      ctx.env,
+    )
+
+    const partial = await quote(40000, "partial-funding")
+    let verificationCalls = 0
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
+      verificationCalls += 1
+      return verificationCalls === 1
+        ? { kind: "pending", reason: "receipt_pending" }
+        : { kind: "verified", senderAddress: expected.senderAddress, txRef: fundingTxRef }
+    })
+    expect(await json(await confirm(partial.id, "c"))).toMatchObject({ status: "confirming" })
+    expect(await json(await confirm(partial.id, "c"))).toMatchObject({ status: "confirmed" })
+    const partiallyFunded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(await json(partiallyFunded)).toMatchObject({ status: "funding_quoted", funded_cents: 40000 })
+
+    const expired = await quote(10000, "expired-funding")
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = '2020-01-01T00:00:00.000Z' WHERE reward_campaign_funding_effect_id = ?1",
+      args: [expired.id],
+    })
+    const expiredConfirm = await confirm(expired.id, "d")
+    expect(expiredConfirm.status).toBe(409)
+    expect(verificationCalls).toBe(2)
+
+    for (const [reason, hex] of [["wrong_transfer_recipient", "e"], ["wrong_transfer_amount", "f"]] as const) {
+      const rejected = await quote(10000, `rejected-${reason}`)
+      let rejectedVerificationCalls = 0
+      setBookingPaymentVerifierForTests(async () => {
+        rejectedVerificationCalls += 1
+        return { kind: "rejected", reason }
+      })
+      const rejectedResponse = await confirm(rejected.id, hex)
+      expect(rejectedResponse.status).toBe(200)
+      expect(await json(rejectedResponse)).toMatchObject({ status: "failed", failure_reason: reason })
+      expect(await json(await confirm(rejected.id, hex))).toMatchObject({ status: "failed", failure_reason: reason })
+      expect(rejectedVerificationCalls).toBe(1)
+    }
+    const finalCampaign = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(await json(finalCampaign)).toMatchObject({ status: "funding_quoted", funded_cents: 40000 })
+    const reconciliation = await ctx.client.execute({
+      sql: `
+        SELECT stored_funded_cents, computed_funded_cents, counters_match
+        FROM reward_campaign_accounting_reconciliation
+        WHERE reward_campaign_id = ?1
+      `,
+      args: [campaign.id],
+    })
+    expect(reconciliation.rows).toEqual([{
+      stored_funded_cents: 40000,
+      computed_funded_cents: 40000,
+      counters_match: 1,
+    }])
+  })
+
+  test("allows only one concurrent campaign to consume a funding transaction", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-funding-concurrent")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId, "pst_reward_concurrent_a")
+    await seedCampaignSong(ctx, session.userId, "pst_reward_concurrent_b")
+
+    const createFundableCampaign = async (post: string, suffix: string) => {
+      const created = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(campaignBody({ post, idempotency_key: `concurrent-campaign-${suffix}` })),
+      }, ctx.env)
+      expect(created.status).toBe(201)
+      const campaign = await json(created) as { id: string }
+      const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100000, idempotency_key: `concurrent-quote-${suffix}` }),
+      }, ctx.env)
+      expect(quoted.status).toBe(201)
+      return { campaignId: campaign.id, fundingId: (await json(quoted) as { id: string }).id }
+    }
+    const first = await createFundableCampaign("pst_reward_concurrent_a", "a")
+    const second = await createFundableCampaign("pst_reward_concurrent_b", "b")
+    let verificationCalls = 0
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
+      verificationCalls += 1
+      await Promise.resolve()
+      return { kind: "verified", senderAddress: expected.senderAddress, txRef: fundingTxRef }
+    })
+    const txHash = `0x${"1".repeat(64)}`
+    const submit = ({ campaignId, fundingId }: { campaignId: string; fundingId: string }) => app.request(
+      `http://pirate.test/reward_campaigns/${campaignId}/funding_quotes/${fundingId}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: txHash }),
+      },
+      ctx.env,
+    )
+    const responses = await Promise.all([submit(first), submit(second)])
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409])
+    expect(verificationCalls).toBe(1)
+    const consumed = await ctx.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM reward_campaign_funding_effects WHERE chain_id = 84532 AND tx_hash = ?1",
+      args: [txHash],
+    })
+    expect(consumed.rows[0]?.count).toBe(1)
   })
 
   test("GET /me/rewards returns ledger balance, today earnings, recent events, and nullifier gate state", async () => {
