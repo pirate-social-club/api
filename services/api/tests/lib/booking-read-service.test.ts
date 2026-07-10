@@ -53,4 +53,27 @@ describe("enrichGlobalBookingCounterparties", () => {
       { user_id: "usr_host", display_name: "Host Name", avatar_ref: "avatar-ref" },
     ]);
   });
+
+  test("falls back to individual profile reads when batch lookup is unavailable", async () => {
+    const requested: string[] = [];
+    const result = await enrichGlobalBookingCounterparties({
+      bookings: [
+        booking(),
+        booking({
+          booking_id: "bkg_host_view",
+          viewer_role: "host",
+          counterparty: { user_id: "usr_booker", display_name: null, avatar_ref: null },
+        }),
+      ],
+      profileRepository: {
+        getProfileByUserId: async (userId: string) => {
+          requested.push(userId);
+          return { display_name: userId === "usr_host" ? "Host Name" : "Booker Name", avatar_ref: null } as never;
+        },
+      } as never,
+    });
+
+    expect(requested).toEqual(["usr_host", "usr_booker"]);
+    expect(result.map((item) => item.counterparty.display_name)).toEqual(["Host Name", "Booker Name"]);
+  });
 });
