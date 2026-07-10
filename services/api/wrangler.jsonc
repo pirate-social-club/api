@@ -25,6 +25,11 @@
       "name": "LINK_PREVIEW_RATE_LIMITER",
       "namespace_id": "1001",
       "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "REWARD_OFFER_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 120, "period": 60 }
     }
   ],
   "send_email": [
@@ -132,6 +137,11 @@
           "name": "LINK_PREVIEW_RATE_LIMITER",
           "namespace_id": "1001",
           "simple": { "limit": 30, "period": 60 }
+        },
+        {
+          "name": "REWARD_OFFER_RATE_LIMITER",
+          "namespace_id": "1002",
+          "simple": { "limit": 120, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -275,6 +285,11 @@
           "name": "LINK_PREVIEW_RATE_LIMITER",
           "namespace_id": "1001",
           "simple": { "limit": 30, "period": 60 }
+        },
+        {
+          "name": "REWARD_OFFER_RATE_LIMITER",
+          "namespace_id": "1002",
+          "simple": { "limit": 120, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -427,6 +442,11 @@
           "name": "LINK_PREVIEW_RATE_LIMITER",
           "namespace_id": "1001",
           "simple": { "limit": 30, "period": 60 }
+        },
+        {
+          "name": "REWARD_OFFER_RATE_LIMITER",
+          "namespace_id": "1002",
+          "simple": { "limit": 120, "period": 60 }
         }
       ],
       "durable_objects": {

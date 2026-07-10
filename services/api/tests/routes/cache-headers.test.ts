@@ -30,6 +30,8 @@ describe("public read cache headers", () => {
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-posts/pst_1"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-comments/pst_1"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-communities/community-slug"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public/reward_campaigns?community_id=c1&post_id=p1"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public/reward_campaigns/rcp_1"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/posts/pst_1"))).toBe(false)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/public", {
       method: "POST",
@@ -62,5 +64,15 @@ describe("public read cache headers", () => {
     })
 
     expect(response.headers.get("cache-tag")).toBe("post:post_pst_1,community:com_cmt_1,bad_tag_value")
+  })
+
+  test("supports a short CDN lifetime for time-sensitive public offers", async () => {
+    const response = await publicReadCacheHeaderResponse("/public/reward_campaigns", {
+      freshSeconds: 15,
+      staleSeconds: 15,
+    })
+
+    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=15, stale-while-revalidate=15")
   })
 })

@@ -2703,6 +2703,12 @@ export type RewardCampaignStatus = "draft" | "funding_quoted" | "funding_confirm
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
+export type PublicRewardOffer = {
+  eligible_activity: RewardCampaignEligibleActivity;
+  daily_reward_cents: number;
+  ends_at: number;
+};
+
 export type RewardSongOwnerPolicy = {
   community: string;
   post: string;

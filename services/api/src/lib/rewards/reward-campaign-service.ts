@@ -1,5 +1,6 @@
 import { getAddress } from "ethers"
 import type {
+  PublicRewardOffer,
   RewardCampaign,
   RewardCampaignCreateRequest,
   RewardCampaignEligibleActivity,
@@ -108,6 +109,14 @@ function campaignResource(row: CampaignRow): RewardCampaign {
   }
 }
 
+function publicRewardOffer(row: CampaignRow): PublicRewardOffer {
+  return {
+    eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
+    daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
+    ends_at: unixSeconds(rowValue(row, "ends_at")) ?? 0,
+  }
+}
+
 function fundingResource(row: FundingRow): RewardCampaignFundingQuote {
   return {
     id: requiredString(row, "reward_campaign_funding_effect_id"),
@@ -163,6 +172,9 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     budget_cents: cents(input.budget_cents, "budget_cents", false),
     starts_at: cents(input.starts_at, "starts_at", false),
     ends_at: cents(input.ends_at, "ends_at", false),
+  }
+  if (normalized.milestone_7_cents !== 0 || normalized.milestone_30_cents !== 0) {
+    throw badRequestError("Campaign milestone rewards are not available yet")
   }
   if (
     normalized.daily_reward_cents > config.maxRewardCents
@@ -434,13 +446,13 @@ export async function getPublicActiveRewardCampaign(input: {
   env: Env
   client: Client
   campaignId: string
-}): Promise<RewardCampaign> {
+}): Promise<PublicRewardOffer> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
   if (!row || requiredString(row, "status") !== "active") {
     throw notFoundError("Active reward campaign not found")
   }
-  return campaignResource(row)
+  return publicRewardOffer(row)
 }
 
 export async function getPublicActiveRewardCampaignForSong(input: {
@@ -448,7 +460,7 @@ export async function getPublicActiveRewardCampaignForSong(input: {
   client: Client
   communityId: string
   postId: string
-}): Promise<RewardCampaign> {
+}): Promise<PublicRewardOffer> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const result = await input.client.execute({
     sql: `
@@ -465,7 +477,7 @@ export async function getPublicActiveRewardCampaignForSong(input: {
   })
   const row = result.rows[0]
   if (!row) throw notFoundError("Active reward campaign not found")
-  return campaignResource(row)
+  return publicRewardOffer(row)
 }
 
 async function resolveFundingSender(exec: Pick<Client | Transaction, "execute">, userId: string): Promise<string> {

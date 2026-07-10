@@ -6803,7 +6803,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RewardCampaign"
+                  "$ref": "#/components/schemas/PublicRewardOffer"
                 }
               }
             }
@@ -6978,7 +6978,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RewardCampaign"
+                  "$ref": "#/components/schemas/PublicRewardOffer"
                 }
               }
             }
@@ -7027,7 +7027,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RewardCampaign"
+                  "$ref": "#/components/schemas/PublicRewardOffer"
                 }
               }
             }
@@ -16098,11 +16098,13 @@ const spec = {
           },
           "milestone_7_cents": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 0
           },
           "milestone_30_cents": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 0
           },
           "reward_period_cap_cents": {
             "type": "integer",
@@ -16122,6 +16124,70 @@ const spec = {
           },
           "idempotency_key": {
             "type": "string"
+          }
+        }
+      },
+      "PublicRewardOffer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eligible_activity",
+          "daily_reward_cents",
+          "ends_at"
+        ],
+        "properties": {
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardSongOwnerPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "song_owner",
+          "third_party_rewards"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "RewardSongOwnerPolicyUpdateRequest": {
+        "type": "object",
+        "required": [
+          "third_party_rewards"
+        ],
+        "properties": {
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
           }
         }
       },
@@ -16258,48 +16324,6 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
-          }
-        }
-      },
-      "RewardSongOwnerPolicy": {
-        "type": "object",
-        "required": [
-          "community",
-          "post",
-          "song_owner",
-          "third_party_rewards"
-        ],
-        "properties": {
-          "community": {
-            "type": "string"
-          },
-          "post": {
-            "type": "string"
-          },
-          "song_owner": {
-            "type": "string"
-          },
-          "third_party_rewards": {
-            "type": "string",
-            "enum": [
-              "allowed",
-              "blocked"
-            ]
-          }
-        }
-      },
-      "RewardSongOwnerPolicyUpdateRequest": {
-        "type": "object",
-        "required": [
-          "third_party_rewards"
-        ],
-        "properties": {
-          "third_party_rewards": {
-            "type": "string",
-            "enum": [
-              "allowed",
-              "blocked"
-            ]
           }
         }
       },

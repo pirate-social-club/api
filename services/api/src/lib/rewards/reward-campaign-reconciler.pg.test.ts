@@ -5,6 +5,7 @@
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
+import type { Client } from "../sql-client"
 import {
   getControlPlaneClient,
   setControlPlanePostgresPoolFactoryForTests,
@@ -63,15 +64,22 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         eligible_activity TEXT NOT NULL,
         daily_reward_cents INTEGER NOT NULL,
         reward_period_cap_cents INTEGER NOT NULL,
+        budget_cents INTEGER NOT NULL,
         funded_cents INTEGER NOT NULL,
         reserved_cents INTEGER NOT NULL,
         credited_cents INTEGER NOT NULL,
+        paid_cents INTEGER NOT NULL,
         refunded_cents INTEGER NOT NULL,
         starts_at TEXT NOT NULL,
         ends_at TEXT NOT NULL,
         terms_version INTEGER NOT NULL,
         exhausted_at TEXT,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        CHECK (budget_cents >= 0),
+        CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
+        CHECK (reserved_cents >= 0 AND credited_cents >= 0 AND paid_cents >= 0 AND refunded_cents >= 0),
+        CHECK (reserved_cents + credited_cents + refunded_cents <= funded_cents),
+        CHECK (paid_cents <= credited_cents)
       );
       CREATE TABLE reward_song_owner_policies (
         community_id TEXT NOT NULL,
@@ -137,7 +145,29 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(`
       INSERT INTO reward_campaigns VALUES (
         'rcp_reward_pg', 'cmt_reward_pg', 'pst_reward_pg', 'sab_reward_pg',
-        'active', 'either', 40, 40, 100, 0, 0, 0,
+        'active', 'either', 40, 40, 100, 100, 0, 0, 0, 0,
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', 1, NULL, $1
+      )
+    `, [NOW])
+    for (const suffix of ["a", "b"] as const) {
+      await db.unsafe(
+        `INSERT INTO users VALUES ($1, $2)`,
+        [`usr_budget_${suffix}`, JSON.stringify({
+          unique_human: {
+            state: "verified", provider: "self", proof_type: "passport",
+            mechanism: "passport", verified_at: NOW,
+          },
+        })],
+      )
+      await db.unsafe(
+        `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4)`,
+        [`idn_budget_${suffix}`, `usr_budget_${suffix}`, `budget-nullifier-${suffix}`, NOW],
+      )
+    }
+    await db.unsafe(`
+      INSERT INTO reward_campaigns VALUES (
+        'rcp_budget_pg', 'cmt_reward_pg', 'pst_budget_pg', 'sab_budget_pg',
+        'active', 'either', 40, 40, 40, 40, 0, 0, 0, 0,
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', 1, NULL, $1
       )
     `, [NOW])
@@ -151,7 +181,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await root.end()
   })
 
-  test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
+  async function withProductionPostgresClient<T>(operation: (client: Client) => Promise<T>): Promise<T> {
     const base = connect(TEST_DB, 4)
     setControlPlanePostgresPoolFactoryForTests(() => ({
       query: async (sql, values) => ({
@@ -171,8 +201,14 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       end: async () => { await base.end() },
     }))
     try {
-      await withRequestControlPlaneClients(async () => {
-        const client = getControlPlaneClient(PG_ENV)
+      return await withRequestControlPlaneClients(() => operation(getControlPlaneClient(PG_ENV)))
+    } finally {
+      setControlPlanePostgresPoolFactoryForTests(null)
+    }
+  }
+
+  test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
+    await withProductionPostgresClient(async (client) => {
         const candidate = {
           eventId: "rqe_reward_pg",
           userId: "usr_reward_pg",
@@ -189,10 +225,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           creditRewardCampaignQualification({ env: PG_ENV, client, candidate, now: NOW }),
         ])
         expect(results.map((result) => result.result).sort()).toEqual(["credited", "duplicate"])
-      })
-    } finally {
-      setControlPlanePostgresPoolFactoryForTests(null)
-    }
+    })
 
     const verify = connect(TEST_DB, 1)
     const reservations = await verify.unsafe(
@@ -206,5 +239,38 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(events).toEqual([{ amount_cents: 40 }])
     expect(campaigns).toEqual([{ funded_cents: 100, reserved_cents: 0, credited_cents: 40 }])
+  })
+
+  test("different identities racing for the final budget admit one full credit", async () => {
+    const results = await withProductionPostgresClient(async (client) => Promise.all(
+      (["a", "b"] as const).map((suffix) => creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: `rqe_budget_${suffix}`,
+          userId: `usr_budget_${suffix}`,
+          communityId: "cmt_reward_pg",
+          postId: "pst_budget_pg",
+          artifactBundleId: "sab_budget_pg",
+          activity: "study",
+          qualifiedAt: NOW,
+          periodKey: "2026-07-10",
+          policyVersion: "study-completed-set-v1",
+        },
+        now: NOW,
+      })),
+    ))
+    expect(results.map((result) => result.result).sort()).toEqual(["budget", "credited"])
+
+    const verify = connect(TEST_DB, 1)
+    const reservations = await verify.unsafe(
+      `SELECT status, amount_cents FROM reward_campaign_reservations WHERE reward_campaign_id = 'rcp_budget_pg'`,
+    ) as Array<{ status: string; amount_cents: number }>
+    const campaigns = await verify.unsafe(
+      `SELECT status, funded_cents, reserved_cents, credited_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_budget_pg'`,
+    ) as Array<{ status: string; funded_cents: number; reserved_cents: number; credited_cents: number }>
+    await verify.end()
+    expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
+    expect(campaigns).toEqual([{ status: "exhausted", funded_cents: 40, reserved_cents: 0, credited_cents: 40 }])
   })
 })
