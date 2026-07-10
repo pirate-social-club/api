@@ -19,6 +19,7 @@ const UNFINISHED_INTENT_STATES = new Set<string>([
 interface BookingLifecycleSnapshot {
   booking_id: string;
   status: string;
+  outcome: Booking["outcome"];
   refund_cents: number;
   refund_tx_ref: string | null;
   payout_tx_ref: string | null;
@@ -192,6 +193,7 @@ function snapshot(booking: Booking): BookingLifecycleSnapshot {
   return {
     booking_id: booking.bookingId,
     status: booking.status,
+    outcome: booking.outcome,
     refund_cents: booking.refundCents ?? 0,
     refund_tx_ref: booking.refundTxRef,
     payout_tx_ref: booking.payoutTxRef,
@@ -437,7 +439,61 @@ export async function startGlobalBookingSession(input: {
 
 export type CancelGlobalBookingResult =
   | { ok: false; reason: "not_found" | "illegal_transition" }
+  | { ok: false; reason: "cancellation_terms_changed"; preview: GlobalBookingCancellationPreview }
   | { ok: true; already: boolean; cancelledBy: CancelBy; booking: BookingLifecycleSnapshot };
+
+export interface GlobalBookingCancellationPreview {
+  object: "booking_cancellation_preview";
+  booking_id: string;
+  cancelled_by: CancelBy;
+  gross_cents: number;
+  refund_cents: number;
+  host_payout_cents: number;
+  platform_fee_cents: number;
+  previewed_at: string;
+  policy_cutoff_at: string | null;
+}
+
+async function cancellationPreviewFor(
+  booking: Booking,
+  cancelledBy: CancelBy,
+  nowUtc: string,
+): Promise<GlobalBookingCancellationPreview> {
+  const intentState: SettlementIntentState = cancelledBy === "host" ? "cancelled_by_host" : "cancelled_by_booker";
+  const refundCents = await refundFor({ state: intentState, cancelledBy, booking, nowUtc });
+  const hostPayoutCents = await computeRetainedHostPayout(booking.grossCents, refundCents, booking.platformFeeBps);
+  return {
+    object: "booking_cancellation_preview",
+    booking_id: booking.bookingId,
+    cancelled_by: cancelledBy,
+    gross_cents: booking.grossCents,
+    refund_cents: refundCents,
+    host_payout_cents: hostPayoutCents,
+    platform_fee_cents: booking.grossCents - refundCents - hostPayoutCents,
+    previewed_at: nowUtc,
+    policy_cutoff_at: cancelledBy === "booker"
+      ? new Date(epochMs(booking.slotStartUtc) - lifecyclePolicy(booking.platformFeeBps).cancellationWindowSeconds * 1000).toISOString()
+      : null,
+  };
+}
+
+export async function previewGlobalBookingCancellation(input: {
+  executor: BookingLifecycleSqlExecutor;
+  bookingId: string;
+  actorUserId: string;
+  nowUtc: string;
+}): Promise<{ ok: false; reason: "not_found" | "illegal_transition" } | { ok: true; preview: GlobalBookingCancellationPreview }> {
+  const booking = await createBookingLifecycleWriteRepository(input.executor).getBooking(input.bookingId);
+  if (!booking) return { ok: false, reason: "not_found" };
+  const cancelledBy = booking.hostUserId === input.actorUserId
+    ? "host"
+    : booking.bookerUserId === input.actorUserId
+      ? "booker"
+      : null;
+  if (!cancelledBy) return { ok: false, reason: "not_found" };
+  if (booking.status !== "confirmed") return { ok: false, reason: "illegal_transition" };
+  return { ok: true, preview: await cancellationPreviewFor(booking, cancelledBy, input.nowUtc) };
+}
 
 export async function cancelGlobalBooking(input: {
   env: Env;
@@ -445,6 +501,7 @@ export async function cancelGlobalBooking(input: {
   bookingId: string;
   actorUserId: string;
   nowUtc: string;
+  expectedRefundCents?: number;
   confirmPollMs?: number[];
 }): Promise<CancelGlobalBookingResult> {
   const repo = createBookingLifecycleWriteRepository(input.executor);
@@ -469,7 +526,11 @@ export async function cancelGlobalBooking(input: {
     const event = cancelledBy === "host" ? "HOST_CANCELS" : "BOOKER_CANCELS";
     if (!await transitionAllowed(booking.status, event)) return { ok: false, reason: "illegal_transition" };
     intentState = await transition(booking.status, event) as SettlementIntentState;
-    refundCents = await refundFor({ state: intentState, cancelledBy, booking, nowUtc: input.nowUtc });
+    const preview = await cancellationPreviewFor(booking, cancelledBy, input.nowUtc);
+    if (input.expectedRefundCents !== undefined && input.expectedRefundCents !== preview.refund_cents) {
+      return { ok: false, reason: "cancellation_terms_changed", preview };
+    }
+    refundCents = preview.refund_cents;
   }
 
   const settled = await executeSettlement({

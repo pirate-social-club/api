@@ -99,6 +99,13 @@ export type BookingStatus =
   | "refunded"
   | "disputed";
 
+export type BookingOutcome =
+  | "completed"
+  | "no_show_host"
+  | "no_show_booker"
+  | "cancelled_by_host"
+  | "cancelled_by_booker";
+
 export interface Booking {
   bookingId: string;
   holdId: string | null;
@@ -112,6 +119,7 @@ export interface Booking {
   hostPayoutCents: number;
   refundCents: number | null;
   status: BookingStatus;
+  outcome: BookingOutcome | null;
   fundingTxRef: string | null;
   payoutTxRef: string | null;
   refundTxRef: string | null;

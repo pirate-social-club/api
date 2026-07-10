@@ -4,6 +4,7 @@ import type { Booking } from "./types";
 
 export type BookingViewerRole = "host" | "booker";
 export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
+export type BookingSettlementStatus = "pending" | "live" | "settling" | "settled" | "refunded" | "disputed";
 
 export interface BookingReadSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
@@ -22,6 +23,8 @@ export interface BookingView {
   host_payout_cents: number;
   refund_cents: number | null;
   status: string;
+  outcome: Booking["outcome"];
+  settlement_status: BookingSettlementStatus;
   funding_tx_ref: string | null;
   payout_tx_ref: string | null;
   refund_tx_ref: string | null;
@@ -121,6 +124,8 @@ function toView(booking: Booking, actorUserId: string): BookingView {
     host_payout_cents: booking.hostPayoutCents,
     refund_cents: booking.refundCents,
     status: booking.status,
+    outcome: booking.outcome,
+    settlement_status: settlementStatus(booking),
     funding_tx_ref: booking.fundingTxRef,
     payout_tx_ref: booking.payoutTxRef,
     refund_tx_ref: booking.refundTxRef,
@@ -133,6 +138,21 @@ function toView(booking: Booking, actorUserId: string): BookingView {
     updated_at: booking.updatedAt,
     viewer_role: actorUserId === booking.hostUserId ? "host" : "booker",
   };
+}
+
+function settlementStatus(booking: Booking): BookingSettlementStatus {
+  if (booking.status === "live") return "live";
+  if (booking.status === "settled") return "settled";
+  if (booking.status === "refunded") return "refunded";
+  if (booking.status === "disputed") return "disputed";
+  if (
+    booking.status === "completed" ||
+    booking.status === "no_show_host" ||
+    booking.status === "no_show_booker" ||
+    booking.status === "cancelled_by_host" ||
+    booking.status === "cancelled_by_booker"
+  ) return "settling";
+  return "pending";
 }
 
 function toReviewView(booking: Booking): BookingSettlementReviewView {

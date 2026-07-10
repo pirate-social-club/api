@@ -21,6 +21,7 @@ import {
   completeGlobalBooking as realCompleteGlobalBooking,
   heartbeatGlobalBookingSession as realHeartbeatGlobalBookingSession,
   noShowGlobalBooking as realNoShowGlobalBooking,
+  previewGlobalBookingCancellation as realPreviewGlobalBookingCancellation,
   resolveGlobalBookingSettlementReview as realResolveGlobalBookingSettlementReview,
   startGlobalBookingSession as realStartGlobalBookingSession,
 } from "../lib/bookings/booking-lifecycle-service"
@@ -76,6 +77,7 @@ export type GlobalBookingRouteServices = {
   startGlobalBookingSession: typeof realStartGlobalBookingSession
   completeGlobalBooking: typeof realCompleteGlobalBooking
   noShowGlobalBooking: typeof realNoShowGlobalBooking
+  previewGlobalBookingCancellation: typeof realPreviewGlobalBookingCancellation
   resolveGlobalBookingByParty: typeof realResolveGlobalBookingByParty
   attachGlobalBookingSession: typeof realAttachGlobalBookingSession
   heartbeatGlobalBookingSession: typeof realHeartbeatGlobalBookingSession
@@ -97,6 +99,7 @@ const realServices: GlobalBookingRouteServices = {
   startGlobalBookingSession: realStartGlobalBookingSession,
   completeGlobalBooking: realCompleteGlobalBooking,
   noShowGlobalBooking: realNoShowGlobalBooking,
+  previewGlobalBookingCancellation: realPreviewGlobalBookingCancellation,
   resolveGlobalBookingByParty: realResolveGlobalBookingByParty,
   attachGlobalBookingSession: realAttachGlobalBookingSession,
   heartbeatGlobalBookingSession: realHeartbeatGlobalBookingSession,
@@ -299,6 +302,17 @@ bookings.get("/:bookingId", async (c) => {
   return c.json({ booking }, 200)
 })
 
+bookings.get("/:bookingId/cancellation-preview", async (c) => {
+  const result = await routeServices().previewGlobalBookingCancellation({
+    executor: executor(c),
+    bookingId: routeParam(c, "bookingId"),
+    actorUserId: c.get("actor").userId,
+    nowUtc: new Date().toISOString(),
+  })
+  if (!result.ok) return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
+  return c.json(result.preview, 200)
+})
+
 bookings.get("/:bookingId/settlement-review", async (c) => {
   const operatorActor = await authenticateOperatorCredential({
     env: c.env,
@@ -365,14 +379,25 @@ bookings.post("/:bookingId/settlement-review/resolve", async (c) => {
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {
+  const body = await requireJsonBody<{ expected_refund_cents?: unknown }>(c, "expected_refund_cents is required")
+  const expectedRefundCents = Number(body.expected_refund_cents)
+  if (!Number.isSafeInteger(expectedRefundCents) || expectedRefundCents < 0) {
+    return c.json({ error: "invalid_expected_refund_cents" }, 400)
+  }
   const result = await routeServices().cancelGlobalBooking({
     env: c.env,
     executor: executor(c),
     bookingId: routeParam(c, "bookingId"),
     actorUserId: c.get("actor").userId,
     nowUtc: new Date().toISOString(),
+    expectedRefundCents,
   })
-  if (!result.ok) return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
+  if (!result.ok) {
+    if (result.reason === "cancellation_terms_changed") {
+      return c.json({ error: result.reason, preview: result.preview }, 409)
+    }
+    return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
+  }
   return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
 })
 

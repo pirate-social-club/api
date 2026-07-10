@@ -31,6 +31,8 @@ const bookingView = {
   host_payout_cents: 4500,
   refund_cents: null,
   status: "confirmed",
+  outcome: null,
+  settlement_status: "pending",
   funding_tx_ref: "0xfunding",
   payout_tx_ref: null,
   refund_tx_ref: null,
@@ -61,6 +63,7 @@ const bookingSnapshot = {
 const lifecycleSnapshot = {
   booking_id: "bkg_route",
   status: "live",
+  outcome: null,
   refund_cents: 0,
   refund_tx_ref: null,
   payout_tx_ref: null,
@@ -72,6 +75,7 @@ let quoteResult: unknown
 let confirmResult: unknown
 let getBookingResult: unknown
 let cancelResult: unknown
+let cancellationPreviewResult: unknown
 let startResult: unknown
 let completeResult: unknown
 let noShowResult: unknown
@@ -87,6 +91,7 @@ const calls: Record<string, unknown[]> = {
   confirm: [],
   getBooking: [],
   cancel: [],
+  cancellationPreview: [],
   start: [],
   complete: [],
   noShow: [],
@@ -150,6 +155,20 @@ function resetMocks(): void {
   confirmResult = { ok: true, already: false, booking: bookingSnapshot }
   getBookingResult = bookingView
   cancelResult = { ok: true, already: false, cancelledBy: "booker", booking: lifecycleSnapshot }
+  cancellationPreviewResult = {
+    ok: true,
+    preview: {
+      object: "booking_cancellation_preview",
+      booking_id: "bkg_route",
+      cancelled_by: "booker",
+      gross_cents: 5000,
+      refund_cents: 5000,
+      host_payout_cents: 0,
+      platform_fee_cents: 0,
+      previewed_at: "2026-07-01T09:00:00.000Z",
+      policy_cutoff_at: "2026-06-30T10:00:00.000Z",
+    },
+  }
   startResult = { ok: true, already: false, booking: lifecycleSnapshot }
   completeResult = { ok: true, already: false, booking: { ...lifecycleSnapshot, status: "settled" } }
   noShowResult = { ok: true, already: false, booking: { ...lifecycleSnapshot, status: "refunded" } }
@@ -206,6 +225,10 @@ function routeServices(): GlobalBookingRouteServices {
     cancelGlobalBooking: async (input: unknown) => {
       calls.cancel.push(input)
       return cancelResult
+    },
+    previewGlobalBookingCancellation: async (input: unknown) => {
+      calls.cancellationPreview.push(input)
+      return cancellationPreviewResult
     },
     completeGlobalBooking: async (input: unknown) => {
       calls.complete.push(input)
@@ -474,27 +497,60 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "not_found" })
   })
 
-  test("wires cancel/start to their matching global services", async () => {
+  test("returns authoritative cancellation terms and requires them when cancelling", async () => {
     const app = loadApp()
-    const routeCases = [
-      ["cancel", calls.cancel],
-      ["start", calls.start],
-    ] as const
+    const preview = await app.request("http://pirate.test/bookings/bkg_route/cancellation-preview", {
+      headers: adminHeaders(),
+    }, env())
+    expect(preview.status).toBe(200)
+    expect(await json(preview)).toMatchObject({ refund_cents: 5000, host_payout_cents: 0 })
 
-    for (const [action, callLog] of routeCases) {
-      const res = await app.request(`http://pirate.test/bookings/bkg_route/${action}`, {
-        method: "POST",
-        headers: adminHeaders({ "content-type": "application/json" }),
-        body: "{}",
-      }, env())
-      expect(res.status).toBe(200)
-      expect(callLog).toHaveLength(1)
-      expect(callLog[0]).toMatchObject({
-        executor: dummyExecutor,
-        bookingId: "bkg_route",
-        actorUserId: "actor_route",
-      })
+    const missingTerms = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: "{}",
+    }, env())
+    expect(missingTerms.status).toBe(400)
+
+    const cancelled = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ expected_refund_cents: 5000 }),
+    }, env())
+    expect(cancelled.status).toBe(200)
+    expect(calls.cancel[0]).toMatchObject({
+      executor: dummyExecutor,
+      bookingId: "bkg_route",
+      actorUserId: "actor_route",
+      expectedRefundCents: 5000,
+    })
+  })
+
+  test("returns refreshed cancellation terms when the policy boundary changed", async () => {
+    const app = loadApp()
+    cancelResult = {
+      ok: false,
+      reason: "cancellation_terms_changed",
+      preview: { ...(cancellationPreviewResult as { preview: object }).preview, refund_cents: 0, host_payout_cents: 4500, platform_fee_cents: 500 },
     }
+    const res = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ expected_refund_cents: 5000 }),
+    }, env())
+    expect(res.status).toBe(409)
+    expect(await json(res)).toMatchObject({ error: "cancellation_terms_changed", preview: { refund_cents: 0 } })
+  })
+
+  test("wires start to its global service", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings/bkg_route/start", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: "{}",
+    }, env())
+    expect(res.status).toBe(200)
+    expect(calls.start[0]).toMatchObject({ bookingId: "bkg_route", actorUserId: "actor_route" })
   })
 
   test("routes /complete and /no-show through attendance-based settlement, not party claims", async () => {
