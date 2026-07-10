@@ -44,6 +44,9 @@ function serializeRewardEvent(row: QueryResultRow): RewardEventSummary {
     activity_date: requiredString(row, "activity_date"),
     reward_kind: requiredString(row, "reward_kind") as RewardEventKind,
     amount_cents: requiredNumber(row, "amount_cents"),
+    reward_campaign_id: stringOrNull(rowValue(row, "reward_campaign_id")),
+    reward_period_key: stringOrNull(rowValue(row, "reward_period_key")),
+    qualification_basis: stringOrNull(rowValue(row, "qualification_basis")) as RewardEventSummary["qualification_basis"],
     created_at: unixSeconds(rowValue(row, "created_at")),
   }
 }
@@ -122,7 +125,8 @@ export async function getRewardsSummaryForUser(input: {
     }),
     client.execute({
       sql: `
-        SELECT reward_event_id, user_id, community_id, post_id, activity_date, reward_kind, amount_cents, created_at
+        SELECT reward_event_id, user_id, community_id, post_id, activity_date, reward_kind,
+          amount_cents, reward_campaign_id, reward_period_key, qualification_basis, created_at
         FROM reward_events
         WHERE user_id = ?1
         ORDER BY created_at DESC, reward_event_id DESC

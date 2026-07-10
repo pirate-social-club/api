@@ -206,6 +206,20 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         "mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')",
       )
   }
+  if (normalized.startsWith("CREATE TABLE REWARD_EVENTS")) {
+    // SQLite cannot replace table CHECK constraints through ALTER TABLE. The
+    // canonical 0134 migration expands these enums for campaign credits, so
+    // build the local test mirror with the final accepted values up front.
+    sqliteCompat = sqliteCompat
+      .replace(
+        /reward_kind\s+IN\s+\(\s*'study_streak_day',\s*'study_streak_milestone_7',\s*'study_streak_milestone_30'\s*\)/i,
+        "reward_kind IN ('study_streak_day', 'study_streak_milestone_7', 'study_streak_milestone_30', 'campaign_practice_day', 'campaign_milestone_7', 'campaign_milestone_30')",
+      )
+      .replace(
+        /source\s+IN\s+\(\s*'song_engagement_reconciler'\s*\)/i,
+        "source IN ('song_engagement_reconciler', 'reward_campaign_reconciler')",
+      )
+  }
   if (normalized.startsWith("CREATE TABLE COMMUNITY_DATABASE_ROUTING")) {
     // Migration 0124 drops the Turso `backend` column, but it does so inside a
     // Postgres DO block that this SQLite mirror skips — so the column survives here.

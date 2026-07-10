@@ -271,6 +271,7 @@ export type Env = {
   // Off-chain song-practice rewards. Every surface fails closed independently: a legacy
   // REWARDS_ENABLED value must never enable accrual, reads, payouts, or campaigns.
   REWARDS_ACCRUAL_ENABLED?: string
+  REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED?: string
   REWARDS_READS_ENABLED?: string
   REWARDS_PAYOUTS_ENABLED?: string
   REWARDS_CAMPAIGNS_ENABLED?: string

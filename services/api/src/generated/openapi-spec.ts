@@ -20761,6 +20761,23 @@ const spec = {
           "amount_cents": {
             "type": "integer"
           },
+          "reward_campaign_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reward_period_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "qualification_basis": {
+            "type": "string",
+            "enum": [
+              "study",
+              "karaoke",
+              "both"
+            ],
+            "nullable": true
+          },
           "created_at": {
             "type": "integer",
             "format": "int64"
@@ -23351,7 +23368,10 @@ const spec = {
         "enum": [
           "study_streak_day",
           "study_streak_milestone_7",
-          "study_streak_milestone_30"
+          "study_streak_milestone_30",
+          "campaign_practice_day",
+          "campaign_milestone_7",
+          "campaign_milestone_30"
         ]
       },
       "RewardVerificationState": {

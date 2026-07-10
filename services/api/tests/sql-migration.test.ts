@@ -98,6 +98,20 @@ describe("sql migration helpers", () => {
     expect(identityNullifiers).toContain("mechanism IN ('zk-nullifier', 'palm-nullifier', 'zkpassport-unique-identifier')")
   })
 
+  test("builds the sqlite reward ledger with campaign enum expansions", () => {
+    const rewardEvents = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_events (
+        reward_kind TEXT NOT NULL CHECK (reward_kind IN (
+          'study_streak_day', 'study_streak_milestone_7', 'study_streak_milestone_30'
+        )),
+        source TEXT NOT NULL CHECK (source IN ('song_engagement_reconciler'))
+      );
+    `)
+    expect(rewardEvents).toContain("'campaign_practice_day'")
+    expect(rewardEvents).toContain("'campaign_milestone_30'")
+    expect(rewardEvents).toContain("'reward_campaign_reconciler'")
+  })
+
   test("a ';' inside a line comment does not split the statement (regression: migration 0122)", () => {
     // The leading comment block has an embedded ';' AND an apostrophe — neither may split the
     // statement or toggle quote state. Matches migration 0122's "(superuser); the ..." comment.

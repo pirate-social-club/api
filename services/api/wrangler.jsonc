@@ -361,6 +361,7 @@
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "REWARDS_ACCRUAL_ENABLED": "false",
+        "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "false",
         "REWARDS_PAYOUTS_ENABLED": "false",
         "REWARDS_CAMPAIGNS_ENABLED": "false",
