@@ -914,7 +914,10 @@ describe("verification routes", () => {
       join_eligibility?: { status: string; failure_reason?: string | null }
       wallet_score_status?: { current_score_decimal?: string | null; required_score_decimal?: string | null; passing_score?: boolean | null }
     }
-    expect(body.join_eligibility?.status).toBe("verification_required")
+    expect(body.join_eligibility).toMatchObject({
+      status: "gate_failed",
+      failure_reason: "wallet_score_too_low",
+    })
     expect(body.wallet_score_status).toMatchObject({
       current_score_decimal: "10",
       required_score_decimal: "20",
