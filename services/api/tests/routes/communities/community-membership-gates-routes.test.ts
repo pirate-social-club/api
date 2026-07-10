@@ -370,8 +370,18 @@ describe("community membership gate routes", () => {
       ctx.env,
     )
     expect(preview.status).toBe(200)
-    const previewBody = await json(preview) as { gate_match_mode: string | null }
+    const previewBody = await json(preview) as {
+      gate_match_mode: string | null
+      membership_gate_expression: unknown
+    }
     expect(previewBody.gate_match_mode).toBe("any")
+    expect(previewBody.membership_gate_expression).toEqual({
+      op: "or",
+      children: [
+        { op: "gate", gate: { gate_type: "unique_human", accepted_providers: ["very"] } },
+        { op: "gate", gate: { gate_type: "altcha_pow" } },
+      ],
+    })
 
     const createdPost = await requestJson(
       `http://pirate.test/communities/${created.communityId}/posts`,
@@ -805,11 +815,12 @@ describe("community membership gate routes", () => {
     const eligibilityBody = await json(eligibility) as {
       status: string
       failure_reason: string | null
-      missing_capabilities: string[]
+      missing_capabilities?: string[]
       wallet_score_status?: { current_score_decimal: string | null; required_score_decimal: string | null; passing_score: boolean | null; last_scored_at: number | null }
     }
-    expect(eligibilityBody.status).toBe("verification_required")
-    expect(eligibilityBody.missing_capabilities).toContain("wallet_score")
+    expect(eligibilityBody.status).toBe("gate_failed")
+    expect(eligibilityBody.failure_reason).toBe("wallet_score_too_low")
+    expect(eligibilityBody.missing_capabilities).toBeUndefined()
     expect(eligibilityBody.wallet_score_status).toMatchObject({
       current_score_decimal: "24",
       required_score_decimal: "30",
@@ -1056,9 +1067,11 @@ describe("community membership gate routes", () => {
     expect(eligibility.status).toBe(200)
     const eligibilityBody = await json(eligibility) as {
       status: string
+      failure_reason: string | null
       membership_gate_summaries: Array<{ gate_type: string }>
     }
-    expect(eligibilityBody.status).toBe("verification_required")
+    expect(eligibilityBody.status).toBe("gate_failed")
+    expect(eligibilityBody.failure_reason).toBe("nationality_mismatch")
   })
 
   test("join-eligibility returns joinable on nationality match", async () => {
@@ -1205,7 +1218,7 @@ describe("community membership gate routes", () => {
       details: { failure_reason: string; membership_gate_summaries: Array<{ gate_type: string }> }
     }
     expect(deniedBody.code).toBe("gate_failed")
-    expect(deniedBody.details.failure_reason).toBe("missing_verification")
+    expect(deniedBody.details.failure_reason).toBe("nationality_mismatch")
     expect(deniedBody.details.membership_gate_summaries[0].gate_type).toBe("nationality")
   })
 

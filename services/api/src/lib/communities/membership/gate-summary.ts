@@ -1,4 +1,4 @@
-import type { MembershipGateSummary } from "../../../types"
+import type { MembershipGateExpressionSummary, MembershipGateSummary } from "../../../types"
 import {
   parseGateConfig,
   parseProofRequirements,
@@ -101,6 +101,22 @@ function collectAtoms(expression: GateExpression, atoms: GateAtom[]): void {
 
 export function buildMembershipGateSummariesFromPolicy(policy: GatePolicy | null): MembershipGateSummary[] {
   return flattenGatePolicyAtoms(policy).map(buildMembershipGateSummaryFromAtom)
+}
+
+export function buildMembershipGateExpressionFromPolicy(
+  policy: GatePolicy | null,
+): MembershipGateExpressionSummary | null {
+  return policy ? buildMembershipGateExpression(policy.expression) : null
+}
+
+function buildMembershipGateExpression(expression: GateExpression): MembershipGateExpressionSummary {
+  if (expression.op === "gate") {
+    return { op: "gate", gate: buildMembershipGateSummaryFromAtom(expression.gate) }
+  }
+  return {
+    op: expression.op,
+    children: expression.children.map(buildMembershipGateExpression),
+  }
 }
 
 export function getGatePolicyMatchMode(policy: GatePolicy | null): "all" | "any" {

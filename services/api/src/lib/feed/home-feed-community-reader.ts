@@ -2,6 +2,7 @@ import type { DbExecutor } from "../db-helpers"
 import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import type { Client } from "../sql-client"
 import {
+  buildMembershipGateExpressionFromPolicy,
   buildMembershipGateSummariesFromPolicy,
   getGatePolicyMatchMode,
 } from "../communities/membership/gates"
@@ -308,6 +309,7 @@ async function getHomeFeedViewerGateState(input: {
           ? "member"
           : "not_member",
     membership_gate_summaries: buildMembershipGateSummariesFromPolicy(gatePolicy),
+    membership_gate_expression: buildMembershipGateExpressionFromPolicy(gatePolicy),
     gate_match_mode: gatePolicy ? getGatePolicyMatchMode(gatePolicy) : null,
   }
 }

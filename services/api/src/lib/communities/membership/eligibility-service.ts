@@ -6,6 +6,7 @@ import type { Client } from "../../sql-client"
 import { openCommunityReadClient } from "../community-read-access"
 import { isCommunityLive } from "../community-status"
 import {
+  buildMembershipGateExpressionFromPolicy,
   buildMembershipGateSummariesFromPolicy,
   flattenGatePolicyAtoms,
   evaluateMembershipGatePolicy,
@@ -78,10 +79,12 @@ export async function evaluateGatedMembership(input: {
   verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<{
   gateSummaries: ReturnType<typeof buildMembershipGateSummariesFromPolicy>
+  gateExpression: ReturnType<typeof buildMembershipGateExpressionFromPolicy>
   walletScoreStatus: JoinEligibility["wallet_score_status"]
   evaluation: GatePolicyEvaluation
 }> {
   const gateSummaries = buildMembershipGateSummariesFromPolicy(input.policy)
+  const gateExpression = buildMembershipGateExpressionFromPolicy(input.policy)
   const walletScoreStatus = buildWalletScoreStatus(input.user, input.policy)
   const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.user.user_id)
   const evaluation = await evaluateMembershipGatePolicy({
@@ -94,7 +97,7 @@ export async function evaluateGatedMembership(input: {
     altchaProof: input.altchaProof,
     verifiedAltchaProof: input.verifiedAltchaProof,
   })
-  return { gateSummaries, walletScoreStatus, evaluation }
+  return { gateSummaries, gateExpression, walletScoreStatus, evaluation }
 }
 
 export async function enforceCommunityActionGate(input: {
@@ -119,7 +122,7 @@ export async function enforceCommunityActionGate(input: {
   if (hasCommunityRole(membership, ANY_COMMUNITY_ROLE)) {
     return
   }
-  const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
+  const { gateSummaries, gateExpression, walletScoreStatus, evaluation } = await evaluateGatedMembership({
     env: input.env,
     user,
     userRepository: input.userRepository,
@@ -131,7 +134,7 @@ export async function enforceCommunityActionGate(input: {
     verifiedAltchaProof: input.verifiedAltchaProof,
   })
   if (!evaluation.satisfied) {
-    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, walletScoreStatus, altchaScope: input.altchaScope })
+    throwUnsatisfiedMembershipGate({ evaluation, gateSummaries, gateExpression, walletScoreStatus, altchaScope: input.altchaScope })
   }
 }
 
@@ -217,7 +220,7 @@ export async function getJoinEligibility(input: {
     }
 
     const policy = await getMembershipGatePolicy(db.client, input.communityId)
-    const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
+    const { gateSummaries, gateExpression, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
       user,
       userRepository: input.userRepository,
@@ -237,6 +240,7 @@ export async function getJoinEligibility(input: {
         joinable_now: true,
         status: "joinable",
         membership_gate_summaries: gateSummaries,
+        membership_gate_expression: gateExpression,
         gate_evaluation: gateEvaluation,
       }
     }
@@ -250,6 +254,7 @@ export async function getJoinEligibility(input: {
         joinable_now: false,
         status: "verification_required",
         membership_gate_summaries: gateSummaries,
+        membership_gate_expression: gateExpression,
         gate_evaluation: gateEvaluation,
         missing_capabilities: missingCapabilities,
         suggested_verification_provider: suggestedProviderFromRequiredActionSet(evaluation.requiredActionSet),
@@ -265,6 +270,7 @@ export async function getJoinEligibility(input: {
       joinable_now: false,
       status: "gate_failed",
       membership_gate_summaries: gateSummaries,
+      membership_gate_expression: gateExpression,
       gate_evaluation: gateEvaluation,
       failure_reason: gateFailureReasonFromPolicyEvaluation(evaluation),
       ...(walletScoreStatus ? { wallet_score_status: walletScoreStatus } : {}),

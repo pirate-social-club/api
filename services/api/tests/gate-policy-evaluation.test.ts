@@ -133,10 +133,8 @@ describe("evaluateMembershipGatePolicy", () => {
         walletAttachments: [],
       })
       expect(result.satisfied).toBe(false)
-      expect(result.requiredActionSet).not.toBeNull()
-      expect(result.requiredActionSet!.kind).toBe("set")
-      expect(result.requiredActionSet!.mode).toBe("all")
-      expect(result.requiredActionSet!.items).toHaveLength(1)
+      expect(result.outcome).toBe("terminal_mismatch")
+      expect(result.requiredActionSet).toBeNull()
     })
 
     test("fails when wallet score is unverified", async () => {
@@ -213,10 +211,8 @@ describe("evaluateMembershipGatePolicy", () => {
         walletAttachments: [],
       })
       expect(result.satisfied).toBe(false)
-      expect(result.requiredActionSet!.kind).toBe("set")
-      expect(result.requiredActionSet!.mode).toBe("all")
-      const actions = result.requiredActionSet!.items.filter((i) => i.kind === "action")
-      expect(actions.length >= 1).toBe(true)
+      expect(result.outcome).toBe("terminal_mismatch")
+      expect(result.requiredActionSet).toBeNull()
     })
 
     test("fails when all children fail", async () => {
@@ -477,19 +473,21 @@ describe("evaluateMembershipGatePolicy", () => {
       expect(action.kind).toBe("action")
     })
 
-    test("wallet score action includes minimum_score and actual_score", async () => {
+    test("verified wallet score mismatch is terminal instead of requesting verification", async () => {
       const result = await evaluateMembershipGatePolicy({
         env: {},
         policy: atomGate(passportAtom),
         user: makeUser({ walletScore: { state: "verified", score: 18, passing: false } }),
         walletAttachments: [],
       })
-      const action = result.requiredActionSet!.items[0]
-      expect(action.kind).toBe("action")
-      if (action.kind === "action" && action.capability === "wallet_score") {
-        expect(action.minimum_score).toBe(30)
-        expect(action.actual_score).toBe(18)
-      }
+      expect(result.outcome).toBe("terminal_mismatch")
+      expect(result.requiredActionSet).toBeNull()
+      expect(result.trace).toMatchObject({
+        kind: "gate",
+        reason: "wallet_score_too_low",
+        required_score: 30,
+        actual_score: 18,
+      })
     })
 
     test("nationality action includes allowed_countries", async () => {
@@ -528,6 +526,115 @@ describe("evaluateMembershipGatePolicy", () => {
       })
       expect(verified.satisfied).toBe(true)
       expect(verified.requiredActionSet).toBeNull()
+    })
+  })
+
+  describe("outcome composition", () => {
+    const nationalityMismatch: GateAtom = {
+      type: "nationality",
+      provider: "self",
+      allowed: ["CA"],
+    }
+    const erc721WithoutRpc: GateAtom = {
+      type: "erc721_holding",
+      chain_namespace: "eip155:1",
+      contract_address: "0x0000000000000000000000000000000000000001",
+    }
+
+    test("AND terminal mismatch dominates actionable branches in either order", async () => {
+      for (const policy of [
+        andPolicy(nationalityMismatch, palmAtom),
+        andPolicy(palmAtom, nationalityMismatch),
+      ]) {
+        const result = await evaluateMembershipGatePolicy({
+          env: {},
+          policy,
+          user: makeUser({ nationality: { state: "verified", value: "US" } }),
+          walletAttachments: [],
+          mode: "enforce",
+        })
+        expect(result.outcome).toBe("terminal_mismatch")
+        expect(result.requiredActionSet).toBeNull()
+        expect(result.trace).toMatchObject({ kind: "op", op: "and" })
+        if (result.trace.kind === "op") expect(result.trace.children).toHaveLength(2)
+      }
+    })
+
+    test("OR actionable branches dominate terminal mismatches in either order", async () => {
+      for (const policy of [
+        orPolicy(nationalityMismatch, palmAtom),
+        orPolicy(palmAtom, nationalityMismatch),
+      ]) {
+        const result = await evaluateMembershipGatePolicy({
+          env: {},
+          policy,
+          user: makeUser({ nationality: { state: "verified", value: "US" } }),
+          walletAttachments: [],
+          mode: "enforce",
+        })
+        expect(result.outcome).toBe("action_required")
+        expect(result.requiredActionSet?.mode).toBe("any")
+      }
+    })
+
+    test("provider outages dominate actions in AND but not OR", async () => {
+      const originalConsoleError = console.error
+      console.error = () => {}
+      try {
+        for (const policy of [
+          andPolicy(erc721WithoutRpc, palmAtom),
+          andPolicy(palmAtom, erc721WithoutRpc),
+        ]) {
+          const result = await evaluateMembershipGatePolicy({
+            env: {},
+            policy,
+            user: makeUser({}),
+            walletAttachments: [],
+            mode: "enforce",
+          })
+          expect(result.outcome).toBe("provider_unavailable")
+          expect(result.requiredActionSet).toBeNull()
+        }
+
+        for (const policy of [
+          orPolicy(erc721WithoutRpc, palmAtom),
+          orPolicy(palmAtom, erc721WithoutRpc),
+        ]) {
+          const result = await evaluateMembershipGatePolicy({
+            env: {},
+            policy,
+            user: makeUser({}),
+            walletAttachments: [],
+            mode: "enforce",
+          })
+          expect(result.outcome).toBe("action_required")
+          expect(result.requiredActionSet?.mode).toBe("any")
+        }
+      } finally {
+        console.error = originalConsoleError
+      }
+    })
+
+    test("failed AND enforcement diagnoses unvisited proof-of-work without consuming it", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: andPolicy(nationalityMismatch, altchaAtom),
+        user: makeUser({ nationality: { state: "verified", value: "US" } }),
+        walletAttachments: [],
+        mode: "enforce",
+        altchaScope: "community_join",
+      })
+
+      expect(result.outcome).toBe("terminal_mismatch")
+      expect(result.requiredActionSet).toBeNull()
+      if (result.trace.kind === "op") {
+        expect(result.trace.children).toHaveLength(2)
+        expect(result.trace.children[1]).toMatchObject({
+          kind: "gate",
+          gate_type: "altcha_pow",
+          reason: "missing_altcha_pow",
+        })
+      }
     })
   })
 

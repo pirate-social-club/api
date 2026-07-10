@@ -11,6 +11,7 @@ import type {
 } from "./gate-types"
 
 export {
+  buildMembershipGateExpressionFromPolicy,
   buildMembershipGateSummariesFromPolicy,
   buildMembershipGateSummary,
   flattenGatePolicyAtoms,

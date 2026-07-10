@@ -1,4 +1,5 @@
 import {
+  buildMembershipGateExpressionFromPolicy,
   buildMembershipGateSummariesFromPolicy,
   getGatePolicyMatchMode,
 } from "./membership/gates"
@@ -560,6 +561,9 @@ async function buildCommunityPreview(input: {
     moderators: moderators.filter((summary): summary is CommunityRoleSummary => summary !== null),
     reference_links: referenceLinks,
     membership_gate_summaries: membershipGateSummaries,
+    membership_gate_expression: membershipMode === "gated"
+      ? buildMembershipGateExpressionFromPolicy(input.gatePolicy)
+      : null,
     gate_match_mode: membershipMode === "gated" ? getGatePolicyMatchMode(input.gatePolicy) : null,
     viewer_membership_status: input.viewerMembershipStatus,
     viewer_community_role: input.viewerCommunityRole,

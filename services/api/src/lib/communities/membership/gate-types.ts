@@ -75,8 +75,11 @@ export type RequiredAction =
     min_quantity: number
   }
 
+export type GateEvaluationOutcome = "passed" | "action_required" | "terminal_mismatch" | "provider_unavailable"
+
 export type GatePolicyEvaluation = {
   satisfied: boolean
+  outcome: GateEvaluationOutcome
   trace: GateTraceNode
   requiredActionSet: RequiredActionSet | null
 }
