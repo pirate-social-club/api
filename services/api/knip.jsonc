@@ -2,12 +2,12 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "wrangler.jsonc",
-    "src/index.ts",
     "scripts/**/*.{ts,mjs}",
+    "src/lib/bookings/codecs.tz-probe.ts",
     "tests/**/*.test.ts",
-    "tests/**/*.test.tsx",
-    "src/**/*.test.ts",
-    "src/**/*.test.tsx"
+    "tests/integration/env.d.ts",
+    "tests/integration/karaoke-gateway.worker.ts",
+    "src/**/*.test.ts"
   ],
   "project": [
     "scripts/**/*.{ts,mjs}",
@@ -20,13 +20,9 @@
     "test-fixtures/**"
   ],
   "ignoreBinaries": [
-    "infisical",
-    "wrangler2"
+    "infisical"
   ],
   "ignoreDependencies": [
-    "@cloudflare/workers-types",
-    "@types/bun",
-    "@types/node",
-    "typescript"
+    "cloudflare"
   ]
 }
