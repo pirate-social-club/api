@@ -18,6 +18,7 @@ import { decodePublicSongArtifactBundleId, publicCommunityId, publicPostId } fro
 import { getControlPlaneClient } from "../runtime-deps"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import { resolveCommunityKaraokeScoringPolicy } from "../communities/community-karaoke-policy-service"
+import { emitKaraokeQualification } from "../rewards/reward-qualification-outbox"
 
 export type KaraokeAttemptCompletionReason =
   | "abandoned"
@@ -400,6 +401,7 @@ export async function recordKaraokeAttempt(input: {
   attemptId: string
   summary: KaraokeSessionSummary
   userId: string
+  emitRewardQualification?: boolean
 }): Promise<RecordKaraokeAttemptResult> {
   const finalScoreBps = scoreBps(input.summary.finalScore) ?? 0
   const lyricsScoreBps = scoreBps(input.summary.lyricsScore) ?? 0
@@ -493,6 +495,20 @@ export async function recordKaraokeAttempt(input: {
       input.completedAt,
     ],
   })
+  if (input.emitRewardQualification) {
+    await emitKaraokeQualification({
+      attemptId: input.attemptId,
+      client: input.client,
+      communityId: input.communityId,
+      finalScoreBps,
+      karaokeRevisionId: input.karaokeRevisionId,
+      now: input.completedAt,
+      postId: input.postId,
+      scoringVersion: KARAOKE_SCORING_VERSION,
+      sessionId: input.sessionId,
+      userId: input.userId,
+    })
+  }
   await materializeKaraokeStreakFromLedger({
     client: input.client,
     communityId: input.communityId,
