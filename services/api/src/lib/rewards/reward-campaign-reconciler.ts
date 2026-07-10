@@ -173,7 +173,7 @@ export async function creditRewardCampaignQualification(input: {
           refunded_cents, terms_version
         FROM reward_campaigns c
         WHERE c.community_id = ?1 AND c.post_id = ?2 AND c.song_artifact_bundle_id = ?3
-          AND c.status IN ('active', 'ended')
+          AND c.status IN ('active', 'ended', 'exhausted')
           AND c.starts_at <= ?4 AND c.ends_at >= ?4
           AND (c.eligible_activity = 'either' OR c.eligible_activity = ?5)
           AND NOT EXISTS (

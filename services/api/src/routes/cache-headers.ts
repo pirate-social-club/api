@@ -34,9 +34,17 @@ function normalizeCacheTag(tag: string): string | null {
   return normalized.replace(/[^A-Za-z0-9_:-]/gu, "_").slice(0, 128)
 }
 
-export function setPublicReadCacheHeaders(c: Context, options?: { vary?: string[]; cacheTags?: string[] }): void {
-  c.header("Cloudflare-CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
-  c.header("CDN-Cache-Control", PUBLIC_READ_CDN_CACHE_CONTROL)
+export function setPublicReadCacheHeaders(c: Context, options?: {
+  vary?: string[]
+  cacheTags?: string[]
+  freshSeconds?: number
+  staleSeconds?: number
+}): void {
+  const freshSeconds = options?.freshSeconds ?? PUBLIC_READ_CACHE_FRESH_SECONDS
+  const staleSeconds = options?.staleSeconds ?? PUBLIC_READ_CACHE_STALE_SECONDS
+  const cdnCacheControl = `public, max-age=${freshSeconds}, stale-while-revalidate=${staleSeconds}`
+  c.header("Cloudflare-CDN-Cache-Control", cdnCacheControl)
+  c.header("CDN-Cache-Control", cdnCacheControl)
   c.header("Cache-Control", PUBLIC_READ_CACHE_CONTROL)
   const cacheTags = (options?.cacheTags ?? [])
     .map(normalizeCacheTag)
@@ -64,6 +72,8 @@ export function isPublicReadCacheRequest(request: Request): boolean {
     url.pathname.startsWith("/public-posts/")
     || url.pathname.startsWith("/public-comments/")
     || url.pathname.startsWith("/public-communities/")
+    || url.pathname === "/public/reward_campaigns"
+    || url.pathname.startsWith("/public/reward_campaigns/")
   )
 }
 

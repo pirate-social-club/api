@@ -13,6 +13,8 @@ import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+let offerRateLimitAllows = true
+let offerRateLimitCalls = 0
 
 beforeEach(() => {
   resetRuntimeCaches()
@@ -20,6 +22,8 @@ beforeEach(() => {
   setRewardSettlementConfirmPollPlanForTests(null)
   setPrivyAccessProofVerifierForTests(null)
   setBookingPaymentVerifierForTests(null)
+  offerRateLimitAllows = true
+  offerRateLimitCalls = 0
 })
 
 afterEach(async () => {
@@ -55,6 +59,12 @@ describe("rewards routes", () => {
       REWARDS_CAMPAIGN_MAX_REWARD_CENTS: "1000",
       REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "3600",
       REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "7776000",
+      REWARD_OFFER_RATE_LIMITER: {
+        limit: async () => {
+          offerRateLimitCalls += 1
+          return { success: offerRateLimitAllows }
+        },
+      },
     }
   }
 
@@ -207,9 +217,9 @@ describe("rewards routes", () => {
       post: "pst_reward_campaign_song",
       eligible_activity: "either",
       daily_reward_cents: 40,
-      milestone_7_cents: 100,
-      milestone_30_cents: 300,
-      reward_period_cap_cents: 340,
+      milestone_7_cents: 0,
+      milestone_30_cents: 0,
+      reward_period_cap_cents: 40,
       budget_cents: 100000,
       starts_at: now - 60,
       ends_at: now + 86400,
@@ -240,17 +250,25 @@ describe("rewards routes", () => {
     await addWallet(ctx, session.userId, new Date().toISOString())
     await seedCampaignSong(ctx, session.userId)
 
+    const unsupportedMilestone = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ milestone_7_cents: 100, reward_period_cap_cents: 140 })),
+    }, ctx.env)
+    expect(unsupportedMilestone.status).toBe(400)
+
     const underCapped = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({ reward_period_cap_cents: 339 })),
+      body: JSON.stringify(campaignBody({ reward_period_cap_cents: 39 })),
     }, ctx.env)
     expect(underCapped.status).toBe(400)
 
+    const createBody = campaignBody()
     const create = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody()),
+      body: JSON.stringify(createBody),
     }, ctx.env)
     expect(create.status).toBe(201)
     const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string }
@@ -259,14 +277,14 @@ describe("rewards routes", () => {
     const replay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody()),
+      body: JSON.stringify(createBody),
     }, ctx.env)
     expect((await json(replay) as { id: string }).id).toBe(campaign.id)
 
     const changedReplay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({ daily_reward_cents: 41, reward_period_cap_cents: 341 })),
+      body: JSON.stringify({ ...createBody, daily_reward_cents: 41, reward_period_cap_cents: 41 }),
     }, ctx.env)
     expect(changedReplay.status).toBe(409)
 
@@ -326,14 +344,33 @@ describe("rewards routes", () => {
     })
     const publicOffer = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
     expect(publicOffer.status).toBe(200)
-    expect(await json(publicOffer)).toMatchObject({ id: campaign.id, status: "active" })
+    expect(await json(publicOffer)).toEqual({
+      eligible_activity: "either",
+      daily_reward_cents: 40,
+      ends_at: expect.any(Number),
+    })
+    expect(publicOffer.headers.get("cache-control")).toBe("public, max-age=0")
+    expect(publicOffer.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=15, stale-while-revalidate=15")
     const songOffer = await app.request(
       "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
       {},
       ctx.env,
     )
     expect(songOffer.status).toBe(200)
-    expect(await json(songOffer)).toMatchObject({ id: campaign.id, status: "active" })
+    expect(await json(songOffer)).toEqual({
+      eligible_activity: "either",
+      daily_reward_cents: 40,
+      ends_at: expect.any(Number),
+    })
+    expect(offerRateLimitCalls).toBe(2)
+    offerRateLimitAllows = false
+    const rateLimitedOffer = await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {},
+      ctx.env,
+    )
+    expect(rateLimitedOffer.status).toBe(429)
+    offerRateLimitAllows = true
     const ownerBlocksActive = await app.request(
       "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song",
       {
