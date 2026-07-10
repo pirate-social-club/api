@@ -174,6 +174,13 @@ export type Env = {
   PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
   // Opt out of the canonical-USDC pin (only honor a non-canonical token override when "true").
   PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
+  // Rewards payout custody/settlement is funded by a separate operator treasury.
+  PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS?: string
+  PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY?: string
+  PIRATE_REWARDS_SETTLEMENT_RPC_URL?: string
+  PIRATE_REWARDS_SETTLEMENT_CHAIN_ID?: string
+  PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
+  PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   // Caps RPC receipt waits for routed checkout funding confirmation. Paid
   // handle claims can be retried with the same funding_tx_ref after timeout.
   // Use 15000-30000 for pilot smoke.
@@ -261,6 +268,19 @@ export type Env = {
   // When true, attendance-ambiguous due bookings are moved to disputed/pending operator review
   // instead of being left untouched by the settlement cron.
   BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED?: string
+  // Off-chain song-practice rewards. Every surface fails closed independently: a legacy
+  // REWARDS_ENABLED value must never enable accrual, reads, payouts, or campaigns.
+  REWARDS_ACCRUAL_ENABLED?: string
+  REWARDS_READS_ENABLED?: string
+  REWARDS_PAYOUTS_ENABLED?: string
+  REWARDS_CAMPAIGNS_ENABLED?: string
+  // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
+  REWARDS_IDENTITY_PROVIDER?: string
+  REWARDS_DAILY_STREAK_CENTS?: string
+  REWARDS_DAILY_USER_CAP_CENTS?: string
+  REWARDS_STREAK_MILESTONE_7_CENTS?: string
+  REWARDS_STREAK_MILESTONE_30_CENTS?: string
+  REWARDS_MIN_CASHOUT_CENTS?: string
   STORY_TX_WAIT_TIMEOUT_MS?: string
   STORY_RUNTIME_SIGNER_MIN_BALANCE_WEI?: string
   STORY_RUNTIME_SIGNER_TARGET_BALANCE_WEI?: string

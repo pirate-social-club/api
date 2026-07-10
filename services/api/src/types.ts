@@ -179,6 +179,63 @@ export type CommunityPurchaseSettlementEffectListResponse = {
   next_cursor: string | null
 }
 
+export type RewardVerificationState = "unverified" | "verified" | "conflict"
+
+export type RewardEventKind =
+  | "study_streak_day"
+  | "study_streak_milestone_7"
+  | "study_streak_milestone_30"
+
+export type RewardEventSummary = {
+  id: string
+  user_id: string
+  community_id: string
+  post_id: string
+  activity_date: string
+  reward_kind: RewardEventKind
+  amount_cents: number
+  created_at: number
+}
+
+export type RewardsCashoutSummary = {
+  eligible: boolean
+  min_cents: number
+  verification_state: RewardVerificationState
+}
+
+export type RewardsSummaryResponse = {
+  balance_cents: number
+  today_earned_cents: number
+  recent_events: RewardEventSummary[]
+  cashout: RewardsCashoutSummary
+}
+
+export type RewardPayoutStatus = "submitted" | "confirmed" | "failed"
+
+export type RewardPayoutSummary = {
+  id: string
+  amount_cents: number
+  recipient_address: string
+  status: RewardPayoutStatus
+  settlement_ref: string | null
+  failure_reason: string | null
+}
+
+export type RewardCashoutRequest = {
+  amount_cents: number
+  idempotency_key: string
+  wallet_proof?: {
+    type: "privy_access_token"
+    privy_access_token: string
+    wallet_address?: string | null
+  } | null
+}
+
+export type RewardCashoutResponse = {
+  payout: RewardPayoutSummary
+  balance_cents: number
+}
+
 export type PostDerivativeSource = {
   source_ref: string
   title: string

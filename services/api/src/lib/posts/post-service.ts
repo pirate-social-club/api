@@ -61,8 +61,10 @@ import { hashPostCreateRequestBody, isPostCreateIdempotencyConflict } from "./po
 type PostWaitUntil = (promise: Promise<void>) => void
 type PostAssetCreator = typeof createAssetForPost
 type SongPostAssetCreator = typeof createSongAssetForPost
+type PostCommunityWriteOpener = typeof openCommunityWriteClient
 let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
 let songPostAssetCreatorForRuntime: SongPostAssetCreator = createSongAssetForPost
+let postCommunityWriteOpenerForRuntime: PostCommunityWriteOpener = openCommunityWriteClient
 
 export function setPostAssetCreatorsForTests(input: {
   createAssetForPost?: PostAssetCreator | null
@@ -70,6 +72,10 @@ export function setPostAssetCreatorsForTests(input: {
 } | null): void {
   postAssetCreatorForRuntime = input?.createAssetForPost ?? createAssetForPost
   songPostAssetCreatorForRuntime = input?.createSongAssetForPost ?? createSongAssetForPost
+}
+
+export function setPostCommunityWriteOpenerForTests(input: PostCommunityWriteOpener | null): void {
+  postCommunityWriteOpenerForRuntime = input ?? openCommunityWriteClient
 }
 
 export { moderationSeverityFromProviderResult } from "./post-moderation-recording"
@@ -119,7 +125,7 @@ export async function retryPostPublish(input: {
   communityRepository: PostServiceCommunityRepository
   waitUntil?: PostWaitUntil
 }): Promise<Post> {
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  const db = await postCommunityWriteOpenerForRuntime(input.env, input.communityRepository, input.communityId)
   try {
     await requireMemberAccess(db.client, input.communityId, input.userId)
     const post = await getPostById(db.client, input.postId)
@@ -255,7 +261,7 @@ export async function createPost(input: {
 
   assertPostCreateRequest(input.body, input.communityId)
 
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  const db = await postCommunityWriteOpenerForRuntime(input.env, input.communityRepository, input.communityId)
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
     if (!input.bypassAuthorAccessChecks) {

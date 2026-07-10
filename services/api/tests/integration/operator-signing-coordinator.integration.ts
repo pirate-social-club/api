@@ -41,6 +41,19 @@ function req(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRequest {
   return { communityId: "c1", bookingId: "bkg1", effectKind: "booking_refund", amountCents: 5000, recipientAddress: "0x0000000000000000000000000000000000000222", ...over }
 }
 
+function rewardsReq(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRequest {
+  return {
+    operatorKind: "rewards",
+    userId: "usr_reward",
+    payoutEffectId: "rpe_reward",
+    idempotencyKey: "reward-cashout:test",
+    effectKind: "reward_cashout",
+    amountCents: 100,
+    recipientAddress: "0x0000000000000000000000000000000000000222",
+    ...over,
+  }
+}
+
 beforeEach(() => { setOperatorChainPrimitivesForTests(null) })
 
 describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
@@ -62,6 +75,20 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     const [x, y] = await Promise.all([stub.settle(req({ bookingId: "bkgA" })), stub.settle(req({ bookingId: "bkgB" }))])
     expect(new Set([x.nonce, y.nonce])).toEqual(new Set([10, 11]))
     expect((await effects(stub)).map((r) => r.nonce).sort()).toEqual([10, 11])
+  })
+
+  it("supports reward cashout effects with reward-shaped idempotency", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 30, latest: 30, liveness: {} })
+    const first = await stub.settle(rewardsReq())
+    const replay = await stub.settle(rewardsReq())
+    expect(first.idempotencyKey).toBe(JSON.stringify(["reward_payout", "reward-cashout:test"]))
+    expect(replay.idempotencyKey).toBe(first.idempotencyKey)
+    expect(first.nonce).toBe(30)
+    expect(replay.nonce).toBe(30)
+    expect((await effects(stub)).map((row) => row.state)).toEqual(["broadcast"])
+
+    await expect(stub.settle(rewardsReq({ amountCents: 101 }))).rejects.toThrow()
   })
 
   it("deterministic wallet+chain routing: a fresh stub for the same name reuses the persisted nonce state (NOT an eviction test)", async () => {

@@ -29,6 +29,7 @@ Mounted in `services/api/src/index.ts`:
 - `/jobs`
 - `/karaoke/sessions`
 - `/notifications`
+- `/me/rewards`
 - `/royalties`
 - `/posts`
 - `/public-agents`
@@ -80,6 +81,7 @@ Mounted in `services/api/src/index.ts`:
 | `/jobs/:jobId` | `src/routes/jobs.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated jobs coverage now exists, with broader assertions still present in community flows. |
 | `/karaoke/sessions/:sessionId/websocket` | `src/routes/karaoke-sessions.ts` | `tests/routes/karaoke-sessions.test.ts` | direct | Covers the WebSocket gateway: upgrade requirement, allowed-origin enforcement, gateway token verification (session binding, expiry, future-issued, TTL cap, tampered signature, unsupported protocol version), and 503 when the runtime namespace is unbound. Runtime/DO WebSocket forwarding is exercised via the token-validation surface. |
 | `/notifications/*` | `src/routes/notifications.ts` | `tests/routes/notifications-routes.test.ts` | direct | Covers auth requirement, summary, tasks, feed, mark-read, and dismiss-task. |
+| `/me/rewards*` | `src/routes/rewards.ts` | `tests/routes/rewards-routes.test.ts` | direct | Covers rewards summary, dark flag behavior, unique-human cashout gate, balance/minimum validation, idempotent payout confirmation, claim-time Privy wallet attachment, proof-conflict rejection, submitted payout reconciliation, and terminal preparation failure. |
 | `/royalties/*` | `src/routes/royalties.ts` | `tests/routes/royalties-routes.test.ts` | direct | Covers claimable royalties, activity, claims listing, and claim recording. |
 | `/posts/:postId` and `/posts/:postId/vote` | `src/routes/posts.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated post read/vote coverage now exists, with broader post lifecycle coverage still present in community flows. |
 | `/public-posts/:postId` | `src/routes/public-posts.ts` | `tests/routes/communities/community-routes.test.ts`, `tests/routes/communities/public-communities-routes.test.ts`, `tests/routes/jobs-posts-routes.test.ts` | direct/indirect | Public visibility behavior is exercised from community/post flows. |

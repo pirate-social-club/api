@@ -8,8 +8,12 @@ import {
   resolveBookingSettlementOperatorPrivateKey,
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
+  resolveRewardsSettlementChainId,
+  resolveRewardsSettlementOperatorPrivateKey,
+  resolveRewardsSettlementRpcUrl,
+  resolveRewardsSettlementUsdcTokenAddress,
 } from "./booking-chain-config"
-import type { ChainPrimitives } from "./operator-signing-coordinator-do"
+import type { ChainPrimitives, OperatorKind } from "./operator-signing-coordinator-do"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
 // the DO module itself has no ethers import — the production worker entry registers this via
@@ -23,24 +27,28 @@ const ERC20_ABI = [
 ] as const
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 
-function resolveConfig(env: Env): { privateKey: string; rpcUrl: string; chainId: number; usdc: string } {
-  const privateKey = resolveBookingSettlementOperatorPrivateKey(env)
+function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): { privateKey: string; rpcUrl: string; chainId: number; usdc: string; operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS" } {
+  const privateKey = operatorKind === "rewards"
+    ? resolveRewardsSettlementOperatorPrivateKey(env)
+    : resolveBookingSettlementOperatorPrivateKey(env)
   // Last-line guard on the signing path: if an operator address is configured (it names the nonce DO),
   // the key we are about to sign with MUST derive it — otherwise refuse to sign rather than broadcast
   // from a wallet whose nonce is being tracked under a different DO.
-  const expectedOperator = parseExpectedEvmAddress(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS)
+  const operatorAddressField = operatorKind === "rewards" ? "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS" : "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS"
+  const expectedOperator = parseExpectedEvmAddress(env[operatorAddressField])
   if (expectedOperator) {
     assertPrivateKeyMatchesExpectedAddress({
       privateKey,
       expectedAddress: expectedOperator,
-      expectedField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS",
+      expectedField: operatorAddressField,
     })
   }
   return {
     privateKey,
-    rpcUrl: resolveBookingSettlementRpcUrl(env),
-    chainId: resolveBookingSettlementChainId(env),
-    usdc: resolveBookingSettlementUsdcTokenAddress(env),
+    rpcUrl: operatorKind === "rewards" ? resolveRewardsSettlementRpcUrl(env) : resolveBookingSettlementRpcUrl(env),
+    chainId: operatorKind === "rewards" ? resolveRewardsSettlementChainId(env) : resolveBookingSettlementChainId(env),
+    usdc: operatorKind === "rewards" ? resolveRewardsSettlementUsdcTokenAddress(env) : resolveBookingSettlementUsdcTokenAddress(env),
+    operatorAddressField,
   }
 }
 function checksumRecipient(raw: string): string {
@@ -54,15 +62,15 @@ function centsToAtomic(amountCents: number): bigint {
 }
 
 export const realChain: ChainPrimitives = {
-  pendingNonce: async (env) => { const c = resolveConfig(env); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "pending") },
-  latestNonce: async (env) => { const c = resolveConfig(env); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "latest") },
-  gasParams: async (env) => {
-    const c = resolveConfig(env)
+  pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "pending") },
+  latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "latest") },
+  gasParams: async (env, operatorKind) => {
+    const c = resolveConfig(env, operatorKind)
     const fee = await new JsonRpcProvider(c.rpcUrl, c.chainId).getFeeData()
     return { maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n, maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n, gasLimit: 100_000n }
   },
   signVerifiedTransfer: async (env, input) => {
-    const c = resolveConfig(env)
+    const c = resolveConfig(env, input.operatorKind)
     const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
     const usdc = new Contract(c.usdc, ERC20_ABI, signer)
     const to = checksumRecipient(input.to)
@@ -92,9 +100,9 @@ export const realChain: ChainPrimitives = {
     if (!parsed.hash) throw badRequestError("signed tx missing hash")
     return { signedTx, txHash: parsed.hash }
   },
-  broadcast: async (env, input) => { const c = resolveConfig(env); await new JsonRpcProvider(c.rpcUrl, c.chainId).broadcastTransaction(input.signedTx) },
-  txLiveness: async (env, txHash) => {
-    const c = resolveConfig(env)
+  broadcast: async (env, input) => { const c = resolveConfig(env, input.operatorKind); await new JsonRpcProvider(c.rpcUrl, c.chainId).broadcastTransaction(input.signedTx) },
+  txLiveness: async (env, txHash, operatorKind) => {
+    const c = resolveConfig(env, operatorKind)
     const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
     const receipt = await provider.getTransactionReceipt(txHash)
     if (receipt) return receipt.status === 1 ? "success" : "failed"

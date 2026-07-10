@@ -6,19 +6,25 @@ import { badRequestError, conflictError } from "../../errors"
 const SIGNING_CLAIM_TTL_MS = 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
-export type OperatorEffectKind = "booking_payout" | "booking_refund"
+export type OperatorKind = "booking" | "rewards"
+export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout"
 
-export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number): string {
+export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
   if (!EVM_ADDRESS_RE.test(a)) throw badRequestError("Operator signer address is invalid")
   // Lowercase (not EIP-55 checksum) so the DO name needs no ethers dependency; deterministic per wallet.
-  return `booking-operator-signer:${a.toLowerCase()}:${chainId}`
+  const prefix = operatorKind === "rewards" ? "rewards-operator-signer" : "booking-operator-signer"
+  return `${prefix}:${a.toLowerCase()}:${chainId}`
 }
 
 // The DO derives the canonical key itself — a caller cannot supply a colliding key.
 export interface OperatorSettleRequest {
-  communityId: string
-  bookingId: string
+  operatorKind?: OperatorKind
+  communityId?: string
+  bookingId?: string
+  userId?: string
+  payoutEffectId?: string
+  idempotencyKey?: string
   effectKind: OperatorEffectKind
   amountCents: number
   recipientAddress: string
@@ -44,12 +50,12 @@ export interface OperatorSettleResult {
 export interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
 export type TxLiveness = "success" | "failed" | "pending" | "absent"
 export interface ChainPrimitives {
-  pendingNonce: (env: Env) => Promise<number>
-  latestNonce: (env: Env) => Promise<number>
-  gasParams: (env: Env) => Promise<GasParams>
-  signVerifiedTransfer: (env: Env, input: { to: string; amountCents: number; nonce: number; gas: GasParams }) => Promise<{ signedTx: string; txHash: string }>
-  broadcast: (env: Env, input: { signedTx: string }) => Promise<void>
-  txLiveness: (env: Env, txHash: string) => Promise<TxLiveness>
+  pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
+  latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
+  gasParams: (env: Env, operatorKind?: OperatorKind) => Promise<GasParams>
+  signVerifiedTransfer: (env: Env, input: { to: string; amountCents: number; nonce: number; gas: GasParams; operatorKind?: OperatorKind }) => Promise<{ signedTx: string; txHash: string }>
+  broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
+  txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
 }
 
 function normalizeRecipient(raw: string): string {
@@ -59,6 +65,22 @@ function normalizeRecipient(raw: string): string {
   return a.toLowerCase()
 }
 function errMsg(e: unknown): string { return e instanceof Error ? e.message : String(e) }
+function requestOperatorKind(req: OperatorSettleRequest): OperatorKind {
+  return req.operatorKind ?? (req.effectKind === "reward_cashout" ? "rewards" : "booking")
+}
+function canonicalFields(req: OperatorSettleRequest): { communityId: string; bookingId: string; effectKind: OperatorEffectKind } {
+  const kind = requestOperatorKind(req)
+  if (kind === "rewards") {
+    if (req.effectKind !== "reward_cashout" || !req.userId || !req.payoutEffectId || !req.idempotencyKey) {
+      throw badRequestError("Rewards settlement request is missing user/payout/idempotency data")
+    }
+    return { communityId: req.userId, bookingId: req.payoutEffectId, effectKind: req.effectKind }
+  }
+  if (!req.communityId || !req.bookingId || (req.effectKind !== "booking_payout" && req.effectKind !== "booking_refund")) {
+    throw badRequestError("Operator settlement request is missing community/booking/effect kind")
+  }
+  return { communityId: req.communityId, bookingId: req.bookingId, effectKind: req.effectKind }
+}
 
 // The ethers-backed chain primitives are REGISTERED by the production worker entry (see
 // registerOperatorChainPrimitives) so the DO module has no ethers import — keeping ethers (and its
@@ -113,7 +135,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     let row = this.read(key)
     if (row) this.assertImmutable(row, req, recipient)
     if (!row) {
-      const chainPending = await chain().pendingNonce(this.env) // RPC OUTSIDE the atomic reservation
+      const chainPending = await chain().pendingNonce(this.env, requestOperatorKind(req)) // RPC OUTSIDE the atomic reservation
       row = this.reserveOrGet(key, req, recipient, chainPending)
     }
     if (row.state === "reserving" || row.state === "failed_preparation") row = await this.signClaimedRow(row, req, recipient)
@@ -128,7 +150,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
     if (row.tx_hash !== txHash) throw conflictError("Operator settlement confirmation hash mismatch")
     if (row.state === "confirmed" || row.state === "failed_onchain" || row.state === "replaced") return this.result(row)
-    const liveness = await chain().txLiveness(this.env, txHash)
+    const liveness = await chain().txLiveness(this.env, txHash, requestOperatorKind(req))
     if (liveness === "success") return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
     if (liveness === "failed") return this.result(this.cas(key, row.version, { state: "failed_onchain" }) ?? this.read(key)!)
     // pending/absent: not confirmable yet — return the current chain state (no exception); the
@@ -149,14 +171,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (row.state === "prepared") return this.result(await this.broadcastRow(row))
     // broadcast / reconciliation_required
     if (!row.tx_hash || row.nonce == null || !row.signed_tx) throw new Error("broadcast effect missing tx fields")
-    const liveness = await chain().txLiveness(this.env, row.tx_hash)
+    const liveness = await chain().txLiveness(this.env, row.tx_hash, requestOperatorKind(req))
     if (liveness === "success") return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
     if (liveness === "failed") return this.result(this.cas(key, row.version, { state: "failed_onchain" }) ?? this.read(key)!)
     if (liveness === "pending") return this.result(row.state === "reconciliation_required" ? (this.cas(key, row.version, { state: "broadcast" }) ?? this.read(key)!) : row)
     // absent: a different tx consumed our nonce (replaced) vs dropped-from-mempool (rebroadcast).
-    const latest = await chain().latestNonce(this.env)
+    const latest = await chain().latestNonce(this.env, requestOperatorKind(req))
     if (latest > row.nonce) return this.result(this.cas(key, row.version, { state: "replaced" }) ?? this.read(key)!)
-    await chain().broadcast(this.env, { signedTx: row.signed_tx })
+    await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: requestOperatorKind(req) })
     return this.result(this.cas(key, row.version, { state: "broadcast" }) ?? this.read(key)!)
   }
 
@@ -171,6 +193,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
   /** Atomic: recheck-or-insert the effect AND bump next_nonce, so only the inserting caller allocates. */
   private reserveOrGet(key: string, req: OperatorSettleRequest, recipient: string, chainPending: number): EffectRow {
+    const fields = canonicalFields(req)
     return this.ctx.storage.transactionSync(() => {
       const existing = this.read(key)
       if (existing) return existing
@@ -180,7 +203,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         `INSERT INTO effects (idempotency_key, community_id, booking_id, effect_kind, amount_cents, recipient_address, signed_tx, tx_hash, nonce, state, version, claim_token, claim_expires_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, 'reserving', 1, NULL, NULL, ?8, ?8)`,
-        key, req.communityId, req.bookingId, req.effectKind, req.amountCents, recipient, nonce, now,
+        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents, recipient, nonce, now,
       )
       return this.read(key)!
     })
@@ -201,8 +224,9 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
     const claimedRow = this.read(row.idempotency_key)!
     try {
-      const gas = await chain().gasParams(this.env)
-      const signed = await chain().signVerifiedTransfer(this.env, { to: recipient, amountCents: req.amountCents, nonce: claimedRow.nonce!, gas })
+      const operatorKind = requestOperatorKind(req)
+      const gas = await chain().gasParams(this.env, operatorKind)
+      const signed = await chain().signVerifiedTransfer(this.env, { to: recipient, amountCents: req.amountCents, nonce: claimedRow.nonce!, gas, operatorKind })
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
       const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, { signed_tx: signed.signedTx, tx_hash: signed.txHash, state: "prepared", claim_token: null, claim_expires_at: null })
       return updated ?? this.read(row.idempotency_key)!
@@ -216,30 +240,34 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row.signed_tx || !row.tx_hash || row.nonce == null) throw new Error("prepared effect missing signed tx/nonce")
     const fromVersion = row.version
     try {
-      await chain().broadcast(this.env, { signedTx: row.signed_tx })
+      await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: row.effect_kind === "reward_cashout" ? "rewards" : "booking" })
       return this.cas(row.idempotency_key, fromVersion, { state: "broadcast" }) ?? this.read(row.idempotency_key)!
     } catch (error) {
       const msg = errMsg(error).toLowerCase()
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
       if (!nonceConsumed) return this.read(row.idempotency_key)! // transient: stays 'prepared'
-      const liveness = await chain().txLiveness(this.env, row.tx_hash)
+      const liveness = await chain().txLiveness(this.env, row.tx_hash, row.effect_kind === "reward_cashout" ? "rewards" : "booking")
       const next: OperatorSettleState = liveness === "success" || liveness === "pending" ? "broadcast" : (liveness === "failed" ? "failed_onchain" : "reconciliation_required")
       return this.cas(row.idempotency_key, fromVersion, { state: next }) ?? this.read(row.idempotency_key)!
     }
   }
 
   private deriveKey(req: OperatorSettleRequest): string {
-    if (!req.communityId || !req.bookingId || (req.effectKind !== "booking_payout" && req.effectKind !== "booking_refund")) {
-      throw badRequestError("Operator settlement request is missing community/booking/effect kind")
+    const operatorKind = requestOperatorKind(req)
+    if (operatorKind === "rewards") {
+      canonicalFields(req)
+      return JSON.stringify(["reward_payout", req.idempotencyKey])
     }
     // Unambiguous encoding — a colon (or any char) inside an id cannot collide another effect.
+    canonicalFields(req)
     return JSON.stringify(["booking_settlement", req.communityId, req.bookingId, req.effectKind])
   }
 
   private assertImmutable(existing: EffectRow, req: OperatorSettleRequest, recipient: string): void {
+    const fields = canonicalFields(req)
     if (
-      existing.community_id !== req.communityId || existing.booking_id !== req.bookingId ||
-      existing.effect_kind !== req.effectKind || existing.amount_cents !== req.amountCents ||
+      existing.community_id !== fields.communityId || existing.booking_id !== fields.bookingId ||
+      existing.effect_kind !== fields.effectKind || existing.amount_cents !== req.amountCents ||
       existing.recipient_address !== recipient
     ) {
       throw conflictError("Operator settlement idempotency key reused with different effect data")
