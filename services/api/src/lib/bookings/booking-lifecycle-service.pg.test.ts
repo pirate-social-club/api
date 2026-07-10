@@ -192,6 +192,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       already: false,
       booking: {
         booking_id: "bkg_lifecycle_service_start",
+        outcome: null,
         status: "live",
         refund_cents: 0,
         refund_tx_ref: null,
