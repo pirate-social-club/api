@@ -327,6 +327,13 @@ describe("rewards routes", () => {
     const publicOffer = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
     expect(publicOffer.status).toBe(200)
     expect(await json(publicOffer)).toMatchObject({ id: campaign.id, status: "active" })
+    const songOffer = await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {},
+      ctx.env,
+    )
+    expect(songOffer.status).toBe(200)
+    expect(await json(songOffer)).toMatchObject({ id: campaign.id, status: "active" })
     const ownerBlocksActive = await app.request(
       "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song",
       {
@@ -339,6 +346,12 @@ describe("rewards routes", () => {
     expect(ownerBlocksActive.status).toBe(200)
     const noLongerPublic = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
     expect(noLongerPublic.status).toBe(404)
+    const noLongerDiscoverable = await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {},
+      ctx.env,
+    )
+    expect(noLongerDiscoverable.status).toBe(404)
 
     await seedCampaignSong(ctx, session.userId, "pst_reward_campaign_song_two")
     const secondCreate = await app.request("http://pirate.test/reward_campaigns", {

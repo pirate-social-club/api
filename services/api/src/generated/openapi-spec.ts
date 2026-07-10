@@ -6997,6 +6997,45 @@ const spec = {
         ]
       }
     },
+    "/public/reward_campaigns": {
+      "get": {
+        "operationId": "public_reward_campaigns_resolve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Resolve the active reward offer for a published song post",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "post_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {}
+        }
+      }
+    },
     "/reward_campaigns/{campaign_id}/funding_quotes": {
       "parameters": [
         {

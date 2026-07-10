@@ -10,6 +10,7 @@ import {
   createRewardCampaignFundingQuote,
   getRewardCampaign,
   getPublicActiveRewardCampaign,
+  getPublicActiveRewardCampaignForSong,
   getRewardSongOwnerPolicy,
   setRewardSongOwnerPolicy,
   type RewardCampaignCreateInput,
@@ -97,6 +98,16 @@ rewards.get("/public/reward_campaigns/:campaignId", async (c) => {
     env: c.env,
     client: getControlPlaneClient(c.env),
     campaignId: c.req.param("campaignId"),
+  })
+  return c.json(result, 200, { "cache-control": "public, max-age=15" })
+})
+
+rewards.get("/public/reward_campaigns", async (c) => {
+  const result = await getPublicActiveRewardCampaignForSong({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? "",
+    postId: c.req.query("post_id") ?? "",
   })
   return c.json(result, 200, { "cache-control": "public, max-age=15" })
 })

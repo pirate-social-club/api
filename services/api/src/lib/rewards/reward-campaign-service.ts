@@ -443,6 +443,31 @@ export async function getPublicActiveRewardCampaign(input: {
   return campaignResource(row)
 }
 
+export async function getPublicActiveRewardCampaignForSong(input: {
+  env: Env
+  client: Client
+  communityId: string
+  postId: string
+}): Promise<RewardCampaign> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const result = await input.client.execute({
+    sql: `
+      SELECT ${CAMPAIGN_COLUMNS}
+      FROM reward_campaigns
+      WHERE community_id = ?1 AND post_id = ?2 AND status = 'active'
+      ORDER BY activated_at DESC, reward_campaign_id ASC
+      LIMIT 1
+    `,
+    args: [
+      nonEmpty(input.communityId, "community_id"),
+      nonEmpty(input.postId, "post_id"),
+    ],
+  })
+  const row = result.rows[0]
+  if (!row) throw notFoundError("Active reward campaign not found")
+  return campaignResource(row)
+}
+
 async function resolveFundingSender(exec: Pick<Client | Transaction, "execute">, userId: string): Promise<string> {
   const row = await executeFirst(exec, {
     sql: `

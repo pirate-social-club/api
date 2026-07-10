@@ -319,6 +319,13 @@ jobs:
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
         run: bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
 
+      - name: Run reward credit concurrency real-Postgres test
+        if: always() && steps.install-api-dependencies.outcome == 'success'
+        working-directory: services/api
+        env:
+          BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+        run: bun test src/lib/rewards/reward-campaign-reconciler.pg.test.ts
+
       - name: Run API coverage report
         # Report-only: this command enforces no threshold, and coverage instrumentation can be flaky/OOM-prone.
         continue-on-error: true

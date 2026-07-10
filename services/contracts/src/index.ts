@@ -4230,6 +4230,7 @@ export const apiRoutes = {
   rewardSongPolicies: (communityId: string, postId: string) => `/reward_song_policies/${communityId}/${postId}`,
   rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
   publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
+  publicRewardCampaigns: "/public/reward_campaigns",
   rewardCampaignFundingQuotes: (campaignId: string) => `/reward_campaigns/${campaignId}/funding_quotes`,
   rewardCampaignFundingQuoteConfirm: (campaignId: string, fundingQuoteId: string) => `/reward_campaigns/${campaignId}/funding_quotes/${fundingQuoteId}/confirm`,
 } as const
