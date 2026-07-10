@@ -4,6 +4,7 @@
 // and reservation key admit one credit for one human/song/UTC period.
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { readFile, writeFile } from "node:fs/promises"
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import {
@@ -19,6 +20,10 @@ if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
 }
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "reward_campaign_credit_test"
+const INVARIANTS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0136_control_plane_reward_campaign_enable_invariants.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -34,6 +39,15 @@ function urlFor(db?: string): string {
 
 function connect(db?: string, max = 4): SQL {
   return new SQL({ url: urlFor(db), tls: false, max, connectionTimeout: 5 } as Record<string, unknown>)
+}
+
+async function postgresErrorMessage(operation: () => Promise<unknown>): Promise<string> {
+  try {
+    await operation()
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error("Expected PostgreSQL statement to be rejected")
 }
 
 describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
@@ -60,12 +74,18 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
       CREATE TABLE reward_campaigns (
         reward_campaign_id TEXT PRIMARY KEY,
+        campaign_kind TEXT NOT NULL DEFAULT 'song_practice',
+        rewarder_user_id TEXT NOT NULL,
+        creation_idempotency_key TEXT NOT NULL,
         community_id TEXT NOT NULL,
         post_id TEXT NOT NULL,
         song_artifact_bundle_id TEXT NOT NULL,
+        song_owner_user_id TEXT NOT NULL,
         status TEXT NOT NULL,
         eligible_activity TEXT NOT NULL,
         daily_reward_cents INTEGER NOT NULL,
+        milestone_7_cents INTEGER NOT NULL DEFAULT 0,
+        milestone_30_cents INTEGER NOT NULL DEFAULT 0,
         reward_period_cap_cents INTEGER NOT NULL,
         budget_cents INTEGER NOT NULL,
         funded_cents INTEGER NOT NULL,
@@ -73,9 +93,12 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         credited_cents INTEGER NOT NULL,
         paid_cents INTEGER NOT NULL,
         refunded_cents INTEGER NOT NULL,
+        platform_fee_bps INTEGER NOT NULL DEFAULT 0,
+        platform_fee_cents INTEGER NOT NULL DEFAULT 0,
         starts_at TEXT NOT NULL,
         ends_at TEXT NOT NULL,
         terms_version INTEGER NOT NULL,
+        terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
         updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
@@ -132,6 +155,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         PRIMARY KEY (user_id, activity_date)
       );
     `)
+    await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(
       `INSERT INTO users VALUES ($1, $2)`,
       ["usr_reward_pg", JSON.stringify({
@@ -146,10 +170,17 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       ["idn_reward_pg", "usr_reward_pg", "stable-nullifier", NOW],
     )
     await db.unsafe(`
-      INSERT INTO reward_campaigns VALUES (
-        'rcp_reward_pg', 'cmt_reward_pg', 'pst_reward_pg', 'sab_reward_pg',
-        'active', 'either', 40, 40, 100, 100, 0, 0, 0, 0,
-        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', 1, NULL, $1
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES (
+        'rcp_reward_pg', 'usr_reward_pg', 'create-reward-pg', 'cmt_reward_pg',
+        'pst_reward_pg', 'sab_reward_pg', 'usr_reward_pg', 'active', 'either',
+        40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-reward-pg',
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
     `, [NOW])
     for (const suffix of ["a", "b"] as const) {
@@ -168,10 +199,31 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       )
     }
     await db.unsafe(`
-      INSERT INTO reward_campaigns VALUES (
-        'rcp_budget_pg', 'cmt_reward_pg', 'pst_budget_pg', 'sab_budget_pg',
-        'active', 'either', 40, 40, 40, 40, 0, 0, 0, 0,
-        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', 1, NULL, $1
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES (
+        'rcp_budget_pg', 'usr_budget_a', 'create-budget-pg', 'cmt_reward_pg',
+        'pst_budget_pg', 'sab_budget_pg', 'usr_budget_a', 'active', 'either',
+        40, 40, 40, 40, 0, 0, 0, 0, 1, 'terms-budget-pg',
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+      )
+    `, [NOW])
+    await db.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES (
+        'rcp_invariants_pg', 'usr_reward_pg', 'create-invariants-pg', 'cmt_reward_pg',
+        'pst_invariants_pg', 'sab_invariants_pg', 'usr_reward_pg', 'draft', 'study',
+        25, 25, 100, 0, 0, 0, 0, 0, 1, 'terms-invariants-pg',
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
     `, [NOW])
     await db.end()
@@ -182,6 +234,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     const root = connect(undefined, 1)
     await root.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`).catch(() => {})
     await root.end()
+    const sentinelPath = process.env.REWARD_CAMPAIGN_PG_SENTINEL_PATH
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "reward-campaign-postgres-suite-complete\n", "utf8")
+    }
   })
 
   async function withProductionPostgresClient<T>(operation: (client: Client) => Promise<T>): Promise<T> {
@@ -275,5 +331,61 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await verify.end()
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(campaigns).toEqual([{ status: "exhausted", funded_cents: 40, reserved_cents: 0, credited_cents: 40 }])
+  })
+
+  test("canonical 0136 trigger rejects campaign term mutations", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns SET daily_reward_cents = 30
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `))
+      expect(message).toContain("reward campaign terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0136 check rejects nonzero milestone campaigns", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+          community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+          status, eligible_activity, daily_reward_cents, milestone_7_cents,
+          milestone_30_cents, reward_period_cap_cents, budget_cents, funded_cents,
+          reserved_cents, credited_cents, paid_cents, refunded_cents, terms_version,
+          terms_hash, starts_at, ends_at, updated_at
+        ) VALUES (
+          'rcp_milestone_rejected_pg', 'usr_reward_pg', 'create-milestone-pg',
+          'cmt_reward_pg', 'pst_milestone_pg', 'sab_milestone_pg', 'usr_reward_pg',
+          'draft', 'study', 25, 10, 0, 35, 100, 0, 0, 0, 0, 0, 1,
+          'terms-milestone-pg', '2026-07-01T00:00:00.000Z',
+          '2026-07-31T23:59:59.999Z', $1
+        )
+      `, [NOW]))
+      expect(message).toContain("reward_campaigns_pilot_milestones_disabled_check")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0136 trigger permits lifecycle and accounting updates", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        UPDATE reward_campaigns
+        SET status = 'paused', funded_cents = 50, reserved_cents = 10, updated_at = $1
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `, ["2026-07-10T12:05:00.000Z"])
+      const rows = await db.unsafe(`
+        SELECT status, funded_cents, reserved_cents
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `) as Array<{ status: string; funded_cents: number; reserved_cents: number }>
+      expect(rows).toEqual([{ status: "paused", funded_cents: 50, reserved_cents: 10 }])
+    } finally {
+      await db.end()
+    }
   })
 })

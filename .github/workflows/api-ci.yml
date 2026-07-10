@@ -141,6 +141,7 @@ jobs:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
           REWARD_CAMPAIGN_PG_CI_REQUIRED: "true"
+          REWARD_CAMPAIGN_PG_SENTINEL_PATH: "/tmp/reward-campaign-pg-suite-complete"
         run: |
           echo "::group::host-config repository PG"
           timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
@@ -176,7 +177,9 @@ jobs:
           timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
           echo "::endgroup::"
           echo "::group::reward campaign credit PG"
+          rm -f "$REWARD_CAMPAIGN_PG_SENTINEL_PATH"
           timeout 120s bun test src/lib/rewards/reward-campaign-reconciler.pg.test.ts
+          test "$(cat "$REWARD_CAMPAIGN_PG_SENTINEL_PATH")" = "reward-campaign-postgres-suite-complete"
           echo "::endgroup::"
 
   api:
