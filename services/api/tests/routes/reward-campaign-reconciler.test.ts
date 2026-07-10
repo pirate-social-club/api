@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { reconcileRewardCampaigns } from "./reward-campaign-reconciler"
-import { getRewardsSummaryForUser } from "./reward-read-service"
-import { createRouteTestContext, resetRuntimeCaches } from "../../../tests/helpers"
-import { exchangeJwt } from "../../../tests/routes/communities/community-routes-test-helpers"
-import { getCommunityRepository } from "../communities/db-community-repository"
-import { openCommunityWriteClient } from "../communities/community-read-access"
+import { reconcileRewardCampaigns } from "../../src/lib/rewards/reward-campaign-reconciler"
+import { getRewardsSummaryForUser } from "../../src/lib/rewards/reward-read-service"
+import { createRouteTestContext, resetRuntimeCaches } from "../helpers"
+import { exchangeJwt } from "./communities/community-routes-test-helpers"
+import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
+import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
 
 let cleanup: (() => Promise<void>) | null = null
 
