@@ -273,7 +273,7 @@ describe("rewards routes", () => {
     const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "reward-funding-quote-1" }),
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "test-quote-one" }),
     }, ctx.env)
     expect(quoteResponse.status).toBe(201)
     const quote = await json(quoteResponse) as {
@@ -338,7 +338,7 @@ describe("rewards routes", () => {
     const secondQuoteResponse = await app.request(`http://pirate.test/reward_campaigns/${secondCampaign.id}/funding_quotes`, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "reward-funding-quote-2" }),
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "test-quote-two" }),
     }, ctx.env)
     const secondQuote = await json(secondQuoteResponse) as { id: string }
     const reusedReceipt = await app.request(
