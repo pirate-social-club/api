@@ -3914,7 +3914,7 @@ describe("community Telegram routes", () => {
     expect(grant?.approved_at).toBeNull()
   })
 
-  test("webhook chat_join_request names missing nationality gates", async () => {
+  test("webhook chat_join_request explains verified nationality mismatches", async () => {
     const ctx = await createRouteTestContext({
       TELEGRAM_BOT_USERNAME: "PirateTestBot",
       TELEGRAM_BOT_TOKEN: "987654:bot-token",
@@ -3991,7 +3991,7 @@ describe("community Telegram routes", () => {
     })
     expect(grant?.status).toBe("pending")
     expect(grant?.user_id).toBe(joiner.userId)
-    expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).toContain("nationality")
+    expect(JSON.parse(grant?.missing_capabilities_json ?? "[]")).not.toContain("nationality")
   })
 
   test("post-verification approval approves pending nationality-gated Telegram join requests", async () => {
