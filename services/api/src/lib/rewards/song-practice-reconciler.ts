@@ -63,12 +63,18 @@ export function resolveRewardConfig(env: Pick<
   | "REWARDS_STREAK_MILESTONE_7_CENTS"
   | "REWARDS_STREAK_MILESTONE_30_CENTS"
 >): RewardConfig {
+  const dailyCents = parseCents(env.REWARDS_DAILY_STREAK_CENTS)
+  const dailyUserCapCents = parseCents(env.REWARDS_DAILY_USER_CAP_CENTS)
+  const milestone7Cents = parseCents(env.REWARDS_STREAK_MILESTONE_7_CENTS)
+  const milestone30Cents = parseCents(env.REWARDS_STREAK_MILESTONE_30_CENTS)
+  const configuredEnabled = String(env.REWARDS_ACCRUAL_ENABLED ?? "").trim().toLowerCase() === "true"
+  const capCoversEveryRewardCombination = dailyUserCapCents >= dailyCents + Math.max(milestone7Cents, milestone30Cents)
   return {
-    enabled: String(env.REWARDS_ACCRUAL_ENABLED ?? "").trim().toLowerCase() === "true",
-    dailyCents: parseCents(env.REWARDS_DAILY_STREAK_CENTS),
-    dailyUserCapCents: parseCents(env.REWARDS_DAILY_USER_CAP_CENTS),
-    milestone7Cents: parseCents(env.REWARDS_STREAK_MILESTONE_7_CENTS),
-    milestone30Cents: parseCents(env.REWARDS_STREAK_MILESTONE_30_CENTS),
+    enabled: configuredEnabled && capCoversEveryRewardCombination,
+    dailyCents,
+    dailyUserCapCents,
+    milestone7Cents,
+    milestone30Cents,
   }
 }
 

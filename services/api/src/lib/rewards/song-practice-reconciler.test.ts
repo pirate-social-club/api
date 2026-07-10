@@ -225,7 +225,7 @@ function env(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_ACCRUAL_ENABLED: "true",
     REWARDS_DAILY_STREAK_CENTS: "10",
-    REWARDS_DAILY_USER_CAP_CENTS: "25",
+    REWARDS_DAILY_USER_CAP_CENTS: "300",
     REWARDS_STREAK_MILESTONE_7_CENTS: "50",
     REWARDS_STREAK_MILESTONE_30_CENTS: "200",
     ...overrides,
@@ -273,6 +273,19 @@ describe("song practice rewards reconciler", () => {
     })
   })
 
+  test("fails accrual closed when the cap cannot cover a daily reward plus the largest milestone", () => {
+    const config = resolveRewardConfig({
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_DAILY_STREAK_CENTS: "10",
+      REWARDS_DAILY_USER_CAP_CENTS: "209",
+      REWARDS_STREAK_MILESTONE_7_CENTS: "50",
+      REWARDS_STREAK_MILESTONE_30_CENTS: "200",
+    })
+
+    expect(config.enabled).toBe(false)
+    expect(config.dailyUserCapCents).toBe(209)
+  })
+
   test("disabled reconciliation does not enumerate communities", async () => {
     let listed = false
     const summary = await reconcileSongPracticeRewards({
@@ -310,7 +323,11 @@ describe("song practice rewards reconciler", () => {
     const controlPlane = createControlPlaneClient()
 
     const summary = await reconcileSongPracticeRewards({
-      env: env(),
+      env: env({
+        REWARDS_DAILY_USER_CAP_CENTS: "25",
+        REWARDS_STREAK_MILESTONE_7_CENTS: "0",
+        REWARDS_STREAK_MILESTONE_30_CENTS: "0",
+      }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
     })
@@ -324,7 +341,11 @@ describe("song practice rewards reconciler", () => {
     expect(controlPlane.closedTransactionCount).toBe(3)
 
     const replay = await reconcileSongPracticeRewards({
-      env: env(),
+      env: env({
+        REWARDS_DAILY_USER_CAP_CENTS: "25",
+        REWARDS_STREAK_MILESTONE_7_CENTS: "0",
+        REWARDS_STREAK_MILESTONE_30_CENTS: "0",
+      }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
     })
@@ -347,14 +368,22 @@ describe("song practice rewards reconciler", () => {
     const controlPlane = createControlPlaneClient()
 
     const first = await reconcileSongPracticeRewards({
-      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "100" }),
+      env: env({
+        REWARDS_DAILY_USER_CAP_CENTS: "100",
+        REWARDS_STREAK_MILESTONE_7_CENTS: "0",
+        REWARDS_STREAK_MILESTONE_30_CENTS: "0",
+      }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
       maxQualifiedDaysPerCommunity: 2,
       lookbackDays: 10_000,
     })
     const second = await reconcileSongPracticeRewards({
-      env: env({ REWARDS_DAILY_USER_CAP_CENTS: "100" }),
+      env: env({
+        REWARDS_DAILY_USER_CAP_CENTS: "100",
+        REWARDS_STREAK_MILESTONE_7_CENTS: "0",
+        REWARDS_STREAK_MILESTONE_30_CENTS: "0",
+      }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
       maxQualifiedDaysPerCommunity: 2,
@@ -413,7 +442,7 @@ describe("song practice rewards reconciler", () => {
     expect(controlPlane.closedTransactionCount).toBe(2)
   })
 
-  test("does not partially credit a milestone that would exceed the daily cap", async () => {
+  test("does not scan when a milestone configuration can exceed the daily cap", async () => {
     shardState.milestones = [{
       community_id: "cmty_rewards",
       milestone_30_date: null,
@@ -429,9 +458,9 @@ describe("song practice rewards reconciler", () => {
       controlPlaneClient: controlPlane.client,
     })
 
-    expect(summary.credited_events).toBe(0)
-    expect(summary.skipped_cap_cents).toBe(50)
+    expect(summary.enabled).toBe(false)
+    expect(summary.scanned_communities).toBe(0)
     expect(controlPlane.events).toHaveLength(0)
-    expect(controlPlane.userDays.get("usr_rewards:2026-07-07")).toBe(0)
+    expect(controlPlane.userDays.get("usr_rewards:2026-07-07")).toBeUndefined()
   })
 })

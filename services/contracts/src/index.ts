@@ -2641,6 +2641,7 @@ export type RewardsSummaryResponse = {
   today_earned_cents: number;
   recent_events: Array<RewardEventSummary>;
   cashout: RewardsCashoutSummary;
+  latest_in_flight_cashout: RewardPayoutSummary | null;
 };
 
 export type RewardPayoutStatus = "submitted" | "confirmed" | "failed";
