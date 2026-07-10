@@ -274,6 +274,18 @@ export type Env = {
   REWARDS_READS_ENABLED?: string
   REWARDS_PAYOUTS_ENABLED?: string
   REWARDS_CAMPAIGNS_ENABLED?: string
+  // Direct Base USDC campaign funding. These are required when campaigns are enabled;
+  // missing or invalid values keep campaign mutation paths fail-closed.
+  REWARDS_CAMPAIGN_CHAIN_ID?: string
+  REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS?: string
+  REWARDS_CAMPAIGN_TREASURY_ADDRESS?: string
+  REWARDS_CAMPAIGN_RPC_URL?: string
+  REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS?: string
+  REWARDS_CAMPAIGN_MIN_BUDGET_CENTS?: string
+  REWARDS_CAMPAIGN_MAX_BUDGET_CENTS?: string
+  REWARDS_CAMPAIGN_MAX_REWARD_CENTS?: string
+  REWARDS_CAMPAIGN_MIN_DURATION_SECONDS?: string
+  REWARDS_CAMPAIGN_MAX_DURATION_SECONDS?: string
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
   REWARDS_DAILY_STREAK_CENTS?: string
