@@ -40,7 +40,7 @@ async function getLatestVerificationSessionRow(executor: DbExecutor, userId: str
   return row ? toVerificationSessionRow(row) : null
 }
 
-export async function getLatestRedditVerificationSessionRow(
+async function getLatestRedditVerificationSessionRow(
   executor: DbExecutor,
   userId: string,
 ): Promise<RedditVerificationSessionRow | null> {

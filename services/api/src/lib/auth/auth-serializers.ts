@@ -100,7 +100,7 @@ function parseLinkedHandleMetadata(raw: string | null): Record<string, unknown> 
     : null
 }
 
-export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
+function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
   return {
     linked_handle: row.linked_handle_id,
     label: row.label_display,
@@ -110,7 +110,7 @@ export function serializeLinkedHandleRow(row: LinkedHandleRow): LinkedHandle {
   }
 }
 
-export function serializePirateLinkedHandle(row: GlobalHandleRow): LinkedHandle {
+function serializePirateLinkedHandle(row: GlobalHandleRow): LinkedHandle {
   return {
     linked_handle: `global:${row.global_handle_id}`,
     label: row.label_display,

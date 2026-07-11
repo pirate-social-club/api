@@ -1,6 +1,6 @@
 import type { Env } from "../../env"
 
-export type StructuredAccessLink = {
+type StructuredAccessLink = {
   href: string
   type: "application/json" | "text/html" | "text/markdown"
   auth_required?: boolean
