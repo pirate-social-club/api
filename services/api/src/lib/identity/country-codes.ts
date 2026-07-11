@@ -6,12 +6,25 @@ const ISO3_BY_ISO2 = new Map(COUNTRY_CODE_PAIRS)
 const ISO2_BY_ISO3 = new Map(COUNTRY_CODE_PAIRS.map(([alpha2, alpha3]) => [alpha3, alpha2]))
 const ISO3_CODES = new Set(COUNTRY_CODE_PAIRS.map(([, alpha3]) => alpha3))
 
+// Existing policies use XKK as Pirate's canonical Kosovo value. ICAO Doc 9303
+// assigns KS/RKS to Kosovo travel documents, so normalize those inputs without
+// rewriting stored policies or public contracts.
+const IDENTITY_COUNTRY_CODE_ALIASES = new Map([
+  ["KS", "XKK"],
+  ["RKS", "XKK"],
+  ["XKX", "XKK"],
+])
+
 export function normalizeIdentityCountryCode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null
   }
 
   const normalized = value.trim().toUpperCase()
+  const aliased = IDENTITY_COUNTRY_CODE_ALIASES.get(normalized)
+  if (aliased) {
+    return aliased
+  }
   if (/^[A-Z]{2}$/.test(normalized)) {
     return ISO3_BY_ISO2.get(normalized) ?? null
   }
@@ -27,6 +40,9 @@ export function normalizeIdentityCountryAlpha2(value: unknown): string | null {
   }
 
   const normalized = value.trim().toUpperCase()
+  if (IDENTITY_COUNTRY_CODE_ALIASES.has(normalized)) {
+    return "XK"
+  }
   if (/^[A-Z]{2}$/.test(normalized)) {
     return ISO3_BY_ISO2.has(normalized) ? normalized : null
   }
