@@ -354,15 +354,13 @@ export async function processAvailableCommunityJobs(input: {
       activeCommunities,
       maxCommunities,
     )
-  const staleSweepCommunityIds = input.communityIds?.length
-    ? input.communityIds
-    : activeCommunities.map((community) => community.community_id)
-
   const communities: CommunityJobCommunityProcessingSummary[] = []
   const failedCommunities: CommunityJobCommunityFailureSummary[] = await sweepStaleRunningCommunityJobs({
     env: input.env,
     communityRepository: input.communityRepository,
-    communityIds: staleSweepCommunityIds,
+    // Keep all per-tick database work within maxCommunities. Sweeping every
+    // active community here made a bounded polling tick perform unbounded I/O.
+    communityIds,
   })
 
   for (const communityId of communityIds) {
