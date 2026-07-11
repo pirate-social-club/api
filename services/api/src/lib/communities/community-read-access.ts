@@ -10,6 +10,7 @@ import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
+import { shouldUseLocalCommunityDb } from "./community-local-mode"
 import {
   routeCommunityRead,
   invalidateOnStaleBindingError,
@@ -111,11 +112,7 @@ function shardReadInvokerFor(env: Env): CommunityReadInvoker {
   return async (binding) => makeShardReadClient(shard, binding)
 }
 
-function shouldUseTestLocalCommunityDb(env: Env): boolean {
-  return env.ENVIRONMENT === "test" && !env.COMMUNITY_D1_SHARD
-}
-
-async function openTestLocalCommunityDb(
+async function openLocalCommunityDb(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
@@ -151,8 +148,8 @@ export async function openCommunityReadClient(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<CommunityReadHandle> {
-  if (shouldUseTestLocalCommunityDb(env)) {
-    return openTestLocalCommunityDb(env, repo, communityId)
+  if (shouldUseLocalCommunityDb(env)) {
+    return openLocalCommunityDb(env, repo, communityId)
   }
 
   return resolveCommunityReadHandle(
@@ -212,8 +209,8 @@ export async function openCommunityWriteClient(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<CommunityWriteHandle> {
-  if (shouldUseTestLocalCommunityDb(env)) {
-    return openTestLocalCommunityDb(env, repo, communityId)
+  if (shouldUseLocalCommunityDb(env)) {
+    return openLocalCommunityDb(env, repo, communityId)
   }
 
   return resolveCommunityWriteHandle(

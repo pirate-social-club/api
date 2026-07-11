@@ -44,6 +44,10 @@ export async function seedCommunityState(input: {
   memberUserIds: string[]
   membershipMode?: "open" | "request" | "gated"
 }): Promise<{ postId: string }> {
+  // These fixtures exercise the file-backed community database. Make the local
+  // mode explicit so production routing can continue to fail closed when the
+  // environment is absent or misspelled.
+  input.env.ENVIRONMENT ??= "test"
   return await seedTestCommunityState({
     ...input,
     membershipMode: input.membershipMode ?? "open",
