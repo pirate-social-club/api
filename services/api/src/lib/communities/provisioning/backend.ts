@@ -17,6 +17,7 @@ import type {
   CreateCommunityRequestBody,
 } from "../create/validation"
 import type { Env } from "../../../env"
+import { shouldUseLocalCommunityDb } from "../community-local-mode"
 
 type BindingInput = {
   env: Env
@@ -281,10 +282,6 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
   },
 }
 
-function isLocalDevProvisioningSelected(env: Env): boolean {
-  return Boolean(String(env.LOCAL_COMMUNITY_DB_ROOT ?? "").trim())
-}
-
 /** True when D1-native provisioning has the required shard binding. */
 export function isD1NativeProvisioningSelected(env: Env): boolean {
   return Boolean(env.COMMUNITY_D1_SHARD)
@@ -299,7 +296,7 @@ export function resolveCommunityProvisioningBackend(
   env: Env,
   _request: ProvisioningRequestShape,
 ): CommunityProvisioningBackend {
-  if (isLocalDevProvisioningSelected(env)) {
+  if (shouldUseLocalCommunityDb(env)) {
     return localDevProvisioningBackend
   }
   return d1NativeProvisioningBackend
