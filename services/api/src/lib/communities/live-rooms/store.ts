@@ -102,7 +102,7 @@ export async function getHydratedLiveRoom(
   return hydrateLiveRoom(client, await getLiveRoomRow(client, communityId, liveRoomId))
 }
 
-export async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRow): Promise<LiveRoom> {
+async function hydrateLiveRoom(client: LiveRoomExecutor, room: LiveRoomRow): Promise<LiveRoom> {
   const allocations = (await client.execute({
     sql: `
       SELECT allocation_id, user_id, role, share_bps

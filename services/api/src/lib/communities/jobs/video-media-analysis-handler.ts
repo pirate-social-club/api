@@ -31,7 +31,7 @@ import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
 import type { Post } from "../../../types"
 
-export type VideoMediaAnalysisJobPayload = {
+type VideoMediaAnalysisJobPayload = {
   post_id: string
   storage_object_key: string
   mime_type?: string | null

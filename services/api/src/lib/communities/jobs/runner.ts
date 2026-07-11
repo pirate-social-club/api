@@ -53,7 +53,7 @@ export class CommunityJobAttemptTimeoutError extends Error {
   }
 }
 
-export function resolveCommunityJobAttemptTimeoutMs(env: Pick<Env, "COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS">): number {
+function resolveCommunityJobAttemptTimeoutMs(env: Pick<Env, "COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS">): number {
   const raw = String(env.COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS || "").trim()
   const parsed = raw ? Number(raw) : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
   return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= MAX_DURABLE_ATTEMPT_DEADLINE_MS
@@ -61,7 +61,7 @@ export function resolveCommunityJobAttemptTimeoutMs(env: Pick<Env, "COMMUNITY_JO
     : DEFAULT_COMMUNITY_JOB_ATTEMPT_TIMEOUT_MS
 }
 
-export function resolveCommunityJobDurableAttemptDeadlineMs(
+function resolveCommunityJobDurableAttemptDeadlineMs(
   env: Pick<Env, "COMMUNITY_JOB_DURABLE_ATTEMPT_DEADLINE_MS">,
 ): number {
   const raw = String(env.COMMUNITY_JOB_DURABLE_ATTEMPT_DEADLINE_MS || "").trim()
@@ -71,7 +71,7 @@ export function resolveCommunityJobDurableAttemptDeadlineMs(
     : DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
 }
 
-export function resolveCommunityJobStaleCheckpointTimeoutMs(
+function resolveCommunityJobStaleCheckpointTimeoutMs(
   env: Pick<Env, "COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS">,
 ): number {
   const raw = String(env.COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS || "").trim()
@@ -98,7 +98,7 @@ export async function withCommunityJobAttemptTimeout<T>(
   }
 }
 
-export function createCommunityJobCheckpointRecorder(input: {
+function createCommunityJobCheckpointRecorder(input: {
   client: Parameters<typeof recordCommunityJobCheckpoint>[0]["client"]
   job: CommunityJobRow
 }): (checkpoint: CommunityJobCheckpoint, details?: Record<string, unknown> | null) => Promise<void> {

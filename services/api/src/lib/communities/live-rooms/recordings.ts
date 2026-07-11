@@ -4,7 +4,7 @@ import { rowValue, stringOrNull } from "../../sql-row"
 import type { QueryResultRow } from "../../sql-client"
 import type { LiveRoomExecutor } from "./store"
 
-export type LiveRoomRecordingStatus =
+type LiveRoomRecordingStatus =
   | "starting"
   | "recording"
   | "stopping"

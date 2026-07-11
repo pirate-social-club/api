@@ -201,7 +201,7 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
   return postStatus === "processing"
 }
 
-export async function markPostPublishFinalizeFailed(input: {
+async function markPostPublishFinalizeFailed(input: {
   client: Parameters<typeof markPostPublishFailed>[0]["executor"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
   communityId: string
