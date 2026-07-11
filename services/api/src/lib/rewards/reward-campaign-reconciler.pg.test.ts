@@ -183,6 +183,27 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
     `, [NOW])
+    await db.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES
+      (
+        'rcp_ended_grace_pg', 'usr_budget_a', 'create-ended-grace-pg', 'cmt_reward_pg',
+        'pst_ended_grace_pg', 'sab_ended_grace_pg', 'usr_budget_a', 'ended', 'study',
+        40, 40, 40, 40, 0, 0, 0, 0, 1, 'terms-ended-grace-pg',
+        '2026-07-01T00:00:00.000Z', '2026-07-11T00:00:00.000Z', $1
+      ),
+      (
+        'rcp_expiry_race_pg', 'usr_reward_pg', 'create-expiry-race-pg', 'cmt_reward_pg',
+        'pst_expiry_race_pg', 'sab_expiry_race_pg', 'usr_reward_pg', 'active', 'study',
+        40, 40, 40, 40, 0, 0, 0, 0, 1, 'terms-expiry-race-pg',
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+      )
+    `, [NOW])
     for (const suffix of ["a", "b"] as const) {
       await db.unsafe(
         `INSERT INTO users VALUES ($1, $2)`,
@@ -331,6 +352,71 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await verify.end()
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(campaigns).toEqual([{ status: "exhausted", funded_cents: 40, reserved_cents: 0, credited_cents: 40 }])
+  })
+
+  test("pre-end qualifications remain claimable during grace and exhaustion rejects the next identity", async () => {
+    const candidate = {
+      communityId: "cmt_reward_pg",
+      postId: "pst_ended_grace_pg",
+      artifactBundleId: "sab_ended_grace_pg",
+      activity: "study" as const,
+      qualifiedAt: "2026-07-10T23:59:00.000Z",
+      periodKey: "2026-07-10",
+      policyVersion: "study-completed-set-v1",
+    }
+    const results = await withProductionPostgresClient(async (client) => {
+      const credited = await creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: { ...candidate, eventId: "rqe_ended_grace_a", userId: "usr_budget_a" },
+        now: "2026-07-17T23:58:59.999Z",
+      })
+      const exhausted = await creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: { ...candidate, eventId: "rqe_ended_grace_b", userId: "usr_budget_b" },
+        now: "2026-07-17T23:58:59.999Z",
+      })
+      return [credited.result, exhausted.result]
+    })
+    expect(results).toEqual(["credited", "budget"])
+
+    const verify = connect(TEST_DB, 1)
+    const campaigns = await verify.unsafe(`
+      SELECT status, credited_cents FROM reward_campaigns
+      WHERE reward_campaign_id = 'rcp_ended_grace_pg'
+    `) as Array<{ status: string; credited_cents: number }>
+    await verify.end()
+    expect(campaigns).toEqual([{ status: "exhausted", credited_cents: 40 }])
+  })
+
+  test("expiry is rechecked after the campaign lock before reserving money", async () => {
+    const result = await withProductionPostgresClient((client) => creditRewardCampaignQualification({
+      env: PG_ENV,
+      client,
+      candidate: {
+        eventId: "rqe_expiry_race",
+        userId: "usr_reward_pg",
+        communityId: "cmt_reward_pg",
+        postId: "pst_expiry_race_pg",
+        artifactBundleId: "sab_expiry_race_pg",
+        activity: "study",
+        qualifiedAt: "2026-07-10T00:01:00.000Z",
+        periodKey: "2026-07-10",
+        policyVersion: "study-completed-set-v1",
+      },
+      now: "2026-07-17T00:00:59.999Z",
+      currentTime: () => "2026-07-17T00:01:00.000Z",
+    }))
+    expect(result).toEqual({ result: "expired", amountCents: 0 })
+
+    const verify = connect(TEST_DB, 1)
+    const reservations = await verify.unsafe(`
+      SELECT count(*)::int AS count FROM reward_campaign_reservations
+      WHERE reward_campaign_id = 'rcp_expiry_race_pg'
+    `) as Array<{ count: number }>
+    await verify.end()
+    expect(reservations).toEqual([{ count: 0 }])
   })
 
   test("canonical 0136 trigger rejects campaign term mutations", async () => {
