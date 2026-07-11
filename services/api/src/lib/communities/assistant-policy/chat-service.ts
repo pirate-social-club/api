@@ -40,7 +40,7 @@ export type CommunityAssistantChatBody = {
   chat_id?: unknown
 }
 
-export type CommunityAssistantVoiceMessageSource = {
+type CommunityAssistantVoiceMessageSource = {
   kind: "voice"
   provider: "elevenlabs"
   model: string
@@ -53,9 +53,9 @@ export type CommunityAssistantVoiceMessageSource = {
   audio_retention: "not_stored"
 }
 
-export type CommunityAssistantMessageSource = CommunityAssistantVoiceMessageSource
+type CommunityAssistantMessageSource = CommunityAssistantVoiceMessageSource
 
-export type CommunityAssistantChat = {
+type CommunityAssistantChat = {
   id: string
   object: "community_assistant_chat"
   community: string
@@ -66,7 +66,7 @@ export type CommunityAssistantChat = {
   updated_at: string
 }
 
-export type CommunityAssistantMessage = {
+type CommunityAssistantMessage = {
   id: string
   object: "community_assistant_message"
   chat: string

@@ -28,7 +28,7 @@ import {
 } from "./access"
 import type { Env } from "../../../env"
 
-export type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
+type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
 
 const OPENROUTER_PROVIDER = "openrouter" as const
 const ELEVENLABS_PROVIDER = "elevenlabs" as const
@@ -38,7 +38,7 @@ const LOCAL_STUDY_CAPABILITY_TTL_MS = 24 * 60 * 60 * 1000
 
 type ActiveCredentialCacheSource = "hit" | "miss"
 
-export type ActiveCredentialPresence = {
+type ActiveCredentialPresence = {
   active: boolean
   cache: ActiveCredentialCacheSource
 }
@@ -369,7 +369,7 @@ async function getActiveCredentialPresence(input: {
   return { active, cache: "miss" }
 }
 
-export async function getCommunityAssistantCredentialStatus(input: {
+async function getCommunityAssistantCredentialStatus(input: {
   env: Env
   communityId: string
   provider: CommunityAssistantCredentialProvider
@@ -531,7 +531,7 @@ export async function saveCommunityAssistantCredential(input: {
   })
 }
 
-export async function decryptActiveCommunityAssistantCredential(input: {
+async function decryptActiveCommunityAssistantCredential(input: {
   env: Env
   communityId: string
   missingCredentialMessage?: string
@@ -589,7 +589,7 @@ export async function hasActiveCommunityElevenLabsCredential(input: {
   })
 }
 
-export async function getActiveCommunityElevenLabsCredentialPresence(input: {
+async function getActiveCommunityElevenLabsCredentialPresence(input: {
   env: Env
   communityId: string
 }): Promise<ActiveCredentialPresence> {
