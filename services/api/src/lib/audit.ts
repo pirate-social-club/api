@@ -3,7 +3,7 @@ import { makeId, nowIso } from "./helpers"
 import { getControlPlaneClient } from "./runtime-deps"
 import type { Env } from "../env"
 
-export type AuditActorType = "operator" | "user"
+type AuditActorType = "operator" | "user"
 
 export type AuditEventInput = {
   action: string

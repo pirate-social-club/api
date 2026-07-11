@@ -51,7 +51,7 @@ export async function authenticateUserToken(input: {
   }
 }
 
-export async function authenticateAgentDelegatedToken(input: {
+async function authenticateAgentDelegatedToken(input: {
   env: Env
   token: string
 }): Promise<ActorContext> {
