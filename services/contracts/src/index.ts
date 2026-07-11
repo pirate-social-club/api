@@ -2868,6 +2868,7 @@ type AudioMediaDescriptor = {
 
 type BookingCounterparty = {
   user_id: string;
+  public_handle: string | null;
   display_name: string | null;
   avatar_ref: string | null;
 };
