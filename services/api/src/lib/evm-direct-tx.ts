@@ -94,7 +94,7 @@ export function resolveDirectTxGasPolicy(params: {
   }
 }
 
-export async function resolveDirectTxFeeOverrides(params: {
+async function resolveDirectTxFeeOverrides(params: {
   provider: JsonRpcProvider
   from: string
   to: string

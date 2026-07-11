@@ -15,7 +15,7 @@ function safeHeaderValue(value: string | undefined | null): string | null {
   return text ? text : null
 }
 
-export function submitTraceId(value: string | undefined | null): string | null {
+function submitTraceId(value: string | undefined | null): string | null {
   const text = safeHeaderValue(value)
   if (!text) return null
   return /^[a-z0-9_:-]{1,80}$/iu.test(text) ? text : null

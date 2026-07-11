@@ -12,7 +12,7 @@ export function parseExpectedEvmAddress(raw: string | null | undefined): string 
   }
 }
 
-export function deriveEvmAddressFromPrivateKey(privateKey: string): string {
+function deriveEvmAddressFromPrivateKey(privateKey: string): string {
   return getAddress(new Wallet(privateKey).address)
 }
 
