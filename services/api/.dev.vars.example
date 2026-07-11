@@ -6,10 +6,8 @@ AUTH_UPSTREAM_JWT_ISSUER=pirate-dev-upstream
 AUTH_UPSTREAM_JWT_AUDIENCE=pirate-api
 # Optional for bun local dev. Blank defaults to services/api/.local/control-plane.db.
 CONTROL_PLANE_DATABASE_URL=
-TURSO_CONTROL_PLANE_AUTH_TOKEN=
 # Required for local community DB credentials and community assistant OpenRouter keys.
 # Use a local-only 32-byte hex value, for example: openssl rand -hex 32
-TURSO_COMMUNITY_DB_WRAP_KEY=
 # Optional for bun local dev. Blank defaults to services/api/.local/community-dbs.
 LOCAL_COMMUNITY_DB_ROOT=
 REGISTRY_PUBLISHER_URL=
