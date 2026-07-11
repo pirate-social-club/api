@@ -15,8 +15,6 @@ import type { CronLock } from "./scheduled-job-runner"
  * calls `release` cannot deadlock future invocations. Pure lease semantics live in
  * `scheduled-cron-lease.ts` (`evaluateLease`); this class is a thin SQLite wrapper.
  */
-export { SCHEDULED_CRON_LOCK_NAME } from "./scheduled-cron-lease"
-
 export class ScheduledCronLockDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)

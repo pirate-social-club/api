@@ -127,8 +127,6 @@ export type SettleCommunityPurchaseResult = {
   royaltyEarningEvents: RoyaltyEarningEventForNotification[]
 }
 
-export type { PublicCommunityPurchaseSettlement } from "./purchase-settlement-serialization"
-
 export type PublicCommunityPurchaseSettlementRequest = {
   quote: string
   funding_tx_ref: string

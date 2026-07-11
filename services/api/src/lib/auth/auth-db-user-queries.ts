@@ -38,7 +38,6 @@ type PrimaryInitRow = {
 export {
   deriveOnboardingStatus,
   getLatestExternalReputationSnapshotRow,
-  getLatestRedditVerificationSessionRow,
   getLatestRedditVerificationSessionRowForUsername,
 } from "./auth-db-onboarding-queries"
 

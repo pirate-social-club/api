@@ -28,11 +28,10 @@ import type {
 } from "./home-feed-types"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
-export type { HomeFeedCommunityIdentity, HomeFeedWaitUntil } from "./home-feed-community-reader"
+export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
 export type {
   HomeFeedCommunityRepository,
   HomeFeedProjectionRow,
-  HomeFeedTimeRange,
   InternalHomeFeedCommunitySummary,
 } from "./home-feed-types"
 

@@ -1,4 +1,3 @@
-export type { DbExecutor } from "../db-helpers"
 import {
   numberOrNull,
   requiredNumber,
@@ -25,7 +24,6 @@ export type {
 } from "./auth-db-community-rows"
 export {
   toCommunityCommentProjectionRow,
-  toCommunityDatabaseBindingRow,
   toCommunityFollowProjectionRow,
   toCommunityMembershipProjectionRow,
   toCommunityPostProjectionRow,

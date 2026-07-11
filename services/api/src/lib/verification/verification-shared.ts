@@ -13,7 +13,6 @@ import {
   toVerificationSessionRow,
 } from "../auth/auth-db-rows"
 export {
-  boolToDb,
   deriveAcceptedHnsSnapshot,
   deriveHnsInspectionSnapshot,
   deriveSpacesAcceptedSnapshot,
@@ -28,7 +27,6 @@ export {
 } from "./namespace-verification-policy"
 export type {
   HnsSessionAssertionSnapshot,
-  SpacesAcceptedSnapshot,
 } from "./namespace-verification-policy"
 
 /**
