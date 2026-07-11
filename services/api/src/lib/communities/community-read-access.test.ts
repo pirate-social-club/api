@@ -95,6 +95,37 @@ test("stale binding from invoker → cache invalidated and error propagates", as
   })
 })
 
+test("stale binding from shard execute → cache invalidated for the next request", async () => {
+  await seedD1Row("cmty_rpc_stale")
+  const resolver = new CommunityBindingResolver()
+  const staleClient: ReadClient = {
+    execute: async () => {
+      throw new HttpError(409, "binding_stale", "stale", false)
+    },
+    batch: async () => [],
+  }
+  const deps = makeDeps({ resolver, openShardReadClient: async () => staleClient })
+  const first = await resolveCommunityReadHandle(deps, "cmty_rpc_stale")
+  await expect(first.client.execute("SELECT 1")).rejects.toMatchObject({ code: "binding_stale" })
+
+  await cp.execute(
+    "UPDATE community_database_routing SET binding_name = 'DB_REBOUND' WHERE community_id = ?1",
+    ["cmty_rpc_stale"],
+  )
+  let reboundBinding: string | null = null
+  await resolveCommunityReadHandle(
+    makeDeps({
+      resolver,
+      openShardReadClient: async (binding) => {
+        reboundBinding = binding.bindingName
+        return STUB_READ_CLIENT
+      },
+    }),
+    "cmty_rpc_stale",
+  )
+  expect(reboundBinding).toBe("DB_REBOUND")
+})
+
 test("makeShardReadClient dispatches execute/batch to the shard RPC with communityId + bindingName", async () => {
   const calls: Array<[string, unknown]> = []
   const shard = {
@@ -223,6 +254,51 @@ test("write: backend='d1' never opens the legacy external client (enqueue backen
   const deps = writeDeps({})
   const h = await resolveCommunityWriteHandle(deps, "cmt_d1consistency")
   expect((h.client as { __tag?: string }).__tag).toBe("d1")
+})
+
+test("write: stale binding from commit invalidates the cache without replaying the write", async () => {
+  await seedD1Row("cmt_write_stale")
+  const resolver = new CommunityBindingResolver()
+  let commitCalls = 0
+  const transaction = {
+    execute: async () => ({ rows: [] }),
+    batch: async () => [],
+    commit: async () => {
+      commitCalls += 1
+      throw new HttpError(409, "binding_stale", "stale", false)
+    },
+    rollback: async () => {},
+    close: () => {},
+  }
+  const staleClient = {
+    ...STUB_READ_CLIENT,
+    transaction: async () => transaction,
+  } as ApiClient
+  const first = await resolveCommunityWriteHandle(
+    writeDeps({ resolver, openD1: () => staleClient }),
+    "cmt_write_stale",
+  )
+  const tx = await first.client.transaction("write")
+  await expect(tx.commit()).rejects.toMatchObject({ code: "binding_stale" })
+  expect(commitCalls).toBe(1)
+
+  await cp.execute(
+    "UPDATE community_database_routing SET binding_name = 'DB_WRITE_REBOUND' WHERE community_id = ?1",
+    ["cmt_write_stale"],
+  )
+  let reboundBinding: string | null = null
+  await resolveCommunityWriteHandle(
+    writeDeps({
+      resolver,
+      openD1: (binding) => {
+        reboundBinding = binding.bindingName
+        return staleClient
+      },
+    }),
+    "cmt_write_stale",
+  )
+  expect(reboundBinding).toBe("DB_WRITE_REBOUND")
+  expect(commitCalls).toBe(1)
 })
 
 test("write: no routing row → propagates community_not_found", async () => {

@@ -16,6 +16,19 @@ function isStaleBindingError(error: unknown): boolean {
   return error instanceof HttpError && STALE_BINDING_ERROR_CODES.has(error.code)
 }
 
+export async function invalidateOnStaleBindingError<T>(
+  resolver: CommunityBindingResolver,
+  communityId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isStaleBindingError(error)) resolver.invalidate(communityId)
+    throw error
+  }
+}
+
 /**
  * Router read path. Composes the binding resolver with backend
  * dispatch — the documented hot path for a community-touching read:
@@ -45,15 +58,8 @@ export async function routeCommunityRead(
   communityId: string,
 ): Promise<RoutedCommunityRead> {
   const binding = await deps.resolver.resolve(deps.controlPlane, communityId)
-  try {
+  return invalidateOnStaleBindingError(deps.resolver, communityId, async () => {
     const client = await deps.openShardReadClient(binding)
     return { binding, client }
-  } catch (error) {
-    // Only drop the cache when the directory pointed at a binding the backend
-    // can no longer serve. Transient failures keep the (still-correct) entry.
-    if (isStaleBindingError(error)) {
-      deps.resolver.invalidate(communityId)
-    }
-    throw error
-  }
+  })
 }
