@@ -204,8 +204,90 @@ export interface BookingPaymentExpectation {
 }
 export type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
-  | { kind: "pending" } // not yet mined / transient RPC — resumable, never clears the claimed hash
+  | { kind: "pending"; reason?: string } // not yet final / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
+
+export type BookingPaymentFinalityPolicy = {
+  expectedChainId: number
+  fallbackConfirmations: number
+  preferSafeBlock: boolean
+}
+
+type FinalityReceipt = MinimalReceipt & { blockNumber: number; blockHash: string }
+type FinalityProvider = {
+  send(method: string, params: unknown[]): Promise<unknown>
+  getTransactionReceipt(txHash: string): Promise<FinalityReceipt | null>
+  getBlock(blockTag: number | "safe"): Promise<{ number: number; hash: string | null } | null>
+  getBlockNumber(): Promise<number>
+}
+
+let testFinalityProviderFactory: ((rpcUrl: string, chainId: number) => FinalityProvider) | null = null
+export function setBookingPaymentFinalityProviderFactoryForTests(
+  factory: typeof testFinalityProviderFactory,
+): void {
+  testFinalityProviderFactory = factory
+}
+
+function createFinalityProvider(rpcUrl: string, chainId: number): FinalityProvider {
+  if (testFinalityProviderFactory) return testFinalityProviderFactory(rpcUrl, chainId)
+  const provider = new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true })
+  return {
+    send: (method, params) => provider.send(method, params),
+    getTransactionReceipt: async (txHash) => await provider.getTransactionReceipt(txHash) as FinalityReceipt | null,
+    getBlock: async (blockTag) => await provider.getBlock(blockTag),
+    getBlockNumber: async () => await provider.getBlockNumber(),
+  }
+}
+
+function parseRpcChainId(value: unknown): number | null {
+  try {
+    const parsed = typeof value === "string" ? Number(BigInt(value)) : Number(value)
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function classifyFinalizedPaymentReceipt(input: {
+  provider: FinalityProvider
+  fundingTxRef: string
+  expected: BookingPaymentExpectation
+  finality: BookingPaymentFinalityPolicy
+}): Promise<BookingPaymentVerification> {
+  const rpcChainId = parseRpcChainId(await input.provider.send("eth_chainId", []))
+  if (rpcChainId !== input.finality.expectedChainId || rpcChainId !== input.expected.chainId) {
+    return { kind: "pending", reason: "rpc_chain_id_mismatch" }
+  }
+  const receipt = await input.provider.getTransactionReceipt(input.fundingTxRef)
+  if (!receipt) return { kind: "pending", reason: "receipt_pending" }
+  const canonicalBlock = await input.provider.getBlock(receipt.blockNumber)
+  if (!canonicalBlock?.hash || canonicalBlock.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+    return { kind: "pending", reason: "receipt_not_canonical" }
+  }
+
+  let final = false
+  if (input.finality.preferSafeBlock) {
+    try {
+      const safeBlock = await input.provider.getBlock("safe")
+      if (safeBlock) {
+        if (safeBlock.number < receipt.blockNumber) {
+          return { kind: "pending", reason: "safe_block_pending" }
+        }
+        final = true
+      }
+    } catch {
+      // RPC does not support the safe block tag; use the documented depth fallback.
+    }
+  }
+  if (!final) {
+    const head = await input.provider.getBlockNumber()
+    const confirmations = head >= receipt.blockNumber ? head - receipt.blockNumber + 1 : 0
+    if (confirmations < input.finality.fallbackConfirmations) {
+      return { kind: "pending", reason: "confirmation_depth_pending" }
+    }
+  }
+  return evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
+}
 
 let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expected: BookingPaymentExpectation; rpcUrl?: string }) => Promise<BookingPaymentVerification>) | null = null
 export function setBookingPaymentVerifierForTests(fn: typeof testBookingPaymentVerifier): void { testBookingPaymentVerifier = fn }
@@ -241,8 +323,24 @@ export async function classifyBookingPaymentReceipt(input: {
   fundingTxRef: string // normalized by the caller
   expected: BookingPaymentExpectation
   rpcUrl?: string
+  finality?: BookingPaymentFinalityPolicy
 }): Promise<BookingPaymentVerification> {
   if (testBookingPaymentVerifier) return testBookingPaymentVerifier(input)
+  if (input.finality) {
+    try {
+      return await classifyFinalizedPaymentReceipt({
+        provider: createFinalityProvider(
+          input.rpcUrl ?? resolvePirateCheckoutRpcUrl(input.env),
+          input.expected.chainId,
+        ),
+        fundingTxRef: input.fundingTxRef,
+        expected: input.expected,
+        finality: input.finality,
+      })
+    } catch {
+      return { kind: "pending", reason: "rpc_unavailable" }
+    }
+  }
   const provider = new JsonRpcProvider(input.rpcUrl ?? resolvePirateCheckoutRpcUrl(input.env), input.expected.chainId)
   let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
   try {
