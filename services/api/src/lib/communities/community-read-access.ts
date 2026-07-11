@@ -5,12 +5,14 @@ import { globalSingleton } from "../db-helpers"
 import { HttpError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client, InStatement, ReadClient } from "../sql-client"
+import type { Transaction } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
 import {
   routeCommunityRead,
+  invalidateOnStaleBindingError,
   type CommunityReadInvoker,
 } from "./community-read-router"
 import type { CommunityDatabaseBindingRepository } from "./community-repository-types"
@@ -133,7 +135,15 @@ export async function resolveCommunityReadHandle(
   communityId: string,
 ): Promise<CommunityReadHandle> {
   const routed = await routeCommunityRead(deps, communityId)
-  return { client: routed.client, close: () => routed.client.close?.() }
+  const client: ReadClient = {
+    ...routed.client,
+    execute: (statement) =>
+      invalidateOnStaleBindingError(deps.resolver, communityId, () => routed.client.execute(statement)),
+    batch: (statements, mode) =>
+      invalidateOnStaleBindingError(deps.resolver, communityId, () => routed.client.batch(statements, mode)),
+    close: () => routed.client.close?.(),
+  }
+  return { client, close: () => client.close?.() }
 }
 
 export async function openCommunityReadClient(
@@ -177,7 +187,24 @@ export async function resolveCommunityWriteHandle(
   communityId: string,
 ): Promise<CommunityWriteHandle> {
   const binding = await deps.resolver.resolve(deps.controlPlane, communityId)
-  return { client: deps.openD1(binding), close: () => {} }
+  const routed = deps.openD1(binding)
+  const guard = <T>(operation: () => Promise<T>) =>
+    invalidateOnStaleBindingError(deps.resolver, communityId, operation)
+  const wrapTransaction = (transaction: Transaction): Transaction => ({
+    execute: (statement) => guard(() => transaction.execute(statement)),
+    batch: (statements, mode) => guard(() => transaction.batch(statements, mode)),
+    commit: () => guard(() => transaction.commit()),
+    rollback: () => guard(() => transaction.rollback()),
+    close: () => transaction.close(),
+  })
+  const client: Client = {
+    ...routed,
+    execute: (statement) => guard(() => routed.execute(statement)),
+    batch: (statements, mode) => guard(() => routed.batch(statements, mode)),
+    transaction: async (mode) => wrapTransaction(await guard(() => routed.transaction(mode))),
+    close: () => routed.close?.(),
+  }
+  return { client, close: () => client.close?.() }
 }
 
 export async function openCommunityWriteClient(
