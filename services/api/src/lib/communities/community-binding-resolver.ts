@@ -27,10 +27,10 @@ export type ResolvedCommunityBinding = {
   decommissionedAt: string | null
 }
 
-export const ROUTING_CACHE_TTL_MS = 60_000
+const ROUTING_CACHE_TTL_MS = 60_000
 // Short TTL for non-stable routing states (degraded, decommissioned) so the
 // router observes a recovery or a decommission quickly.
-export const SHORT_CACHE_TTL_MS = 5_000
+const SHORT_CACHE_TTL_MS = 5_000
 
 type CacheEntry = {
   value: ResolvedCommunityBinding
