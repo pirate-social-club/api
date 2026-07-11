@@ -36,9 +36,9 @@ import {
   type OpenRouterModel,
 } from "../../openrouter-client"
 
-export type AssistantRetentionMode = "per_user_private" | "community_visible_to_mods" | "ephemeral"
+type AssistantRetentionMode = "per_user_private" | "community_visible_to_mods" | "ephemeral"
 
-export type AssistantContextSources = {
+type AssistantContextSources = {
   communityProfile: boolean
   rules: boolean
   referenceLinks: boolean
@@ -50,7 +50,7 @@ export type AssistantContextSources = {
   pinnedKnowledge: boolean
 }
 
-export type AssistantModelOption = {
+type AssistantModelOption = {
   contextLength?: number
   createdAt?: string
   id: string
@@ -80,7 +80,7 @@ export type CommunityAssistantPolicy = CommunityAssistantPolicySettingsInput & {
   updatedAt: string
 }
 
-export type CommunityAssistantPublicPolicy = {
+type CommunityAssistantPublicPolicy = {
   object: "community_assistant_policy_public"
   community: string
   enabled: boolean
@@ -107,7 +107,7 @@ export type CommunityAssistantModelList = {
   data: AssistantModelOption[]
 }
 
-export const DEFAULT_OPENROUTER_MODELS: readonly AssistantModelOption[] = [
+const DEFAULT_OPENROUTER_MODELS: readonly AssistantModelOption[] = [
   {
     id: "mistralai/mistral-small-3.2-24b-instruct",
     label: "Mistral Small 3.2",
