@@ -692,7 +692,17 @@ export async function confirmRewardCampaignFunding(input: {
   }
   const verification = input.verify
     ? await input.verify(expected, txHash, config.rpcUrl)
-    : await classifyBookingPaymentReceipt({ env: input.env, fundingTxRef: txHash, expected, rpcUrl: config.rpcUrl })
+    : await classifyBookingPaymentReceipt({
+      env: input.env,
+      fundingTxRef: txHash,
+      expected,
+      rpcUrl: config.rpcUrl,
+      finality: {
+        expectedChainId: config.chainId,
+        fallbackConfirmations: 30,
+        preferSafeBlock: true,
+      },
+    })
   if (verification.kind === "pending") {
     const pending = await selectFunding(input.client, input.fundingId)
     if (!pending) throw notFoundError("Reward campaign funding quote not found")
