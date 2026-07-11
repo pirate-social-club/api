@@ -38,7 +38,7 @@ export type StuckBinding = {
   region: string
 }
 
-export type StaleUnloadedPoolBinding = {
+type StaleUnloadedPoolBinding = {
   communityId: string
   bindingName: string
   allocatedAt: string
@@ -63,7 +63,7 @@ export type ReconcilerDeps = {
   markRoutingDegraded(binding: StuckBinding, reason: string): Promise<void>
 }
 
-export type ReconcilerOutcome = "advanced" | "released" | "error"
+type ReconcilerOutcome = "advanced" | "released" | "error"
 
 export type ReconcilerResult = {
   scanned: number

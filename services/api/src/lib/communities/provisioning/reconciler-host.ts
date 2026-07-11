@@ -11,7 +11,7 @@ import { persistProvisionedD1Binding } from "./repository"
 import { runReconciliationSweep, type ReconcilerDeps, type ReconcilerResult, type StuckBinding } from "./reconciler"
 
 /** Grace window: a 'provisioning' routing row is only reconciled after this long. */
-export const RECONCILER_GRACE_MS = 15 * 60 * 1000
+const RECONCILER_GRACE_MS = 15 * 60 * 1000
 
 /** Cap on errors logged/returned per sweep so a mass-failure tick doesn't emit a huge payload. */
 const MAX_LOGGED_ERRORS = 20

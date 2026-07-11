@@ -91,7 +91,7 @@ const RESERVED_LABELS = new Set([
   "support",
 ])
 
-export function normalizeCommunityHandleLabel(desiredLabel: unknown): {
+function normalizeCommunityHandleLabel(desiredLabel: unknown): {
   labelNormalized: string
   labelDisplay: string
 } {

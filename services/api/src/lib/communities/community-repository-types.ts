@@ -9,7 +9,7 @@ import type {
 } from "../auth/auth-db-rows"
 import type { Post } from "../../types"
 
-export interface CommunityRepositoryLifecycle {
+interface CommunityRepositoryLifecycle {
   close?(): void | Promise<void>
 }
 

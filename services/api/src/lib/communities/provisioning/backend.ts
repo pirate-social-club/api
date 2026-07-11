@@ -34,7 +34,7 @@ type ProvisionInput = {
   communityRepository: CommunityProvisioningRepository
 }
 
-export type ProvisionedCommunityCredential = {
+type ProvisionedCommunityCredential = {
   credentialId: string
   organizationSlug: string
   groupName: string
@@ -49,7 +49,7 @@ export type ProvisionedCommunityCredential = {
   expiresAt: string | null
 }
 
-export type ProvisionedCommunityDatabase = {
+type ProvisionedCommunityDatabase = {
   mode: CommunityProvisioningMode
   binding: InitialCommunityDatabaseBinding
   credential: ProvisionedCommunityCredential | null
