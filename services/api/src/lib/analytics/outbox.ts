@@ -2,7 +2,7 @@ import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { buildAnalyticsEvent, isAnalyticsEnabled, type AnalyticsEvent, type AnalyticsEventInput } from "./events"
 
-export type AnalyticsFlushResult = {
+type AnalyticsFlushResult = {
   attempted: number
   sent: number
   failed: number
