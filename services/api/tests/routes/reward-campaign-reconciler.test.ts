@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   creditRewardCampaignQualification,
+  isRewardQualificationExpired,
   reconcileRewardCampaigns,
+  rewardQualificationExpiresAt,
 } from "../../src/lib/rewards/reward-campaign-reconciler"
 import { getRewardsSummaryForUser } from "../../src/lib/rewards/reward-read-service"
 import { createRouteTestContext, resetRuntimeCaches } from "../helpers"
@@ -36,6 +38,15 @@ function env() {
 }
 
 describe("reward campaign reconciler", () => {
+  test("uses an exact seven-day qualified-at grace boundary across the UTC day", () => {
+    for (const qualifiedAt of ["2026-07-10T00:01:00.000Z", "2026-07-10T23:59:00.000Z"]) {
+      const expiresAt = rewardQualificationExpiresAt(qualifiedAt)
+      expect(Date.parse(expiresAt) - Date.parse(qualifiedAt)).toBe(7 * 86_400_000)
+      expect(isRewardQualificationExpired(qualifiedAt, new Date(Date.parse(expiresAt) - 1).toISOString())).toBe(false)
+      expect(isRewardQualificationExpired(qualifiedAt, expiresAt)).toBe(true)
+    }
+  })
+
   test("fails closed unless campaign and accrual flags plus an identity provider are configured", async () => {
     let listed = false
     const summary = await reconcileRewardCampaigns({
@@ -58,6 +69,7 @@ describe("reward campaign reconciler", () => {
     const session = await exchangeJwt(ctx.env, "campaign-reconciler-user")
     const unverifiedSession = await exchangeJwt(ctx.env, "campaign-reconciler-unverified-user")
     const now = "2026-07-10T12:00:00.000Z"
+    const reconcileNow = "2026-07-12T12:00:00.000Z"
     await ctx.client.execute({
       sql: `
         INSERT INTO communities (
@@ -182,6 +194,9 @@ describe("reward campaign reconciler", () => {
             reward_period_key, qualification_policy_version, evidence_summary_json,
             ingested_at
           ) VALUES
+            ('rqe_exactly_expired', 'cmt_campaign_reconcile', 99, ?1,
+              'pst_campaign_reconcile', 'sab_campaign_reconcile', 'study',
+              '2026-07-05T12:00:00.000Z', '2026-07-05', 'policy-v1', '{}', ?3),
             ('rqe_unverified_cursor', 'cmt_campaign_reconcile', 100, ?1,
               'pst_campaign_reconcile', 'sab_campaign_reconcile', 'study',
               '2026-07-10T11:00:00.000Z', '2026-07-10', 'policy-v1', '{}', ?3),
@@ -199,6 +214,7 @@ describe("reward campaign reconciler", () => {
         maxCommunities: 5,
         maxCredits: 2,
         outboxBatchSize: 1,
+        now: reconcileNow,
       })
       expect(first).toMatchObject({
         enabled: true,
@@ -206,6 +222,7 @@ describe("reward campaign reconciler", () => {
         credited_events: 2,
         credited_cents: 80,
         skipped_identity: 1,
+        scanned_qualifications: 3,
       })
       const effects = await ctx.client.execute(`
         SELECT r.status, r.amount_cents, r.qualification_basis, e.reward_kind,
@@ -222,6 +239,11 @@ describe("reward campaign reconciler", () => {
           credited_cents: 80, campaign_status: "exhausted",
         }),
       ]))
+      const unverifiedReservations = await ctx.client.execute({
+        sql: "SELECT count(*) AS count FROM reward_campaign_reservations WHERE user_id = ?1",
+        args: [unverifiedSession.userId],
+      })
+      expect(Number(unverifiedReservations.rows[0]?.count ?? 0)).toBe(0)
       let checkpoint = await ctx.client.execute("SELECT last_shard_sequence FROM reward_qualification_checkpoints")
       expect(checkpoint.rows).toEqual([{ last_shard_sequence: 1 }])
       const secondActivity = await reconcileRewardCampaigns({
@@ -283,7 +305,7 @@ describe("reward campaign reconciler", () => {
           policyVersion: "policy-v1",
         },
       })
-      expect(blockedAtReservation).toEqual({ result: "campaign", amountCents: 0 })
+      expect(blockedAtReservation).toEqual({ result: "owner_blocked", amountCents: 0 })
       const rewards = await getRewardsSummaryForUser({
         env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
         userId: session.userId,
