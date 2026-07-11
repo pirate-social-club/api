@@ -5,7 +5,7 @@ import { getCommunityById, getCommunityByRouteSlug } from "../communities/commun
 import type { Client } from "../sql-client"
 import { analyticsEnvironment } from "./events"
 
-export type CommunityHealthSyncResult = {
+type CommunityHealthSyncResult = {
   fetched_rows: number
   synced_communities: number
 }

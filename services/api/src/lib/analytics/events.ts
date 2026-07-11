@@ -3,8 +3,8 @@ import type { Env } from "../../env"
 
 const encoder = new TextEncoder()
 
-export type AnalyticsSource = "web" | "api" | "job" | "backfill"
-export type AnalyticsAppSurface = "web" | "api" | "worker"
+type AnalyticsSource = "web" | "api" | "job" | "backfill"
+type AnalyticsAppSurface = "web" | "api" | "worker"
 
 export type AnalyticsEventName =
   | "page_viewed"
