@@ -349,10 +349,8 @@ async function resolveCommunities(
 }
 
 const NO_REMOTE_PREFLIGHTS = {
-  ensureRemoteMembershipStateIndexes: async () => undefined,
   ensureRemoteThreadCommentLockColumns: async () => undefined,
   ensureRemoteCommentGuestAuthorship: async () => undefined,
-  ensureRemoteLiveRoomTables: async () => undefined,
   ensureRemotePostSongTitleColumn: async () => undefined,
 }
 
