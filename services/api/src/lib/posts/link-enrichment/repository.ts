@@ -12,8 +12,6 @@ import type {
 
 export {
   listLinkEnrichmentUsages,
-  updateLinkEnrichmentUsageSnapshotSyncedAt,
-  upsertLinkEnrichmentUsage,
 } from "./repository-usages"
 
 export async function getLinkEnrichmentByNormalizedUrl(

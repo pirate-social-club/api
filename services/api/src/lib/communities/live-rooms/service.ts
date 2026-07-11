@@ -118,14 +118,7 @@ import type {
 export type {
   CreateLiveRoomRequest,
   LiveRoom,
-  LiveRoomAccessMode,
-  LiveRoomKind,
-  LiveRoomRightsBasis,
-  LiveRoomRightsStatus,
-  LiveRoomSetlistStatus,
-  LiveRoomStatus,
   LiveRoomViewerRenewRequest,
-  LiveRoomVisibility,
   PublishLiveRoomRequest,
 } from "./types"
 

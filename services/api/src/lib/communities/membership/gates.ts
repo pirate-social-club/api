@@ -17,12 +17,9 @@ export {
   flattenGatePolicyAtoms,
   getGatePolicyMatchMode,
 } from "./gate-summary"
-export { toCommunityGateRuleRow } from "./gate-row"
 export { evaluateMembershipGatePolicy }
 export type {
   CommunityGateRuleRow,
-  GatePolicy,
-  GatePolicyEvaluation,
   MembershipGateEvaluation,
 } from "./gate-types"
 
