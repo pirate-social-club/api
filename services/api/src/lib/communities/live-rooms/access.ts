@@ -22,7 +22,7 @@ import type { LiveRoom, LiveRoomAccessMode, LiveRoomAudienceGate, LiveRoomAudien
 type LiveRoomAccessExecutor = Pick<Client, "execute">
 type LiveRoomMembership = Awaited<ReturnType<typeof getCommunityMembershipState>>
 
-export type LiveRoomAccessDecisionReason =
+type LiveRoomAccessDecisionReason =
   | "not_live"
   | "ended"
   | "canceled"
@@ -32,7 +32,7 @@ export type LiveRoomAccessDecisionReason =
   | "gate_unsatisfied"
   | "allowed"
 
-export type LiveRoomGateFailedSegment =
+type LiveRoomGateFailedSegment =
   | { type: "community_members" }
   | {
     type: "purchase_entitlement"
@@ -46,7 +46,7 @@ export type LiveRoomGateFailedSegment =
     }>
   }
 
-export type LiveRoomGateAccessPayload = {
+type LiveRoomGateAccessPayload = {
   failed_segments: LiveRoomGateFailedSegment[]
 } | null
 
