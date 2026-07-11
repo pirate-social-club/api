@@ -7,6 +7,7 @@ on:
       - ".github/ci-refs/core.sha"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-d1-shard/**"
       - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
@@ -18,6 +19,7 @@ on:
       - ".github/ci-refs/core.sha"
       - "services/api/**"
       - "services/cli/**"
+      - "services/community-d1-shard/**"
       - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
@@ -67,6 +69,33 @@ jobs:
               echo "- Core source: committed .github/ci-refs/core.sha"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  community-d1-shard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install shared service dependencies
+        working-directory: services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Install community D1 shard dependencies
+        working-directory: services/community-d1-shard
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck community D1 shard
+        working-directory: services/community-d1-shard
+        run: bun run check
+
+      - name: Test community D1 shard
+        working-directory: services/community-d1-shard
+        run: bun run test
 
   bookings-repository:
     # Real-Postgres tests for the global bookings repositories: provisions

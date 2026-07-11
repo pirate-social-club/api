@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "audit:gates:staging": "bun run scripts/audit-gate-policies.ts --environment staging",
     "check": "tsc --noEmit",
     "test": "bun test"
   },
