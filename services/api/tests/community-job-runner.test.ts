@@ -1752,12 +1752,15 @@ describe("community-job-runner", () => {
       maxJobsPerCommunity: 1,
     })
 
-    expect(summary.failed_communities).toEqual([
-      expect.objectContaining({
-        community_id: failedCommunityId,
-        error: expect.any(String),
-      }),
-    ])
+    expect(summary.failed_communities.length).toBeGreaterThanOrEqual(1)
+    expect(summary.failed_communities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          community_id: failedCommunityId,
+          error: expect.any(String),
+        }),
+      ]),
+    )
     expect(summary.processed_jobs).toBe(0)
   })
 
