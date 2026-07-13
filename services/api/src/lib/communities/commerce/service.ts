@@ -737,24 +737,49 @@ function buildPublicAssetContentPath(communityId: string, assetId: string): stri
   return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
 }
 
-function isProjectableStoryRegisteredAsset(input: {
+type StoryRegisteredProjectionCandidate = {
   assetKind: Asset["asset_kind"]
   publicationStatus: Asset["publication_status"]
   storyStatus: Asset["story_status"]
   storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed"
   storyIpId: string | null
   storyLicenseTermsId: string | null
-}): input is typeof input & {
+  ipRoyaltyVault: string | null
+  royaltyAllocationStatus: AssetRow["royalty_allocation_status"]
+}
+
+function isRegisteredStoryAsset(input: StoryRegisteredProjectionCandidate): input is StoryRegisteredProjectionCandidate & {
   assetKind: "song_audio" | "video_file"
   storyIpId: string
-  storyLicenseTermsId: string
 } {
   return isStoryRoyaltyAssetKind(input.assetKind)
     && input.publicationStatus === "story_published"
     && input.storyStatus === "published"
     && input.storyRoyaltyRegistrationStatus === "registered"
     && Boolean(input.storyIpId?.trim())
+}
+
+export function isCatalogProjectableStoryRegisteredAsset(
+  input: StoryRegisteredProjectionCandidate,
+): input is StoryRegisteredProjectionCandidate & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+  storyLicenseTermsId: string
+} {
+  return isRegisteredStoryAsset(input)
     && Boolean(input.storyLicenseTermsId?.trim())
+}
+
+export function isRoyaltyProjectableStoryRegisteredAsset(
+  input: StoryRegisteredProjectionCandidate,
+): input is StoryRegisteredProjectionCandidate & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+  ipRoyaltyVault: string
+} {
+  return isRegisteredStoryAsset(input)
+    && Boolean(input.ipRoyaltyVault?.trim())
+    && input.royaltyAllocationStatus !== "none"
 }
 
 type AuthorizedAssetAccess = {
@@ -1213,8 +1238,10 @@ export async function createAssetForPost(input: {
     storyRoyaltyRegistrationStatus: storyRegistration.storyRoyaltyRegistrationStatus,
     storyIpId: storyRegistration.storyIpId,
     storyLicenseTermsId: storyRegistration.storyLicenseTermsId,
+    ipRoyaltyVault: storyRegistration.ipRoyaltyVault,
+    royaltyAllocationStatus,
   }
-  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+  if (isCatalogProjectableStoryRegisteredAsset(projectionCandidate)) {
     try {
       await upsertStoryRegisteredAssetProjection({
         env: input.env,
@@ -1244,7 +1271,7 @@ export async function createAssetForPost(input: {
       })
     }
   }
-  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+  if (isRoyaltyProjectableStoryRegisteredAsset(projectionCandidate)) {
     await syncStoryRoyaltyAllocationProjectionSafely({
       env: input.env,
       client: input.client,
@@ -1776,8 +1803,10 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     storyRoyaltyRegistrationStatus: storyRegistration.storyRoyaltyRegistrationStatus,
     storyIpId: storyRegistration.storyIpId,
     storyLicenseTermsId: storyRegistration.storyLicenseTermsId,
+    ipRoyaltyVault: storyRegistration.ipRoyaltyVault,
+    royaltyAllocationStatus: asset.royalty_allocation_status,
   }
-  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+  if (isCatalogProjectableStoryRegisteredAsset(projectionCandidate)) {
     try {
       await upsertStoryRegisteredAssetProjection({
         env: input.env,
@@ -1807,7 +1836,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       })
     }
   }
-  if (isProjectableStoryRegisteredAsset(projectionCandidate)) {
+  if (isRoyaltyProjectableStoryRegisteredAsset(projectionCandidate)) {
     await withLockedDeliveryProgressHeartbeat({
       env: input.env,
       progress: input.onProgress,

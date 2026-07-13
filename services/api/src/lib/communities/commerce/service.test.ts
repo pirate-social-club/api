@@ -4,6 +4,7 @@ import type { Post } from "../../../types"
 import type { AssetRow } from "./row-types"
 
 let registrationMode: "success" | "failure" = "success"
+let registrationLicenseTermsId: string | null = "42"
 const maybeRegisterStoryRoyaltyForAsset = mock(async () => {
   if (registrationMode === "failure") {
     throw new Error("story_rpc_unavailable")
@@ -16,7 +17,7 @@ const maybeRegisterStoryRoyaltyForAsset = mock(async () => {
     storyIpNftTokenId: "17",
     ipRoyaltyVault: "0x7777777777777777777777777777777777777777",
     storyLicenseTemplate: "0x3333333333333333333333333333333333333333",
-    storyLicenseTermsId: "42",
+    storyLicenseTermsId: registrationLicenseTermsId,
     storyRevenueToken: "0x4444444444444444444444444444444444444444",
     storyRoyaltyPolicy: "0x5555555555555555555555555555555555555555",
     storyRoyaltyRegistrationStatus: "registered",
@@ -28,7 +29,23 @@ mock.module("../../story/story-royalty-registration-service", () => ({
   maybeRegisterStoryRoyaltyForAsset,
 }))
 
-const { createAssetForPost } = await import("./service")
+const syncStoryRoyaltyAllocationProjectionForAsset = mock(async () => ({ projectedRows: 1 }))
+const upsertStoryRegisteredAssetProjection = mock(async () => {})
+
+mock.module("./royalty-allocation-projection", () => ({
+  syncStoryRoyaltyAllocationProjectionForAsset,
+}))
+
+mock.module("./derivative-source-projection", () => ({
+  listStoryRegisteredAssetProjectionRows: mock(async () => []),
+  upsertStoryRegisteredAssetProjection,
+}))
+
+const {
+  createAssetForPost,
+  isCatalogProjectableStoryRegisteredAsset,
+  isRoyaltyProjectableStoryRegisteredAsset,
+} = await import("./service")
 
 const COMMUNITY_ID = "cmty_async"
 const POST_ID = "post_song"
@@ -400,6 +417,90 @@ describe("createAssetForPost allocation projection state", () => {
     const assetInsert = fake.assetInsertStatements[0]
     expect(assetInsert.sql).toContain("royalty_allocation_projection_synced")
     expect(assetInsert.args?.at(-1)).toBe(0)
+  })
+
+  test("syncs a registered derivative allocation without license terms", async () => {
+    registrationMode = "success"
+    registrationLicenseTermsId = null
+    maybeRegisterStoryRoyaltyForAsset.mockClear()
+    syncStoryRoyaltyAllocationProjectionForAsset.mockClear()
+    upsertStoryRegisteredAssetProjection.mockClear()
+    const fake = fakeCreateClient()
+
+    try {
+      await createAssetForPost({
+        assetKind: "song_audio",
+        artifactKind: "primary_audio",
+        bundle: { id: "sab_bundle_1" } as never,
+        bundleId: "bundle_1",
+        client: fake.client,
+        commercialRevSharePct: null,
+        communityId: COMMUNITY_ID,
+        contentHash: "0xabc",
+        displayTitle: "Derivative split song",
+        env: {} as never,
+        licensePreset: null,
+        mimeType: "audio/wav",
+        post: {
+          ...post(),
+          rights_basis: "derivative",
+          song_mode: "remix",
+          title: "Derivative split song",
+          upstream_asset_refs: ["story:ip:0x9999999999999999999999999999999999999999#licenseTermsId=7"],
+        },
+        requireStoryRoyaltyRegistration: true,
+        royaltyAllocations: [
+          {
+            recipient_kind: "creator",
+            wallet_address: "0x6666666666666666666666666666666666666666",
+            share_bps: 10000,
+          },
+        ],
+        storageRef: "r2://song.wav",
+        userRepository: userRepository() as never,
+      })
+    } finally {
+      registrationLicenseTermsId = "42"
+    }
+
+    expect(upsertStoryRegisteredAssetProjection).not.toHaveBeenCalled()
+    expect(syncStoryRoyaltyAllocationProjectionForAsset).toHaveBeenCalledTimes(1)
+    expect(syncStoryRoyaltyAllocationProjectionForAsset).toHaveBeenCalledWith(expect.objectContaining({
+      assetId: ASSET_ID,
+      communityId: COMMUNITY_ID,
+    }))
+  })
+})
+
+describe("Story registered asset projection readiness", () => {
+  const registeredDerivative = {
+    assetKind: "song_audio" as const,
+    publicationStatus: "story_published" as const,
+    storyStatus: "published" as const,
+    storyRoyaltyRegistrationStatus: "registered" as const,
+    storyIpId: "0x1111111111111111111111111111111111111111",
+    storyLicenseTermsId: null,
+    ipRoyaltyVault: "0x7777777777777777777777777777777777777777",
+    royaltyAllocationStatus: "verification_pending" as const,
+  }
+
+  test("keeps null-license derivatives out of the catalog projection", () => {
+    expect(isCatalogProjectableStoryRegisteredAsset(registeredDerivative)).toBe(false)
+  })
+
+  test("admits null-license derivatives to royalty projection", () => {
+    expect(isRoyaltyProjectableStoryRegisteredAsset(registeredDerivative)).toBe(true)
+  })
+
+  test("requires a vault and allocation state for royalty projection", () => {
+    expect(isRoyaltyProjectableStoryRegisteredAsset({
+      ...registeredDerivative,
+      ipRoyaltyVault: null,
+    })).toBe(false)
+    expect(isRoyaltyProjectableStoryRegisteredAsset({
+      ...registeredDerivative,
+      royaltyAllocationStatus: "none",
+    })).toBe(false)
   })
 })
 

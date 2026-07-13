@@ -5,7 +5,7 @@ import type { ProfileRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError, rateLimited } from "../errors"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
-import type { Client, ReadClient } from "../sql-client"
+import type { Client, InStatement, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import type { CommunityJobHandlerInput } from "../communities/jobs/handler-types"
@@ -1186,8 +1186,8 @@ async function selectStudyUnits(client: DbExecutor, postId: string): Promise<Stu
   return result.rows.map((row) => mapStudyUnitRow(row as Record<string, unknown>))
 }
 
-async function upsertStudyUnit(client: Client, post: StudyPost, line: { lineId: string; lineIndex: number; text: string }, now: string): Promise<void> {
-  await client.execute({
+function studyUnitUpsertStatement(post: StudyPost, line: { lineId: string; lineIndex: number; text: string }, now: string): InStatement {
+  return {
     sql: `
       INSERT INTO song_study_unit (
         id, post_id, line_id, line_index, source_language, prompt_text,
@@ -1215,7 +1215,7 @@ async function upsertStudyUnit(client: Client, post: StudyPost, line: { lineId: 
       STUDY_UNIT_GENERATION_VERSION,
       now,
     ],
-  })
+  }
 }
 
 // Explicit cascade: D1/SQLite (and the libsql test client) do not enforce
@@ -1249,8 +1249,8 @@ async function ensureStudyUnits(client: Client, post: StudyPost): Promise<StudyU
   // Upsert keeps the stable primary key + line_id for surviving lines (line_id is
   // index-derived and unaffected by punctuation changes), so their FK localizations
   // and per-user review_state (keyed by line_id) are preserved across the re-split.
-  for (const line of lines) {
-    await upsertStudyUnit(client, post, line, now)
+  if (lines.length > 0) {
+    await client.batch(lines.map((line) => studyUnitUpsertStatement(post, line, now)), "write")
   }
 
   // Remove units the current split no longer produces (edited lyrics or heuristic
@@ -1345,6 +1345,7 @@ async function createReadyStudyPack(input: {
     },
   ]))
   let unavailableLineCount = 0
+  const localizationStatements: InStatement[] = []
   for (const unit of units) {
     const generatedLine = generatedLines.get(unit.line_id)
     if (!generatedLine || generatedLine.distractors.length < 3) {
@@ -1353,7 +1354,7 @@ async function createReadyStudyPack(input: {
       if (existing?.status === "ready") {
         continue
       }
-      await input.client.execute({
+      localizationStatements.push({
         sql: `
           INSERT INTO song_study_unit_localization (
             id, unit_id, target_language, localization_version, status,
@@ -1380,7 +1381,7 @@ async function createReadyStudyPack(input: {
       generated: generatedLine,
       lineIndex: unit.line_index,
     })
-    await input.client.execute({
+    localizationStatements.push({
       sql: `
         INSERT INTO song_study_unit_localization (
           id, unit_id, target_language, localization_version, status,
@@ -1412,6 +1413,9 @@ async function createReadyStudyPack(input: {
         now,
       ],
     })
+  }
+  if (localizationStatements.length > 0) {
+    await input.client.batch(localizationStatements, "write")
   }
 
   return {
@@ -1467,9 +1471,8 @@ async function markStudyLocalizationsProcessing(input: {
   units: StudyUnitRow[]
 }): Promise<void> {
   const now = nowIso()
-  for (const unit of input.units) {
-    await input.client.execute({
-      sql: `
+  const statements = input.units.map((unit): InStatement => ({
+    sql: `
         INSERT INTO song_study_unit_localization (
           id, unit_id, target_language, localization_version, status,
           max_attempts, created_at, updated_at
@@ -1486,8 +1489,10 @@ async function markStudyLocalizationsProcessing(input: {
           max_attempts = excluded.max_attempts,
           updated_at = excluded.updated_at
       `,
-      args: [makeId("sul"), unit.id, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
-    })
+    args: [makeId("sul"), unit.id, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
+  }))
+  if (statements.length > 0) {
+    await input.client.batch(statements, "write")
   }
 }
 
