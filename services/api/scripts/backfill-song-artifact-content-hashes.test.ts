@@ -57,10 +57,32 @@ describe("song artifact content hash backfill", () => {
 
     expect(query).not.toBeNull()
     expect(query!.sql).toContain("upload.content_hash_verified_at IS NULL")
-    expect(query!.sql).toContain("session.upload_mode = 'direct_multipart'")
-    expect(query!.sql).toContain("session.status = 'uploaded'")
     expect(query!.sql).toContain("upload.song_artifact_upload_id > ?3")
     expect(query!.args).toEqual(["cmt_1", "cmt_0", "sau_upload_0", 25])
+  })
+
+  test("does not restrict candidates to direct-multipart uploads", async () => {
+    let query: { sql: string } | null = null
+    const client = {
+      execute: async (input: { sql: string }) => {
+        query = input
+        return { rows: [], rowsAffected: 0 }
+      },
+    } as unknown as Client
+
+    await listContentHashBackfillCandidates({
+      client,
+      communityId: null,
+      uploadId: null,
+      afterCommunityId: null,
+      afterUploadId: null,
+      limit: 25,
+    })
+
+    // A proxy upload that landed between migration 0141 and the deploy that began
+    // stamping content_hash_verified_at is unverified too, and nothing else backfills it.
+    expect(query!.sql).not.toContain("direct_multipart")
+    expect(query!.sql).not.toContain("song_artifact_upload_sessions")
   })
 
   test("accepts both stored and public upload ids without stripping the stored prefix", async () => {

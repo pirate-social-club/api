@@ -91,6 +91,12 @@ export async function listContentHashBackfillCandidates(input: {
     throw new Error("--after-community-id and --after-upload-id must be provided together")
   }
 
+  // Deliberately not scoped to direct-multipart uploads. Verification here means
+  // "hash the stored bytes and compare", which is valid whatever path the upload
+  // arrived by. Scoping to multipart would strand any proxy upload that landed
+  // between migration 0141 and the deploy that started stamping
+  // content_hash_verified_at: those rows are unverified and nothing else would
+  // ever pick them up.
   const filters = [
     "upload.status = 'uploaded'",
     "upload.artifact_kind = 'primary_audio'",
@@ -99,14 +105,6 @@ export async function listContentHashBackfillCandidates(input: {
     "upload.content_hash IS NOT NULL",
     "upload.content_hash <> ''",
     "upload.content_hash_verified_at IS NULL",
-    `EXISTS (
-      SELECT 1
-      FROM song_artifact_upload_sessions AS session
-      WHERE session.community_id = upload.community_id
-        AND session.song_artifact_upload_id = upload.song_artifact_upload_id
-        AND session.upload_mode = 'direct_multipart'
-        AND session.status = 'uploaded'
-    )`,
   ]
   const args: unknown[] = []
 
