@@ -27,6 +27,7 @@
     "check:community-schema-snapshot": "bun run scripts/generate-community-schema-snapshot.ts --check",
     "check:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts",
     "backfill:source-language-detection": "bun run scripts/backfill-source-language-detection.ts",
+    "backfill:song-content-hashes": "bun run scripts/backfill-song-artifact-content-hashes.ts",
     "sync:control-plane-fixtures": "bun run scripts/check-control-plane-fixtures.ts --write",
     "generate:agent-tools": "bun run scripts/generate-agent-tools.ts",
     "generate:agent-skill": "bun run scripts/generate-agent-skill.ts",
