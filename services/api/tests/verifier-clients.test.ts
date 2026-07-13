@@ -7,7 +7,7 @@ import {
   mintSpacesChallenge,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
-import { ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, normalizeHnsRootLabel, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
+import { assertHnsRootLabel, ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, normalizeHnsRootLabel, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
 import { withMockedFetch } from "./helpers"
 
 function urlFromFetchInput(input: Parameters<typeof fetch>[0]): URL {
@@ -59,6 +59,27 @@ describe("normalizeRootLabel", () => {
 describe("normalizeHnsRootLabel", () => {
   test("keeps underscores in HNS labels", () => {
     expect(normalizeHnsRootLabel("Tame_Impala")).toBe("tame_impala")
+  })
+
+  test("validates the hsd covenant root-label grammar", () => {
+    for (const label of ["pirate", "tame_impala", "a--b", "a".repeat(63)]) {
+      expect(() => assertHnsRootLabel(label)).not.toThrow()
+    }
+
+    for (const label of [
+      "_leading",
+      "trailing_",
+      "-leading",
+      "trailing-",
+      "a".repeat(64),
+      "example",
+      "invalid",
+      "local",
+      "localhost",
+      "test",
+    ]) {
+      expect(() => assertHnsRootLabel(label)).toThrow("HNS root label must be a protocol root label")
+    }
   })
 })
 
