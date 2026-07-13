@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Check out core dependency source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/core
           path: core
@@ -48,7 +48,7 @@ jobs:
         # services/api depends on @pirate-social-club/karaoke-runtime via
         # file:../../../web/packages/karaoke-runtime. Keep this pinned to the
         # same compatible web commit used by api-ci.yml.
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
           ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
