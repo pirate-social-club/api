@@ -769,6 +769,7 @@ const SCHEDULED_LEASE_TTL_MS = 120_000
 type ScheduledPriorityJobName =
   | "reconcile_booking_settlements"
   | "reconcile_royalty_allocation_verifications"
+  | "process_community_jobs"
   | "reconcile_d1_provisioning"
   | "monitor_reward_campaigns"
 
@@ -776,6 +777,7 @@ export function scheduledPriorityJobNames(canRunD1Reconciler: boolean): Schedule
   return [
     "reconcile_booking_settlements",
     "reconcile_royalty_allocation_verifications",
+    "process_community_jobs",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     "monitor_reward_campaigns",
   ]
@@ -813,18 +815,20 @@ const handler: ExportedHandler<Env> = {
     const priorityJobRuns: Record<ScheduledPriorityJobName, () => Promise<void>> = {
       reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
+      process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two: royalty verification keeps the second start slot. D1
-    // remains ahead of the slower, latency-tolerant reward monitor so RPC latency
-    // cannot reintroduce provisioning starvation at the task-start deadline.
+    // Concurrency is two: royalty verification keeps the second start slot, then
+    // queued community delivery/Story jobs start as soon as either money-path task
+    // completes. Keeping them outside the rotating tail prevents release-critical
+    // jobs from waiting several cron ticks. D1 remains ahead of the slower,
+    // latency-tolerant reward monitor.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(canRunD1Reconciler)
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
-      { name: "process_community_jobs", run: () => processScheduledCommunityJobs(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
       { name: "reconcile_reward_campaigns", run: () => reconcileScheduledRewardCampaigns(env) },
