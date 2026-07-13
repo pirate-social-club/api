@@ -6,6 +6,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true)).toEqual([
       "reconcile_booking_settlements",
       "reconcile_royalty_allocation_verifications",
+      "process_community_jobs",
       "reconcile_d1_provisioning",
       "monitor_reward_campaigns",
     ])
@@ -15,6 +16,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(false)).toEqual([
       "reconcile_booking_settlements",
       "reconcile_royalty_allocation_verifications",
+      "process_community_jobs",
       "monitor_reward_campaigns",
     ])
   })
