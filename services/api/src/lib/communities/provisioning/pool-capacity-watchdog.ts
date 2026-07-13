@@ -4,10 +4,22 @@ import { captureScheduledError, captureScheduledWarning } from "../../ops-alerts
 const DEFAULT_FREE_ALERT_THRESHOLD = 2
 const TASK_NAME = "community_d1_pool_capacity"
 
-function parseFreeAlertThreshold(value: string | undefined): number {
+export function parseFreeAlertThreshold(value: string | undefined): number {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10)
   if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_FREE_ALERT_THRESHOLD
   return parsed
+}
+
+export function classifyD1PoolCapacity(
+  stats: { total: number; allocated: number; free: number; quarantined: number },
+  thresholdValue: string | undefined,
+) {
+  const threshold = parseFreeAlertThreshold(thresholdValue)
+  return {
+    ...stats,
+    threshold,
+    healthy: stats.free > threshold,
+  }
 }
 
 export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
@@ -17,7 +29,6 @@ export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
     return
   }
 
-  const threshold = parseFreeAlertThreshold(env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
   const result = await env.COMMUNITY_D1_SHARD.communityD1PoolStats({ adminToken: env.SHARD_ADMIN_TOKEN })
   if (!result.ok) {
     const error = new Error(`Community D1 pool stats unavailable: ${result.code}`)
@@ -26,11 +37,12 @@ export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
     return
   }
 
-  const stats = result.value
-  if (stats.free > threshold) return
+  const capacity = classifyD1PoolCapacity(result.value, env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
+  if (capacity.healthy) return
 
-  const urgency = stats.free === 0 ? "high" : "low"
-  const extra = { ...stats, threshold, urgency }
+  const urgency = capacity.free === 0 ? "high" : "low"
+  const { healthy: _healthy, ...stats } = capacity
+  const extra = { ...stats, urgency }
   console.warn("[scheduled] community D1 pool low capacity", JSON.stringify(extra))
   await captureScheduledWarning(
     env,

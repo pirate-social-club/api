@@ -15,7 +15,7 @@ import type { Env } from "../../env"
 const DEFAULT_SETUP_INTENT_TTL_SECONDS = 10 * 60
 const SETUP_TOKEN_PREFIX = "tgsetup"
 
-export type TelegramLinkedChatLinkMode = "invite_link" | "join_request"
+type TelegramLinkedChatLinkMode = "invite_link" | "join_request"
 export type TelegramBotAdminStatus =
   | "unknown"
   | "ready"

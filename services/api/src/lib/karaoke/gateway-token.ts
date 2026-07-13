@@ -21,7 +21,7 @@ export interface KaraokeGatewayClaims {
   nonce: string
 }
 
-export type KaraokeGatewayTokenErrorCode =
+type KaraokeGatewayTokenErrorCode =
   | "invalid_token"
   | "invalid_token_claims"
   | "token_expired"

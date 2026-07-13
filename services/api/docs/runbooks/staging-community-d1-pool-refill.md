@@ -9,6 +9,23 @@ The pool is intentionally monotonic: creating a smoke community consumes a
 binding, and archiving the community does not reclaim it. Do not build or use a
 loaded-community reset as smoke cleanup.
 
+## Detection And Release Gate
+
+The API scheduled handler checks capacity every minute. It emits an ops alert
+when free capacity is at or below `COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD`
+(`8` in staging and `15` in production). That alert remains the continuous
+detection path.
+
+`GET /health/provisioning` independently reads the live shard-pool stats. It
+returns `503 d1_pool_low_capacity` at or below the same threshold, and
+`503 d1_pool_stats_unavailable` when the stats RPC fails. Release smoke calls
+this endpoint, so a deployment cannot report healthy while community creation
+is already near exhaustion.
+
+Do not treat an absent or missed email as proof that the pool is healthy. Check
+the health endpoint or query `d1_pool` directly before a release validation that
+needs to create a community.
+
 ## Safety Invariants
 
 - Work from a clean checkout based on `origin/main`.
@@ -143,6 +160,17 @@ Do not rerun the smoke repeatedly. Each successful run consumes one binding.
 - Insert changed 20 rows.
 - Pre-smoke verification: 74 total, 54 allocated, 20 free, 0 runtime unloaded
   leaks.
+
+## 2026-07-13 Evidence
+
+- Starting state: 104 total rows, 0 free.
+- Added `DB_CMTY_0103` through `DB_CMTY_0122`.
+- Shard deploy version: `454d9c3a-4a79-4ca8-a672-de93c1277389`.
+- Insert changed 20 rows.
+- Post-smoke verification: 124 total, 19 free.
+- The existing scheduled watchdog had no surviving KV delivery marker for the
+  exhaustion window; the provisioning health release gate was added so alert
+  delivery is no longer the only operational signal.
 - Smoke created and archived
   `cmt_0b68dc46c6fa4f26832479ba01ab2d2b` at
   `https://staging.pirate.sc/c/com_cmt_0b68dc46c6fa4f26832479ba01ab2d2b`.

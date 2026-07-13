@@ -19,6 +19,7 @@ import {
   type StoryRoyaltyVaultReader,
 } from "./royalty-allocations"
 import {
+  listPendingStoryRoyaltyAllocationProjectionCommunities,
   loadStoryRoyaltyAllocationProjectionRows,
   syncStoryRoyaltyAllocationProjectionForAsset,
 } from "./royalty-allocation-projection"
@@ -730,6 +731,83 @@ describe("loadStoryRoyaltyAllocationProjectionRows", () => {
       args: ["ast_sync_retry"],
     })
     expect(Number(asset.rows[0].royalty_allocation_projection_synced)).toBe(1)
+  })
+
+  test("targets distinct pending communities from the control-plane projection", async () => {
+    const controlPlaneClient = freshDb()
+    await createProjectionTable(controlPlaneClient)
+    const insert = async (input: {
+      projectionId: string
+      communityId: string
+      assetId: string
+      wallet: string
+      status: string
+      createdAt: string
+    }): Promise<void> => {
+      await controlPlaneClient.execute({
+        sql: `
+          INSERT INTO story_royalty_allocation_projections (
+            projection_id, community_id, asset_id, story_ip_id, recipient_kind,
+            wallet_address_normalized, chain_id, initial_share_bps,
+            allocation_fingerprint, distribution_status, allocation_status,
+            source_updated_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, '0xip', 'creator', ?4, ?5, 10000, ?6, 'pending', ?7, ?8, ?8, ?8)
+        `,
+        args: [
+          input.projectionId,
+          input.communityId,
+          input.assetId,
+          input.wallet,
+          AENEID,
+          `fp_${input.projectionId}`,
+          input.status,
+          input.createdAt,
+        ],
+      })
+    }
+    await insert({
+      projectionId: "proj_verified",
+      communityId: "com_verified",
+      assetId: "ast_verified",
+      wallet: CREATOR,
+      status: "verified",
+      createdAt: "2026-01-01T00:00:00Z",
+    })
+    await insert({
+      projectionId: "proj_pending_1",
+      communityId: "com_new",
+      assetId: "ast_pending",
+      wallet: CREATOR,
+      status: "verification_pending",
+      createdAt: "2026-01-03T00:00:00Z",
+    })
+    await insert({
+      projectionId: "proj_pending_2",
+      communityId: "com_old",
+      assetId: "ast_pending_old",
+      wallet: CREATOR,
+      status: "verification_pending",
+      createdAt: "2026-01-02T00:00:00Z",
+    })
+    await insert({
+      projectionId: "proj_pending_3",
+      communityId: "com_old",
+      assetId: "ast_pending_old_2",
+      wallet: COLLAB,
+      status: "verification_pending",
+      createdAt: "2026-01-04T00:00:00Z",
+    })
+
+    await expect(listPendingStoryRoyaltyAllocationProjectionCommunities({
+      env: {} as never,
+      controlPlaneClient: appClient(controlPlaneClient),
+      limit: 10,
+    })).resolves.toEqual(["com_old", "com_new"])
+    await expect(listPendingStoryRoyaltyAllocationProjectionCommunities({
+      env: {} as never,
+      controlPlaneClient: appClient(controlPlaneClient),
+      limit: 1,
+    })).resolves.toEqual(["com_old"])
   })
 })
 

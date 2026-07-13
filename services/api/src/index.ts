@@ -49,7 +49,10 @@ import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/material
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
-import { checkScheduledD1PoolCapacity } from "./lib/communities/provisioning/pool-capacity-watchdog"
+import {
+  checkScheduledD1PoolCapacity,
+  classifyD1PoolCapacity,
+} from "./lib/communities/provisioning/pool-capacity-watchdog"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -190,15 +193,54 @@ app.get("/health", (c) => c.json({ ok: true }))
 app.get("/health/provisioning", async (c) => {
   const shardConfigured = Boolean(c.env.COMMUNITY_D1_SHARD)
   const regionConfigured = Boolean(String(c.env.COMMUNITY_D1_SHARD_REGION ?? "").trim())
-  const ok = shardConfigured && regionConfigured
+  const adminConfigured = Boolean(c.env.SHARD_ADMIN_TOKEN)
+  if (!shardConfigured || !regionConfigured || !adminConfigured) {
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        shard_configured: shardConfigured,
+        region_configured: regionConfigured,
+        admin_configured: adminConfigured,
+        environment: c.env.ENVIRONMENT ?? null,
+        error_code: "d1_provisioning_unconfigured",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+
+  const result = await c.env.COMMUNITY_D1_SHARD!.communityD1PoolStats({
+    adminToken: c.env.SHARD_ADMIN_TOKEN!,
+  })
+  if (!result.ok) {
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        shard_configured: true,
+        region_configured: true,
+        admin_configured: true,
+        environment: c.env.ENVIRONMENT ?? null,
+        error_code: "d1_pool_stats_unavailable",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+
+  const capacity = classifyD1PoolCapacity(result.value, c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
+  const ok = capacity.healthy
   return c.json(
     {
       ok,
       backend: "d1_native",
-      shard_configured: shardConfigured,
-      region_configured: regionConfigured,
+      shard_configured: true,
+      region_configured: true,
+      admin_configured: true,
       environment: c.env.ENVIRONMENT ?? null,
-      ...(ok ? {} : { error_code: "d1_provisioning_unconfigured" }),
+      pool_capacity: capacity,
+      ...(ok ? {} : { error_code: "d1_pool_low_capacity" }),
     },
     ok ? 200 : 503,
     { "cache-control": "no-store" },
@@ -699,12 +741,14 @@ const handler: ExportedHandler<Env> = {
     // jobs — see runner docs / overlap caveat).
     const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
     const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
-    // Recovery jobs must not sit behind the rotating best-effort maintenance tail. Live ticks
-    // have shown the deadline deferring both settlement and D1 provisioning recovery after
-    // slower community/feed work, so keep them first while lower-priority jobs rotate.
+    // Recovery and money-path verification must not sit behind the rotating best-effort
+    // maintenance tail. Live ticks have shown the deadline deferring settlement, D1
+    // provisioning, and royalty-allocation verification after slower community/feed work,
+    // so keep them first while lower-priority jobs rotate.
     const priorityJobs: NamedTask[] = [
       { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
       ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
+      { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
     ]
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
@@ -716,7 +760,6 @@ const handler: ExportedHandler<Env> = {
       { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
-      { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
       { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
     ]
     const rotatedJobs: NamedTask[] = [

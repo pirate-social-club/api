@@ -38,7 +38,7 @@ describe("community comment projection repository", () => {
         ) VALUES (
           ?1, ?2, ?3, 'request', 'active', 'active',
           'none', NULL, NULL, NULL,
-          NULL, ?4, ?4
+          ?4, ?4
         )
       `,
       args: ["cmt_comment_projection", "usr_comment_projection", "Comment Projection Test", now],

@@ -23,6 +23,26 @@ export type StoryRoyaltyAllocationProjectionRow = {
   createdAt: string
 }
 
+export async function listPendingStoryRoyaltyAllocationProjectionCommunities(input: {
+  env: Env
+  limit: number
+  controlPlaneClient?: Pick<Client, "execute">
+}): Promise<string[]> {
+  const client = input.controlPlaneClient ?? getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT community_id, MIN(created_at) AS first_pending_at
+      FROM story_royalty_allocation_projections
+      WHERE allocation_status = 'verification_pending'
+      GROUP BY community_id
+      ORDER BY MIN(created_at) ASC, community_id ASC
+      LIMIT ?1
+    `,
+    args: [Math.max(1, Math.trunc(input.limit))],
+  })
+  return result.rows.map((row) => requiredString(row, "community_id"))
+}
+
 function isProjectableAssetRow(row: unknown): boolean {
   const storyIpId = stringOrNull(row, "story_ip_id")?.trim()
   const status = stringOrNull(row, "royalty_allocation_status")
