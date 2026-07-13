@@ -57,7 +57,7 @@ async function updateDerivativeSourceProjectionStatus(input: {
   }
 }
 
-export type DeletePostResult = {
+type DeletePostResult = {
   post: Pick<Post, "post_id" | "status" | "updated_at">
   deletedAt: string
   alreadyDeleted: boolean

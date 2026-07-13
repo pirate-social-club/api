@@ -10,7 +10,7 @@ import type { Env } from "../../env"
 import type { CreatePostRequest } from "../../types"
 import type { PostWriteRequest } from "./post-create-validation"
 
-export const LOCKED_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+const LOCKED_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 
 function assertLockedVideoSize(sizeBytes: number | null | undefined): void {
   if (sizeBytes != null && sizeBytes > LOCKED_VIDEO_MAX_BYTES) {
