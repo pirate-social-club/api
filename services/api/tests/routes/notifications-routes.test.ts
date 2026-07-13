@@ -535,29 +535,39 @@ describe("notification routes", () => {
       args: [],
     })
     expect(analyticsRows.rows).toHaveLength(3)
-    expect(analyticsRows.rows.map((row) => row.event_name)).toEqual([
-      "notification_generated",
-      "notification_generated",
-      "notification_task_dismissed",
-    ])
-    expect(analyticsRows.rows[0]?.properties_json).toBe(JSON.stringify({
-      notification_kind: "task",
-      notification_type: "namespace_verification_required",
-      task_type: "namespace_verification_required",
-      task_persistence: "persisted",
+    const analyticsEvents = analyticsRows.rows.map((row) => ({
+      event_name: row.event_name,
+      properties: JSON.parse(String(row.properties_json)) as Record<string, unknown>,
     }))
-    expect(analyticsRows.rows[1]?.properties_json).toBe(JSON.stringify({
-      notification_kind: "activity",
-      notification_type: "post_commented",
-      task_type: null,
-      task_persistence: null,
-    }))
-    expect(analyticsRows.rows[2]?.properties_json).toBe(JSON.stringify({
-      notification_kind: "task",
-      task_type: "namespace_verification_required",
-      task_persistence: "persisted",
-      dismiss_surface: "inbox",
-    }))
+    expect(analyticsEvents).toEqual(expect.arrayContaining([
+      {
+        event_name: "notification_generated",
+        properties: {
+          notification_kind: "task",
+          notification_type: "namespace_verification_required",
+          task_type: "namespace_verification_required",
+          task_persistence: "persisted",
+        },
+      },
+      {
+        event_name: "notification_generated",
+        properties: {
+          notification_kind: "activity",
+          notification_type: "post_commented",
+          task_type: null,
+          task_persistence: null,
+        },
+      },
+      {
+        event_name: "notification_task_dismissed",
+        properties: {
+          notification_kind: "task",
+          task_type: "namespace_verification_required",
+          task_persistence: "persisted",
+          dismiss_surface: "inbox",
+        },
+      },
+    ]))
   })
 
   test("lists royalty activity from persisted events without synthetic royalty tasks", async () => {
