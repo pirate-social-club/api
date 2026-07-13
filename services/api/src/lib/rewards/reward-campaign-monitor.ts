@@ -5,6 +5,7 @@ import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
 import { requireRewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import {
   checkRewardCampaignFundingFinality,
   createRewardCampaignFinalityProvider,
@@ -13,6 +14,7 @@ import {
 } from "./reward-campaign-finality"
 
 export type RewardCampaignMonitorSummary = {
+  enabled: boolean
   scanned: number
   held: number
   accounting_mismatches: number
@@ -33,6 +35,26 @@ export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | 
 
 const MONITOR_STALE_AFTER_MS = 20 * 60_000
 const PARTIAL_FINALITY_ALERT_RATE = 0.25
+
+function emptyMonitorSummary(enabled: boolean): RewardCampaignMonitorSummary {
+  return {
+    enabled,
+    scanned: 0,
+    held: 0,
+    accounting_mismatches: 0,
+    finality_failures: 0,
+    missing_provenance: 0,
+    finality_checks_attempted: 0,
+    transient_finality_checks: 0,
+    transient_finality_rate: 0,
+    liveness_stale: false,
+    coverage_stale: false,
+    wholly_blind: false,
+    partial_finality_degraded: false,
+    scan_successful: false,
+    incidents: [],
+  }
+}
 
 async function recordIncidentCandidate(input: {
   client: Client; campaignId: string; kind: IncidentKind
@@ -106,6 +128,8 @@ export async function monitorRewardCampaigns(input: {
   limit?: number
   finalityProvider?: RewardCampaignFinalityProvider
 }): Promise<RewardCampaignMonitorSummary> {
+  const config = resolveRewardCampaignConfig(input.env)
+  if (!config.enabled) return emptyMonitorSummary(false)
   const ownership = requireRewardCampaignAlertOwnership(input.env)
   const now = input.now ?? nowIso()
   const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)))
@@ -115,15 +139,8 @@ export async function monitorRewardCampaigns(input: {
   })
   const previousLastAttempt = stringOrNull(rowValue(monitorState.rows[0], "last_attempted_scan_at"))
   const summary: RewardCampaignMonitorSummary = {
-    scanned: 0, held: 0, accounting_mismatches: 0, finality_failures: 0,
-    missing_provenance: 0, finality_checks_attempted: 0, transient_finality_checks: 0,
-    transient_finality_rate: 0,
+    ...emptyMonitorSummary(true),
     liveness_stale: Boolean(previousLastAttempt && Date.parse(now) - Date.parse(previousLastAttempt) > MONITOR_STALE_AFTER_MS),
-    coverage_stale: false,
-    wholly_blind: false,
-    partial_finality_degraded: false,
-    scan_successful: false,
-    incidents: [],
   }
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   // Coverage incidents auto-resolve once every confirmed effect has persisted provenance.

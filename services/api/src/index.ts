@@ -676,6 +676,7 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
     const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
+    if (!summary.enabled) return
     if (summary.liveness_stale) {
       await captureScheduledWarning(
         env,
