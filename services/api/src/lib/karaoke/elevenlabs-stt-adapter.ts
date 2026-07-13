@@ -54,7 +54,7 @@ const RETRYABLE_PROVIDER_ERROR_TYPES = new Set([
 ])
 // ---------------------------------------------------------------------------
 
-export interface KaraokeSttSocketMessageEvent {
+interface KaraokeSttSocketMessageEvent {
   data: string | ArrayBuffer
 }
 
