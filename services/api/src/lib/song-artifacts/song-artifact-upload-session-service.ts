@@ -514,6 +514,7 @@ export async function completeMultipartSongArtifactUpload(input: {
     storageEndpoint: config.endpoint.toString(),
     gatewayUrl,
     ipfsCid: head.cid ?? completeResult.cid,
+    contentHashVerifiedAt: null,
     updatedAt: nowIso(),
   })
 }

@@ -314,6 +314,7 @@ async function markFastLocalSongArtifactUploadUploaded(input: {
   const rawUploadId = rawId(input.uploadId, "sau")
   const client = createClient({ url: databaseUrl })
   try {
+    const uploadedAt = nowIso()
     await markSongArtifactUploadUploaded({
       client,
       communityId: input.communityId,
@@ -327,7 +328,8 @@ async function markFastLocalSongArtifactUploadUploaded(input: {
       storageEndpoint: "local-dev://song-artifacts",
       gatewayUrl: `${input.apiUrl}/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(rawUploadId)}/content`,
       ipfsCid: null,
-      updatedAt: nowIso(),
+      contentHashVerifiedAt: uploadedAt,
+      updatedAt: uploadedAt,
     })
   } finally {
     client.close()

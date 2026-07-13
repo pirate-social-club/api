@@ -2,6 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("skips PostgreSQL column nullability changes for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE reward_campaign_monitor_state
+        ALTER COLUMN first_attempted_scan_at SET NOT NULL;
+    `)).toEqual([])
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE reward_campaign_monitor_state
+        ALTER COLUMN last_successful_scan_at DROP NOT NULL;
+    `)).toEqual([])
+  })
+
   test("skips PostgreSQL function-backed triggers for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       CREATE FUNCTION reject_term_changes()
