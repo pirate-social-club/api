@@ -7545,6 +7545,80 @@ const spec = {
         },
         "operationId": "get_public_comments_by_comment_id_replies"
       }
+    },
+    "/operator/reward_campaigns/{campaign_id}/incidents/{incident_id}/recover": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "incident_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "operator_reward_campaign_incident_recover",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Recover a healthy campaign from an operational hold",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignIncidentRecoveryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignIncidentRecoveryResponse"
+                }
+              }
+            }
+          },
+          "401": {},
+          "403": {},
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -20938,6 +21012,7 @@ const spec = {
           "scheduled",
           "active",
           "paused",
+          "operational_hold",
           "exhausted",
           "ended",
           "canceled"
@@ -24844,6 +24919,41 @@ const spec = {
               ]
             },
             "nullable": true
+          }
+        }
+      },
+      "RewardCampaignIncidentRecoveryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "incident_version",
+          "resolution_note"
+        ],
+        "properties": {
+          "incident_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resolution_note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        }
+      },
+      "RewardCampaignIncidentRecoveryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "campaign_id",
+          "status"
+        ],
+        "properties": {
+          "campaign_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardCampaignStatus"
           }
         }
       }
