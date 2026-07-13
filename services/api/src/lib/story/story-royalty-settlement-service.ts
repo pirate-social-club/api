@@ -77,6 +77,15 @@ function resolveRoyaltyPolicyInput(value: string | null | undefined): string | N
   return policy ?? NativeRoyaltyPolicy.LAP
 }
 
+export const STORY_ROYALTY_PAYMENT_WIP_OPTIONS = {
+  enableAutoWrapIp: true,
+  enableAutoApprove: true,
+  // Story SDK's Multicall3 auto-wrap path can simulate against an allowance
+  // state that then reverts with InsufficientAllowance. Sequential wrapping,
+  // approval, and payment is slower but makes each prerequisite explicit.
+  useMulticallWhenPossible: false,
+} as const
+
 export function isRetryableStoryRoyaltyPreflightError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   const isPreflightCall = message.includes("eth_fillTransaction") || message.includes("eth_call")
@@ -147,10 +156,7 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
       token: WIP_TOKEN_ADDRESS,
       amount: input.amount,
       options: {
-        wipOptions: {
-          enableAutoWrapIp: true,
-          enableAutoApprove: true,
-        },
+        wipOptions: STORY_ROYALTY_PAYMENT_WIP_OPTIONS,
       },
     }),
     { maxAttempts: 24 },
