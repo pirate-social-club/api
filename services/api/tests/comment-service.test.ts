@@ -32,7 +32,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comments"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -114,7 +114,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comment_chain"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -186,7 +186,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comment_lock"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -252,7 +252,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_reply_lock"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -332,7 +332,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comment_remove"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -421,7 +421,7 @@ describe("comment-service", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_projection_retry"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     repo.failProjectionWrites = true
     const users = buildUserRepository({

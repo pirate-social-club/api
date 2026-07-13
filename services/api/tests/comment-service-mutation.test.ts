@@ -23,7 +23,7 @@ describe("comment-service mutation", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comment_votes"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
@@ -83,7 +83,7 @@ describe("comment-service mutation", () => {
 
     const databasePath = join(rootDir, "community.db")
     const communityId = "cmt_comment_delete"
-    const env: Env = { LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
     const repo = buildCommunityRepository(databasePath, communityId)
     const users = buildUserRepository({
       usr_owner: buildVerifiedUser("usr_owner"),
