@@ -66,7 +66,7 @@ interface SqlStorageLike {
   ): SqlStorageCursorLike<T>;
 }
 
-export interface DurableObjectStorage {
+interface DurableObjectStorage {
   sql: SqlStorageLike;
   transactionSync?<T>(callback: () => T): T;
   setAlarm?(scheduledTime: number | Date): Promise<void>;

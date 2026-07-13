@@ -55,7 +55,7 @@ const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
   "canvas_video",
 ])
 
-export type SongArtifactMultipartUploadSessionDescriptor = {
+type SongArtifactMultipartUploadSessionDescriptor = {
   id: string
   status: SongArtifactUploadSessionRow["status"]
   object_key: string

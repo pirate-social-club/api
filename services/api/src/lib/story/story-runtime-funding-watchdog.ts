@@ -41,7 +41,7 @@ const DEFAULT_WATCHDOG_INTERVAL_MS = 300_000
 // before hitting the floor. 3 gives an operator comfortable lead time.
 const DEFAULT_WATCHDOG_TX_MARGIN = 3n
 
-export type StoryRuntimeFundingWatchdogSignerReport = {
+type StoryRuntimeFundingWatchdogSignerReport = {
   name: StoryRuntimeSignerName
   address: `0x${string}`
   balanceWei: bigint

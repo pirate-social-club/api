@@ -9,7 +9,7 @@ export type SwarmPublishInput = {
   contentType?: string
 }
 
-export type SwarmCollectionFile = {
+type SwarmCollectionFile = {
   path: string
   contentType?: string
   payload: unknown
