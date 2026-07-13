@@ -185,6 +185,35 @@ export async function resetStaleRunningCommunityJobs(input: {
   return result.rowsAffected ?? 0
 }
 
+export async function resetStaleRunningCommunityJobById(input: {
+  client: DbExecutor
+  jobId: string
+  communityId: string
+  now: string
+  staleCheckpointBefore: string
+}): Promise<boolean> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET status = 'failed',
+          error_code = 'stale_running_timeout',
+          available_at = ?3,
+          attempt_deadline_at = NULL,
+          updated_at = ?3
+      WHERE job_id = ?1
+        AND community_id = ?2
+        AND status = 'running'
+        AND (
+          (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?3)
+          OR (COALESCE(last_checkpoint_at, updated_at) <= ?4)
+        )
+    `,
+    args: [input.jobId, input.communityId, input.now, input.staleCheckpointBefore],
+  })
+
+  return (result.rowsAffected ?? 0) > 0
+}
+
 export async function enqueueCommunityJob(input: {
   client: DbExecutor
   communityId: string

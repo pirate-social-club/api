@@ -8,6 +8,7 @@ import {
   markCommunityJobRunning,
   markCommunityJobSucceeded,
   recordCommunityJobCheckpoint,
+  resetStaleRunningCommunityJobById,
   resetStaleRunningCommunityJobs,
   type CommunityJobCheckpoint,
   type CommunityJobType,
@@ -71,7 +72,7 @@ function resolveCommunityJobDurableAttemptDeadlineMs(
     : DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
 }
 
-function resolveCommunityJobStaleCheckpointTimeoutMs(
+export function resolveCommunityJobStaleCheckpointTimeoutMs(
   env: Pick<Env, "COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS">,
 ): number {
   const raw = String(env.COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS || "").trim()
@@ -79,6 +80,49 @@ function resolveCommunityJobStaleCheckpointTimeoutMs(
   return Number.isInteger(parsed) && parsed >= 30_000 && parsed <= DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
     ? parsed
     : DEFAULT_STALE_CHECKPOINT_TIMEOUT_MS
+}
+
+export async function recoverCommunityJobByIdIfStale(input: {
+  env: Env
+  communityId: string
+  jobId: string
+  communityRepository: CommunityJobRepository
+}): Promise<CommunityJobRow | null> {
+  const now = nowIso()
+  let job: CommunityJobRow | null = null
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    job = await getCommunityJobById({ client: db.client, jobId: input.jobId })
+    if (!job || job.community_id !== input.communityId) return null
+
+    if (job.status === "running") {
+      const staleCheckpointBefore = new Date(
+        Date.parse(now) - resolveCommunityJobStaleCheckpointTimeoutMs(input.env),
+      ).toISOString()
+      const reset = await resetStaleRunningCommunityJobById({
+        client: db.client,
+        jobId: job.job_id,
+        communityId: input.communityId,
+        now,
+        staleCheckpointBefore,
+      })
+      if (!reset) return job
+      job = await getCommunityJobById({ client: db.client, jobId: job.job_id })
+    }
+  } finally {
+    db.close()
+  }
+
+  if (!job || (job.status !== "queued" && job.status !== "failed")) return job
+  if (job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS) return job
+  if (job.available_at && job.available_at > now) return job
+
+  return processCommunityJobById({
+    env: input.env,
+    communityId: input.communityId,
+    jobId: job.job_id,
+    communityRepository: input.communityRepository,
+  })
 }
 
 export async function withCommunityJobAttemptTimeout<T>(
