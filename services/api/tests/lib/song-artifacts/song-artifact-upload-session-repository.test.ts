@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   createSongArtifactUploadIntent,
+  isSongArtifactUploadContentHashServerVerified,
   markSongArtifactUploadCancelled,
+  markSongArtifactUploadContentHashServerVerified,
   markSongArtifactUploadUploaded,
 } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import {
   createSongArtifactUploadSession,
-  isSongArtifactUploadContentHashServerVerified,
   listStaleSongArtifactUploadSessions,
   markSongArtifactUploadSessionAborted,
   markSongArtifactUploadSessionUploaded,
@@ -90,18 +91,30 @@ function sessionInput(overrides: Partial<Parameters<typeof createSongArtifactUpl
 }
 
 describe("song artifact upload session repository", () => {
-  test("treats proxy hashes as verified and direct multipart hashes as unverified", async () => {
+  test("requires an explicit server-verified content hash marker", async () => {
     const setup = await createSetup()
 
     expect(await isSongArtifactUploadContentHashServerVerified({
       client: setup.client,
       communityId: "cmt_session",
-      songArtifactUploadId: setup.upload.id,
-    })).toBe(true)
+      songArtifactUploadId: "sau_session_video",
+    })).toBe(false)
 
-    await createSongArtifactUploadSession({
+    await markSongArtifactUploadUploaded({
       client: setup.client,
-      session: sessionInput(),
+      communityId: "cmt_session",
+      songArtifactUploadId: "sau_session_video",
+      mimeType: "video/mp4",
+      sizeBytes: 25 * 1024 * 1024,
+      contentHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      storageProvider: "filebase",
+      storageBucket: "psc-media-bucket",
+      storageObjectKey: "song-artifacts/cmt_session/primary_video/sau_session_video.mp4",
+      storageEndpoint: "https://s3.filebase.com",
+      gatewayUrl: "https://ipfs.filebase.io/ipfs/QmSession",
+      ipfsCid: "QmSession",
+      contentHashVerifiedAt: null,
+      updatedAt: setup.now,
     })
 
     expect(await isSongArtifactUploadContentHashServerVerified({
@@ -109,6 +122,43 @@ describe("song artifact upload session repository", () => {
       communityId: "cmt_session",
       songArtifactUploadId: setup.upload.id,
     })).toBe(false)
+
+    expect(await markSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+      contentHash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      verifiedAt: "2026-06-05T12:05:00.000Z",
+    })).toBe(false)
+
+    expect(await markSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+      contentHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      verifiedAt: "2026-06-05T12:05:00.000Z",
+    })).toBe(true)
+    expect(await isSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+    })).toBe(true)
+
+    expect(await markSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+      contentHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      verifiedAt: "2026-06-05T12:10:00.000Z",
+    })).toBe(true)
+    const verifiedRow = await setup.client.execute({
+      sql: `
+        SELECT content_hash_verified_at
+        FROM song_artifact_uploads
+        WHERE song_artifact_upload_id = 'sau_session_video'
+      `,
+    })
+    expect(verifiedRow.rows[0]?.content_hash_verified_at).toBe("2026-06-05T12:05:00.000Z")
   })
 
   test("creates sessions and performs race-safe transitions", async () => {
@@ -263,6 +313,7 @@ describe("song artifact upload session repository", () => {
       storageEndpoint: "https://s3.filebase.com",
       gatewayUrl: "https://ipfs.filebase.io/ipfs/QmCancelled",
       ipfsCid: "QmCancelled",
+      contentHashVerifiedAt: null,
       updatedAt: "2026-06-05T12:11:00.000Z",
     })
     expect(uploaded.status).toBe("cancelled")

@@ -224,29 +224,6 @@ export async function getSongArtifactUploadSession(input: {
   return await getSessionRow(input)
 }
 
-export async function isSongArtifactUploadContentHashServerVerified(input: {
-  client: Client
-  communityId: string
-  songArtifactUploadId: string
-}): Promise<boolean> {
-  const row = await executeFirst(input.client, {
-    sql: `
-      SELECT upload_mode
-      FROM song_artifact_upload_sessions
-      WHERE community_id = ?1
-        AND song_artifact_upload_id = ?2
-      ORDER BY created_at DESC
-      LIMIT 1
-    `,
-    args: [input.communityId, input.songArtifactUploadId.replace(/^sau_/, "")],
-  })
-  if (!row) {
-    // Proxy uploads do not create sessions and hash the received bytes server-side.
-    return true
-  }
-  return requiredString(row, "upload_mode") === "proxy"
-}
-
 export async function requireSongArtifactUploadSession(input: {
   client: Client
   communityId: string

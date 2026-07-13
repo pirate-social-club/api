@@ -20,8 +20,10 @@ import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-
 import { loadStoryRoyaltySharesForAsset } from "../communities/commerce/royalty-allocations"
 import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-allocations"
 import { getControlPlaneClient } from "../runtime-deps"
-import { findUploadedSongArtifactByStorageRef } from "../song-artifacts/song-artifact-repository"
-import { isSongArtifactUploadContentHashServerVerified } from "../song-artifacts/song-artifact-upload-session-repository"
+import {
+  findUploadedSongArtifactByStorageRef,
+  isSongArtifactUploadContentHashServerVerified,
+} from "../song-artifacts/song-artifact-repository"
 import {
   buildStoryRoyaltyMetadataPayloads,
   type StoryRoyaltyMetadataAccessMode,

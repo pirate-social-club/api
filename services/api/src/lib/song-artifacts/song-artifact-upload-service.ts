@@ -138,6 +138,7 @@ export async function uploadSongArtifactContent(input: {
       payloadHashHex: actualHashHex,
       origin: input.origin,
     })
+    const uploadedAt = nowIso()
     return await markSongArtifactUploadUploaded({
       client,
       communityId: input.communityId,
@@ -151,7 +152,8 @@ export async function uploadSongArtifactContent(input: {
       storageEndpoint: storage.storageEndpoint,
       gatewayUrl: storage.gatewayUrl,
       ipfsCid: storage.ipfsCid,
-      updatedAt: nowIso(),
+      contentHashVerifiedAt: uploadedAt,
+      updatedAt: uploadedAt,
     })
   } finally {
     db.close()

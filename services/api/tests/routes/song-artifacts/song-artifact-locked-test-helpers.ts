@@ -305,6 +305,7 @@ export async function uploadSongArtifact(input: {
     contentType: input.mimeType,
     objectKey: storageObjectKey,
   })
+  const uploadedAt = new Date().toISOString()
   await markSongArtifactUploadUploaded({
     client: getControlPlaneClient(input.env),
     communityId: normalizedCommunityId,
@@ -318,7 +319,8 @@ export async function uploadSongArtifact(input: {
     storageEndpoint,
     gatewayUrl: buildSongArtifactContentUrl("http://pirate.test", normalizedCommunityId, normalizedUploadId),
     ipfsCid: "bafytestsongartifactcid",
-    updatedAt: new Date().toISOString(),
+    contentHashVerifiedAt: uploadedAt,
+    updatedAt: uploadedAt,
   })
 
   return uploadIntentBody

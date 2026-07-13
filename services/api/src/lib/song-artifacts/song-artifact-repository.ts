@@ -179,6 +179,7 @@ export async function markSongArtifactUploadUploaded(input: {
   storageEndpoint: string
   gatewayUrl: string
   ipfsCid: string | null
+  contentHashVerifiedAt: string | null
   updatedAt: string
 }): Promise<SongArtifactUpload> {
   await input.client.execute({
@@ -194,7 +195,8 @@ export async function markSongArtifactUploadUploaded(input: {
           storage_endpoint = ?9,
           gateway_url = ?10,
           ipfs_cid = ?11,
-          updated_at = ?12
+          content_hash_verified_at = ?12,
+          updated_at = ?13
       WHERE community_id = ?1
         AND song_artifact_upload_id = ?2
         AND status = 'pending_upload'
@@ -211,6 +213,7 @@ export async function markSongArtifactUploadUploaded(input: {
       input.storageEndpoint,
       input.gatewayUrl,
       input.ipfsCid,
+      input.contentHashVerifiedAt,
       input.updatedAt,
     ],
   })
@@ -220,6 +223,52 @@ export async function markSongArtifactUploadUploaded(input: {
     throw internalError("Song artifact upload is missing after update")
   }
   return serializeSongArtifactUpload(updated)
+}
+
+export async function isSongArtifactUploadContentHashServerVerified(input: {
+  client: Client
+  communityId: string
+  songArtifactUploadId: string
+}): Promise<boolean> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT 1 AS verified
+      FROM song_artifact_uploads
+      WHERE community_id = ?1
+        AND song_artifact_upload_id = ?2
+        AND content_hash IS NOT NULL
+        AND content_hash_verified_at IS NOT NULL
+      LIMIT 1
+    `,
+    args: [input.communityId, input.songArtifactUploadId.replace(/^sau_/, "")],
+  })
+  return row != null
+}
+
+export async function markSongArtifactUploadContentHashServerVerified(input: {
+  client: Client
+  communityId: string
+  songArtifactUploadId: string
+  contentHash: string
+  verifiedAt: string
+}): Promise<boolean> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE song_artifact_uploads
+      SET content_hash_verified_at = COALESCE(content_hash_verified_at, ?4)
+      WHERE community_id = ?1
+        AND song_artifact_upload_id = ?2
+        AND status = 'uploaded'
+        AND content_hash = ?3
+    `,
+    args: [
+      input.communityId,
+      input.songArtifactUploadId.replace(/^sau_/, ""),
+      input.contentHash,
+      input.verifiedAt,
+    ],
+  })
+  return (result.rowsAffected ?? 0) > 0
 }
 
 export async function markSongArtifactUploadCancelled(input: {

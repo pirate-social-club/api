@@ -231,7 +231,10 @@ describe("song artifact multipart routes", () => {
 
     const rows = await setup.client.execute({
       sql: `
-        SELECT sau.status AS upload_status, saus.status AS session_status
+        SELECT
+          sau.status AS upload_status,
+          sau.content_hash_verified_at,
+          saus.status AS session_status
         FROM song_artifact_uploads sau
         JOIN song_artifact_upload_sessions saus
           ON saus.song_artifact_upload_id = sau.song_artifact_upload_id
@@ -266,7 +269,10 @@ describe("song artifact multipart routes", () => {
 
     const rows = await setup.client.execute({
       sql: `
-        SELECT sau.status AS upload_status, saus.status AS session_status
+        SELECT
+          sau.status AS upload_status,
+          sau.content_hash_verified_at,
+          saus.status AS session_status
         FROM song_artifact_uploads sau
         JOIN song_artifact_upload_sessions saus
           ON saus.song_artifact_upload_id = sau.song_artifact_upload_id
@@ -275,6 +281,7 @@ describe("song artifact multipart routes", () => {
       args: [intent.upload_session.id],
     })
     expect(rows.rows[0]?.upload_status).toBe("uploaded")
+    expect(rows.rows[0]?.content_hash_verified_at).toBeNull()
     expect(rows.rows[0]?.session_status).toBe("uploaded")
   })
 

@@ -6,6 +6,7 @@ import {
   createSongArtifactUploadIntent,
   findUploadedSongArtifactByStorageRef,
   getSongArtifactBundle,
+  markSongArtifactUploadContentHashServerVerified,
   markSongArtifactUploadUploaded,
   updateSongArtifactBundlePreview,
 } from "./song-artifact-repository"
@@ -21,6 +22,21 @@ import type { Client } from "../sql-client"
 
 function resolveWorkerPublicOrigin(env: Env): string {
   return String(env.PIRATE_API_PUBLIC_ORIGIN || "http://pirate.test").trim()
+}
+
+export async function verifySongArtifactSourceContentHash(input: {
+  sourceBytes: Uint8Array
+  uploadContentHash: string | null
+  bundleContentHash: string | null
+}): Promise<string> {
+  const sourceContentHash = `0x${await sha256Hex(input.sourceBytes)}`
+  if (
+    input.uploadContentHash !== sourceContentHash
+    || input.bundleContentHash !== sourceContentHash
+  ) {
+    throw badRequestError("Primary audio content hash does not match downloaded bytes")
+  }
+  return sourceContentHash
 }
 
 export async function generateSongPreviewForBundle(input: {
@@ -64,9 +80,26 @@ export async function generateSongPreviewForBundle(input: {
       env: input.env,
       objectKey: primaryAudioUpload.storage_object_key,
     })
+    const sourceBytes = new Uint8Array(await primaryResponse.arrayBuffer())
+    const sourceContentHash = await verifySongArtifactSourceContentHash({
+      sourceBytes,
+      uploadContentHash: primaryAudioUpload.content_hash ?? null,
+      bundleContentHash: bundle.primary_audio.content_hash ?? null,
+    })
+    const verified = await markSongArtifactUploadContentHashServerVerified({
+      client,
+      communityId: input.communityId,
+      songArtifactUploadId: primaryAudioUpload.id,
+      contentHash: sourceContentHash,
+      verifiedAt: nowIso(),
+    })
+    if (!verified) {
+      throw badRequestError("Primary audio upload changed before content hash verification")
+    }
+
     const preview = await cropAudioPreviewWithFfmpeg({
       env: input.env,
-      sourceBytes: new Uint8Array(await primaryResponse.arrayBuffer()),
+      sourceBytes,
       sourceMimeType: primaryAudioUpload.mime_type,
       previewWindow: bundle.preview_window,
     })
@@ -98,6 +131,7 @@ export async function generateSongPreviewForBundle(input: {
       bytes: preview.bytes,
       origin,
     })
+    const uploadedAt = nowIso()
     const uploaded = await markSongArtifactUploadUploaded({
       client,
       communityId: input.communityId,
@@ -111,7 +145,8 @@ export async function generateSongPreviewForBundle(input: {
       storageEndpoint: storage.storageEndpoint,
       gatewayUrl: storage.gatewayUrl,
       ipfsCid: storage.ipfsCid,
-      updatedAt: nowIso(),
+      contentHashVerifiedAt: uploadedAt,
+      updatedAt: uploadedAt,
     })
     const updated = await updateSongArtifactBundlePreview({
       client,
