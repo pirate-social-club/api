@@ -1010,48 +1010,39 @@ describe("story royalty registration service", () => {
         }
       })
 
-      const tx = await db.client.transaction("write")
-      try {
-        const derivativePost = await insertPost({
-          client: tx,
-          communityId,
-          authorUserId: userId,
-          body: {
-            post_type: "song",
-            identity_mode: "public",
-            title: "Same bytes remix",
-            idempotency_key: "story-original-collision-derivative-post",
-            song_mode: "remix",
-            rights_basis: "derivative",
-            access_mode: "public",
-            upstream_asset_refs: [`story:ip:${originalIpId}#licenseTermsId=17`],
-          },
-          createdAt: now,
-        })
-        derivativePostId = derivativePost.post_id
+      const derivativePost = await insertPost({
+        client: db.client,
+        communityId,
+        authorUserId: userId,
+        body: {
+          post_type: "song",
+          identity_mode: "public",
+          title: "Same bytes remix",
+          idempotency_key: "story-original-collision-derivative-post",
+          song_mode: "remix",
+          rights_basis: "derivative",
+          access_mode: "public",
+          upstream_asset_refs: [`story:ip:${originalIpId}#licenseTermsId=17`],
+        },
+        createdAt: now,
+      })
+      derivativePostId = derivativePost.post_id
 
-        const derivative = await createSongAssetForPost({
-          env,
-          client: { execute: tx.execute.bind(tx), transaction: db.client.transaction.bind(db.client) },
-          communityId,
-          post: {
-            ...derivativePost,
-            asset_id: "ast_original_collision_derivative",
-          },
-          bundle: buildBundle({ id: "sab_original_collision_derivative", title: "Same bytes remix" }),
-          licensePreset: null,
-          commercialRevSharePct: null,
-          requireStoryRoyaltyRegistration: true,
-          userRepository,
-        })
-        derivativeAssetId = derivative.id
-        await tx.commit()
-      } catch (error) {
-        await tx.rollback()
-        throw error
-      } finally {
-        tx.close()
-      }
+      const derivative = await createSongAssetForPost({
+        env,
+        client: db.client,
+        communityId,
+        post: {
+          ...derivativePost,
+          asset_id: "ast_original_collision_derivative",
+        },
+        bundle: buildBundle({ id: "sab_original_collision_derivative", title: "Same bytes remix" }),
+        licensePreset: null,
+        commercialRevSharePct: null,
+        requireStoryRoyaltyRegistration: true,
+        userRepository,
+      })
+      derivativeAssetId = derivative.id
 
       expect(derivativeRegistrarCalls).toBe(1)
       expect(derivativeAssetId).toBe("asset_ast_original_collision_derivative")
