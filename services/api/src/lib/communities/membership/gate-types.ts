@@ -1,12 +1,5 @@
 export type CommunityGateScope = "membership" | "viewer" | "posting"
 
-export type CommunityGatePolicyRow = {
-  community_id: string
-  scope: CommunityGateScope
-  version: 1
-  expression_json: string
-}
-
 export type GatePolicy = {
   version: 1
   expression: GateExpression
@@ -102,7 +95,7 @@ export type ProofRequirement = {
   config?: Record<string, unknown> | null
 }
 
-export type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow"
+type MissingMembershipCapability = "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow"
 export type SuggestedVerificationProvider = "self" | "very" | "passport" | "zkpassport"
 
 export type MembershipGateEvaluation = {
