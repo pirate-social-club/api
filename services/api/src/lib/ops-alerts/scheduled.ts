@@ -36,10 +36,13 @@ function arrayLengthFromExtra(extra: Record<string, unknown> | undefined, key: s
 }
 
 function scheduledWarningCount(extra: Record<string, unknown> | undefined): number {
-  return numberFromExtra(extra, "failed_posts")
+  return numberFromExtra(extra, "count")
+    ?? numberFromExtra(extra, "failed_posts")
     ?? numberFromExtra(extra, "enqueued_jobs")
     ?? numberFromExtra(extra, "failed")
     ?? numberFromExtra(extra, "errors")
+    ?? numberFromExtra(extra, "leasesApproachingExpiry")
+    ?? numberFromExtra(extra, "deferred")
     ?? arrayLengthFromExtra(extra, "failed_communities")
     ?? arrayLengthFromExtra(extra, "communities")
     ?? 1
