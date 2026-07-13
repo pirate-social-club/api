@@ -292,7 +292,7 @@ describe("openCommunityDb", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const databasePath = join(rootDir, "community-cmt_partial.db")
     await applyPartialCommunitySchema(databasePath)
 
     const beforeTableNames = await listTableNames(databasePath)
@@ -385,7 +385,7 @@ describe("openCommunityDb", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const databasePath = join(rootDir, "community-cmt_partial.db")
     await applyPartialCommunitySchema(databasePath, 1078)
     await seedPostWithComment(databasePath)
 
@@ -413,7 +413,7 @@ describe("openCommunityDb", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const databasePath = join(rootDir, "community-cmt_partial.db")
     await applyPartialCommunitySchema(databasePath, 1063)
 
     const client = createClient({ url: `file:${databasePath}` })
@@ -452,7 +452,7 @@ describe("openCommunityDb", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-db-factory-"))
     cleanupPaths.push(rootDir)
 
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const databasePath = join(rootDir, "community-cmt_partial.db")
     await applyPartialCommunitySchema(databasePath, 1079)
 
     const client = createClient({ url: `file:${databasePath}` })
@@ -700,7 +700,7 @@ describe("openCommunityDb", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-job-store-"))
     cleanupPaths.push(rootDir)
 
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
+    const databasePath = join(rootDir, "community-cmt_partial.db")
     await applyPartialCommunitySchema(databasePath)
 
     const db = await openCommunityDb(
