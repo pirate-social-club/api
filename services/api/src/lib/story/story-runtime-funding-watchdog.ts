@@ -44,6 +44,7 @@ const DEFAULT_WATCHDOG_TX_MARGIN = 3n
 type StoryRuntimeFundingWatchdogSignerReport = {
   name: StoryRuntimeSignerName
   address: `0x${string}`
+  explorerUrl: string | null
   balanceWei: bigint
   enforcedFloorWei: bigint
   warnThresholdWei: bigint
@@ -110,6 +111,15 @@ function resolveEnforcedFloorWei(env: Env, name: StoryRuntimeSignerName): bigint
     : resolveStoryRuntimeSignerMinBalanceWei(env)
 }
 
+export function resolveStorySignerExplorerUrl(
+  chainId: number,
+  address: `0x${string}`,
+): string | null {
+  if (chainId === 1315) return `https://aeneid.storyscan.io/address/${address}`
+  if (chainId === 1514) return `https://www.storyscan.io/address/${address}`
+  return null
+}
+
 export async function runStoryRuntimeFundingWatchdog(
   env: Env,
   options?: {
@@ -145,6 +155,7 @@ export async function runStoryRuntimeFundingWatchdog(
   )
   const worstCaseTxWei = resolveWorstCaseTxWei(env)
   const chainId = resolveStoryChainId(env)
+  const targetBalanceWei = resolveStoryRuntimeSignerTargetBalanceWei(env)
 
   const fetchBalances = options?.fetchBalances ?? getStoryRuntimeSignerBalances
   let balances
@@ -171,10 +182,12 @@ export async function runStoryRuntimeFundingWatchdog(
       ? Number(balanceMinusFloorWei / worstCaseTxWei)
       : (balanceMinusFloorWei < 0n ? -1 : 0)
     const severity: "critical" | "warning" = balance.balanceWei < enforcedFloorWei ? "critical" : "warning"
+    const explorerUrl = resolveStorySignerExplorerUrl(chainId, balance.address)
 
     const report: StoryRuntimeFundingWatchdogSignerReport = {
       name: balance.name,
       address: balance.address,
+      explorerUrl,
       balanceWei: balance.balanceWei,
       enforcedFloorWei,
       warnThresholdWei,
@@ -184,16 +197,26 @@ export async function runStoryRuntimeFundingWatchdog(
     }
     alerts.push(report)
 
+    const topUpToWarnThresholdWei = warnThresholdWei > balance.balanceWei
+      ? warnThresholdWei - balance.balanceWei
+      : 0n
+    const topUpToTargetWei = targetBalanceWei > balance.balanceWei
+      ? targetBalanceWei - balance.balanceWei
+      : 0n
     const structured = {
       signer: balance.name,
       address: balance.address,
+      explorer_url: explorerUrl,
       chain_id: chainId,
       severity,
       balance_ip: formatEther(balance.balanceWei),
       enforced_floor_ip: formatEther(enforcedFloorWei),
       warn_threshold_ip: formatEther(warnThresholdWei),
+      target_balance_ip: formatEther(targetBalanceWei),
       worst_case_tx_ip: formatEther(worstCaseTxWei),
       balance_minus_floor_ip: formatEther(balanceMinusFloorWei),
+      top_up_to_warn_threshold_ip: formatEther(topUpToWarnThresholdWei),
+      top_up_to_target_ip: formatEther(topUpToTargetWei),
       tx_headroom: txHeadroom,
     }
     // Distinct greppable prefix so it doesn't drown in the general cron noise.
@@ -204,8 +227,8 @@ export async function runStoryRuntimeFundingWatchdog(
     await captureScheduledWarning(
       env,
       severity === "critical"
-        ? `Story signer ${balance.name} is BELOW its funding floor — registrations are failing`
-        : `Story signer ${balance.name} funding runway is low`,
+        ? `Story signer ${balance.name} is BELOW its funding floor — fund ${balance.address}`
+        : `Story signer ${balance.name} funding runway is low — fund ${balance.address}`,
       STORY_RUNTIME_FUNDING_WATCHDOG_TASK,
       structured,
       { signer: balance.name, urgency: severity === "critical" ? "high" : "low" },

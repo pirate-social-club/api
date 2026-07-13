@@ -74,6 +74,18 @@ function alertDetailsLines(alert: OpsAlert): string[] {
     "tx_hash",
     "confirmed_block_number",
     "confirmed_block_hash",
+    "signer",
+    "address",
+    "explorer_url",
+    "chain_id",
+    "severity",
+    "balance_ip",
+    "enforced_floor_ip",
+    "warn_threshold_ip",
+    "target_balance_ip",
+    "top_up_to_warn_threshold_ip",
+    "top_up_to_target_ip",
+    "tx_headroom",
     "checked_communities",
     "failed_posts",
     "enqueued_jobs",
@@ -143,7 +155,7 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
         },
         subject,
         text,
-        html: `<pre>${escapeHtml(text)}</pre>`,
+        html: alertHtml(text),
       })
       logPipelineInfo("[ops-alerts] email sent", {
         count: alerts.length,
@@ -198,4 +210,20 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;")
+}
+
+function alertHtml(text: string): string {
+  const urlPattern = /https:\/\/[^\s<>"']+/g
+  let cursor = 0
+  let html = ""
+  for (const match of text.matchAll(urlPattern)) {
+    const index = match.index
+    const url = match[0]
+    html += escapeHtml(text.slice(cursor, index))
+    const escapedUrl = escapeHtml(url)
+    html += `<a href="${escapedUrl}">${escapedUrl}</a>`
+    cursor = index + url.length
+  }
+  html += escapeHtml(text.slice(cursor))
+  return `<pre>${html}</pre>`
 }

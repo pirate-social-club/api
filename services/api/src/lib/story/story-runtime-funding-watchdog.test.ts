@@ -5,6 +5,7 @@ import type { Env } from "../../env"
 import type { StoryRuntimeSignerBalance } from "./story-runtime-funding"
 import {
   resetStoryRuntimeFundingWatchdogStateForTests,
+  resolveStorySignerExplorerUrl,
   runStoryRuntimeFundingWatchdog,
 } from "./story-runtime-funding-watchdog"
 
@@ -47,6 +48,16 @@ beforeEach(() => {
 })
 
 describe("runStoryRuntimeFundingWatchdog", () => {
+  test("links known Story networks to their address explorers", () => {
+    expect(resolveStorySignerExplorerUrl(1315, ADDR["story-settlement"])).toBe(
+      `https://aeneid.storyscan.io/address/${ADDR["story-settlement"]}`,
+    )
+    expect(resolveStorySignerExplorerUrl(1514, ADDR["story-settlement"])).toBe(
+      `https://www.storyscan.io/address/${ADDR["story-settlement"]}`,
+    )
+    expect(resolveStorySignerExplorerUrl(1, ADDR["story-settlement"])).toBeNull()
+  })
+
   test("no alerts when every signer is above its warn threshold", async () => {
     const result = await runStoryRuntimeFundingWatchdog(baseEnv(), {
       fetchBalances: fetchStub({ "story-operator": "0.6", "story-cdr-writer": "0.4", "story-settlement": "0.4" }),
@@ -85,6 +96,9 @@ describe("runStoryRuntimeFundingWatchdog", () => {
     expect(result.alerts).toHaveLength(1)
     expect(result.alerts[0].name).toBe("story-settlement")
     expect(result.alerts[0].severity).toBe("critical")
+    expect(result.alerts[0].explorerUrl).toBe(
+      `https://aeneid.storyscan.io/address/${ADDR["story-settlement"]}`,
+    )
     expect(result.alerts[0].warnThresholdWei).toBe(parseEther(CDR_THRESHOLD_IP))
   })
 
