@@ -13,6 +13,8 @@ import {
   withRequestControlPlaneClients,
 } from "../runtime-deps"
 import { creditRewardCampaignQualification } from "./reward-campaign-reconciler"
+import { monitorRewardCampaigns } from "./reward-campaign-monitor"
+import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -28,6 +30,8 @@ const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
   REWARDS_IDENTITY_PROVIDER: "self",
+  REWARDS_CAMPAIGN_ALERT_OWNER: "reward-operator",
+  REWARDS_CAMPAIGN_ALERT_DESTINATION: "ops@example.test",
 } as unknown as Env
 
 function urlFor(db?: string): string {
@@ -156,6 +160,49 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
     `)
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(`
+      ALTER TABLE reward_campaigns
+        ADD COLUMN status_before_operational_hold TEXT,
+        ADD COLUMN operational_hold_reason TEXT,
+        ADD COLUMN operational_held_at TIMESTAMPTZ,
+        ADD COLUMN operational_held_by TEXT,
+        ADD COLUMN operational_recovered_at TIMESTAMPTZ,
+        ADD COLUMN operational_recovered_by TEXT;
+      CREATE TABLE reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
+        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
+        confirmed_block_number BIGINT, confirmed_block_hash TEXT
+      );
+      CREATE TABLE reward_campaign_incidents (
+        reward_campaign_incident_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
+        incident_kind TEXT NOT NULL, reason TEXT NOT NULL, details_json JSONB NOT NULL,
+        opened_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL,
+        occurrence_count INTEGER NOT NULL DEFAULT 1, alert_owner TEXT NOT NULL,
+        alert_destination TEXT NOT NULL, alerted_at TIMESTAMPTZ, resolved_at TIMESTAMPTZ,
+        resolved_by TEXT, resolution_note TEXT, incident_version INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE UNIQUE INDEX reward_campaign_incidents_one_open_kind
+        ON reward_campaign_incidents (reward_campaign_id, incident_kind) WHERE resolved_at IS NULL;
+      CREATE TABLE reward_campaign_monitor_state (
+        monitor_name TEXT PRIMARY KEY, last_successful_scan_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE VIEW reward_campaign_accounting_reconciliation AS
+      SELECT c.reward_campaign_id, c.funded_cents AS stored_funded_cents,
+        COALESCE(f.funded, 0) AS computed_funded_cents,
+        c.reserved_cents AS stored_reserved_cents,
+        COALESCE(r.reserved, 0) AS computed_reserved_cents,
+        c.credited_cents AS stored_credited_cents,
+        COALESCE(r.credited, 0) AS computed_credited_cents,
+        c.refunded_cents AS stored_refunded_cents, 0 AS computed_refunded_cents,
+        (c.funded_cents = COALESCE(f.funded, 0) AND c.reserved_cents = COALESCE(r.reserved, 0)
+          AND c.credited_cents = COALESCE(r.credited, 0) AND c.refunded_cents = 0) AS counters_match
+      FROM reward_campaigns c
+      LEFT JOIN (SELECT reward_campaign_id, SUM(expected_amount_cents) AS funded FROM reward_campaign_funding_effects WHERE status = 'confirmed' GROUP BY reward_campaign_id) f USING (reward_campaign_id)
+      LEFT JOIN (SELECT reward_campaign_id,
+        SUM(CASE WHEN status = 'reserved' THEN amount_cents ELSE 0 END) AS reserved,
+        SUM(CASE WHEN status = 'credited' THEN amount_cents ELSE 0 END) AS credited
+        FROM reward_campaign_reservations GROUP BY reward_campaign_id) r USING (reward_campaign_id);
+    `)
     await db.unsafe(
       `INSERT INTO users VALUES ($1, $2)`,
       ["usr_reward_pg", JSON.stringify({
@@ -473,5 +520,169 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     } finally {
       await db.end()
     }
+  })
+
+  test("persistent accounting mismatch holds only on the second scan and recovery clears hold metadata", async () => {
+    await withProductionPostgresClient(async (client) => {
+      await client.execute({
+        sql: `UPDATE reward_campaigns SET status = 'paused', funded_cents = 50, reserved_cents = 10 WHERE reward_campaign_id = 'rcp_invariants_pg'`,
+        args: [],
+      })
+      const first = await monitorRewardCampaigns({ env: PG_ENV, client, now: "2026-07-10T12:10:00.000Z" })
+      expect(first.held).toBe(0)
+      const overlapping = await monitorRewardCampaigns({ env: PG_ENV, client, now: "2026-07-10T12:10:20.000Z" })
+      expect(overlapping.held).toBe(0)
+      let campaign = await client.execute({ sql: `SELECT status FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'`, args: [] })
+      expect(campaign.rows[0]?.status).toBe("paused")
+      const second = await monitorRewardCampaigns({ env: PG_ENV, client, now: "2026-07-10T12:11:00.000Z" })
+      expect(second.held).toBeGreaterThanOrEqual(1)
+      campaign = await client.execute({ sql: `SELECT status, status_before_operational_hold FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'`, args: [] })
+      expect(campaign.rows[0]).toMatchObject({ status: "operational_hold", status_before_operational_hold: "paused" })
+      const heldCredit = await creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: "qual-held-pg", userId: "usr_reward_pg", communityId: "cmt_reward_pg",
+          postId: "pst_invariants_pg", artifactBundleId: "sab_invariants_pg",
+          activity: "study", qualifiedAt: NOW, periodKey: "2026-07-10",
+          policyVersion: "study-v1",
+        },
+        now: NOW,
+      })
+      expect(heldCredit.result).toBe("no_campaign")
+      const heldReservations = await client.execute({
+        sql: `SELECT COUNT(*) AS count FROM reward_campaign_reservations WHERE reward_campaign_id = 'rcp_invariants_pg'`,
+        args: [],
+      })
+      expect(Number(heldReservations.rows[0]?.count)).toBe(0)
+
+      await client.execute({
+        sql: `UPDATE reward_campaigns SET funded_cents = 0, reserved_cents = 0 WHERE reward_campaign_id = 'rcp_invariants_pg'`,
+        args: [],
+      })
+      const incidents = await client.execute({
+        sql: `SELECT reward_campaign_incident_id, incident_version FROM reward_campaign_incidents WHERE reward_campaign_id = 'rcp_invariants_pg' AND incident_kind = 'accounting_mismatch' AND resolved_at IS NULL`,
+        args: [],
+      })
+      const incident = incidents.rows[0] as Record<string, unknown>
+      await expect(recoverRewardCampaignIncident({
+        env: PG_ENV, client, campaignId: "rcp_invariants_pg",
+        incidentId: String(incident.reward_campaign_incident_id),
+        incidentVersion: Number(incident.incident_version) + 1, operatorActorId: "operator-test",
+        resolutionNote: "Stale recovery attempt", now: "2026-07-10T12:12:00.000Z",
+      })).rejects.toThrow("incident changed")
+      await recoverRewardCampaignIncident({
+        env: PG_ENV, client, campaignId: "rcp_invariants_pg",
+        incidentId: String(incident.reward_campaign_incident_id),
+        incidentVersion: Number(incident.incident_version), operatorActorId: "operator-test",
+        resolutionNote: "Authoritative counters restored", now: "2026-07-10T12:12:00.000Z",
+      })
+      campaign = await client.execute({
+        sql: `SELECT status, status_before_operational_hold, operational_held_at, operational_held_by, operational_hold_reason FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'`,
+        args: [],
+      })
+      expect(campaign.rows[0]).toEqual({
+        status: "paused", status_before_operational_hold: null, operational_held_at: null,
+        operational_held_by: null, operational_hold_reason: null,
+      })
+    })
+  })
+
+  test("recovery rechecks accounting after waiting for the campaign row lock", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key, community_id,
+          post_id, song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
+          daily_reward_cents, reward_period_cap_cents, budget_cents, funded_cents,
+          reserved_cents, credited_cents, paid_cents, refunded_cents, terms_version,
+          terms_hash, starts_at, ends_at, updated_at, status_before_operational_hold,
+          operational_hold_reason, operational_held_at, operational_held_by
+        ) VALUES (
+          'rcp_recovery_race_pg', 'usr_reward_pg', 'recovery-race-pg', 'cmt_reward_pg',
+          'pst_recovery_race_pg', 'sab_recovery_race_pg', 'usr_reward_pg',
+          'operational_hold', 'study', 40, 40, 100, 0, 0, 0, 0, 0, 1,
+          'terms-recovery-race', '2026-07-01T00:00:00.000Z',
+          '2026-07-31T00:00:00.000Z', $1, 'active', 'accounting mismatch', $2,
+          'scheduled_monitor'
+        )
+      `, [NOW, NOW])
+      await db.unsafe(`
+        INSERT INTO reward_campaign_incidents (
+          reward_campaign_incident_id, reward_campaign_id, incident_kind, reason,
+          details_json, opened_at, last_seen_at, alert_owner, alert_destination
+        ) VALUES (
+          'rci_recovery_race_pg', 'rcp_recovery_race_pg', 'accounting_mismatch',
+          'campaign_accounting_counters_mismatch', '{}', $1, $1,
+          'reward-operator', 'ops@example.test'
+        )
+      `, [NOW])
+      await db.unsafe("BEGIN")
+      await db.unsafe(`SELECT reward_campaign_id FROM reward_campaigns WHERE reward_campaign_id = 'rcp_recovery_race_pg' FOR UPDATE`)
+      await db.unsafe(`UPDATE reward_campaigns SET funded_cents = 10 WHERE reward_campaign_id = 'rcp_recovery_race_pg'`)
+
+      const recovery = withProductionPostgresClient((client) => recoverRewardCampaignIncident({
+        env: PG_ENV, client, campaignId: "rcp_recovery_race_pg",
+        incidentId: "rci_recovery_race_pg", incidentVersion: 1,
+        operatorActorId: "operator-test", resolutionNote: "Attempt while writer commits",
+        now: "2026-07-10T12:30:00.000Z",
+      }))
+      await Bun.sleep(50)
+      await db.unsafe("COMMIT")
+      await expect(recovery).rejects.toThrow("accounting is not healthy")
+      const rows = await db.unsafe(`SELECT status FROM reward_campaigns WHERE reward_campaign_id = 'rcp_recovery_race_pg'`) as Array<{ status: string }>
+      expect(rows[0]?.status).toBe("operational_hold")
+    } finally {
+      await db.unsafe("ROLLBACK").catch(() => {})
+      await db.end()
+    }
+  })
+
+  test("missing provenance records without holding and terminal mismatches preserve terminal state", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key, community_id,
+          post_id, song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
+          daily_reward_cents, reward_period_cap_cents, budget_cents, funded_cents,
+          reserved_cents, credited_cents, paid_cents, refunded_cents, terms_version,
+          terms_hash, starts_at, ends_at, updated_at
+        ) VALUES
+          ('rcp_provenance_pg', 'usr_reward_pg', 'provenance-pg', 'cmt_reward_pg',
+           'pst_provenance_pg', 'sab_provenance_pg', 'usr_reward_pg', 'active', 'study',
+           40, 40, 40, 40, 0, 0, 0, 0, 1, 'terms-provenance',
+           '2026-07-01T00:00:00.000Z', '2026-07-31T00:00:00.000Z', $1),
+          ('rcp_terminal_pg', 'usr_reward_pg', 'terminal-pg', 'cmt_reward_pg',
+           'pst_terminal_pg', 'sab_terminal_pg', 'usr_reward_pg', 'ended', 'study',
+           40, 40, 40, 40, 0, 0, 0, 0, 1, 'terms-terminal',
+           '2026-07-01T00:00:00.000Z', '2026-07-09T00:00:00.000Z', $1)
+      `, [NOW])
+      await db.unsafe(`
+        INSERT INTO reward_campaign_funding_effects (
+          reward_campaign_funding_effect_id, reward_campaign_id, tx_hash, status, expected_amount_cents
+        ) VALUES ('rcf_provenance_pg', 'rcp_provenance_pg', $1, 'confirmed', 40)
+      `, [`0x${"1".repeat(64)}`])
+    } finally {
+      await db.end()
+    }
+    await withProductionPostgresClient(async (client) => {
+      await monitorRewardCampaigns({ env: PG_ENV, client, now: "2026-07-10T13:00:00.000Z" })
+      await monitorRewardCampaigns({ env: PG_ENV, client, now: "2026-07-10T13:01:00.000Z" })
+      const campaigns = await client.execute({
+        sql: `SELECT reward_campaign_id, status FROM reward_campaigns WHERE reward_campaign_id IN ('rcp_provenance_pg', 'rcp_terminal_pg') ORDER BY reward_campaign_id`,
+        args: [],
+      })
+      expect(campaigns.rows).toEqual([
+        { reward_campaign_id: "rcp_provenance_pg", status: "active" },
+        { reward_campaign_id: "rcp_terminal_pg", status: "ended" },
+      ])
+      const provenance = await client.execute({
+        sql: `SELECT occurrence_count FROM reward_campaign_incidents WHERE reward_campaign_id = 'rcp_provenance_pg' AND incident_kind = 'funding_provenance_missing' AND resolved_at IS NULL`,
+        args: [],
+      })
+      expect(Number(provenance.rows[0]?.occurrence_count)).toBe(2)
+    })
   })
 })

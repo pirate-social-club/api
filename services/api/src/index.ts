@@ -60,6 +60,7 @@ import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-fundin
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
+import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns, type IncidentKind } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
@@ -667,6 +668,44 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
   }
 }
 
+async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
+  try {
+    const client = getControlPlaneClient(env)
+    const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
+    if (summary.heartbeat_stale) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity monitor heartbeat was stale",
+        "reward_campaign_integrity_heartbeat",
+        { errors: 1 },
+        { urgency: "high" },
+      )
+    }
+    if (summary.incidents.length > 0) {
+      console.warn("[reward-campaigns] integrity incidents", JSON.stringify(summary))
+      for (const incident of summary.incidents) {
+        const delivered = await captureScheduledWarning(
+          env,
+          "Reward campaign integrity incident",
+          `reward_campaign_integrity:${incident.campaign_id}:${incident.kind}`,
+          { campaign_id: incident.campaign_id, incident_kind: incident.kind, reason: incident.reason },
+          { urgency: summary.held > 0 ? "high" : "low" },
+        )
+        if (delivered) {
+          await markRewardCampaignIncidentAlerted({
+            client,
+            campaignId: incident.campaign_id,
+            kind: incident.kind as IncidentKind,
+          })
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[reward-campaigns] integrity monitor failed", error)
+    await captureScheduledError(env, error, "reward_campaign_integrity_monitor")
+  }
+}
+
 async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
@@ -682,6 +721,9 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
       summary.ingested_qualifications > 0
       || summary.credited_events > 0
       || summary.skipped_budget > 0
+      || summary.skipped_expired > 0
+      || summary.skipped_owner_blocked > 0
+      || summary.skipped_no_campaign > 0
       || summary.failed_communities > 0
       || summary.errors > 0
     )) {
@@ -751,6 +793,7 @@ const handler: ExportedHandler<Env> = {
       // reconciliation can run longer than the task-start deadline, so placing it
       // first would still starve newly registered royalty allocations.
       { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
+      { name: "monitor_reward_campaigns", run: () => monitorScheduledRewardCampaigns(env) },
       ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
     ]
     const generalJobs: NamedTask[] = [

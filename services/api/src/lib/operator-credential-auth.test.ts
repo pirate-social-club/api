@@ -4,6 +4,7 @@ import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   hashOperatorCredentialSecret,
   requireOperatorScope,
+  REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
   type OperatorActorContext,
 } from "./operator-credential-auth"
 import { authenticateAdminToken } from "./auth-middleware"
@@ -315,6 +316,23 @@ describe("requireOperatorScope", () => {
       scopes: [BOOKING_SETTLEMENT_RESOLVE_SCOPE],
     }
     expect(() => requireOperatorScope(actor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)).not.toThrow()
+  })
+
+  test("requires the dedicated reward incident recovery scope", () => {
+    const bookingOnly: OperatorActorContext = {
+      authType: "operator_credential",
+      operatorCredentialId: "opc_booking",
+      operatorActorId: "svc_booking_operator",
+      scopes: [BOOKING_SETTLEMENT_RESOLVE_SCOPE],
+    }
+    const rewardOperator: OperatorActorContext = {
+      ...bookingOnly,
+      operatorCredentialId: "opc_rewards",
+      operatorActorId: "svc_reward_operator",
+      scopes: [REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE],
+    }
+    expect(() => requireOperatorScope(bookingOnly, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE)).toThrow("scope")
+    expect(() => requireOperatorScope(rewardOperator, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE)).not.toThrow()
   })
 
   test("a generic admin token cannot satisfy money-resolution scope", () => {

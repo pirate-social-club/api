@@ -350,8 +350,13 @@ export async function reconcileRewardCampaigns(input: {
   now?: string
 }): Promise<RewardCampaignReconciliationSummary> {
   const campaigns = resolveRewardCampaignConfig(input.env)
+  const alertOwnershipConfigured = Boolean(
+    String(input.env.REWARDS_CAMPAIGN_ALERT_OWNER ?? "").trim()
+    && String(input.env.REWARDS_CAMPAIGN_ALERT_DESTINATION ?? "").trim(),
+  )
   const enabled = campaigns.enabled && literalTrue(input.env.REWARDS_ACCRUAL_ENABLED)
     && resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER) !== null
+    && alertOwnershipConfigured
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
