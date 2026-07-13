@@ -3,7 +3,7 @@ import { HttpError } from "./errors"
 import { isReadOnlyStatement, readOnlyVerb } from "@pirate/api-shared"
 
 /** The read surface shared by a D1 database binding and a D1 session. */
-export interface D1ReadTarget {
+interface D1ReadTarget {
   prepare(query: string): D1PreparedStatement
   batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>
 }
