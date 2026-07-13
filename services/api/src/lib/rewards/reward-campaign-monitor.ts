@@ -1,10 +1,16 @@
-import { JsonRpcProvider } from "ethers"
 import type { Env } from "../../env"
 import { makeId, nowIso } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
+import { requireRewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+import {
+  checkRewardCampaignFundingFinality,
+  createRewardCampaignFinalityProvider,
+  type RewardCampaignFinalityProvider,
+  verifyRewardCampaignFinalityChain,
+} from "./reward-campaign-finality"
 
 export type RewardCampaignMonitorSummary = {
   scanned: number
@@ -14,14 +20,8 @@ export type RewardCampaignMonitorSummary = {
   missing_provenance: number
   transient_finality_checks: number
   heartbeat_stale: boolean
-  incidents: Array<{ campaign_id: string; kind: string; reason: string }>
-}
-
-function requiredOwnership(env: Env): { owner: string; destination: string } {
-  const owner = String(env.REWARDS_CAMPAIGN_ALERT_OWNER ?? "").trim()
-  const destination = String(env.REWARDS_CAMPAIGN_ALERT_DESTINATION ?? "").trim()
-  if (!owner || !destination) throw new Error("reward_campaign_alert_ownership_missing")
-  return { owner, destination }
+  scan_successful: boolean
+  incidents: Array<{ incident_id: string; campaign_id: string; kind: IncidentKind; reason: string }>
 }
 
 export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | "funding_provenance_missing"
@@ -29,13 +29,13 @@ export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | 
 async function recordIncidentCandidate(input: {
   client: Client; campaignId: string; kind: IncidentKind
   reason: string; details: Record<string, unknown>; owner: string; destination: string; now: string; rowLocks: boolean
-}): Promise<boolean> {
+}): Promise<{ incidentId: string; held: boolean } | null> {
   return withTransaction(input.client, "write", async (tx) => {
     const locked = await tx.execute({
       sql: `SELECT status FROM reward_campaigns WHERE reward_campaign_id = ?1${input.rowLocks ? " FOR UPDATE" : ""}`,
       args: [input.campaignId],
     })
-    if (!locked.rows[0]) return false
+    if (!locked.rows[0]) return null
     // The broad scan is only a candidate finder. Accounting evidence must still be bad
     // after acquiring the same campaign lock used by the credit writer.
     if (input.kind === "accounting_mismatch") {
@@ -43,7 +43,7 @@ async function recordIncidentCandidate(input: {
         sql: `SELECT counters_match FROM reward_campaign_accounting_reconciliation WHERE reward_campaign_id = ?1`,
         args: [input.campaignId],
       })
-      if (current.rows[0]?.counters_match !== false) return false
+      if (current.rows[0]?.counters_match !== false) return null
     }
     await tx.execute({
       sql: `
@@ -53,40 +53,52 @@ async function recordIncidentCandidate(input: {
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8)
         ON CONFLICT (reward_campaign_id, incident_kind) WHERE resolved_at IS NULL
         DO UPDATE SET
-          last_seen_at = CASE
-            WHEN excluded.last_seen_at >= reward_campaign_incidents.last_seen_at + INTERVAL '55 seconds'
-              THEN excluded.last_seen_at
-            ELSE reward_campaign_incidents.last_seen_at
-          END,
+          last_seen_at = GREATEST(reward_campaign_incidents.last_seen_at, excluded.last_seen_at),
           occurrence_count = reward_campaign_incidents.occurrence_count + CASE
-            WHEN excluded.last_seen_at >= reward_campaign_incidents.last_seen_at + INTERVAL '55 seconds'
-              THEN 1
+            WHEN excluded.last_seen_at <= reward_campaign_incidents.last_seen_at THEN 0
+            WHEN reward_campaign_incidents.occurrence_count = 1
+              AND excluded.last_seen_at >= reward_campaign_incidents.opened_at + INTERVAL '55 seconds' THEN 1
+            WHEN reward_campaign_incidents.occurrence_count > 1
+              AND excluded.last_seen_at >= reward_campaign_incidents.last_seen_at + INTERVAL '55 seconds' THEN 1
             ELSE 0
-          END,
-          details_json = excluded.details_json
+          END
       `,
       args: [makeId("rci"), input.campaignId, input.kind, input.reason, JSON.stringify(input.details), input.now, input.owner, input.destination],
     })
     const incident = await tx.execute({
-      sql: `SELECT occurrence_count FROM reward_campaign_incidents WHERE reward_campaign_id = ?1 AND incident_kind = ?2 AND resolved_at IS NULL`,
+      sql: `SELECT reward_campaign_incident_id, occurrence_count FROM reward_campaign_incidents WHERE reward_campaign_id = ?1 AND incident_kind = ?2 AND resolved_at IS NULL`,
       args: [input.campaignId, input.kind],
     })
+    const incidentId = requiredString(incident.rows[0], "reward_campaign_incident_id")
     if (
       Number(rowValue(incident.rows[0], "occurrence_count")) < 2
       || input.kind === "funding_provenance_missing"
-    ) return false
+    ) return { incidentId, held: false }
     // Incidents remain auditable for terminal campaigns, but a hold may only stop a
     // lifecycle that can still admit rewards. Never destroy ended/exhausted state.
     const held = await tx.execute({
       sql: `UPDATE reward_campaigns SET status_before_operational_hold = status, status = 'operational_hold', operational_hold_reason = ?2, operational_held_at = COALESCE(operational_held_at, ?3), operational_held_by = 'scheduled_monitor', updated_at = ?3 WHERE reward_campaign_id = ?1 AND status IN ('scheduled', 'active', 'paused') RETURNING reward_campaign_id`,
       args: [input.campaignId, input.reason, input.now],
     })
-    return (held.rowsAffected ?? held.rows.length) > 0
+    return { incidentId, held: (held.rowsAffected ?? held.rows.length) > 0 }
   })
 }
 
-export async function monitorRewardCampaigns(input: { env: Env; client: Client; now?: string; limit?: number }): Promise<RewardCampaignMonitorSummary> {
-  const ownership = requiredOwnership(input.env)
+function rotatingPageOffset(now: string, total: number, limit: number): number {
+  const pages = Math.max(1, Math.ceil(total / limit))
+  const minute = Math.floor(Date.parse(now) / 60_000)
+  const page = Number.isSafeInteger(minute) ? ((minute % pages) + pages) % pages : 0
+  return page * limit
+}
+
+export async function monitorRewardCampaigns(input: {
+  env: Env
+  client: Client
+  now?: string
+  limit?: number
+  finalityProvider?: RewardCampaignFinalityProvider
+}): Promise<RewardCampaignMonitorSummary> {
+  const ownership = requireRewardCampaignAlertOwnership(input.env)
   const now = input.now ?? nowIso()
   const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)))
   const heartbeat = await input.client.execute({
@@ -98,6 +110,7 @@ export async function monitorRewardCampaigns(input: { env: Env; client: Client; 
     scanned: 0, held: 0, accounting_mismatches: 0, finality_failures: 0,
     missing_provenance: 0, transient_finality_checks: 0,
     heartbeat_stale: Boolean(lastSuccess && Date.parse(now) - Date.parse(lastSuccess) > 20 * 60_000),
+    scan_successful: false,
     incidents: [],
   }
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
@@ -123,78 +136,106 @@ export async function monitorRewardCampaigns(input: { env: Env; client: Client; 
     `,
     args: [now, limit],
   })
+  const mismatchCount = await input.client.execute({
+    sql: `SELECT COUNT(*) AS count FROM reward_campaign_accounting_reconciliation WHERE counters_match = FALSE`, args: [],
+  })
+  const mismatchTotal = Number(rowValue(mismatchCount.rows[0], "count") ?? 0)
   const mismatches = await input.client.execute({
-    sql: `SELECT * FROM reward_campaign_accounting_reconciliation WHERE counters_match = FALSE ORDER BY reward_campaign_id LIMIT ?1`, args: [limit],
+    sql: `SELECT * FROM reward_campaign_accounting_reconciliation WHERE counters_match = FALSE ORDER BY reward_campaign_id LIMIT ?1 OFFSET ?2`,
+    args: [limit, rotatingPageOffset(now, mismatchTotal, limit)],
   })
   for (const row of mismatches.rows) {
     const campaignId = requiredString(row, "reward_campaign_id")
     summary.accounting_mismatches += 1
     const details = { stored_funded_cents: rowValue(row, "stored_funded_cents"), computed_funded_cents: rowValue(row, "computed_funded_cents"), stored_reserved_cents: rowValue(row, "stored_reserved_cents"), computed_reserved_cents: rowValue(row, "computed_reserved_cents"), stored_credited_cents: rowValue(row, "stored_credited_cents"), computed_credited_cents: rowValue(row, "computed_credited_cents") }
-    if (await recordIncidentCandidate({ client: input.client, campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch", details, ...ownership, now, rowLocks })) summary.held += 1
-    summary.incidents.push({ campaign_id: campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch" })
+    const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch", details, ...ownership, now, rowLocks })
+    if (!recorded) continue
+    if (recorded.held) summary.held += 1
+    summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch" })
   }
+  const effectFilter = `f.status = 'confirmed' AND c.status IN ('scheduled','active','paused','operational_hold','exhausted','ended')`
+  const effectCount = await input.client.execute({
+    sql: `SELECT COUNT(*) AS count FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE ${effectFilter}`,
+    args: [],
+  })
+  const effectTotal = Number(rowValue(effectCount.rows[0], "count") ?? 0)
   const effects = await input.client.execute({
-    sql: `SELECT f.reward_campaign_id, f.tx_hash, f.confirmed_block_number, f.confirmed_block_hash FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE f.status = 'confirmed' AND c.status IN ('scheduled','active','paused','operational_hold','exhausted','ended') ORDER BY f.reward_campaign_id LIMIT ?1`, args: [limit],
+    sql: `SELECT f.reward_campaign_funding_effect_id, f.reward_campaign_id, f.tx_hash, f.confirmed_block_number, f.confirmed_block_hash FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE ${effectFilter} ORDER BY f.reward_campaign_id, f.reward_campaign_funding_effect_id LIMIT ?1 OFFSET ?2`,
+    args: [limit, rotatingPageOffset(now, effectTotal, limit)],
   })
   const rpcUrl = String(input.env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
   const chainId = Number(input.env.REWARDS_CAMPAIGN_CHAIN_ID)
-  const provider = rpcUrl && Number.isSafeInteger(chainId) ? new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true }) : null
+  const provider = input.finalityProvider
+    ?? (rpcUrl && Number.isSafeInteger(chainId) && chainId > 0
+      ? createRewardCampaignFinalityProvider(rpcUrl, chainId)
+      : null)
+  const hasFinalityCandidates = effects.rows.some((row) => (
+    rowValue(row, "confirmed_block_number") != null
+    && Boolean(stringOrNull(rowValue(row, "confirmed_block_hash")))
+  ))
+  const chainVerified = provider && Number.isSafeInteger(chainId) && chainId > 0 && hasFinalityCandidates
+    ? await verifyRewardCampaignFinalityChain(provider, chainId)
+    : !hasFinalityCandidates
   for (const row of effects.rows) {
     summary.scanned += 1
     const campaignId = requiredString(row, "reward_campaign_id")
     if (rowValue(row, "confirmed_block_number") == null || !stringOrNull(rowValue(row, "confirmed_block_hash"))) {
       const reason = "confirmed_funding_provenance_missing"
       summary.missing_provenance += 1
-      if (await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_provenance_missing", reason, details: { tx_hash: stringOrNull(rowValue(row, "tx_hash")) }, ...ownership, now, rowLocks })) summary.held += 1
-      summary.incidents.push({ campaign_id: campaignId, kind: "funding_provenance_missing", reason })
+      const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_provenance_missing", reason, details: { tx_hash: stringOrNull(rowValue(row, "tx_hash")) }, ...ownership, now, rowLocks })
+      if (!recorded) continue
+      if (recorded.held) summary.held += 1
+      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_provenance_missing", reason })
       continue
     }
-    try {
-      if (!provider) throw new Error("reward_campaign_rpc_not_configured")
-      const receipt = await provider.getTransactionReceipt(requiredString(row, "tx_hash"))
-      const blockNumber = Number(rowValue(row, "confirmed_block_number"))
-      const expectedHash = requiredString(row, "confirmed_block_hash").toLowerCase()
-      if (!receipt) {
-        summary.transient_finality_checks += 1
-        continue
-      }
-      const canonical = await provider.getBlock(blockNumber)
-      if (!canonical?.hash) {
-        summary.transient_finality_checks += 1
-        continue
-      }
-      if (receipt.blockNumber !== blockNumber || receipt.blockHash.toLowerCase() !== expectedHash || canonical.hash.toLowerCase() !== expectedHash) {
-        const reason = "confirmed_funding_receipt_not_canonical"
-        const details = { tx_hash: stringOrNull(rowValue(row, "tx_hash")), confirmed_block_number: blockNumber, confirmed_block_hash: expectedHash }
-        summary.finality_failures += 1
-        if (await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_finality_failure", reason, details, ...ownership, now, rowLocks })) summary.held += 1
-        summary.incidents.push({ campaign_id: campaignId, kind: "funding_finality_failure", reason })
-      }
-    } catch {
+    if (!provider || !chainVerified) {
       summary.transient_finality_checks += 1
+      continue
+    }
+    const blockNumber = Number(rowValue(row, "confirmed_block_number"))
+    const expectedHash = requiredString(row, "confirmed_block_hash").toLowerCase()
+    const result = await checkRewardCampaignFundingFinality({
+      provider,
+      txHash: requiredString(row, "tx_hash"),
+      confirmedBlockNumber: blockNumber,
+      confirmedBlockHash: expectedHash,
+    })
+    if (result.kind === "transient") {
+      summary.transient_finality_checks += 1
+      continue
+    }
+    if (result.kind === "definitive_loss") {
+      const details = { tx_hash: stringOrNull(rowValue(row, "tx_hash")), confirmed_block_number: blockNumber, confirmed_block_hash: expectedHash }
+      summary.finality_failures += 1
+      const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_finality_failure", reason: result.reason, details, ...ownership, now, rowLocks })
+      if (!recorded) continue
+      if (recorded.held) summary.held += 1
+      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_finality_failure", reason: result.reason })
     }
   }
-  await input.client.execute({
-    sql: `
-      INSERT INTO reward_campaign_monitor_state (monitor_name, last_successful_scan_at, updated_at)
-      VALUES ('reward_campaign_integrity', ?1, ?1)
-      ON CONFLICT (monitor_name) DO UPDATE SET
-        last_successful_scan_at = excluded.last_successful_scan_at,
-        updated_at = excluded.updated_at
-    `,
-    args: [now],
-  })
+  summary.scan_successful = summary.transient_finality_checks === 0
+  if (summary.scan_successful) {
+    await input.client.execute({
+      sql: `
+        INSERT INTO reward_campaign_monitor_state (monitor_name, last_successful_scan_at, updated_at)
+        VALUES ('reward_campaign_integrity', ?1, ?1)
+        ON CONFLICT (monitor_name) DO UPDATE SET
+          last_successful_scan_at = excluded.last_successful_scan_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [now],
+    })
+  }
   return summary
 }
 
 export async function markRewardCampaignIncidentAlerted(input: {
   client: Client
-  campaignId: string
-  kind: IncidentKind
+  incidentId: string
   alertedAt?: string
 }): Promise<void> {
   await input.client.execute({
-    sql: `UPDATE reward_campaign_incidents SET alerted_at = ?3 WHERE resolved_at IS NULL AND reward_campaign_id = ?1 AND incident_kind = ?2`,
-    args: [input.campaignId, input.kind, input.alertedAt ?? nowIso()],
+    sql: `UPDATE reward_campaign_incidents SET alerted_at = COALESCE(alerted_at, ?2) WHERE resolved_at IS NULL AND reward_campaign_incident_id = ?1`,
+    args: [input.incidentId, input.alertedAt ?? nowIso()],
   })
 }

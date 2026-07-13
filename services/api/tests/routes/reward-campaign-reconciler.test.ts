@@ -30,6 +30,7 @@ function env() {
     REWARDS_CAMPAIGN_RPC_URL: "https://base-sepolia.example.test",
     REWARDS_CAMPAIGN_ALERT_OWNER: "reward-operator",
     REWARDS_CAMPAIGN_ALERT_DESTINATION: "ops@example.test",
+    OPS_ALERT_WEBHOOK_URL: "https://ops.example.test/reward-alerts",
     REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
     REWARDS_CAMPAIGN_MIN_BUDGET_CENTS: "1",
     REWARDS_CAMPAIGN_MAX_BUDGET_CENTS: "1000000",
@@ -79,6 +80,19 @@ describe("reward campaign reconciler", () => {
       controlPlaneClient: {} as never,
     })
     expect(withoutAlertOwnership.enabled).toBe(false)
+    expect(listed).toBe(false)
+
+    const withoutDeliverySink = await reconcileRewardCampaigns({
+      env: { ...env(), OPS_ALERT_WEBHOOK_URL: undefined } as never,
+      communityRepository: {
+        listActiveCommunities: async () => {
+          listed = true
+          return []
+        },
+      } as never,
+      controlPlaneClient: {} as never,
+    })
+    expect(withoutDeliverySink.enabled).toBe(false)
     expect(listed).toBe(false)
   })
 

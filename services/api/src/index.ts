@@ -60,7 +60,7 @@ import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-fundin
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
-import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns, type IncidentKind } from "./lib/rewards/reward-campaign-monitor"
+import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
@@ -681,21 +681,29 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
         { urgency: "high" },
       )
     }
+    if (summary.transient_finality_checks > 0) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity scan had indeterminate finality checks",
+        "reward_campaign_integrity_rpc",
+        { errors: summary.transient_finality_checks },
+        { urgency: "high" },
+      )
+    }
     if (summary.incidents.length > 0) {
       console.warn("[reward-campaigns] integrity incidents", JSON.stringify(summary))
       for (const incident of summary.incidents) {
         const delivered = await captureScheduledWarning(
           env,
           "Reward campaign integrity incident",
-          `reward_campaign_integrity:${incident.campaign_id}:${incident.kind}`,
+          `reward_campaign_integrity:${incident.incident_id}`,
           { campaign_id: incident.campaign_id, incident_kind: incident.kind, reason: incident.reason },
-          { urgency: summary.held > 0 ? "high" : "low" },
+          { urgency: incident.kind === "funding_provenance_missing" ? "low" : "high" },
         )
         if (delivered) {
           await markRewardCampaignIncidentAlerted({
             client,
-            campaignId: incident.campaign_id,
-            kind: incident.kind as IncidentKind,
+            incidentId: incident.incident_id,
           })
         }
       }
@@ -758,6 +766,21 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // promptly on normal completion.
 const SCHEDULED_LEASE_TTL_MS = 120_000
 
+type ScheduledPriorityJobName =
+  | "reconcile_booking_settlements"
+  | "reconcile_royalty_allocation_verifications"
+  | "reconcile_d1_provisioning"
+  | "monitor_reward_campaigns"
+
+export function scheduledPriorityJobNames(canRunD1Reconciler: boolean): ScheduledPriorityJobName[] {
+  return [
+    "reconcile_booking_settlements",
+    "reconcile_royalty_allocation_verifications",
+    ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
+    "monitor_reward_campaigns",
+  ]
+}
+
 const handler: ExportedHandler<Env> = {
   fetch: fetchApi,
 
@@ -787,15 +810,17 @@ const handler: ExportedHandler<Env> = {
     // maintenance tail. Live ticks have shown the deadline deferring settlement, D1
     // provisioning, and royalty-allocation verification after slower community/feed work,
     // so keep them first while lower-priority jobs rotate.
-    const priorityJobs: NamedTask[] = [
-      { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
-      // Concurrency is two: keep royalty verification in the second start slot. D1
-      // reconciliation can run longer than the task-start deadline, so placing it
-      // first would still starve newly registered royalty allocations.
-      { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
-      { name: "monitor_reward_campaigns", run: () => monitorScheduledRewardCampaigns(env) },
-      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
-    ]
+    const priorityJobRuns: Record<ScheduledPriorityJobName, () => Promise<void>> = {
+      reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
+      reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
+      reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
+      monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
+    }
+    // Concurrency is two: royalty verification keeps the second start slot. D1
+    // remains ahead of the slower, latency-tolerant reward monitor so RPC latency
+    // cannot reintroduce provisioning starvation at the task-start deadline.
+    const priorityJobs: NamedTask[] = scheduledPriorityJobNames(canRunD1Reconciler)
+      .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
