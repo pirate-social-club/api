@@ -18,6 +18,14 @@ const PURCHASE_ENTITLEMENT_TOKEN_ABI = [
   "function mintEntitlement(address to, uint256 tokenId, bytes32 purchaseRef) returns (bool)",
 ] as const
 
+export const STORY_ROYALTY_PAYMENT_WIP_OPTIONS = {
+  enableAutoApprove: true,
+  enableAutoWrapIp: true,
+  // Aeneid can keep reverting an otherwise valid aggregate3Value preflight
+  // after registration. Confirm wrap and approval before simulating payment.
+  useMulticallWhenPossible: false,
+} as const
+
 export type StoryRoyaltyPurchaseSettlementInput = {
   env: Env
   purchaseRef: `0x${string}`
@@ -147,10 +155,7 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
       token: WIP_TOKEN_ADDRESS,
       amount: input.amount,
       options: {
-        wipOptions: {
-          enableAutoWrapIp: true,
-          enableAutoApprove: true,
-        },
+        wipOptions: STORY_ROYALTY_PAYMENT_WIP_OPTIONS,
       },
     }),
     { maxAttempts: 24 },

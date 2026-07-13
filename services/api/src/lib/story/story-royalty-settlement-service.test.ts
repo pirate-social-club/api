@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import {
+  STORY_ROYALTY_PAYMENT_WIP_OPTIONS,
   isRetryableStoryRoyaltyPreflightError,
   withStoryRoyaltyPreflightRetry,
 } from "./story-royalty-settlement-service"
+
+test("Story royalty payment confirms wrap and approval before payment", () => {
+  expect(STORY_ROYALTY_PAYMENT_WIP_OPTIONS).toEqual({
+    enableAutoApprove: true,
+    enableAutoWrapIp: true,
+    useMulticallWhenPossible: false,
+  })
+})
 
 describe("Story royalty preflight retry", () => {
   test("retries a transient preflight revert until claimable revenue is visible", async () => {
