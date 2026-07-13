@@ -1,5 +1,5 @@
 import type { ActorContext, AdminActorContext } from "../../auth-middleware"
-import { badRequestError } from "../../errors"
+import { badRequestError, HttpError } from "../../errors"
 import { executeFirst } from "../../db-helpers"
 import { makeId, nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
@@ -29,6 +29,16 @@ import {
 import type { Env } from "../../../env"
 
 type CommunityAssistantCredentialProvider = "openrouter" | "elevenlabs"
+
+export class CommunityAssistantCredentialNotFoundError extends HttpError {
+  readonly provider: CommunityAssistantCredentialProvider
+
+  constructor(provider: CommunityAssistantCredentialProvider, message: string) {
+    super(400, "bad_request", message)
+    this.name = "CommunityAssistantCredentialNotFoundError"
+    this.provider = provider
+  }
+}
 
 const OPENROUTER_PROVIDER = "openrouter" as const
 const ELEVENLABS_PROVIDER = "elevenlabs" as const
@@ -544,9 +554,12 @@ async function decryptActiveCommunityAssistantCredential(input: {
     status: "active",
   })
   if (!active) {
-    throw badRequestError(input.missingCredentialMessage ?? (input.provider === OPENROUTER_PROVIDER
-      ? "OpenRouter API key is required before chatting with the community assistant"
-      : "ElevenLabs API key is required before using assistant voice"))
+    throw new CommunityAssistantCredentialNotFoundError(
+      input.provider,
+      input.missingCredentialMessage ?? (input.provider === OPENROUTER_PROVIDER
+        ? "OpenRouter API key is required before chatting with the community assistant"
+        : "ElevenLabs API key is required before using assistant voice"),
+    )
   }
 
   return decryptCredentialKey({

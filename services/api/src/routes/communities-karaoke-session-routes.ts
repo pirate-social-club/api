@@ -283,7 +283,11 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
             headers: { "content-type": "application/json" },
             method: "POST",
           })
-          return { status: response.status }
+          const body = await response.json().catch(() => null) as { error?: unknown } | null
+          return {
+            errorCode: typeof body?.error === "string" ? body.error : null,
+            status: response.status,
+          }
         },
         issueToken: ({ claims }) => issueKaraokeGatewayToken({ claims, secret: signingKey }),
         loadPayload: () => getPostKaraokePayload({

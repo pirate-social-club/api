@@ -7,7 +7,10 @@ import { FakeKaraokeStreamingSttAdapter } from "../../../src/lib/karaoke/fake-st
 
 const decryptActiveCommunityElevenLabsKeyMock = mock(async () => "secret-key")
 
+class MockCommunityAssistantCredentialNotFoundError extends Error {}
+
 mock.module("../../../src/lib/communities/assistant-policy/credential-service", () => ({
+  CommunityAssistantCredentialNotFoundError: MockCommunityAssistantCredentialNotFoundError,
   decryptActiveCommunityElevenLabsKey: decryptActiveCommunityElevenLabsKeyMock,
 }))
 
@@ -36,13 +39,13 @@ describe("resolveKaraokeSttAdapter", () => {
   })
 
   test("returns the ElevenLabs adapter when the community ElevenLabs key is configured", async () => {
-    const adapter = await resolve({})
+    const adapter = await resolve({ CONTROL_PLANE_DATABASE_URL: "file:test.db" })
     expect(adapter).toBeInstanceOf(ElevenLabsKaraokeSttAdapter)
   })
 
   test("falls back to the fake adapter when the community ElevenLabs key is absent", async () => {
-    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new Error("missing"))
-    const adapter = await resolve({})
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new MockCommunityAssistantCredentialNotFoundError("missing"))
+    const adapter = await resolve({ CONTROL_PLANE_DATABASE_URL: "file:test.db" })
     expect(adapter).toBeInstanceOf(FakeKaraokeStreamingSttAdapter)
   })
 
@@ -65,7 +68,7 @@ describe("resolveKaraokeSttAdapter", () => {
 
   test("in production, throws instead of silently faking when the community key is missing", async () => {
     const { KaraokeSttConfigurationError } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
-    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new Error("missing"))
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new MockCommunityAssistantCredentialNotFoundError("missing"))
     await expect(resolve({ ENVIRONMENT: "production" })).rejects.toBeInstanceOf(KaraokeSttConfigurationError)
   })
 
