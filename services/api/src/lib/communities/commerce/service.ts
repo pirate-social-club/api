@@ -164,26 +164,42 @@ async function syncStoryRoyaltyAllocationProjectionSafely(input: {
   postId: string
   assetId: string
   sourceUpdatedAt?: string | null
+  required?: boolean
 }): Promise<void> {
-  try {
-    const result = await syncStoryRoyaltyAllocationProjectionForAsset(input)
-    if (result.projectedRows > 0) {
-      logPipelineInfo("[commerce] Story royalty allocation projection synced", {
-        community_id: input.communityId,
-        post_id: input.postId,
-        asset_id: input.assetId,
-        projected_rows: result.projectedRows,
-      })
+  const maxAttempts = input.required ? 3 : 1
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await syncStoryRoyaltyAllocationProjectionForAsset(input)
+      if (input.required && result.projectedRows === 0) {
+        throw new Error("royalty_allocation_projection_rows_missing")
+      }
+      if (result.projectedRows > 0) {
+        logPipelineInfo("[commerce] Story royalty allocation projection synced", {
+          community_id: input.communityId,
+          post_id: input.postId,
+          asset_id: input.assetId,
+          projected_rows: result.projectedRows,
+          attempt,
+        })
+      }
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 250))
+      }
     }
-  } catch (error) {
-    logPipelineInfo("[commerce] Story royalty allocation projection sync failed", {
-      level: "warn",
-      community_id: input.communityId,
-      post_id: input.postId,
-      asset_id: input.assetId,
-      error: error instanceof Error ? error.message : String(error),
-    })
   }
+  logPipelineInfo("[commerce] Story royalty allocation projection sync failed", {
+    level: "warn",
+    community_id: input.communityId,
+    post_id: input.postId,
+    asset_id: input.assetId,
+    attempts: maxAttempts,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  })
+  if (input.required) throw lastError
 }
 
 async function resolveLockedSongPreviewState(input: {
@@ -1295,6 +1311,20 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     return serializeAsset(asset)
   }
   if (asset.locked_delivery_status === "ready") {
+    if (
+      asset.royalty_allocation_projection_synced === 0
+      && asset.royalty_allocation_status !== "none"
+    ) {
+      await syncStoryRoyaltyAllocationProjectionSafely({
+        env: input.env,
+        client: input.client,
+        communityId: input.communityId,
+        postId: asset.source_post_id,
+        assetId: asset.asset_id,
+        sourceUpdatedAt: asset.updated_at,
+        required: true,
+      })
+    }
     return serializeAsset(asset)
   }
   const requiresStoryRoyaltyRegistration = shouldAttemptStoryRoyaltyRegistration({
@@ -1793,6 +1823,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           postId: post.post_id,
           assetId: asset.asset_id,
           sourceUpdatedAt: post.updated_at ?? updatedAt,
+          required: true,
         })
       },
     })

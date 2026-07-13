@@ -46,6 +46,7 @@ export type AssetRow = {
   story_write_condition: string | null
   royalty_allocation_status: "none" | "draft" | "registration_pending" | "verification_pending" | "verified" | "registration_failed" | "verification_failed" | "legacy_unverified"
   royalty_allocation_fingerprint: string | null
+  royalty_allocation_projection_synced: number
   locked_delivery_status: Asset["locked_delivery_status"]
   locked_delivery_ref: string | null
   locked_delivery_error: string | null
