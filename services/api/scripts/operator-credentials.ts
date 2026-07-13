@@ -4,7 +4,16 @@ import { createHash, randomBytes } from "node:crypto"
 import { chmodSync, writeFileSync } from "node:fs"
 import { SQL } from "bun"
 
-const ALLOWED_SCOPES = new Set(["bookings:settlement:resolve"])
+export const BOOKING_SETTLEMENT_RESOLVE_SCOPE = "bookings:settlement:resolve"
+export const REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE = "rewards:campaign-incidents:resolve"
+
+export const ALLOWED_SCOPES = new Set([
+  BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+  REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+])
+
+const BOOKING_CREDENTIAL_ENV_NAME = "PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL"
+const REWARD_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_CAMPAIGN_OPERATOR_CREDENTIAL"
 
 type Mode = "issue" | "rotate" | "revoke"
 
@@ -19,19 +28,23 @@ type Options = {
   rotateCredentialId: string | null
   revokeCredentialId: string | null
   credentialEnvFile: string | null
+  credentialEnvName: string
 }
 
 function usage(exitCode = 1): never {
   console.error(`Usage:
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope bookings:settlement:resolve --expires-at 2026-07-31T00:00:00Z
-  bun scripts/operator-credentials.ts rotate --credential-id opc_... --operator-actor-id svc_... --label "Name" --scope bookings:settlement:resolve --expires-at 2026-07-31T00:00:00Z
+  bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope rewards:campaign-incidents:resolve --expires-at 2026-08-14T00:00:00Z
+  bun scripts/operator-credentials.ts rotate --credential-id opc_... --operator-actor-id svc_... --label "Name" --scope rewards:campaign-incidents:resolve --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts revoke --credential-id opc_...
 
 Uses CONTROL_PLANE_MIGRATOR_DATABASE_URL by default. This is operator tooling only; never expose
 issuance, rotation, or revocation through the public API runtime.
 
-Use --credential-env-file /path/to/file with issue/rotate to write
-PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL without printing the secret.`)
+Use --credential-env-file /path/to/file with issue/rotate to write the credential
+without printing the secret. The variable name defaults from the single scope:
+${BOOKING_CREDENTIAL_ENV_NAME} or ${REWARD_CREDENTIAL_ENV_NAME}.
+Use --credential-env-name NAME to override it; multi-scope credentials require an explicit name.`)
   process.exit(exitCode)
 }
 
@@ -42,6 +55,22 @@ function readValue(argv: string[], index: number, flag: string): string {
     usage()
   }
   return value
+}
+
+export function credentialEnvNameForScopes(scopes: string[], explicitName = ""): string {
+  const normalizedName = explicitName.trim()
+  if (normalizedName && !/^[A-Z][A-Z0-9_]*$/.test(normalizedName)) {
+    throw new Error("--credential-env-name must be an uppercase environment variable name")
+  }
+  const uniqueScopes = Array.from(new Set(scopes))
+  if (normalizedName) return normalizedName
+  if (uniqueScopes.length === 1 && uniqueScopes[0] === BOOKING_SETTLEMENT_RESOLVE_SCOPE) {
+    return BOOKING_CREDENTIAL_ENV_NAME
+  }
+  if (uniqueScopes.length === 1 && uniqueScopes[0] === REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE) {
+    return REWARD_CREDENTIAL_ENV_NAME
+  }
+  throw new Error("multi-scope credentials require --credential-env-name")
 }
 
 function parseArgs(argv: string[]): Options {
@@ -61,6 +90,7 @@ function parseArgs(argv: string[]): Options {
   let expiresAt = ""
   let credentialId: string | null = null
   let credentialEnvFile: string | null = null
+  let credentialEnvName = ""
 
   for (let index = 1; index < argv.length;) {
     const arg = argv[index]
@@ -93,6 +123,10 @@ function parseArgs(argv: string[]): Options {
         credentialEnvFile = readValue(argv, index, arg)
         index += 2
         break
+      case "--credential-env-name":
+        credentialEnvName = readValue(argv, index, arg)
+        index += 2
+        break
       default:
         console.error(`unknown argument: ${arg}`)
         usage()
@@ -118,6 +152,12 @@ function parseArgs(argv: string[]): Options {
       console.error("--expires-at must be an ISO timestamp")
       usage()
     }
+    try {
+      credentialEnvName = credentialEnvNameForScopes(scopes, credentialEnvName)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      usage()
+    }
   }
 
   return {
@@ -131,6 +171,7 @@ function parseArgs(argv: string[]): Options {
     rotateCredentialId: mode === "rotate" ? credentialId : null,
     revokeCredentialId: mode === "revoke" ? credentialId : null,
     credentialEnvFile,
+    credentialEnvName,
   }
 }
 
@@ -146,16 +187,17 @@ function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex")
 }
 
-function writeCredentialEnvFile(path: string, credential: string): void {
-  writeFileSync(path, `PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL=${credential}\n`, { mode: 0o600 })
+function writeCredentialEnvFile(path: string, envName: string, credential: string): void {
+  writeFileSync(path, `${envName}=${credential}\n`, { mode: 0o600 })
   chmodSync(path, 0o600)
 }
 
 function printIssuedCredential(created: { id: string; secret: string }, options: Options): void {
   console.log(`operator_credential_id=${created.id}`)
   if (options.credentialEnvFile) {
-    writeCredentialEnvFile(options.credentialEnvFile, `${created.id}.${created.secret}`)
+    writeCredentialEnvFile(options.credentialEnvFile, options.credentialEnvName, `${created.id}.${created.secret}`)
     console.log(`operator_credential_env_file=${options.credentialEnvFile}`)
+    console.log(`operator_credential_env_name=${options.credentialEnvName}`)
     return
   }
   console.log(`operator_credential=${created.id}.${created.secret}`)
@@ -214,25 +256,31 @@ async function revoke(sql: SQL, options: Options): Promise<void> {
   }
 }
 
-const options = parseArgs(process.argv.slice(2))
-const databaseUrl = process.env[options.databaseUrlEnv]?.trim()
-if (!databaseUrl) {
-  console.error(`missing ${options.databaseUrlEnv}`)
-  process.exit(1)
+async function main(): Promise<void> {
+  const options = parseArgs(process.argv.slice(2))
+  const databaseUrl = process.env[options.databaseUrlEnv]?.trim()
+  if (!databaseUrl) {
+    console.error(`missing ${options.databaseUrlEnv}`)
+    process.exit(1)
+  }
+
+  const sql = new SQL({ url: databaseUrl, max: 1 })
+  try {
+    if (options.mode === "issue") {
+      const created = await issue(sql, options)
+      printIssuedCredential(created, options)
+    } else if (options.mode === "rotate") {
+      const created = await rotate(sql, options)
+      printIssuedCredential(created, options)
+    } else {
+      await revoke(sql, options)
+      console.log("operator_credential_revoked=true")
+    }
+  } finally {
+    await sql.end()
+  }
 }
 
-const sql = new SQL({ url: databaseUrl, max: 1 })
-try {
-  if (options.mode === "issue") {
-    const created = await issue(sql, options)
-    printIssuedCredential(created, options)
-  } else if (options.mode === "rotate") {
-    const created = await rotate(sql, options)
-    printIssuedCredential(created, options)
-  } else {
-    await revoke(sql, options)
-    console.log("operator_credential_revoked=true")
-  }
-} finally {
-  await sql.end()
+if (import.meta.main) {
+  await main()
 }
