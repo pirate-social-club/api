@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import {
+  STORY_ROYALTY_PAYMENT_PREFLIGHT_MAX_ATTEMPTS,
   STORY_ROYALTY_PAYMENT_WIP_OPTIONS,
   isRetryableStoryRoyaltyPreflightError,
   withStoryRoyaltyPreflightRetry,
 } from "./story-royalty-settlement-service"
 
 describe("Story royalty preflight retry", () => {
+  test("allows newly registered IPs up to four minutes to become payable", () => {
+    expect(STORY_ROYALTY_PAYMENT_PREFLIGHT_MAX_ATTEMPTS).toBe(48)
+  })
+
   test("uses sequential WIP wrap, approval, and royalty payment", () => {
     expect(STORY_ROYALTY_PAYMENT_WIP_OPTIONS).toEqual({
       enableAutoWrapIp: true,
