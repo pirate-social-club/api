@@ -72,30 +72,28 @@ function ttlSecondsForBucket(bucketMs: number): number {
   return Math.max(MIN_DEDUPE_TTL_SECONDS, Math.ceil((bucketMs * 2) / 1000))
 }
 
-async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<void> {
+async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<boolean> {
   const kv = env.OPS_ALERT_DEDUPE
   if (!kv) {
-    await sendOpsAlerts(env, [alert])
-    return
+    return (await sendOpsAlerts(env, [alert])).delivered
   }
 
   const bucketMs = bucketMsForScheduledAlert(env, alert)
   const bucket = bucketStartMs(Date.now(), bucketMs)
   const deduper = new KvAlertDeduper(kv, ttlSecondsForBucket(bucketMs))
-  if (await deduper.hasSent(alert.key, bucket)) return
+  if (await deduper.hasSent(alert.key, bucket)) return true
 
   const delivery = await sendOpsAlerts(env, [alert])
-  if (delivery.delivered) {
-    await deduper.markSent(alert.key, bucket)
-  }
+  if (delivery.delivered) await deduper.markSent(alert.key, bucket)
+  return delivery.delivered
 }
 
 export async function captureScheduledError(
   env: Env,
   error: unknown,
   task: string,
-): Promise<void> {
-  await deliverScheduledAlert(env, {
+): Promise<boolean> {
+  return deliverScheduledAlert(env, {
     key: `scheduled_error:${task}`,
     severity: "high",
     title: `Scheduled task failed: ${task}`,
@@ -111,13 +109,13 @@ export async function captureScheduledWarning(
   task: string,
   extra?: Record<string, unknown>,
   tags?: Record<string, string>,
-): Promise<void> {
+): Promise<boolean> {
   const severity: OpsAlertSeverity = tags?.urgency === "high"
     ? "high"
     : tags?.urgency === "low"
       ? "low"
       : "medium"
-  await deliverScheduledAlert(env, {
+  return deliverScheduledAlert(env, {
     key: `scheduled_warning:${task}:${tags?.urgency ?? "normal"}`,
     severity,
     title: message,

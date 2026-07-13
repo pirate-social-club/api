@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,17 +15,37 @@ const outPath = resolve(outDir, "openapi-spec.ts")
 
 type OpenApiRecord = Record<string, any>
 
-function resolveCoreRepoRoot(): string {
-  const candidates = [
-    process.env.PIRATE_CORE_REPO?.trim(),
-    resolve(repoRoot, "core"),
-    resolve(repoRoot, "../core"),
-  ].filter((value): value is string => Boolean(value))
+function gitOutput(repo: string, args: string[]): string {
+  try {
+    return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  } catch {
+    throw new Error(`Could not verify auto-resolved core repo at ${repo}. Set PIRATE_CORE_REPO explicitly.`)
+  }
+}
 
+function assertSafeAutoResolvedCore(repo: string): void {
+  if (gitOutput(repo, ["status", "--porcelain"])) {
+    throw new Error(`Refusing to generate from dirty auto-resolved core repo at ${repo}. Set PIRATE_CORE_REPO explicitly to acknowledge the source.`)
+  }
+  gitOutput(repo, ["rev-parse", "--verify", "origin/main"])
+  const behind = Number(gitOutput(repo, ["rev-list", "--count", "HEAD..origin/main"]))
+  if (!Number.isSafeInteger(behind) || behind > 0) {
+    throw new Error(`Refusing to generate from stale auto-resolved core repo at ${repo} (${behind} commit(s) behind origin/main). Set PIRATE_CORE_REPO explicitly.`)
+  }
+}
+
+function resolveCoreRepoRoot(): string {
+  const explicit = process.env.PIRATE_CORE_REPO?.trim()
+  if (explicit) {
+    if (existsSync(resolve(explicit, "specs/api/openapi.yaml"))) return explicit
+    throw new Error(`PIRATE_CORE_REPO does not contain specs/api/openapi.yaml: ${explicit}`)
+  }
+
+  const candidates = [resolve(repoRoot, "core"), resolve(repoRoot, "../core")]
   for (const candidate of new Set(candidates)) {
-    if (existsSync(resolve(candidate, "specs/api/openapi.yaml"))) {
-      return candidate
-    }
+    if (!existsSync(resolve(candidate, "specs/api/openapi.yaml"))) continue
+    assertSafeAutoResolvedCore(candidate)
+    return candidate
   }
 
   throw new Error("Could not locate Pirate core repo. Set PIRATE_CORE_REPO.")
