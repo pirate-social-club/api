@@ -8,7 +8,7 @@ const DEFAULT_EXCERPT_CHARS = 280
 const MAX_CANDIDATE_ROWS = 250
 const RECENCY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
-export type BoardReadPostVisibility = "public" | "members_only"
+type BoardReadPostVisibility = "public" | "members_only"
 
 export type BoardReadPost = {
   authorUserId: string | null
