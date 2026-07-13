@@ -747,8 +747,11 @@ const handler: ExportedHandler<Env> = {
     // so keep them first while lower-priority jobs rotate.
     const priorityJobs: NamedTask[] = [
       { name: "reconcile_booking_settlements", run: () => reconcileScheduledBookingSettlements(env) },
-      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
+      // Concurrency is two: keep royalty verification in the second start slot. D1
+      // reconciliation can run longer than the task-start deadline, so placing it
+      // first would still starve newly registered royalty allocations.
       { name: "reconcile_royalty_allocation_verifications", run: () => reconcileScheduledRoyaltyAllocationVerifications(env) },
+      ...(canRunD1Reconciler ? [{ name: "reconcile_d1_provisioning", run: () => reconcileScheduledD1Provisioning(env) }] : []),
     ]
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
