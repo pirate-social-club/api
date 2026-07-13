@@ -8,7 +8,7 @@ import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { withTransaction } from "../transactions"
 
-export type RewardKind =
+type RewardKind =
   | "study_streak_day"
   | "study_streak_milestone_7"
   | "study_streak_milestone_30"
