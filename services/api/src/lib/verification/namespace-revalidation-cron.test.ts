@@ -5,7 +5,10 @@ import {
   createControlPlaneTestClient,
   withMockedFetch,
 } from "../../../tests/helpers"
-import { sweepHnsNamespaceRevalidations } from "./namespace-revalidation-cron"
+import {
+  hnsNamespaceRevalidationAlertState,
+  sweepHnsNamespaceRevalidations,
+} from "./namespace-revalidation-cron"
 
 const NOW = new Date("2026-07-13T12:00:00.000Z")
 const FUTURE_EXPIRY = "2026-07-20T12:00:00.000Z"
@@ -213,6 +216,7 @@ describe("HNS namespace revalidation sweep", () => {
       downgraded: 0,
       staled: 0,
       deferred: 0,
+      leasesApproachingExpiry: 0,
       errors: 0,
       deadlineReached: false,
     })
@@ -270,6 +274,52 @@ describe("HNS namespace revalidation sweep", () => {
         expiry_observation_provider: "hsd_json_rpc",
       },
     })
+  })
+
+  test("derives restored capabilities from assertions changed after candidate selection", async () => {
+    const client = await setup()
+    const { namespaceVerificationId } = await seedAcceptedHnsVerification({ client })
+
+    const summary = await withMockedFetch(
+      () => async () => {
+        await client.execute({
+          sql: `
+            UPDATE namespace_verification_assertions
+            SET assertion_value = 0, status = 'stale', updated_at = ?2
+            WHERE namespace_verification_id = ?1
+              AND assertion_name = 'root_control_verified'
+          `,
+          args: [namespaceVerificationId, NOW.toISOString()],
+        })
+        return Response.json({
+          expiry_root_exists: true,
+          expiry_horizon_sufficient: true,
+          expiry_observation_provider: "hsd_json_rpc",
+        })
+      },
+      () => sweepHnsNamespaceRevalidations({ client, env: testEnv(), now: NOW, config: CONFIG }),
+    )
+
+    expect(summary.refreshed).toBe(1)
+    expect(await readVerification(client, namespaceVerificationId)).toMatchObject({
+      status: "verified",
+      club_attach_allowed: 0,
+      pirate_subdomain_issuance_allowed: 0,
+    })
+    const capabilities = await client.execute({
+      sql: `
+        SELECT capability_name, capability_value, status
+        FROM namespace_verification_capabilities
+        WHERE namespace_verification_id = ?1
+          AND capability_name IN ('club_attach_allowed', 'pirate_subdomain_issuance_allowed')
+        ORDER BY capability_name
+      `,
+      args: [namespaceVerificationId],
+    })
+    expect(capabilities.rows).toEqual([
+      { capability_name: "club_attach_allowed", capability_value: 0, status: "stale" },
+      { capability_name: "pirate_subdomain_issuance_allowed", capability_value: 0, status: "stale" },
+    ])
   })
 
   test("withholds expiry-gated capabilities without extending a still-live lease", async () => {
@@ -351,6 +401,63 @@ describe("HNS namespace revalidation sweep", () => {
     expect(await readVerification(client, live.namespaceVerificationId)).toMatchObject({
       status: "verified",
       expires_at: FUTURE_EXPIRY,
+    })
+  })
+
+  test("surfaces deferred observations that put a lease inside the next sweep interval", async () => {
+    const client = await setup()
+    await seedAcceptedHnsVerification({
+      client,
+      suffix: "near-expiry",
+      expiresAt: "2026-07-14T06:00:00.000Z",
+    })
+
+    const summary = await withInspection({
+      expiry_root_exists: null,
+      expiry_horizon_sufficient: null,
+      expiry_observation_provider: null,
+    }, () => sweepHnsNamespaceRevalidations({ client, env: testEnv(), now: NOW, config: CONFIG }))
+
+    expect(summary).toMatchObject({
+      attempted: 1,
+      deferred: 1,
+      leasesApproachingExpiry: 1,
+    })
+    expect(hnsNamespaceRevalidationAlertState(summary)).toEqual({
+      allDeferred: true,
+      massDeferred: false,
+      leaseExpiryRisk: true,
+    })
+  })
+
+  test("classifies broad deferral without treating small partial batches as mass failures", () => {
+    const baseSummary = {
+      enabled: true,
+      candidates: 10,
+      attempted: 10,
+      refreshed: 5,
+      downgraded: 0,
+      staled: 0,
+      deferred: 5,
+      leasesApproachingExpiry: 0,
+      errors: 0,
+      deadlineReached: false,
+    }
+    expect(hnsNamespaceRevalidationAlertState(baseSummary)).toEqual({
+      allDeferred: false,
+      massDeferred: true,
+      leaseExpiryRisk: false,
+    })
+    expect(hnsNamespaceRevalidationAlertState({
+      ...baseSummary,
+      candidates: 4,
+      attempted: 4,
+      refreshed: 3,
+      deferred: 1,
+    })).toEqual({
+      allDeferred: false,
+      massDeferred: false,
+      leaseExpiryRisk: false,
     })
   })
 

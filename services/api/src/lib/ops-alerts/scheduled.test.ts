@@ -3,6 +3,31 @@ import type { Env } from "../../env"
 import { captureScheduledWarning } from "./scheduled"
 
 describe("captureScheduledWarning", () => {
+  test("honors an explicit structured warning count", async () => {
+    const sent: Array<{ text?: string }> = []
+    const env = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string }) => {
+          sent.push(message)
+          return { messageId: "msg_test" }
+        },
+      },
+    } as unknown as Env
+
+    await captureScheduledWarning(
+      env,
+      "HNS namespace ownership leases are approaching expiry without refresh",
+      "hns_namespace_revalidation_lease_expiry",
+      { count: 7, errors: 1, leasesApproachingExpiry: 7 },
+      { urgency: "high" },
+    )
+
+    expect(sent[0]?.text).toContain("Count: 7")
+  })
+
   test("derives count and community ids from scheduled summary details", async () => {
     const sent: Array<{ text?: string; subject?: string }> = []
     const env = {
