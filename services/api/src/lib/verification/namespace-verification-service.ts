@@ -455,6 +455,7 @@ export async function completeNamespaceVerificationSession(
     }
     const evidenceResolverPath = [
       observationProvider,
+      verificationResult?.expiry_observation_provider,
       authorityProvisioningEvidence?.observation_provider,
       authorityHealthEvidence?.observation_provider,
     ].filter((provider, index, providers): provider is string => (
