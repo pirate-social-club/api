@@ -272,6 +272,7 @@ jobs:
         shell: bash
         working-directory: services/api
         env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
           TEST_SHARD: ${{ matrix.shard }}
           TEST_SHARD_COUNT: 4
         run: |
