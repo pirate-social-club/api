@@ -56,6 +56,14 @@ const TRANSIENT_FINALITY_PROVIDER: RewardCampaignFinalityProvider = {
   getTransactionReceipt: async () => { throw new Error("rpc unavailable") },
   getBlock: async () => { throw new Error("rpc unavailable") },
 }
+const PARTIAL_FINALITY_PROVIDER: RewardCampaignFinalityProvider = {
+  send: async () => "0x14a34",
+  getTransactionReceipt: async (txHash) => {
+    if (txHash === `0x${"a".repeat(64)}`) throw new Error("receipt endpoint unavailable for one effect")
+    return { blockNumber: 123, blockHash: CONFIRMED_BLOCK_HASH }
+  },
+  getBlock: async () => ({ hash: CONFIRMED_BLOCK_HASH }),
+}
 
 function urlFor(db?: string): string {
   const url = new URL(ADMIN_URL as string)
@@ -207,7 +215,11 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       CREATE UNIQUE INDEX reward_campaign_incidents_one_open_kind
         ON reward_campaign_incidents (reward_campaign_id, incident_kind) WHERE resolved_at IS NULL;
       CREATE TABLE reward_campaign_monitor_state (
-        monitor_name TEXT PRIMARY KEY, last_successful_scan_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+        monitor_name TEXT PRIMARY KEY,
+        first_attempted_scan_at TIMESTAMPTZ NOT NULL,
+        last_attempted_scan_at TIMESTAMPTZ NOT NULL,
+        last_successful_scan_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL
       );
       CREATE VIEW reward_campaign_accounting_reconciliation AS
       SELECT c.reward_campaign_id, c.funded_cents AS stored_funded_cents,
@@ -815,10 +827,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     })
   })
 
-  test("transient RPC blindness does not advance the successful heartbeat and a vanished receipt on a replaced block holds", async () => {
+  test("wholly blind and partial finality scans advance liveness without inventing completeness", async () => {
     await withProductionPostgresClient(async (client) => {
       await client.execute({
-        sql: `INSERT INTO reward_campaign_monitor_state (monitor_name, last_successful_scan_at, updated_at) VALUES ('reward_campaign_integrity', ?1, ?1) ON CONFLICT (monitor_name) DO UPDATE SET last_successful_scan_at = excluded.last_successful_scan_at, updated_at = excluded.updated_at`,
+        sql: `INSERT INTO reward_campaign_monitor_state (monitor_name, first_attempted_scan_at, last_attempted_scan_at, last_successful_scan_at, updated_at) VALUES ('reward_campaign_integrity', ?1, ?1, ?1, ?1) ON CONFLICT (monitor_name) DO UPDATE SET first_attempted_scan_at = excluded.first_attempted_scan_at, last_attempted_scan_at = excluded.last_attempted_scan_at, last_successful_scan_at = excluded.last_successful_scan_at, updated_at = excluded.updated_at`,
         args: ["2026-07-10T13:10:00.000Z"],
       })
       const blind = await monitorRewardCampaigns({
@@ -826,13 +838,83 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         finalityProvider: TRANSIENT_FINALITY_PROVIDER,
       })
       expect(blind.transient_finality_checks).toBeGreaterThan(0)
+      expect(blind.finality_checks_attempted).toBe(blind.transient_finality_checks)
+      expect(blind.wholly_blind).toBe(true)
+      expect(blind.partial_finality_degraded).toBe(false)
       expect(blind.scan_successful).toBe(false)
       let heartbeat = await client.execute({
-        sql: `SELECT last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
+        sql: `SELECT last_attempted_scan_at, last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
         args: [],
       })
+      expect(new Date(String(heartbeat.rows[0]?.last_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:20:00.000Z")
       expect(new Date(String(heartbeat.rows[0]?.last_successful_scan_at)).toISOString()).toBe("2026-07-10T13:10:00.000Z")
 
+      const partial = await monitorRewardCampaigns({
+        env: PG_ENV, client, now: "2026-07-10T13:21:00.000Z", limit: 500,
+        finalityProvider: PARTIAL_FINALITY_PROVIDER,
+      })
+      expect(partial.finality_checks_attempted).toBeGreaterThan(partial.transient_finality_checks)
+      expect(partial.transient_finality_checks).toBeGreaterThan(0)
+      expect(partial.wholly_blind).toBe(false)
+      expect(partial.partial_finality_degraded).toBe(true)
+      expect(partial.scan_successful).toBe(false)
+      heartbeat = await client.execute({
+        sql: `SELECT last_attempted_scan_at, last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
+        args: [],
+      })
+      expect(new Date(String(heartbeat.rows[0]?.last_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:21:00.000Z")
+      expect(new Date(String(heartbeat.rows[0]?.last_successful_scan_at)).toISOString()).toBe("2026-07-10T13:10:00.000Z")
+    })
+  })
+
+  test("liveness and coverage staleness are independent and cold-start blindness stays nullable", async () => {
+    await withProductionPostgresClient(async (client) => {
+      await client.execute({
+        sql: `UPDATE reward_campaign_monitor_state SET first_attempted_scan_at = ?1, last_attempted_scan_at = ?1, last_successful_scan_at = ?1, updated_at = ?1 WHERE monitor_name = 'reward_campaign_integrity'`,
+        args: ["2026-07-10T12:50:00.000Z"],
+      })
+      const resumed = await monitorRewardCampaigns({
+        env: PG_ENV, client, now: "2026-07-10T13:20:01.000Z", limit: 500,
+        finalityProvider: HEALTHY_FINALITY_PROVIDER,
+      })
+      expect(resumed.liveness_stale).toBe(true)
+      expect(resumed.coverage_stale).toBe(false)
+      expect(resumed.scan_successful).toBe(true)
+
+      await client.execute({
+        sql: `UPDATE reward_campaign_monitor_state SET first_attempted_scan_at = ?1, last_attempted_scan_at = ?2, last_successful_scan_at = NULL, updated_at = ?2 WHERE monitor_name = 'reward_campaign_integrity'`,
+        args: ["2026-07-10T12:50:00.000Z", "2026-07-10T13:19:00.000Z"],
+      })
+      const neverComplete = await monitorRewardCampaigns({
+        env: PG_ENV, client, now: "2026-07-10T13:20:02.000Z", limit: 500,
+        finalityProvider: TRANSIENT_FINALITY_PROVIDER,
+      })
+      expect(neverComplete.liveness_stale).toBe(false)
+      expect(neverComplete.coverage_stale).toBe(true)
+      expect(neverComplete.scan_successful).toBe(false)
+
+      await client.execute({
+        sql: `DELETE FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
+        args: [],
+      })
+      const coldBlind = await monitorRewardCampaigns({
+        env: PG_ENV, client, now: "2026-07-10T13:20:03.000Z", limit: 500,
+        finalityProvider: TRANSIENT_FINALITY_PROVIDER,
+      })
+      expect(coldBlind.wholly_blind).toBe(true)
+      expect(coldBlind.coverage_stale).toBe(false)
+      const state = await client.execute({
+        sql: `SELECT first_attempted_scan_at, last_attempted_scan_at, last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
+        args: [],
+      })
+      expect(new Date(String(state.rows[0]?.first_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:20:03.000Z")
+      expect(new Date(String(state.rows[0]?.last_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:20:03.000Z")
+      expect(state.rows[0]?.last_successful_scan_at).toBeNull()
+    })
+  })
+
+  test("a definitive finality loss is complete coverage and holds on repeated observation", async () => {
+    await withProductionPostgresClient(async (client) => {
       const first = await monitorRewardCampaigns({
         env: PG_ENV, client, now: "2026-07-10T13:21:00.000Z", limit: 500,
         finalityProvider: REORGED_FINALITY_PROVIDER,
@@ -848,7 +930,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         args: [],
       })
       expect(campaign.rows[0]?.status).toBe("operational_hold")
-      heartbeat = await client.execute({
+      const heartbeat = await client.execute({
         sql: `SELECT last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
         args: [],
       })
