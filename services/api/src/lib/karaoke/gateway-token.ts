@@ -2,7 +2,7 @@ import { KARAOKE_TRANSPORT_PROTOCOL_VERSION } from "@pirate-social-club/karaoke-
 
 export const KARAOKE_GATEWAY_TOKEN_VERSION = 1 as const
 export const KARAOKE_GATEWAY_TOKEN_TTL_SECONDS = 60 as const
-export const KARAOKE_TOKEN_CLOCK_SKEW_SECONDS = 30 as const
+const KARAOKE_TOKEN_CLOCK_SKEW_SECONDS = 30 as const
 
 const TOKEN_HEADER = { alg: "HS256", typ: "JWT" } as const
 const encoder = new TextEncoder()

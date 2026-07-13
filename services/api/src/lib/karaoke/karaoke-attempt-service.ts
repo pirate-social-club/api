@@ -271,24 +271,6 @@ function isRankEligible(input: {
     && input.finalScoreBps >= KARAOKE_STREAK_PASS_SCORE_BPS
 }
 
-async function insertedAttemptExists(input: {
-  attemptId: string
-  client: ReadClient
-  sessionId: string
-}): Promise<boolean> {
-  const row = await executeFirst(input.client, {
-    sql: `
-      SELECT 1 AS present
-      FROM karaoke_attempt
-      WHERE session_id = ?1
-        AND attempt_id = ?2
-      LIMIT 1
-    `,
-    args: [input.sessionId, input.attemptId],
-  })
-  return Boolean(row)
-}
-
 type ComputedStreak = {
   bestStreak: number
   currentStreak: number
@@ -522,14 +504,6 @@ export async function recordKaraokeAttempt(input: {
     rankEligible,
     streakCredited: true,
   }
-}
-
-export async function hasKaraokeAttempt(input: {
-  attemptId: string
-  client: ReadClient
-  sessionId: string
-}): Promise<boolean> {
-  return insertedAttemptExists(input)
 }
 
 export async function getPostKaraokeLeaderboard(input: {
