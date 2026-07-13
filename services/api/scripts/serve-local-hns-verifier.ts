@@ -49,11 +49,45 @@ function localInspect(rootLabel: string): Record<string, unknown> {
   }
 }
 
+// Mirrors the real verifier's child-zone state so the authority-health check
+// has something to read back: a nonce must be PUBLISHED before it can be served.
+const publishedChallenges = new Map<string, string>()
+
+function localPublishTxt(body: Record<string, unknown>): Record<string, unknown> {
+  const rootLabel = normalizeRootLabel(body.root_label)
+  const value = String(body.challenge_txt_value || "")
+  publishedChallenges.set(rootLabel, value)
+  return {
+    root_label: rootLabel,
+    zone_name: rootLabel,
+    challenge_name: challengeName(rootLabel),
+    challenge_txt_value: value,
+    zone_created: true,
+    nameservers,
+    observation_provider: "powerdns_api",
+  }
+}
+
+function localAuthorityHealth(rootLabel: string): Record<string, unknown> {
+  const published = publishedChallenges.has(rootLabel)
+  return {
+    root_label: rootLabel,
+    zone_name: rootLabel,
+    challenge_name: challengeName(rootLabel),
+    zone_provisioned: published,
+    challenge_present: published,
+    challenge_served: published,
+    nameservers,
+    observation_provider: "powerdns_api",
+  }
+}
+
 function localVerifyTxt(body: Record<string, unknown>): Record<string, unknown> {
   const rootLabel = normalizeRootLabel(body.root_label)
   return {
     verified: true,
     observation_provider: "web3dns_json_doh",
+    ownership_source: "hns_parent_chain_txt",
     failure_reason: null,
     observed_values: typeof body.challenge_txt_value === "string" ? [body.challenge_txt_value] : [],
     root_exists: true,
@@ -82,6 +116,16 @@ export function createLocalHnsVerifierServer(): Server {
 
       if (req.method === "POST" && url.pathname === "/verify-txt-public") {
         writeJson(res, 200, localVerifyTxt(await readJson(req)))
+        return
+      }
+
+      if (req.method === "POST" && (url.pathname === "/publish-txt" || url.pathname === "/ensure-zone")) {
+        writeJson(res, 200, localPublishTxt(await readJson(req)))
+        return
+      }
+
+      if (req.method === "GET" && url.pathname === "/authority-health") {
+        writeJson(res, 200, localAuthorityHealth(normalizeRootLabel(url.searchParams.get("root_label"))))
         return
       }
 

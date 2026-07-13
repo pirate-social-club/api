@@ -131,6 +131,73 @@ const SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS = [
   `,
 ]
 
+// SQLite cannot ALTER a CHECK constraint, and simply dropping the ADD CONSTRAINT
+// (as every other constraint statement is) would leave the baseline's inline
+// CHECK rejecting assertion names introduced by later migrations. Rebuild the
+// table so the SQLite mirror enforces exactly the enum Postgres does. Keep this
+// list in sync with the newest migration that redefines the constraint.
+const SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD = [
+  `
+    CREATE TABLE namespace_verification_assertions_sqlite_rebuild (
+      assertion_record_id TEXT PRIMARY KEY,
+      namespace_verification_session_id TEXT NOT NULL,
+      namespace_verification_id TEXT,
+      family TEXT NOT NULL CHECK (family IN ('hns', 'spaces')),
+      assertion_name TEXT NOT NULL CHECK (
+        assertion_name IN (
+          'root_exists',
+          'root_control_verified',
+          'expiry_horizon_sufficient',
+          'routing_enabled',
+          'pirate_dns_authority_verified',
+          'authority_health_verified',
+          'root_key_proof_verified',
+          'fabric_publish_verified',
+          'anchor_fresh_enough',
+          'owner_signed_updates_verified'
+        )
+      ),
+      assertion_value INTEGER CHECK (assertion_value IS NULL OR assertion_value IN (0, 1)),
+      source_evidence_bundle_id TEXT,
+      status TEXT NOT NULL CHECK (status IN ('accepted', 'stale', 'disputed', 'superseded')),
+      first_accepted_at TIMESTAMPTZ,
+      last_revalidated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      FOREIGN KEY (namespace_verification_session_id) REFERENCES namespace_verification_sessions(namespace_verification_session_id),
+      FOREIGN KEY (namespace_verification_id) REFERENCES namespace_verifications(namespace_verification_id),
+      FOREIGN KEY (source_evidence_bundle_id) REFERENCES namespace_verification_evidence_bundles(evidence_bundle_id)
+    );
+  `,
+  `
+    INSERT INTO namespace_verification_assertions_sqlite_rebuild
+    SELECT
+      assertion_record_id,
+      namespace_verification_session_id,
+      namespace_verification_id,
+      family,
+      assertion_name,
+      assertion_value,
+      source_evidence_bundle_id,
+      status,
+      first_accepted_at,
+      last_revalidated_at,
+      created_at,
+      updated_at
+    FROM namespace_verification_assertions;
+  `,
+  `DROP TABLE namespace_verification_assertions;`,
+  `ALTER TABLE namespace_verification_assertions_sqlite_rebuild RENAME TO namespace_verification_assertions;`,
+  `
+    CREATE INDEX IF NOT EXISTS idx_namespace_verification_assertions_session
+      ON namespace_verification_assertions(namespace_verification_session_id, assertion_name);
+  `,
+  `
+    CREATE INDEX IF NOT EXISTS idx_namespace_verification_assertions_verification
+      ON namespace_verification_assertions(namespace_verification_id, assertion_name, status);
+  `,
+]
+
 // Drop leading blank / `--` comment lines so statement-type detection sees the real SQL. The
 // splitter glues a file's leading comment block onto its first statement; without this, a
 // skippable Postgres-only statement (e.g. `ALTER TABLE ... OWNER TO`) preceded by comments would
@@ -191,6 +258,9 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       && normalized.includes("ALTER TABLE NAMESPACE_VERIFICATIONS")
     ) {
       return SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS
+    }
+    if (normalized.includes("NAMESPACE_VERIFICATION_ASSERTIONS_ASSERTION_NAME_CHECK")) {
+      return SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD
     }
     return []
   }

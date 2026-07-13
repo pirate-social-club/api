@@ -72,6 +72,7 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
       if (url.endsWith("/verify-txt-public")) {
         return new Response(JSON.stringify({
           verified: true,
+          ownership_source: "hns_parent_chain_txt",
           root_exists: true,
           root_control_verified: true,
           expiry_horizon_sufficient: true,
@@ -87,13 +88,31 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
           headers: { "content-type": "application/json" },
         })
       }
-      if (url.endsWith("/ensure-zone")) {
+      // Provisioning publishes the session nonce into the child zone...
+      if (url.endsWith("/publish-txt") || url.endsWith("/ensure-zone")) {
         return new Response(JSON.stringify({
           root_label: "piratecommunityroot",
           zone_name: "piratecommunityroot.",
+          challenge_name: "_pirate.piratecommunityroot.",
           zone_created: true,
           nameservers: ["ns1.pirate."],
-          observation_provider: "powerdns_sqlite",
+          observation_provider: "powerdns_api",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      // ...and the authority-health check reads it back through the serving path.
+      if (url.includes("/authority-health")) {
+        return new Response(JSON.stringify({
+          root_label: "piratecommunityroot",
+          zone_name: "piratecommunityroot.",
+          challenge_name: "_pirate.piratecommunityroot.",
+          zone_provisioned: true,
+          challenge_present: true,
+          challenge_served: true,
+          nameservers: ["ns1.pirate."],
+          observation_provider: "powerdns_api",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },

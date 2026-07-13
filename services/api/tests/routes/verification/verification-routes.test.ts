@@ -607,16 +607,30 @@ describe("verification routes", () => {
           return Response.json({
             verified: true,
             observation_provider: "web3dns_json_doh",
+            ownership_source: "hns_parent_chain_txt",
             failure_reason: null,
           })
         }
-        if (url.endsWith("/ensure-zone")) {
+        if (url.endsWith("/publish-txt")) {
           return Response.json({
             root_label: "piratetestroot",
             zone_name: "piratetestroot.",
+            challenge_name: "_pirate.piratetestroot.",
             zone_created: true,
             nameservers: ["ns1.pirate."],
-            observation_provider: "powerdns_sqlite",
+            observation_provider: "powerdns_api",
+          })
+        }
+        if (url.includes("/authority-health?")) {
+          return Response.json({
+            root_label: "piratetestroot",
+            zone_name: "piratetestroot.",
+            challenge_name: "_pirate.piratetestroot.",
+            zone_provisioned: true,
+            challenge_present: true,
+            challenge_served: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "authoritative_dns",
           })
         }
       }

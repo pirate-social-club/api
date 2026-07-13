@@ -53,18 +53,35 @@ describe("hns verification lifecycle routes", () => {
           return new Response(JSON.stringify({
             verified: true,
             observation_provider: "web3dns_json_doh",
+            ownership_source: "hns_parent_chain_txt",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-        if (url.endsWith("/ensure-zone")) {
+        if (url.endsWith("/publish-txt")) {
           return new Response(JSON.stringify({
             root_label: "piraterestartroot",
             zone_name: "piraterestartroot.",
+            challenge_name: "_pirate.piraterestartroot.",
             zone_created: true,
             nameservers: ["ns1.pirate."],
-            observation_provider: "powerdns_sqlite",
+            observation_provider: "powerdns_api",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.includes("/authority-health?")) {
+          return new Response(JSON.stringify({
+            root_label: "piraterestartroot",
+            zone_name: "piraterestartroot.",
+            challenge_name: "_pirate.piraterestartroot.",
+            zone_provisioned: true,
+            challenge_present: true,
+            challenge_served: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "authoritative_dns",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -168,19 +185,36 @@ describe("hns verification lifecycle routes", () => {
               : {
                   verified: true,
                   observation_provider: "web3dns_json_doh",
+                  ownership_source: "hns_parent_chain_txt",
                 },
           ), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-        if (url.endsWith("/ensure-zone")) {
+        if (url.endsWith("/publish-txt")) {
           return new Response(JSON.stringify({
             root_label: "piratependingroot",
             zone_name: "piratependingroot.",
+            challenge_name: "_pirate.piratependingroot.",
             zone_created: true,
             nameservers: ["ns1.pirate."],
-            observation_provider: "powerdns_sqlite",
+            observation_provider: "powerdns_api",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.includes("/authority-health?")) {
+          return new Response(JSON.stringify({
+            root_label: "piratependingroot",
+            zone_name: "piratependingroot.",
+            challenge_name: "_pirate.piratependingroot.",
+            zone_provisioned: true,
+            challenge_present: true,
+            challenge_served: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "authoritative_dns",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
