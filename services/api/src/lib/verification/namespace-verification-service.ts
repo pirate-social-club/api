@@ -7,7 +7,7 @@ import {
 } from "../auth/auth-serializers"
 import {
   checkHnsAuthorityHealth,
-  ensureHnsZone,
+  publishHnsChallenge,
   verifyHnsTxtRecord,
 } from "./hns-verifier"
 import type { HnsVerifyTxtResult } from "./hns-verifier"
@@ -391,29 +391,37 @@ export async function completeNamespaceVerificationSession(
       throw providerUnavailable("HNS verifier is not configured")
     }
 
-    const acceptedSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
-    // Assertion-3 outcome: only meaningful on the Pirate-managed path, only
-    // after ownership+delegation passed, and only as health evidence. Null for
-    // owner-managed sessions and when the health check cannot run.
+    // Assertion 3 (authority health), computed BEFORE the snapshot so routing
+    // capabilities can be derived from it rather than assuming it. Only
+    // meaningful on the Pirate-managed path; null for owner-managed sessions.
     let authorityHealthVerified: number | null = null
-    if (acceptedSnapshot.pirateDnsAuthorityVerified === 1) {
+    const ownershipSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
+    if (ownershipSnapshot.pirateDnsAuthorityVerified === 1) {
       try {
-        await ensureHnsZone(env, {
+        // Provision the child zone AND publish the session nonce in one write —
+        // a bare ensure-zone would leave the health check nothing to read back.
+        await publishHnsChallenge(env, {
           rootLabel: requireNormalizedRootLabel(row),
+          challengeHost: row.challenge_host,
+          challengeTxtValue: row.challenge_txt_value ?? "",
         })
         try {
           const health = await checkHnsAuthorityHealth(env, {
             rootLabel: requireNormalizedRootLabel(row),
             challengeHost: row.challenge_host,
           })
+          // A serving-path result is REQUIRED: challenge_served === null means
+          // the check could not observe the zone being served, which is not
+          // evidence of health.
           authorityHealthVerified = health.zone_provisioned === true
             && health.challenge_present === true
-            && health.challenge_served !== false
+            && health.challenge_served === true
             ? 1
             : 0
         } catch {
           // Health is post-acceptance evidence; an unavailable health check
-          // must not fail the session. Leave the assertion unknown.
+          // must not fail the session. Leave the assertion unknown (which
+          // withholds the routing capabilities that depend on it).
           authorityHealthVerified = null
         }
       } catch (caught) {
@@ -433,6 +441,11 @@ export async function completeNamespaceVerificationSession(
         throw caught
       }
     }
+
+    // Re-derive with health in hand so pirate_web_routing_allowed /
+    // pirate_subdomain_issuance_allowed reflect assertion 3 instead of assuming
+    // a healthy authority.
+    const acceptedSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult, authorityHealthVerified)
 
     await client.batch([
       {
@@ -485,12 +498,16 @@ export async function completeNamespaceVerificationSession(
             namespace_verification_id, source_namespace_verification_session_id, user_id, family, normalized_root_label,
             status, root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
             pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
-            control_class, operation_class, observation_provider, evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at
+            control_class, operation_class, observation_provider, evidence_bundle_ref, accepted_at, expires_at, created_at, updated_at,
+            ownership_source, authority_health_verified
           ) VALUES (
             ?1, ?2, ?3, 'hns', ?4, 'verified', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-            ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?17
+            ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?17,
+            ?19, ?20
           )
           ON CONFLICT(namespace_verification_id) DO UPDATE SET
+            ownership_source = excluded.ownership_source,
+            authority_health_verified = excluded.authority_health_verified,
             source_namespace_verification_session_id = excluded.source_namespace_verification_session_id,
             user_id = excluded.user_id,
             family = excluded.family,
@@ -531,6 +548,8 @@ export async function completeNamespaceVerificationSession(
           evidenceBundleId,
           updatedAt,
           expiresAt,
+          verificationResult?.ownership_source ?? null,
+          authorityHealthVerified,
         ],
       },
       {
@@ -563,6 +582,7 @@ export async function completeNamespaceVerificationSession(
           { name: "expiry_horizon_sufficient", value: acceptedSnapshot.expiryHorizonSufficient },
           { name: "routing_enabled", value: acceptedSnapshot.routingEnabled },
           { name: "pirate_dns_authority_verified", value: acceptedSnapshot.pirateDnsAuthorityVerified },
+          { name: "authority_health_verified", value: authorityHealthVerified },
         ],
       }),
       ...makeNamespaceCapabilityStatements({

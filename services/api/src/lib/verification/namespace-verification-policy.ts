@@ -36,6 +36,7 @@ export type HnsSessionAssertionSnapshot = {
   expiryHorizonSufficient: number | null
   routingEnabled: number | null
   pirateDnsAuthorityVerified: number | null
+  authorityHealthVerified?: number | null
   clubAttachAllowed: number | null
   pirateWebRoutingAllowed: number | null
   pirateSubdomainIssuanceAllowed: number | null
@@ -107,11 +108,19 @@ const TRUSTED_HNS_OBSERVATION_PROVIDERS = new Set([
   "hns_public_dns",
   "web3dns_json_doh",
   "web3dns_public_dns",
+  // Owner-managed ownership proof: the owner's OWN authoritative DNS, observed
+  // through independent resolvers. Without this the owner-managed path is
+  // unreachable in production.
+  "owner_authoritative_dns",
 ])
 
 export function deriveAcceptedHnsSnapshot(
   row: NamespaceVerificationSessionRow,
   verification: HnsVerifyTxtResult | null,
+  // Assertion 3. Only defined once the child zone has been provisioned and read
+  // back through the serving path, so routing capabilities are derived AFTER
+  // health rather than assuming it.
+  authorityHealthVerified: number | null = null,
 ): HnsSessionAssertionSnapshot {
   const hasAcceptedTxtProof = verification?.verified === true
   const isLocalDevAcceptance = verification == null && isLocalDevHnsObservationProvider(row.observation_provider)
@@ -129,10 +138,24 @@ export function deriveAcceptedHnsSnapshot(
     ?? row.pirate_dns_authority_verified
     ?? (isLocalDevAcceptance ? 1 : null)
 
+  // Pirate-managed roots route through Pirate's authority, so their routing and
+  // subdomain capabilities require that authority to be provably HEALTHY —
+  // provisioned, and serving the challenge back through the serving path.
+  // Owner-managed roots route through the owner's own DNS, so health of Pirate's
+  // authority is not part of their capability at all.
+  const dependsOnPirateAuthority = pirateDnsAuthorityVerified === 1
+  const authorityHealthy = !dependsOnPirateAuthority || authorityHealthVerified === 1
+
   const clubAttachAllowed = rootControlVerified === 1 && expiryHorizonSufficient === 1 ? 1 : 0
-  const pirateWebRoutingAllowed = rootControlVerified === 1 && routingEnabled === 1 ? 1 : 0
+  const pirateWebRoutingAllowed =
+    rootControlVerified === 1 && routingEnabled === 1 && authorityHealthy ? 1 : 0
   const pirateSubdomainIssuanceAllowed =
-    rootControlVerified === 1 && expiryHorizonSufficient === 1 && pirateDnsAuthorityVerified === 1 ? 1 : 0
+    rootControlVerified === 1
+      && expiryHorizonSufficient === 1
+      && pirateDnsAuthorityVerified === 1
+      && authorityHealthVerified === 1
+      ? 1
+      : 0
 
   return {
     rootExists,
@@ -140,6 +163,7 @@ export function deriveAcceptedHnsSnapshot(
     expiryHorizonSufficient,
     routingEnabled,
     pirateDnsAuthorityVerified,
+    authorityHealthVerified,
     clubAttachAllowed,
     pirateWebRoutingAllowed,
     pirateSubdomainIssuanceAllowed,
@@ -219,6 +243,7 @@ export function makeNamespaceAssertionStatements(input: {
       | "expiry_horizon_sufficient"
       | "routing_enabled"
       | "pirate_dns_authority_verified"
+      | "authority_health_verified"
       | "root_key_proof_verified"
       | "fabric_publish_verified"
       | "anchor_fresh_enough"

@@ -48,6 +48,16 @@ export type HnsEnsureZoneResult = {
   observation_provider?: string | null
 }
 
+export type HnsPublishChallengeResult = {
+  root_label?: string
+  zone_name?: string
+  challenge_name?: string
+  challenge_txt_value?: string
+  zone_created?: boolean
+  nameservers?: string[]
+  observation_provider?: string | null
+}
+
 export type HnsAuthorityHealthResult = {
   root_label?: string
   zone_name?: string
@@ -231,6 +241,28 @@ export async function verifyHnsTxtRecord(
 ): Promise<HnsVerifyTxtResult> {
   assertHnsRootLabel(input.rootLabel)
   return request<HnsVerifyTxtResult>(env, "/verify-txt-public", {
+    method: "POST",
+    body: JSON.stringify({
+      root_label: input.rootLabel,
+      challenge_host: input.challengeHost ?? null,
+      challenge_txt_value: input.challengeTxtValue,
+    }),
+  })
+}
+
+// Provisions the child zone AND publishes the session nonce at _pirate.<root>
+// in one write. This is what the authority-health check then reads back through
+// the serving path — a bare ensure-zone would leave nothing to find.
+export async function publishHnsChallenge(
+  env: Env,
+  input: {
+    rootLabel: string
+    challengeHost?: string | null
+    challengeTxtValue: string
+  },
+): Promise<HnsPublishChallengeResult> {
+  assertHnsRootLabel(input.rootLabel)
+  return request<HnsPublishChallengeResult>(env, "/publish-txt", {
     method: "POST",
     body: JSON.stringify({
       root_label: input.rootLabel,
