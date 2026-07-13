@@ -52,7 +52,7 @@ const FUNDING_COLUMNS = `
   reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
   chain_id, token_address, expected_amount_cents, expected_amount_atomic,
   sender_address, treasury_address, tx_hash, status, failure_reason,
-  expires_at, confirmed_at, created_at
+  expires_at, confirmed_at, confirmed_block_number, confirmed_block_hash, created_at
 `
 
 function integer(value: unknown): number {
@@ -769,10 +769,14 @@ export async function confirmRewardCampaignFunding(input: {
       sql: `
         UPDATE reward_campaign_funding_effects
         SET status = 'confirmed', received_amount_atomic = expected_amount_atomic,
-            sender_address = ?2, confirmed_at = ?3, failure_reason = NULL, updated_at = ?3
+            sender_address = ?2, confirmed_at = ?3, confirmed_block_number = ?4,
+            confirmed_block_hash = ?5, failure_reason = NULL, updated_at = ?3
         WHERE reward_campaign_funding_effect_id = ?1
       `,
-      args: [input.fundingId, verification.senderAddress, now],
+      args: [
+        input.fundingId, verification.senderAddress, now,
+        verification.blockNumber ?? null, verification.blockHash ?? null,
+      ],
     })
     try {
       await tx.execute({

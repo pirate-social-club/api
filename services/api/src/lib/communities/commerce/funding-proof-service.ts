@@ -203,7 +203,7 @@ export interface BookingPaymentExpectation {
   senderAddress: string
 }
 export type BookingPaymentVerification =
-  | { kind: "verified"; senderAddress: string; txRef: string }
+  | { kind: "verified"; senderAddress: string; txRef: string; blockNumber?: number; blockHash?: string }
   | { kind: "pending"; reason?: string } // not yet final / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
 
@@ -286,7 +286,10 @@ async function classifyFinalizedPaymentReceipt(input: {
       return { kind: "pending", reason: "confirmation_depth_pending" }
     }
   }
-  return evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
+  const evaluated = evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
+  return evaluated.kind === "verified"
+    ? { ...evaluated, blockNumber: receipt.blockNumber, blockHash: receipt.blockHash.toLowerCase() }
+    : evaluated
 }
 
 let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expected: BookingPaymentExpectation; rpcUrl?: string }) => Promise<BookingPaymentVerification>) | null = null

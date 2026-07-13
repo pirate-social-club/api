@@ -12,6 +12,7 @@ function captureWarningCalls(into: unknown[][]) {
     tags?: Record<string, string>,
   ) => {
     into.push([env, message, task, extra, tags].filter((value) => value !== undefined))
+    return true
   }
 }
 

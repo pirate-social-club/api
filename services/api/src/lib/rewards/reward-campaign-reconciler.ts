@@ -9,6 +9,7 @@ import { openCommunityWriteClient } from "../communities/community-read-access"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 
 export const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
@@ -350,8 +351,10 @@ export async function reconcileRewardCampaigns(input: {
   now?: string
 }): Promise<RewardCampaignReconciliationSummary> {
   const campaigns = resolveRewardCampaignConfig(input.env)
+  const alertOwnershipConfigured = rewardCampaignAlertOwnership(input.env) !== null
   const enabled = campaigns.enabled && literalTrue(input.env.REWARDS_ACCRUAL_ENABLED)
     && resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER) !== null
+    && alertOwnershipConfigured
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
