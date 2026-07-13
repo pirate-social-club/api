@@ -43,6 +43,17 @@ export function gateFailedWithDetails(message: string, details: GateFailureDetai
   return new HttpError(403, "gate_failed", message, false, details as Record<string, unknown>)
 }
 
+export const SONG_CONTENT_HASH_MISMATCH_CODE = "song_content_hash_mismatch"
+
+// Stored bytes disagree with the hash the uploader declared. Retrying re-downloads
+// the same bytes and fails identically, so this must never be treated as transient.
+export function songContentHashMismatchError(
+  message: string,
+  details: Record<string, unknown> | null = null,
+): HttpError {
+  return new HttpError(422, SONG_CONTENT_HASH_MISMATCH_CODE, message, false, details)
+}
+
 export function conflictError(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(409, "conflict", message, false, details)
 }

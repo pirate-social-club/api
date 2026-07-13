@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { generateSongPreviewForBundle } from "../src/lib/song-artifacts/song-artifact-preview-service"
+import { permanentPreviewFailure } from "../src/lib/song-artifacts/song-preview-failure"
 import { extractVideoAudioSampleForObject } from "../src/lib/song-artifacts/video-audio-sample"
 import type { Env } from "../src/env"
 import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
@@ -297,11 +298,21 @@ async function handleRequest(request: Request): Promise<Response> {
       startedAt: Date.now(),
     }
     return handlePreview(request, context).catch((error) => {
+      const permanent = permanentPreviewFailure(error)
       logSongPreviewWarning("song_preview.preview.failed", {
         request_id: context.requestId,
         error: error instanceof Error ? error.message : String(error),
+        code: permanent?.code ?? null,
+        permanent: Boolean(permanent),
         latency_ms: Date.now() - context.startedAt,
       })
+      if (permanent) {
+        return jsonResponse({
+          code: permanent.code,
+          message: permanent.message,
+          details: permanent.details,
+        }, permanent.status)
+      }
       return jsonResponse({
         code: "preview_generation_failed",
         message: error instanceof Error ? error.message : "Song preview generation failed",
