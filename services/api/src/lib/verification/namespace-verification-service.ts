@@ -6,6 +6,7 @@ import {
   serializeNamespaceVerificationSession,
 } from "../auth/auth-serializers"
 import {
+  checkHnsAuthorityHealth,
   ensureHnsZone,
   verifyHnsTxtRecord,
 } from "./hns-verifier"
@@ -391,11 +392,30 @@ export async function completeNamespaceVerificationSession(
     }
 
     const acceptedSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
+    // Assertion-3 outcome: only meaningful on the Pirate-managed path, only
+    // after ownership+delegation passed, and only as health evidence. Null for
+    // owner-managed sessions and when the health check cannot run.
+    let authorityHealthVerified: number | null = null
     if (acceptedSnapshot.pirateDnsAuthorityVerified === 1) {
       try {
         await ensureHnsZone(env, {
           rootLabel: requireNormalizedRootLabel(row),
         })
+        try {
+          const health = await checkHnsAuthorityHealth(env, {
+            rootLabel: requireNormalizedRootLabel(row),
+            challengeHost: row.challenge_host,
+          })
+          authorityHealthVerified = health.zone_provisioned === true
+            && health.challenge_present === true
+            && health.challenge_served !== false
+            ? 1
+            : 0
+        } catch {
+          // Health is post-acceptance evidence; an unavailable health check
+          // must not fail the session. Leave the assertion unknown.
+          authorityHealthVerified = null
+        }
       } catch (caught) {
         if (caught instanceof HttpError && caught.code === "provider_unavailable") {
           await client.execute({
@@ -431,6 +451,8 @@ export async function completeNamespaceVerificationSession(
               control_class = ?12,
               operation_class = ?13,
               observation_provider = ?14,
+              ownership_source = ?16,
+              authority_health_verified = ?17,
               evidence_bundle_ref = ?3,
               failure_reason = NULL,
               accepted_at = ?15,
@@ -453,6 +475,8 @@ export async function completeNamespaceVerificationSession(
           acceptedSnapshot.operationClass ?? null,
           observationProvider,
           updatedAt,
+          verificationResult?.ownership_source ?? null,
+          authorityHealthVerified,
         ],
       },
       {
