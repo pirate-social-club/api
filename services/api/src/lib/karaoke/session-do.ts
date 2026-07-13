@@ -42,7 +42,7 @@ const SESSION_EXPIRED_CLOSE_CODE = 4001;
 const FINALIZE_RETRY_BASE_MS = 5_000;
 const FINALIZE_RETRY_MAX_MS = 5 * 60_000;
 
-export interface InitializeRequest {
+interface InitializeRequest {
   communityId: string;
   postId: string;
   sessionId: string;
@@ -81,7 +81,7 @@ export interface DurableObjectContextLike {
   blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
 }
 
-export interface SqliteOutboxStoreOptions {
+interface SqliteOutboxStoreOptions {
   storage: DurableObjectStorage;
   now?: () => number;
 }
