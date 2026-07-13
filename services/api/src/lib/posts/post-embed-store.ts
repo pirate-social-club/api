@@ -163,7 +163,7 @@ export async function upsertPostEmbed(input: {
   return toPostEmbed(toPostEmbedRow(row))
 }
 
-export async function listPostEmbeds(input: {
+async function listPostEmbeds(input: {
   client: DbExecutor
   postId: string
 }): Promise<Post["embeds"]> {
