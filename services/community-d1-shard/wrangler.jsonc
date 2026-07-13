@@ -947,6 +947,106 @@
       "binding": "DB_CMTY_0184",
       "database_name": "community-d1-pool-0184-staging",
       "database_id": "bceba81e-e01a-4f51-b9ef-fb633593f6f2"
+    },
+    {
+      "binding": "DB_CMTY_0185",
+      "database_name": "community-d1-pool-0185-staging",
+      "database_id": "a2a44c7b-e040-449f-bb35-6d83f86896ec"
+    },
+    {
+      "binding": "DB_CMTY_0186",
+      "database_name": "community-d1-pool-0186-staging",
+      "database_id": "856bb792-6fc3-4120-961f-c055a835ee00"
+    },
+    {
+      "binding": "DB_CMTY_0187",
+      "database_name": "community-d1-pool-0187-staging",
+      "database_id": "f8d412b1-4dc2-43f0-aaa5-ee640e9b40eb"
+    },
+    {
+      "binding": "DB_CMTY_0188",
+      "database_name": "community-d1-pool-0188-staging",
+      "database_id": "ae56c78e-36b9-4814-8e65-3ca8e2fd19f0"
+    },
+    {
+      "binding": "DB_CMTY_0189",
+      "database_name": "community-d1-pool-0189-staging",
+      "database_id": "be24358f-beee-43f1-8ac1-ed641447d41f"
+    },
+    {
+      "binding": "DB_CMTY_0190",
+      "database_name": "community-d1-pool-0190-staging",
+      "database_id": "ab27af7b-7c1a-4d84-95b4-5bb94ee6da2d"
+    },
+    {
+      "binding": "DB_CMTY_0191",
+      "database_name": "community-d1-pool-0191-staging",
+      "database_id": "3547b747-9682-4e25-bdc6-395a5f0907eb"
+    },
+    {
+      "binding": "DB_CMTY_0192",
+      "database_name": "community-d1-pool-0192-staging",
+      "database_id": "16c3c49f-cdbe-4c6b-8b93-5be548e7ac04"
+    },
+    {
+      "binding": "DB_CMTY_0193",
+      "database_name": "community-d1-pool-0193-staging",
+      "database_id": "5fad907e-8298-4fd5-9487-f3907a9e42f5"
+    },
+    {
+      "binding": "DB_CMTY_0194",
+      "database_name": "community-d1-pool-0194-staging",
+      "database_id": "6a477ea4-bbf8-4aad-94f4-16a98b8c1a0c"
+    },
+    {
+      "binding": "DB_CMTY_0195",
+      "database_name": "community-d1-pool-0195-staging",
+      "database_id": "3d0db70b-5b4e-4a3a-aa16-0c702844e2fd"
+    },
+    {
+      "binding": "DB_CMTY_0196",
+      "database_name": "community-d1-pool-0196-staging",
+      "database_id": "255d29f6-42ae-49ac-81e2-6a9c61caa0ad"
+    },
+    {
+      "binding": "DB_CMTY_0197",
+      "database_name": "community-d1-pool-0197-staging",
+      "database_id": "9cf2375f-5d74-40ee-98f8-29a1454c045e"
+    },
+    {
+      "binding": "DB_CMTY_0198",
+      "database_name": "community-d1-pool-0198-staging",
+      "database_id": "c9683088-3baf-4edb-bb67-fb860eaf3a66"
+    },
+    {
+      "binding": "DB_CMTY_0199",
+      "database_name": "community-d1-pool-0199-staging",
+      "database_id": "d762e5e3-018d-4fd7-a26c-4101b00b954f"
+    },
+    {
+      "binding": "DB_CMTY_0200",
+      "database_name": "community-d1-pool-0200-staging",
+      "database_id": "88e8a1d4-d8ca-42d4-b95f-cd97291ec19a"
+    },
+    {
+      "binding": "DB_CMTY_0201",
+      "database_name": "community-d1-pool-0201-staging",
+      "database_id": "5926d7fe-4313-41d7-a2a0-d5f4eb39da83"
+    },
+    {
+      "binding": "DB_CMTY_0202",
+      "database_name": "community-d1-pool-0202-staging",
+      "database_id": "86255da6-247c-43eb-acf9-ada8e9bab7ff"
+    },
+    {
+      "binding": "DB_CMTY_0203",
+      "database_name": "community-d1-pool-0203-staging",
+      "database_id": "329b1714-be4b-4e1f-90ea-96e9666ac445"
+    },
+    {
+      "binding": "DB_CMTY_0204",
+      "database_name": "community-d1-pool-0204-staging",
+      "database_id": "64271986-6322-493c-b4ba-279349002fac"
     }
   ],
   // Production env — a SEPARATE worker (community-d1-shard-prod) with its own pool
