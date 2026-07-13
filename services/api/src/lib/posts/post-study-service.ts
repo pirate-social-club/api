@@ -39,15 +39,9 @@ import {
 } from "./post-study-streak-read-service"
 
 export { listPostStreakSummaries } from "./post-study-streak-read-service"
-export type {
-  SongStreakLeaderboardEntry,
-  SongStreakSummary,
-  SongStreakViewerStanding,
-} from "./post-study-streak-read-service"
+export type { SongStreakSummary } from "./post-study-streak-read-service"
 
-export type SongStreakLeaderboardIdentity = SongStreakLeaderboardEntry["identity"]
-
-export type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
+type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 type ExerciseType = "say_it_back" | "translation_choice"
 
 // v2: strip trailing line punctuation at unit creation (see stripTrailingLinePunctuation)
@@ -206,7 +200,7 @@ type StudyReviewSchedule = {
   state: StudyReviewStateRow["state"]
 }
 
-export type SongStudyExercise =
+type SongStudyExercise =
   | {
       id: string
       line_id: string
@@ -228,7 +222,7 @@ export type SongStudyExercise =
       type: "translation_choice"
     }
 
-export type SongStudySessionSummary = {
+type SongStudySessionSummary = {
   due_count: number
   next_due_at?: number
   served_count: number
@@ -279,7 +273,7 @@ export type SongStudyAttemptResult = {
   study_progress?: SongStudyAttemptProgress
 }
 
-export type SongStudyAttemptProgress = {
+type SongStudyAttemptProgress = {
   current_streak: number
   next_due_at?: number
   qualified_today: boolean
@@ -2062,7 +2056,7 @@ type StudyEngagementProgress = {
   studyTargetCount: number
 }
 
-export async function upsertStudyEngagementDay(input: {
+async function upsertStudyEngagementDay(input: {
   client: ReadClient
   communityId: string
   isCorrect: boolean
@@ -2198,7 +2192,7 @@ async function getStudyAttemptProgressSnapshot(input: {
   }
 }
 
-export async function materializeStudyStreak(input: {
+async function materializeStudyStreak(input: {
   activityDate?: string
   client: ReadClient
   now: string
