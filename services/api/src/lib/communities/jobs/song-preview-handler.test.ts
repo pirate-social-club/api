@@ -257,4 +257,49 @@ describe("runSongPreviewGenerate", () => {
     })
     warnSpy.mockRestore()
   })
+
+  test("ends the job instead of retrying when the bundle fails hash verification", async () => {
+    const updates = capturePreviewFailureUpdates()
+    let previewRequests = 0
+    globalThis.fetch = (async (): Promise<Response> => {
+      previewRequests += 1
+      return Response.json({
+        code: "song_content_hash_mismatch",
+        message: "Primary audio content hash does not match downloaded bytes",
+      }, { status: 422 })
+    }) as typeof globalThis.fetch
+    const errors: string[] = []
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    const errorSpy = spyOn(console, "error").mockImplementation((message) => {
+      errors.push(String(message))
+    })
+
+    // Returning a "failed:" result (rather than throwing) is what stops the runner
+    // from burning every remaining attempt on a fault that can never succeed.
+    const result = await runSongPreviewGenerate({
+      env: {
+        SONG_PREVIEW_SERVICE_URL: "https://preview.example/preview",
+        SONG_PREVIEW_SHARED_SECRET: "shared-secret",
+        CONTROL_PLANE_DATABASE_URL: "file::memory:",
+      } as Env,
+      job: testJob({
+        payload_json: JSON.stringify({ song_artifact_bundle: "sab_payload" }),
+      }),
+      communityRepository: {} as never,
+    })
+
+    expect(result).toBe("failed:song_content_hash_mismatch")
+    expect(previewRequests).toBe(1)
+    expect(updates).toHaveLength(1)
+    expect(updates[0]!.previewStatus).toBe("failed")
+    expect(updates[0]!.previewError).toContain("song_content_hash_mismatch")
+
+    const mismatchEvents = errors
+      .map((entry) => JSON.parse(entry) as { event?: string })
+      .filter((entry) => entry.event === "song_preview.content_hash_mismatch")
+    expect(mismatchEvents).toHaveLength(1)
+
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
 })
