@@ -2,7 +2,10 @@ import { createPublicClient, erc20Abi, fallback, http } from "viem"
 import type { Env } from "../../../env"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../community-repository-types"
-import { syncStoryRoyaltyAllocationProjectionForAsset } from "./royalty-allocation-projection"
+import {
+  listPendingStoryRoyaltyAllocationProjectionCommunities,
+  syncStoryRoyaltyAllocationProjectionForAsset,
+} from "./royalty-allocation-projection"
 import {
   listPendingStoryRoyaltyAllocationAssets,
   type StoryRoyaltyAllocationVerificationResult,
@@ -113,14 +116,14 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
 }): Promise<RoyaltyAllocationVerificationSummary> {
   const summary = emptySummary()
   const vaultReader = input.vaultReader ?? createStoryRoyaltyVaultReader(input.env)
-  const communities = await input.communityRepository.listActiveCommunities({
+  const communityIds = await listPendingStoryRoyaltyAllocationProjectionCommunities({
+    env: input.env,
     limit: input.maxCommunities,
-    requireReadyRouting: true,
   })
 
-  for (const community of communities) {
+  for (const communityId of communityIds) {
     const communitySummary = {
-      community_id: community.community_id,
+      community_id: communityId,
       checked: 0,
       verified: 0,
       pending: 0,
@@ -129,7 +132,7 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
     }
     let handle: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
-      handle = await openCommunityWriteClient(input.env, input.communityRepository, community.community_id)
+      handle = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
       const assets = await listPendingStoryRoyaltyAllocationAssets({
         client: handle.client,
         limit: input.maxAssetsPerCommunity,
@@ -162,9 +165,9 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
     } catch (error) {
       summary.failed += 1
       communitySummary.failed += 1
-      summary.failed_communities.push(community.community_id)
+      summary.failed_communities.push(communityId)
       console.warn("[royalty-allocation-verifier] community failed", {
-        communityId: community.community_id,
+        communityId,
         error: error instanceof Error ? error.message : String(error),
       })
     } finally {
