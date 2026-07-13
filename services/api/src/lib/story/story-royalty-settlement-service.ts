@@ -86,6 +86,8 @@ export const STORY_ROYALTY_PAYMENT_WIP_OPTIONS = {
   useMulticallWhenPossible: false,
 } as const
 
+export const STORY_ROYALTY_PAYMENT_PREFLIGHT_MAX_ATTEMPTS = 48
+
 export function isRetryableStoryRoyaltyPreflightError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   const isPreflightCall = message.includes("eth_fillTransaction") || message.includes("eth_call")
@@ -159,7 +161,7 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
         wipOptions: STORY_ROYALTY_PAYMENT_WIP_OPTIONS,
       },
     }),
-    { maxAttempts: 24 },
+    { maxAttempts: STORY_ROYALTY_PAYMENT_PREFLIGHT_MAX_ATTEMPTS },
   )
   const royaltyTxHash = String(royalty.txHash || "")
   if (!royaltyTxHash) {
