@@ -488,6 +488,7 @@ describe("story royalty registration service", () => {
         commercialRevSharePct: 15,
         upstreamAssetRefs: ["story:asset:ast_derivative_onchain_parent"],
         assetKind: "song_audio",
+        accessMode: "public",
         bundle: buildBundle({
           id: "sab_derivative_onchain_child",
           title: "Derivative child",
@@ -594,6 +595,7 @@ describe("story royalty registration service", () => {
         commercialRevSharePct: 10,
         upstreamAssetRefs: null,
         assetKind: "song_audio",
+        accessMode: "public",
         bundle: buildBundle({ id: "sab_original_shares", title: "Original shares" }),
         primaryContentHash: "0xabc123",
         royaltyShares: [
