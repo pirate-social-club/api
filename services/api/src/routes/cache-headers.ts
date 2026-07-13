@@ -1,7 +1,7 @@
 import type { Context } from "hono"
 
 export const PUBLIC_READ_CACHE_FRESH_SECONDS = 600
-export const PUBLIC_READ_CACHE_STALE_SECONDS = 3600
+const PUBLIC_READ_CACHE_STALE_SECONDS = 3600
 export const PUBLIC_READ_CDN_CACHE_CONTROL = `public, max-age=${PUBLIC_READ_CACHE_FRESH_SECONDS}, stale-while-revalidate=${PUBLIC_READ_CACHE_STALE_SECONDS}`
 export const PUBLIC_READ_CACHE_CONTROL = "public, max-age=0"
 const DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES = ["Accept"]
