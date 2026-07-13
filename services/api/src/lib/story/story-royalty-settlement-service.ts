@@ -77,7 +77,7 @@ function resolveRoyaltyPolicyInput(value: string | null | undefined): string | N
   return policy ?? NativeRoyaltyPolicy.LAP
 }
 
-export function isRetryableStoryParentVaultTransferError(error: unknown): boolean {
+export function isRetryableStoryRoyaltyPreflightError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   const isPreflightCall = message.includes("eth_fillTransaction") || message.includes("eth_call")
   return isPreflightCall
@@ -85,7 +85,7 @@ export function isRetryableStoryParentVaultTransferError(error: unknown): boolea
     && !message.toLowerCase().includes("transaction hash")
 }
 
-export async function withStoryParentVaultTransferRetry<T>(
+export async function withStoryRoyaltyPreflightRetry<T>(
   operation: () => Promise<T>,
   options: {
     maxAttempts?: number
@@ -101,14 +101,14 @@ export async function withStoryParentVaultTransferRetry<T>(
     try {
       return await operation()
     } catch (error) {
-      if (attempt === maxAttempts || !isRetryableStoryParentVaultTransferError(error)) {
+      if (attempt === maxAttempts || !isRetryableStoryRoyaltyPreflightError(error)) {
         throw error
       }
       await sleep(delayMs)
     }
   }
 
-  throw new Error("story_parent_royalty_vault_transfer_retry_exhausted")
+  throw new Error("story_royalty_preflight_retry_exhausted")
 }
 
 export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPaymentResult> {
@@ -137,18 +137,24 @@ export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurc
     transport: http(resolveStoryRpcUrl(input.env)),
     chainId: resolveStoryChainName(input.env),
   })
-  const royalty = await storyClient.royalty.payRoyaltyOnBehalf({
-    receiverIpId: receiverIpId as `0x${string}`,
-    payerIpId: payerIpId as `0x${string}`,
-    token: WIP_TOKEN_ADDRESS,
-    amount: input.amount,
-    options: {
-      wipOptions: {
-        enableAutoWrapIp: true,
-        enableAutoApprove: true,
+  // A newly registered IP can be visible through the registry before the
+  // royalty module accepts payment. Retry only simulation reverts, which are
+  // known to occur before a transaction is broadcast and are therefore safe.
+  const royalty = await withStoryRoyaltyPreflightRetry(() =>
+    storyClient.royalty.payRoyaltyOnBehalf({
+      receiverIpId: receiverIpId as `0x${string}`,
+      payerIpId: payerIpId as `0x${string}`,
+      token: WIP_TOKEN_ADDRESS,
+      amount: input.amount,
+      options: {
+        wipOptions: {
+          enableAutoWrapIp: true,
+          enableAutoApprove: true,
+        },
       },
-    },
-  })
+    }),
+    { maxAttempts: 24 },
+  )
   const royaltyTxHash = String(royalty.txHash || "")
   if (!royaltyTxHash) {
     throw new Error("story_royalty_payment_missing_tx_hash")
@@ -186,7 +192,7 @@ export async function transferStoryRoyaltyToParentVault(input: StoryParentRoyalt
   // Story can confirm the royalty payment before the policy exposes the
   // descendant revenue as claimable. Retry only the preflight simulation
   // revert; ambiguous post-broadcast failures must remain non-retryable.
-  const transfer = await withStoryParentVaultTransferRetry(() =>
+  const transfer = await withStoryRoyaltyPreflightRetry(() =>
     storyClient.royalty.transferToVault({
       ipId: childIpId as `0x${string}`,
       ancestorIpId: parentIpId as `0x${string}`,

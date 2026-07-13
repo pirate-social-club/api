@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import {
-  isRetryableStoryParentVaultTransferError,
-  withStoryParentVaultTransferRetry,
+  isRetryableStoryRoyaltyPreflightError,
+  withStoryRoyaltyPreflightRetry,
 } from "./story-royalty-settlement-service"
 
-describe("Story parent royalty vault transfer retry", () => {
+describe("Story royalty preflight retry", () => {
   test("retries a transient preflight revert until claimable revenue is visible", async () => {
     let attempts = 0
     const sleeps: number[] = []
 
-    const result = await withStoryParentVaultTransferRetry(async () => {
+    const result = await withStoryRoyaltyPreflightRetry(async () => {
       attempts += 1
       if (attempts < 3) {
         throw new Error("RPC Request failed: eth_fillTransaction: execution reverted")
@@ -30,7 +30,7 @@ describe("Story parent royalty vault transfer retry", () => {
     let attempts = 0
     const failure = new Error("RPC timeout while waiting for transaction hash")
 
-    await expect(withStoryParentVaultTransferRetry(async () => {
+    await expect(withStoryRoyaltyPreflightRetry(async () => {
       attempts += 1
       throw failure
     }, {
@@ -41,10 +41,13 @@ describe("Story parent royalty vault transfer retry", () => {
   })
 
   test("recognizes only simulation reverts", () => {
-    expect(isRetryableStoryParentVaultTransferError(
+    expect(isRetryableStoryRoyaltyPreflightError(
       new Error("eth_call failed: execution reverted"),
     )).toBe(true)
-    expect(isRetryableStoryParentVaultTransferError(
+    expect(isRetryableStoryRoyaltyPreflightError(
+      new Error('Failed to pay royalty on behalf: aggregate3Value reverted; RPC method "eth_fillTransaction"; execution reverted'),
+    )).toBe(true)
+    expect(isRetryableStoryRoyaltyPreflightError(
       new Error("writeContract failed: execution reverted"),
     )).toBe(false)
   })
