@@ -2,7 +2,18 @@ import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv } from "../helpers"
 import type { Env } from "../../env"
 
-export type HnsInspectResult = {
+export type HnsExpiryEvidence = {
+  expiry_height?: number | null
+  expiry_anchor_height?: number | null
+  expiry_anchor_block_hash?: string | null
+  expiry_anchor_median_time?: number | null
+  expiry_chain_network?: string | null
+  expiry_blocks_remaining?: number | null
+  expiry_horizon_blocks?: number | null
+  expiry_observation_provider?: string | null
+}
+
+export type HnsInspectResult = HnsExpiryEvidence & {
   root_label?: string
   zone_name?: string
   challenge_name?: string
@@ -22,7 +33,7 @@ export type HnsInspectResult = {
 
 export type HnsOwnershipSource = "hns_parent_chain_txt" | "owner_authoritative_dns_txt"
 
-export type HnsVerifyTxtResult = {
+export type HnsVerifyTxtResult = HnsExpiryEvidence & {
   verified?: boolean
   observation_provider?: string | null
   ownership_source?: HnsOwnershipSource | null
