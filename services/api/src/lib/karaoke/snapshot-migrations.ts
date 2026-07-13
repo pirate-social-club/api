@@ -46,5 +46,3 @@ export const KARAOKE_ATTEMPT_FINALIZE_INDEX_DDL = `
 CREATE INDEX IF NOT EXISTS karaoke_attempt_finalize_pending_idx
   ON karaoke_attempt_finalize_outbox (delivered_at, next_attempt_at);
 `;
-
-export const KARAOKE_SNAPSHOT_MIGRATION_TAG = "v1_karaoke_session_runtime" as const;
