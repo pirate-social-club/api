@@ -81,6 +81,9 @@ const spec = {
       "name": "Notifications"
     },
     {
+      "name": "Rewards"
+    },
+    {
       "name": "Jobs"
     }
   ],
@@ -1770,12 +1773,8 @@ const spec = {
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "linked_handle_id"
-                ],
                 "properties": {
-                  "linked_handle_id": {
+                  "linked_handle": {
                     "type": "string",
                     "nullable": true
                   }
@@ -3765,6 +3764,68 @@ const spec = {
         "operationId": "post_communities_by_community_id_posts_by_post_id_karaoke_sessions"
       }
     },
+    "/communities/{community_id}/posts/{post_id}/karaoke/leaderboard": {
+      "get": {
+        "operationId": "communityPostKaraokeLeaderboard",
+        "tags": [
+          "Karaoke"
+        ],
+        "summary": "Fetch the karaoke leaderboard for a song post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/KaraokeRankingScope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KaraokeSongLeaderboard"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
     "/communities/{community_id}/posts/{post_id}/study": {
       "get": {
         "tags": [
@@ -5086,6 +5147,42 @@ const spec = {
         ]
       }
     },
+    "/bookings/{booking_id}/cancellation-preview": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Preview the authoritative financial result of cancelling a booking",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookingCancellationPreview"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "get_bookings_by_booking_id_cancellation_preview",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/bookings/{booking_id}/settlement-review": {
       "get": {
         "tags": [
@@ -5190,22 +5287,24 @@ const spec = {
         "tags": [
           "Bookings"
         ],
-        "summary": "Mutate a booking lifecycle state",
+        "summary": "Cancel a booking, checking previously confirmed financial terms when supplied",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBookingRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
-                  "required": [
-                    "booking"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    }
-                  }
+                  "additionalProperties": true
                 }
               }
             }
@@ -6589,6 +6688,470 @@ const spec = {
             }
           }
         }
+      }
+    },
+    "/me/rewards": {
+      "get": {
+        "operationId": "me_rewards",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get the current user's rewards ledger summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardsSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/rewards/cashouts": {
+      "post": {
+        "operationId": "me_rewards_cashouts",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Claim off-chain reward credits to the user's wallet",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCashoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCashoutResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/rewards/cashouts/{cashout_id}": {
+      "parameters": [
+        {
+          "name": "cashout_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "me_rewards_cashouts_by_cashout_id",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get an authoritative reward cashout status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCashoutResponse"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "cashout_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns": {
+      "post": {
+        "operationId": "reward_campaigns_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Create a draft, budget-backed song-practice campaign",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRewardOffer"
+                }
+              }
+            }
+          },
+          "409": {}
+        }
+      }
+    },
+    "/reward_song_policies/{community_id}/{post_id}": {
+      "parameters": [
+        {
+          "name": "community_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "post_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "reward_song_policies_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get a song owner's third-party reward policy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSongOwnerPolicy"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "reward_song_policies_update",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Update a song owner's third-party reward policy",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardSongOwnerPolicyUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSongOwnerPolicy"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns/{campaign_id}": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "reward_campaigns_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Retrieve a song-practice reward campaign",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/public/reward_campaigns/{campaign_id}": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "public_reward_campaigns_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Retrieve a currently active public song-practice offer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRewardOffer"
+                }
+              }
+            }
+          },
+          "404": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/public/reward_campaigns": {
+      "get": {
+        "operationId": "public_reward_campaigns_resolve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Resolve the active reward offer for a published song post",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "post_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRewardOffer"
+                }
+              }
+            }
+          },
+          "404": {}
+        }
+      }
+    },
+    "/reward_campaigns/{campaign_id}/funding_quotes": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaign_funding_quotes_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Quote a direct Base USDC campaign funding transfer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignFundingQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignFundingQuote"
+                }
+              }
+            }
+          },
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reward_campaigns/{campaign_id}/funding_quotes/{funding_quote_id}/confirm": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "funding_quote_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaign_funding_quotes_confirm",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Verify and uniquely bind a Base USDC receipt to a campaign",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardCampaignFundingConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignFundingQuote"
+                }
+              }
+            }
+          },
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "funding_quote_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/jobs/{job_id}": {
@@ -11493,6 +12056,10 @@ const spec = {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
+          },
           "gate_match_mode": {
             "type": "string",
             "enum": [
@@ -11580,6 +12147,10 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
+          },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
           },
           "missing_capabilities": {
             "type": "array",
@@ -13222,6 +13793,106 @@ const spec = {
           }
         }
       },
+      "KaraokeRankingScope": {
+        "type": "string",
+        "enum": [
+          "all_time",
+          "weekly"
+        ]
+      },
+      "KaraokeSongLeaderboard": {
+        "type": "object",
+        "required": [
+          "object",
+          "post_id",
+          "community_id",
+          "scope",
+          "karaoke_revision_id",
+          "scoring_version",
+          "scoring_provider",
+          "scoring_model",
+          "total_ranked",
+          "entries",
+          "viewer_rank",
+          "viewer_top_percent",
+          "viewer_best_score",
+          "viewer_best_reached_at",
+          "viewer_eligible_attempt_count"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "karaoke_song_leaderboard"
+            ]
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/KaraokeRankingScope"
+          },
+          "period_start": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "karaoke_revision_id": {
+            "type": "string"
+          },
+          "scoring_version": {
+            "type": "integer"
+          },
+          "scoring_provider": {
+            "type": "string"
+          },
+          "scoring_model": {
+            "type": "string"
+          },
+          "total_ranked": {
+            "type": "integer"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KaraokeLeaderboardEntry"
+            }
+          },
+          "viewer_rank": {
+            "type": "integer",
+            "nullable": true
+          },
+          "viewer_top_percent": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "viewer_best_score": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "viewer_best_reached_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "viewer_eligible_attempt_count": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStudyPayload": {
         "type": "object",
         "required": [
@@ -14034,6 +14705,10 @@ const spec = {
           "lyrics_sha256": {
             "type": "string"
           },
+          "karaoke_revision_id": {
+            "type": "string",
+            "nullable": true
+          },
           "genius_annotations_url": {
             "type": "string",
             "nullable": true
@@ -14110,6 +14785,21 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "alignment_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "lyrics_missing",
+              "audio_missing",
+              "elevenlabs_key_missing",
+              "elevenlabs_key_invalid",
+              "elevenlabs_rate_limited",
+              "elevenlabs_provider_unavailable",
+              "elevenlabs_timeout",
+              "elevenlabs_invalid_response",
+              "alignment_failed"
+            ]
+          },
           "timed_lyrics_ref": {
             "type": "string",
             "nullable": true
@@ -14167,6 +14857,15 @@ const spec = {
           },
           "status": {
             "$ref": "#/BookingStatus"
+          },
+          "outcome": {
+            "$ref": "#/BookingOutcome"
+          },
+          "settlement_status": {
+            "$ref": "#/BookingSettlementStatus"
+          },
+          "counterparty": {
+            "$ref": "#/BookingCounterparty"
           },
           "host_user_id": {
             "type": "string"
@@ -14300,6 +14999,60 @@ const spec = {
           }
         }
       },
+      "BookingCancellationPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object",
+          "booking_id",
+          "cancelled_by",
+          "gross_cents",
+          "refund_cents",
+          "host_payout_cents",
+          "platform_fee_cents",
+          "previewed_at",
+          "policy_cutoff_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "booking_cancellation_preview"
+            ]
+          },
+          "booking_id": {
+            "type": "string"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "enum": [
+              "host",
+              "booker"
+            ]
+          },
+          "gross_cents": {
+            "type": "integer"
+          },
+          "refund_cents": {
+            "type": "integer"
+          },
+          "host_payout_cents": {
+            "type": "integer"
+          },
+          "platform_fee_cents": {
+            "type": "integer"
+          },
+          "previewed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "policy_cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
       "ResolveBookingSettlementReviewRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -14352,6 +15105,16 @@ const spec = {
           },
           "replayed": {
             "type": "boolean"
+          }
+        }
+      },
+      "CancelBookingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expected_refund_cents": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -14917,6 +15680,10 @@ const spec = {
             "$ref": "#/components/schemas/SongStudyCapability",
             "nullable": true
           },
+          "karaoke_capability": {
+            "$ref": "#/components/schemas/SongKaraokeCapability",
+            "nullable": true
+          },
           "streak_summary": {
             "$ref": "#/components/schemas/SongStreakSummary",
             "nullable": true
@@ -15232,6 +15999,436 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RewardsSummaryResponse": {
+        "type": "object",
+        "required": [
+          "balance_cents",
+          "today_earned_cents",
+          "recent_events",
+          "cashout",
+          "latest_in_flight_cashout"
+        ],
+        "properties": {
+          "balance_cents": {
+            "type": "integer"
+          },
+          "today_earned_cents": {
+            "type": "integer"
+          },
+          "recent_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardEventSummary"
+            }
+          },
+          "cashout": {
+            "$ref": "#/components/schemas/RewardsCashoutSummary"
+          },
+          "latest_in_flight_cashout": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardPayoutSummary"
+          }
+        }
+      },
+      "RewardCashoutRequest": {
+        "type": "object",
+        "required": [
+          "amount_cents",
+          "idempotency_key"
+        ],
+        "properties": {
+          "amount_cents": {
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "wallet_proof": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardCashoutWalletProof"
+          }
+        }
+      },
+      "RewardCashoutResponse": {
+        "type": "object",
+        "required": [
+          "payout",
+          "balance_cents"
+        ],
+        "properties": {
+          "payout": {
+            "$ref": "#/components/schemas/RewardPayoutSummary"
+          },
+          "balance_cents": {
+            "type": "integer"
+          }
+        }
+      },
+      "RewardCampaignCreateRequest": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "eligible_activity",
+          "daily_reward_cents",
+          "milestone_7_cents",
+          "milestone_30_cents",
+          "reward_period_cap_cents",
+          "budget_cents",
+          "starts_at",
+          "ends_at",
+          "idempotency_key"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "milestone_7_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 0
+          },
+          "milestone_30_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 0
+          },
+          "reward_period_cap_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "starts_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicRewardOffer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eligible_activity",
+          "daily_reward_cents",
+          "ends_at"
+        ],
+        "properties": {
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardSongOwnerPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "song_owner",
+          "third_party_rewards"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "RewardSongOwnerPolicyUpdateRequest": {
+        "type": "object",
+        "required": [
+          "third_party_rewards"
+        ],
+        "properties": {
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "RewardCampaign": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "rewarder",
+          "community",
+          "post",
+          "song_artifact_bundle",
+          "song_owner",
+          "status",
+          "eligible_activity",
+          "daily_reward_cents",
+          "milestone_7_cents",
+          "milestone_30_cents",
+          "reward_period_cap_cents",
+          "budget_cents",
+          "funded_cents",
+          "reserved_cents",
+          "credited_cents",
+          "paid_cents",
+          "refunded_cents",
+          "remaining_cents",
+          "starts_at",
+          "ends_at",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "reward_campaign"
+            ]
+          },
+          "rewarder": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_artifact_bundle": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardCampaignStatus"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "milestone_7_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "milestone_30_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reward_period_cap_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "funded_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reserved_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "credited_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "paid_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refunded_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "starts_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "activated_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "exhausted_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "ended_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "canceled_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardCampaignFundingQuoteRequest": {
+        "type": "object",
+        "required": [
+          "amount_cents",
+          "idempotency_key"
+        ],
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "RewardCampaignFundingQuote": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "campaign",
+          "funder",
+          "chain_id",
+          "token_address",
+          "amount_cents",
+          "amount_atomic",
+          "sender_address",
+          "treasury_address",
+          "status",
+          "expires_at",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "reward_campaign_funding_quote"
+            ]
+          },
+          "campaign": {
+            "type": "string"
+          },
+          "funder": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "token_address": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "amount_atomic": {
+            "type": "string"
+          },
+          "sender_address": {
+            "type": "string"
+          },
+          "treasury_address": {
+            "type": "string"
+          },
+          "tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardCampaignFundingStatus"
+          },
+          "failure_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "confirmed_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardCampaignFundingConfirmRequest": {
+        "type": "object",
+        "required": [
+          "tx_hash"
+        ],
+        "properties": {
+          "tx_hash": {
+            "type": "string"
           }
         }
       },
@@ -16209,10 +17406,6 @@ const spec = {
             ]
           },
           "provider_partner_ref": {
-            "type": "string",
-            "nullable": true
-          },
-          "payout_destination_ref": {
             "type": "string",
             "nullable": true
           },
@@ -17409,6 +18602,16 @@ const spec = {
           }
         }
       },
+      "MembershipGateExpressionSummary": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/MembershipGateExpressionGate"
+          },
+          {
+            "$ref": "#/components/schemas/MembershipGateExpressionGroup"
+          }
+        ]
+      },
       "CommunityRule": {
         "type": "object",
         "required": [
@@ -18290,6 +19493,43 @@ const spec = {
           }
         ]
       },
+      "KaraokeLeaderboardEntry": {
+        "type": "object",
+        "required": [
+          "rank",
+          "top_percent",
+          "score",
+          "reached_at",
+          "identity",
+          "is_viewer"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer"
+          },
+          "top_percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "reached_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/KaraokeLeaderboardIdentity"
+          },
+          "is_viewer": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStudyAccessState": {
         "type": "string",
         "enum": [
@@ -19169,6 +20409,10 @@ const spec = {
               "$ref": "#/components/schemas/MembershipGateSummary"
             }
           },
+          "membership_gate_expression": {
+            "$ref": "#/components/schemas/MembershipGateExpressionSummary",
+            "nullable": true
+          },
           "gate_match_mode": {
             "type": "string",
             "enum": [
@@ -19292,6 +20536,37 @@ const spec = {
           "target_language": {
             "type": "string",
             "nullable": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongFeatureCapabilityReason"
+            }
+          }
+        }
+      },
+      "SongKaraokeCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "locked",
+              "processing",
+              "failed",
+              "unavailable"
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SongFeatureCapabilityReason"
+            }
           }
         }
       },
@@ -19513,6 +20788,169 @@ const spec = {
           "open",
           "completed",
           "dismissed"
+        ]
+      },
+      "RewardEventSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "community_id",
+          "post_id",
+          "activity_date",
+          "reward_kind",
+          "amount_cents",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "activity_date": {
+            "type": "string"
+          },
+          "reward_kind": {
+            "$ref": "#/components/schemas/RewardEventKind"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "reward_campaign_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reward_period_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "qualification_basis": {
+            "type": "string",
+            "enum": [
+              "study",
+              "karaoke",
+              "both"
+            ],
+            "nullable": true
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardsCashoutSummary": {
+        "type": "object",
+        "required": [
+          "eligible",
+          "min_cents",
+          "verification_state"
+        ],
+        "properties": {
+          "eligible": {
+            "type": "boolean"
+          },
+          "min_cents": {
+            "type": "integer"
+          },
+          "verification_state": {
+            "$ref": "#/components/schemas/RewardVerificationState"
+          }
+        }
+      },
+      "RewardPayoutSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "amount_cents",
+          "recipient_address",
+          "status",
+          "settlement_ref",
+          "failure_reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "recipient_address": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardPayoutStatus"
+          },
+          "settlement_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "failure_reason": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RewardCashoutWalletProof": {
+        "type": "object",
+        "required": [
+          "type",
+          "privy_access_token"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "privy_access_token"
+            ]
+          },
+          "privy_access_token": {
+            "type": "string"
+          },
+          "wallet_address": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "RewardCampaignEligibleActivity": {
+        "type": "string",
+        "enum": [
+          "study",
+          "karaoke",
+          "either"
+        ]
+      },
+      "RewardCampaignStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "funding_quoted",
+          "funding_confirming",
+          "scheduled",
+          "active",
+          "paused",
+          "exhausted",
+          "ended",
+          "canceled"
+        ]
+      },
+      "RewardCampaignFundingStatus": {
+        "type": "string",
+        "enum": [
+          "quoted",
+          "confirming",
+          "confirmed",
+          "failed",
+          "refunded"
         ]
       },
       "PublicCommunityIdentity": {
@@ -21158,6 +22596,49 @@ const spec = {
           }
         }
       },
+      "MembershipGateExpressionGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "gate"
+        ],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "gate"
+            ]
+          },
+          "gate": {
+            "$ref": "#/components/schemas/MembershipGateSummary"
+          }
+        }
+      },
+      "MembershipGateExpressionGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "op",
+          "children"
+        ],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "and",
+              "or"
+            ]
+          },
+          "children": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/MembershipGateExpressionSummary"
+            }
+          }
+        }
+      },
       "GateTraceNode": {
         "type": "object",
         "required": [
@@ -21635,6 +23116,37 @@ const spec = {
           "unavailable"
         ]
       },
+      "KaraokeLeaderboardIdentity": {
+        "type": "object",
+        "required": [
+          "visibility",
+          "display_name",
+          "handle",
+          "avatar_ref"
+        ],
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "visible",
+              "anonymized"
+            ]
+          },
+          "display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatar_ref": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStreakLeaderboardIdentity": {
         "type": "object",
         "required": [
@@ -21772,6 +23284,58 @@ const spec = {
           }
         }
       },
+      "SongFeatureCapabilityReason": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "kind",
+          "owner_action"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "lyrics_missing",
+              "lyrics_too_short",
+              "exercise_generation_failed",
+              "provider_key_missing",
+              "provider_key_invalid",
+              "provider_rate_limited",
+              "provider_unavailable",
+              "provider_timeout",
+              "provider_invalid_response",
+              "instrumental_missing",
+              "timed_lyrics_missing",
+              "alignment_failed",
+              "karaoke_disabled",
+              "locked"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "config",
+              "content",
+              "processing_failure",
+              "entitlement",
+              "unavailable"
+            ]
+          },
+          "owner_action": {
+            "type": "string",
+            "enum": [
+              "none",
+              "manage_integrations",
+              "retry",
+              "edit_song",
+              "upload_instrumental",
+              "enable_karaoke",
+              "buy"
+            ]
+          }
+        }
+      },
       "NotificationEvent": {
         "type": "object",
         "required": [
@@ -21861,6 +23425,33 @@ const spec = {
             "format": "int64"
           }
         }
+      },
+      "RewardEventKind": {
+        "type": "string",
+        "enum": [
+          "study_streak_day",
+          "study_streak_milestone_7",
+          "study_streak_milestone_30",
+          "campaign_practice_day",
+          "campaign_milestone_7",
+          "campaign_milestone_30"
+        ]
+      },
+      "RewardVerificationState": {
+        "type": "string",
+        "enum": [
+          "unverified",
+          "verified",
+          "conflict"
+        ]
+      },
+      "RewardPayoutStatus": {
+        "type": "string",
+        "enum": [
+          "submitted",
+          "confirmed",
+          "failed"
+        ]
       },
       "StructuredAccessLink": {
         "type": "object",

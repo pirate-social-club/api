@@ -2699,17 +2699,7 @@ export type RewardCashoutResponse = {
   balance_cents: number;
 };
 
-export type RewardCampaignStatus = "draft" | "funding_quoted" | "funding_confirming" | "scheduled" | "active" | "paused" | "operational_hold" | "exhausted" | "ended" | "canceled";
-
-export type RewardCampaignIncidentRecoveryRequest = {
-  incident_version: number;
-  resolution_note: string;
-};
-
-export type RewardCampaignIncidentRecoveryResponse = {
-  campaign_id: string;
-  status: RewardCampaignStatus;
-};
+export type RewardCampaignStatus = "draft" | "funding_quoted" | "funding_confirming" | "scheduled" | "active" | "paused" | "exhausted" | "ended" | "canceled";
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
@@ -4248,7 +4238,6 @@ export const apiRoutes = {
   rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
   publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
   publicRewardCampaigns: "/public/reward_campaigns",
-  operatorRewardCampaignIncidentRecovery: (campaignId: string, incidentId: string) => `/operator/reward_campaigns/${campaignId}/incidents/${incidentId}/recover`,
   rewardCampaignFundingQuotes: (campaignId: string) => `/reward_campaigns/${campaignId}/funding_quotes`,
   rewardCampaignFundingQuoteConfirm: (campaignId: string, fundingQuoteId: string) => `/reward_campaigns/${campaignId}/funding_quotes/${fundingQuoteId}/confirm`,
 } as const
