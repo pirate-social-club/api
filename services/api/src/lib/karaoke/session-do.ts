@@ -15,6 +15,7 @@ import {
 } from "@pirate-social-club/karaoke-runtime";
 
 import type { Env } from "../../env";
+import { withRequestControlPlaneClients } from "../runtime-deps";
 import {
   CloudflareKaraokeEffectRunner,
   type OutboxRow,
@@ -39,6 +40,7 @@ const TRUSTED_GATEWAY_HEADERS = [
   "x-karaoke-subject",
 ] as const;
 const SESSION_EXPIRED_CLOSE_CODE = 4001;
+const SESSION_CONFIGURATION_CLOSE_CODE = 4002;
 const FINALIZE_RETRY_BASE_MS = 5_000;
 const FINALIZE_RETRY_MAX_MS = 5 * 60_000;
 
@@ -224,9 +226,9 @@ export class KaraokeSessionRuntimeDO {
 
   async webSocketMessage(server: WebSocket, message: string | ArrayBuffer): Promise<void> {
     await this.schemaReady;
-    if (await this.rejectExpiredSocket(server)) return;
+    if (!(await this.ensureHostForSocket(server))) return;
+    if (this.rejectExpiredSocket(server)) return;
     if (typeof message !== "string") {
-      await this.ensureHost();
       const decoded = decodeKaraokeBinaryFrame(message, {
         attemptId: this.meta!.attemptId,
         sessionId: this.meta!.sessionId,
@@ -239,7 +241,6 @@ export class KaraokeSessionRuntimeDO {
       await this.persistSnapshotIfNeeded();
       return;
     }
-    await this.ensureHost();
     let parsed: unknown;
     try {
       parsed = JSON.parse(message);
@@ -351,7 +352,7 @@ export class KaraokeSessionRuntimeDO {
       sttAdapter = await this.resolveSttAdapter(state, body.communityId);
     } catch (error) {
       if (error instanceof KaraokeSttConfigurationError) {
-        return Response.json({ error: error.code }, { status: 503 });
+        return Response.json({ error: error.code }, { status: 422 });
       }
       throw error;
     }
@@ -435,7 +436,15 @@ export class KaraokeSessionRuntimeDO {
     if (!this.ctx.acceptWebSocket) {
       return Response.json({ error: "websockets_not_supported" }, { status: 501 });
     }
-    await this.ensureHost();
+    try {
+      await this.ensureHost();
+    } catch (error) {
+      if (error instanceof KaraokeSttConfigurationError) {
+        console.error("[karaoke-stt] refusing to restore session without a real adapter", { code: error.code });
+        return Response.json({ error: error.code }, { status: 422 });
+      }
+      throw error;
+    }
     const requestId = request.headers.get("x-karaoke-request-id")?.trim() ?? "";
     if (this.isExpired()) {
       return Response.json({ error: "karaoke_session_expired" }, {
@@ -471,11 +480,11 @@ export class KaraokeSessionRuntimeDO {
     });
   }
 
-  private async sendSessionError(server: WebSocket, message: string): Promise<void> {
+  private async sendSessionError(server: WebSocket, message: string, code = "session_aborted"): Promise<void> {
     try {
       const envelope = {
         attemptId: this.meta?.attemptId ?? "",
-        code: "session_aborted",
+        code,
         eventId: `${this.meta?.sessionId ?? ""}:${this.meta?.attemptId ?? ""}:session_error:socket`,
         message,
         protocolVersion: 1,
@@ -489,6 +498,27 @@ export class KaraokeSessionRuntimeDO {
     }
   }
 
+  private async ensureHostForSocket(server: WebSocket): Promise<boolean> {
+    try {
+      await this.ensureHost();
+      return true;
+    } catch (error) {
+      if (!(error instanceof KaraokeSttConfigurationError)) throw error;
+      console.error("[karaoke-stt] aborting restored session without a real adapter", { code: error.code });
+      await this.sendSessionError(
+        server,
+        "Karaoke scoring is unavailable; this attempt was not scored",
+        "karaoke_stt_unconfigured",
+      );
+      try {
+        server.close(SESSION_CONFIGURATION_CLOSE_CODE, "Karaoke scoring unavailable");
+      } catch {
+        // best-effort
+      }
+      return false;
+    }
+  }
+
   private async ensureHost(): Promise<void> {
     if (this.host) return;
     const stored = this.loadStoredSnapshot();
@@ -497,19 +527,14 @@ export class KaraokeSessionRuntimeDO {
     }
     const restored = deserializeKaraokeSessionSnapshot(stored);
     this.meta = stored.runtimeMetadata;
-    // The session was already validated at creation; on restore, degrade to the
-    // fake adapter rather than crash a live session if config has since broken.
-    let sttAdapter: KaraokeStreamingSttAdapter;
-    try {
-      sttAdapter = await this.resolveSttAdapter(restored.state, stored.runtimeMetadata.communityId);
-    } catch (error) {
-      if (error instanceof KaraokeSttConfigurationError) {
-        console.error("[karaoke-stt] STT config error on restore; degrading to fake", { code: error.code });
-        sttAdapter = new FakeKaraokeStreamingSttAdapter();
-      } else {
-        throw error;
-      }
+    const communityId = stored.runtimeMetadata.communityId?.trim();
+    if (!communityId) {
+      throw new KaraokeSttConfigurationError("karaoke_stt_restore_missing_community");
     }
+    // A production scoring session must never silently restore onto the fake
+    // adapter: that turns an infrastructure/configuration failure into a bogus
+    // all-miss score that can be persisted. Abort restoration instead.
+    const sttAdapter = await this.resolveSttAdapter(restored.state, communityId);
     await this.initializeHost(restored.state, sttAdapter, {
       lastClientSequence: restored.lastClientSequence,
       lastSttSequence: restored.lastSttSequence,
@@ -533,13 +558,14 @@ export class KaraokeSessionRuntimeDO {
   }
 
   private async resolveSttAdapter(state: KaraokeSessionState, communityId: string): Promise<KaraokeStreamingSttAdapter> {
-    return this.options.sttAdapter ?? resolveKaraokeSttAdapter({
+    if (this.options.sttAdapter) return this.options.sttAdapter;
+    return await withRequestControlPlaneClients(() => resolveKaraokeSttAdapter({
       attemptId: state.attemptId,
       communityId,
       env: this.env,
       policy: state.scoringPolicy,
       sessionId: state.sessionId,
-    });
+    }));
   }
 
   private async initializeHost(
@@ -804,8 +830,7 @@ export class KaraokeSessionRuntimeDO {
     return Boolean(this.meta && this.meta.sessionExpiresAtMs <= this.now());
   }
 
-  private async rejectExpiredSocket(server: WebSocket): Promise<boolean> {
-    await this.ensureHost();
+  private rejectExpiredSocket(server: WebSocket): boolean {
     if (!this.isExpired()) return false;
     try {
       server.close(SESSION_EXPIRED_CLOSE_CODE, "Karaoke session expired");

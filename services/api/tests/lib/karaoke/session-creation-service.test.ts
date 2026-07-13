@@ -152,6 +152,20 @@ describe("karaoke session creation service", () => {
     expect(calls).toEqual(["claim", "payload", "policy", "fail"])
   })
 
+  test("keeps an in-progress idempotent creation retryable", async () => {
+    const { deps } = dependencies({
+      async claim() {
+        return { kind: "pending", record: initializedRecord({ status: "pending" }) }
+      },
+    })
+
+    await expect(create(deps)).rejects.toMatchObject({
+      code: "karaoke_session_create_in_progress",
+      retryable: true,
+      status: 409,
+    } satisfies Partial<HttpError>)
+  })
+
   test("retries one runtime collision using a new session and attempt", async () => {
     let runtimeCalls = 0
     const { deps, initialized } = dependencies({
@@ -167,6 +181,47 @@ describe("karaoke session creation service", () => {
       ["uuid-4", "uuid-5"],
     ])
     expect(result.id).toBe("uuid-4")
+  })
+
+  test("maps an unconfigured STT provider to a distinct terminal error", async () => {
+    const { calls, deps } = dependencies({
+      async initializeRuntime() {
+        calls.push("initialize")
+        return { errorCode: "karaoke_stt_unconfigured_elevenlabs", status: 422 }
+      },
+    })
+
+    await expect(create(deps)).rejects.toMatchObject({
+      code: "karaoke_stt_unconfigured",
+      retryable: false,
+      status: 400,
+    } satisfies Partial<HttpError>)
+    expect(calls.filter((call) => call === "initialize")).toHaveLength(1)
+    expect(calls.at(-1)).toBe("fail")
+  })
+
+  test("serves a cached failed creation without touching the runtime", async () => {
+    const { calls, deps } = dependencies({
+      async claim() {
+        calls.push("claim")
+        return {
+          kind: "failed",
+          record: initializedRecord({
+            attemptId: null,
+            failureCode: "karaoke_runtime_unavailable",
+            sessionId: null,
+            status: "failed",
+          }),
+        }
+      },
+    })
+
+    await expect(create(deps)).rejects.toMatchObject({
+      code: "karaoke_runtime_unavailable",
+      retryable: true,
+      status: 503,
+    } satisfies Partial<HttpError>)
+    expect(calls).toEqual(["claim"])
   })
 
   test("returns an initialized idempotent session without allocating another runtime", async () => {

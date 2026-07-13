@@ -27,6 +27,7 @@ const KARAOKE_CREATION_FAILED_TTL_SECONDS = 60
 type KaraokeSessionCreateErrorCode =
   | "karaoke_scoring_disabled"
   | "karaoke_unavailable"
+  | "karaoke_stt_unconfigured"
   | "karaoke_runtime_unavailable"
   | "karaoke_runtime_initialization_failed"
   | "karaoke_session_create_in_progress"
@@ -76,7 +77,7 @@ export interface KaraokeSessionCreationDependencies {
     sessionExpiresAtMs: number
     lines: ScorableKaraokeLine[]
     scoringPolicy: KaraokeScoringPolicy
-  }): Promise<{ status: number }>
+  }): Promise<{ errorCode?: string | null; status: number }>
   issueToken(input: { claims: KaraokeGatewayClaims }): Promise<string>
   loadPayload(): Promise<SongKaraokePayload>
   randomUUID(): string
@@ -106,7 +107,20 @@ type InitializedCreationRecord = KaraokeSessionCreationRecord & {
 }
 
 function karaokeError(status: number, code: KaraokeSessionCreateErrorCode, message: string): HttpError {
-  return new HttpError(status, code, message, status >= 500)
+  return new HttpError(status, code, message, status >= 500 || code === "karaoke_session_create_in_progress")
+}
+
+function cachedFailureError(failureCode: string | null): HttpError {
+  if (failureCode === "karaoke_stt_unconfigured") {
+    return karaokeError(400, "karaoke_stt_unconfigured", "Karaoke scoring provider is not configured")
+  }
+  if (failureCode === "karaoke_scoring_disabled" || failureCode === "karaoke_unavailable") {
+    return karaokeError(409, failureCode, "Karaoke is unavailable")
+  }
+  const code = failureCode === "karaoke_runtime_initialization_failed"
+    ? failureCode
+    : "karaoke_runtime_unavailable"
+  return karaokeError(503, code, "Karaoke runtime initialization failed")
 }
 
 function iso(ms: number): string {
@@ -276,6 +290,9 @@ export async function createKaraokeSession(input: {
   if (claim.kind === "initialized") {
     return await responseFromRecord({ deps: input.deps, key, nowMs, record: claim.record })
   }
+  if (claim.kind === "failed") {
+    throw cachedFailureError(claim.record.failureCode)
+  }
 
   let failureCode = "karaoke_runtime_initialization_failed"
   try {
@@ -316,6 +333,10 @@ export async function createKaraokeSession(input: {
         sessionId,
         subjectUserId: input.subjectUserId,
       })
+      if (runtime.errorCode?.startsWith("karaoke_stt_unconfigured_")) {
+        failureCode = "karaoke_stt_unconfigured"
+        throw karaokeError(400, "karaoke_stt_unconfigured", "Karaoke scoring provider is not configured")
+      }
       if (runtime.status === 409 && attempt === 0) continue
       if (runtime.status !== 200) {
         failureCode = runtime.status === 409

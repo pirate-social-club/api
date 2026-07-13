@@ -237,7 +237,7 @@ describe("karaoke session creation repository", () => {
     expect(stored?.expiresAt).toBe("2026-06-13T10:01:01.000Z")
   })
 
-  test("reaps a failed claim on retry without surfacing the prior failure", async () => {
+  test("caches a failed claim until its expiry, then permits a fresh claim", async () => {
     const client = await setup()
     await claimKaraokeSessionCreation({
       client,
@@ -253,17 +253,25 @@ describe("karaoke session creation repository", () => {
       expiresAt: "2026-06-13T10:05:00.000Z",
     })
 
-    const reaped = await claimKaraokeSessionCreation({
+    const cached = await claimKaraokeSessionCreation({
       client,
       key,
       now: "2026-06-13T10:00:02.000Z",
       pendingExpiresAt: "2026-06-13T10:00:32.000Z",
+    })
+    expect(cached.kind).toBe("failed")
+
+    const reaped = await claimKaraokeSessionCreation({
+      client,
+      key,
+      now: "2026-06-13T10:05:01.000Z",
+      pendingExpiresAt: "2026-06-13T10:05:31.000Z",
     })
     const stored = await getKaraokeSessionCreationRecord({ client, key })
 
     expect(reaped.kind).toBe("claimed")
     expect(stored?.status).toBe("pending")
     expect(stored?.failureCode).toBeNull()
-    expect(stored?.expiresAt).toBe("2026-06-13T10:00:32.000Z")
+    expect(stored?.expiresAt).toBe("2026-06-13T10:05:31.000Z")
   })
 })
