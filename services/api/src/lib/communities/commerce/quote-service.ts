@@ -28,7 +28,7 @@ import {
   getCommunityMoneyPolicy,
   getCommunityPricingPolicy,
 } from "./policy-service"
-import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import { ensureAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
 import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
@@ -285,7 +285,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
     let settlementMode = resolvePurchaseSettlementMode({})
     let replayAllocationSnapshot: QuoteAllocationSnapshot[] | null = null
     if (listing.asset_id?.trim()) {
-      const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
+      let asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
       if (!asset) {
         throw notFoundError("Asset not found")
       }
@@ -304,7 +304,11 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
           throw notFoundError("Listing not found")
         }
       }
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      asset = await ensureAssetReadyForStoryRoyaltyCommerce({
+        asset,
+        client: db.client,
+        env: input.env,
+      })
       settlementMode = resolvePurchaseSettlementMode({
         storyRoyaltyRegistrationStatus: asset.story_royalty_registration_status,
         storyIpId: asset.story_ip_id,
