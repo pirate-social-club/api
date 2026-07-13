@@ -2,7 +2,18 @@ import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv } from "../helpers"
 import type { Env } from "../../env"
 
-export type HnsInspectResult = {
+export type HnsExpiryEvidence = {
+  expiry_height?: number | null
+  expiry_anchor_height?: number | null
+  expiry_anchor_block_hash?: string | null
+  expiry_anchor_median_time?: number | null
+  expiry_chain_network?: string | null
+  expiry_blocks_remaining?: number | null
+  expiry_horizon_blocks?: number | null
+  expiry_observation_provider?: string | null
+}
+
+export type HnsInspectResult = HnsExpiryEvidence & {
   root_label?: string
   zone_name?: string
   challenge_name?: string
@@ -20,9 +31,12 @@ export type HnsInspectResult = {
   failure_reason?: string | null
 }
 
-export type HnsVerifyTxtResult = {
+export type HnsOwnershipSource = "hns_parent_chain_txt" | "owner_authoritative_dns_txt"
+
+export type HnsVerifyTxtResult = HnsExpiryEvidence & {
   verified?: boolean
   observation_provider?: string | null
+  ownership_source?: HnsOwnershipSource | null
   failure_reason?: string | null
   observed_values?: string[]
   root_exists?: boolean | null
@@ -41,6 +55,27 @@ export type HnsEnsureZoneResult = {
   root_label?: string
   zone_name?: string
   zone_created?: boolean
+  nameservers?: string[]
+  observation_provider?: string | null
+}
+
+export type HnsPublishChallengeResult = {
+  root_label?: string
+  zone_name?: string
+  challenge_name?: string
+  challenge_txt_value?: string
+  zone_created?: boolean
+  nameservers?: string[]
+  observation_provider?: string | null
+}
+
+export type HnsAuthorityHealthResult = {
+  root_label?: string
+  zone_name?: string
+  challenge_name?: string
+  zone_provisioned?: boolean
+  challenge_present?: boolean
+  challenge_served?: boolean | null
   nameservers?: string[]
   observation_provider?: string | null
 }
@@ -224,6 +259,46 @@ export async function verifyHnsTxtRecord(
       challenge_txt_value: input.challengeTxtValue,
     }),
   })
+}
+
+// Provisions the child zone AND publishes the session nonce at _pirate.<root>
+// in one write. This is what the authority-health check then reads back through
+// the serving path — a bare ensure-zone would leave nothing to find.
+export async function publishHnsChallenge(
+  env: Env,
+  input: {
+    rootLabel: string
+    challengeHost?: string | null
+    challengeTxtValue: string
+  },
+): Promise<HnsPublishChallengeResult> {
+  assertHnsRootLabel(input.rootLabel)
+  return request<HnsPublishChallengeResult>(env, "/publish-txt", {
+    method: "POST",
+    body: JSON.stringify({
+      root_label: input.rootLabel,
+      challenge_host: input.challengeHost ?? null,
+      challenge_txt_value: input.challengeTxtValue,
+    }),
+  })
+}
+
+// Assertion-3 health check (core specs/domain/hns-authoritative-dns.md,
+// "Verification Assertions"): confirms Pirate's authority actually serves the
+// provisioned zone. Never carries or implies ownership evidence.
+export async function checkHnsAuthorityHealth(
+  env: Env,
+  input: {
+    rootLabel: string
+    challengeHost?: string | null
+  },
+): Promise<HnsAuthorityHealthResult> {
+  assertHnsRootLabel(input.rootLabel)
+  const params = new URLSearchParams({ root_label: input.rootLabel })
+  if (input.challengeHost?.trim()) {
+    params.set("challenge_host", input.challengeHost.trim())
+  }
+  return request<HnsAuthorityHealthResult>(env, `/authority-health?${params.toString()}`)
 }
 
 export async function ensureHnsZone(

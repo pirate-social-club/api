@@ -80,6 +80,7 @@ function assetRow(overrides: Partial<AssetRow> = {}): AssetRow {
     story_write_condition: null,
     royalty_allocation_status: "none",
     royalty_allocation_fingerprint: null,
+    royalty_allocation_projection_synced: 1,
     updated_at: "2026-07-05T00:00:00.000Z",
     ...overrides,
   }

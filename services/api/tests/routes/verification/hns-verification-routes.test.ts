@@ -286,18 +286,44 @@ describe("hns verification routes", () => {
           return new Response(JSON.stringify({
             verified: true,
             observation_provider: "web3dns_json_doh",
+            ownership_source: "hns_parent_chain_txt",
+            expiry_horizon_sufficient: false,
+            expiry_height: 10_500,
+            expiry_anchor_height: 10_000,
+            expiry_anchor_block_hash: "ab".repeat(32),
+            expiry_anchor_median_time: 1_786_000_000,
+            expiry_chain_network: "main",
+            expiry_blocks_remaining: 500,
+            expiry_horizon_blocks: 1_000,
+            expiry_observation_provider: "hsd_json_rpc",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
         }
-        if (url.endsWith("/ensure-zone")) {
+        if (url.endsWith("/publish-txt")) {
           return new Response(JSON.stringify({
             root_label: "pirateassertionsroot",
             zone_name: "pirateassertionsroot.",
+            challenge_name: "_pirate.pirateassertionsroot.",
             zone_created: true,
             nameservers: ["ns1.pirate."],
-            observation_provider: "powerdns_sqlite",
+            observation_provider: "powerdns_api",
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        }
+        if (url.includes("/authority-health?")) {
+          return new Response(JSON.stringify({
+            root_label: "pirateassertionsroot",
+            zone_name: "pirateassertionsroot.",
+            challenge_name: "_pirate.pirateassertionsroot.",
+            zone_provisioned: true,
+            challenge_present: true,
+            challenge_served: true,
+            nameservers: ["ns1.pirate."],
+            observation_provider: "authoritative_dns",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -362,7 +388,28 @@ describe("hns verification routes", () => {
       expect(fetchedBody.capabilities.pirate_subdomain_issuance_allowed).toBe(false)
       expect(fetchedBody.control_class).toBe("dao_controlled_root")
       expect(fetchedBody.operation_class).toBe("routing_only_namespace")
-      expect(verifierCalls.some((url) => url.endsWith("/ensure-zone"))).toBe(true)
+      expect(verifierCalls.some((url) => url.endsWith("/publish-txt"))).toBe(true)
+      expect(verifierCalls.some((url) => url.includes("/authority-health?"))).toBe(true)
+
+      const evidenceResult = await ctx.client.execute({
+        sql: `
+          SELECT resolver_path_json, raw_response_json
+          FROM namespace_verification_evidence_bundles
+          WHERE family = 'hns'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      })
+      const evidenceRow = evidenceResult.rows[0]
+      expect(JSON.parse(String(evidenceRow?.resolver_path_json))).toEqual([
+        "web3dns_json_doh",
+        "hsd_json_rpc",
+        "powerdns_api",
+        "authoritative_dns",
+      ])
+      const rawEvidence = JSON.parse(String(evidenceRow?.raw_response_json)) as Record<string, unknown>
+      expect(rawEvidence.expiry_height).toBe(10_500)
+      expect(rawEvidence.expiry_observation_provider).toBe("hsd_json_rpc")
     })
   })
 })

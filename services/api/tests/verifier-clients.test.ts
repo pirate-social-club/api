@@ -473,6 +473,11 @@ describe("verifyHnsTxtRecord", () => {
       return Response.json({
         verified: true,
         observation_provider: "web3dns_json_doh",
+        expiry_height: 1_250_000,
+        expiry_anchor_height: 1_200_000,
+        expiry_blocks_remaining: 50_000,
+        expiry_horizon_blocks: 25_000,
+        expiry_observation_provider: "hsd_json_rpc",
       })
     }), async () => {
       const result = await verifyHnsTxtRecord({
@@ -483,6 +488,8 @@ describe("verifyHnsTxtRecord", () => {
       })
       expect(result.verified).toBe(true)
       expect(result.observation_provider).toBe("web3dns_json_doh")
+      expect(result.expiry_height).toBe(1_250_000)
+      expect(result.expiry_observation_provider).toBe("hsd_json_rpc")
       expect(requestedPath).toBe("/verify-txt-public")
     })
   })
