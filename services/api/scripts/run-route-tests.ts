@@ -34,6 +34,20 @@ const processTimeoutMs = Number(
 const processKillGraceMs = Number(
   process.env.ROUTE_TEST_PROCESS_KILL_GRACE_MS ?? "10000",
 );
+const shard = Number(process.env.ROUTE_TEST_SHARD ?? "1");
+const shardCount = Number(process.env.ROUTE_TEST_SHARD_COUNT ?? "1");
+
+if (
+  !Number.isInteger(shard) ||
+  !Number.isInteger(shardCount) ||
+  shardCount < 1 ||
+  shard < 1 ||
+  shard > shardCount
+) {
+  throw new Error(
+    `Invalid route-test shard ${String(process.env.ROUTE_TEST_SHARD)}/${String(process.env.ROUTE_TEST_SHARD_COUNT)}`,
+  );
+}
 
 const testFiles =
   explicitTestFiles.length > 0
@@ -43,7 +57,18 @@ const testFiles =
         "tests/community-membership-reconciliation.test.ts",
       ]
         .map((path) => relative(process.cwd(), path))
-        .sort();
+        .sort()
+        .filter((_, index) => index % shardCount === shard - 1);
+
+if (testFiles.length === 0) {
+  throw new Error(`No route tests selected for shard ${shard}/${shardCount}`);
+}
+
+if (explicitTestFiles.length === 0 && shardCount > 1) {
+  console.log(
+    `[route-tests] shard ${shard}/${shardCount}: ${testFiles.length} files`,
+  );
+}
 
 async function runTestFile(testFile: string): Promise<number> {
   return new Promise((resolve) => {
