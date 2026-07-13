@@ -5,6 +5,7 @@
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { readFile, writeFile } from "node:fs/promises"
+import { setTimeout as sleep } from "node:timers/promises"
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import {
@@ -628,7 +629,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         operatorActorId: "operator-test", resolutionNote: "Attempt while writer commits",
         now: "2026-07-10T12:30:00.000Z",
       }))
-      await Bun.sleep(50)
+      await sleep(50)
       await db.unsafe("COMMIT")
       await expect(recovery).rejects.toThrow("accounting is not healthy")
       const rows = await db.unsafe(`SELECT status FROM reward_campaigns WHERE reward_campaign_id = 'rcp_recovery_race_pg'`) as Array<{ status: string }>
