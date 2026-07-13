@@ -63,6 +63,10 @@ import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconcil
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
+import {
+  isHnsNamespaceRevalidationEnabled,
+  sweepHnsNamespaceRevalidations,
+} from "./lib/verification/namespace-revalidation-cron"
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
@@ -672,22 +676,48 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
     const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
-    if (summary.heartbeat_stale) {
+    if (summary.liveness_stale) {
       await captureScheduledWarning(
         env,
-        "Reward campaign integrity monitor heartbeat was stale",
-        "reward_campaign_integrity_heartbeat",
+        "Reward campaign integrity monitor liveness was stale",
+        "reward_campaign_integrity_liveness",
         { errors: 1 },
         { urgency: "high" },
       )
     }
-    if (summary.transient_finality_checks > 0) {
+    if (summary.coverage_stale) {
       await captureScheduledWarning(
         env,
-        "Reward campaign integrity scan had indeterminate finality checks",
-        "reward_campaign_integrity_rpc",
-        { errors: summary.transient_finality_checks },
+        "Reward campaign integrity monitor has not achieved complete finality coverage",
+        "reward_campaign_integrity_coverage",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+        },
         { urgency: "high" },
+      )
+    }
+    if (summary.wholly_blind) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity scan was wholly blind to funding finality",
+        "reward_campaign_integrity_wholly_blind",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+        },
+        { urgency: "high" },
+      )
+    } else if (summary.partial_finality_degraded) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity scan had a degraded finality provider",
+        "reward_campaign_integrity_partial_finality",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+          transient_finality_rate: summary.transient_finality_rate,
+        },
       )
     }
     if (summary.incidents.length > 0) {
@@ -745,6 +775,30 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
   }
 }
 
+async function revalidateScheduledHnsNamespaces(env: Env): Promise<void> {
+  try {
+    const summary = await sweepHnsNamespaceRevalidations({
+      client: getControlPlaneClient(env),
+      env,
+    })
+    if (summary.candidates > 0 || summary.errors > 0) {
+      console.info("[hns-revalidation] swept", JSON.stringify(summary))
+    }
+    if (summary.errors > 0) {
+      await captureScheduledWarning(
+        env,
+        "HNS namespace revalidation completed with write errors",
+        "hns_namespace_revalidation",
+        summary,
+        { urgency: "high" },
+      )
+    }
+  } catch (error) {
+    console.error("[hns-revalidation] sweep failed", error)
+    await captureScheduledError(env, error, "hns_namespace_revalidation")
+  }
+}
+
 // The cron fires every minute. Each scheduled job opens its OWN control-plane
 // connection (via withRequestControlPlaneClients) — one connection, opened and
 // closed independently, to respect Workers' 15-min waitUntil limit. Running all
@@ -771,14 +825,19 @@ type ScheduledPriorityJobName =
   | "reconcile_royalty_allocation_verifications"
   | "process_community_jobs"
   | "reconcile_d1_provisioning"
+  | "revalidate_hns_namespaces"
   | "monitor_reward_campaigns"
 
-export function scheduledPriorityJobNames(canRunD1Reconciler: boolean): ScheduledPriorityJobName[] {
+export function scheduledPriorityJobNames(
+  canRunD1Reconciler: boolean,
+  canRunHnsNamespaceRevalidation: boolean,
+): ScheduledPriorityJobName[] {
   return [
     "reconcile_booking_settlements",
     "reconcile_royalty_allocation_verifications",
     "process_community_jobs",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
+    ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
   ]
 }
@@ -817,14 +876,18 @@ const handler: ExportedHandler<Env> = {
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
+      revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
     // Concurrency is two: royalty verification keeps the second start slot, then
     // queued community delivery/Story jobs start as soon as either money-path task
     // completes. Keeping them outside the rotating tail prevents release-critical
     // jobs from waiting several cron ticks. D1 remains ahead of the slower,
-    // latency-tolerant reward monitor.
-    const priorityJobs: NamedTask[] = scheduledPriorityJobNames(canRunD1Reconciler)
+    // latency-tolerant HNS revalidation and reward monitor.
+    const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
+      canRunD1Reconciler,
+      isHnsNamespaceRevalidationEnabled(env),
+    )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },

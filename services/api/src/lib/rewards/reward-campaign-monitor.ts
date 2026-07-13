@@ -18,13 +18,21 @@ export type RewardCampaignMonitorSummary = {
   accounting_mismatches: number
   finality_failures: number
   missing_provenance: number
+  finality_checks_attempted: number
   transient_finality_checks: number
-  heartbeat_stale: boolean
+  transient_finality_rate: number
+  liveness_stale: boolean
+  coverage_stale: boolean
+  wholly_blind: boolean
+  partial_finality_degraded: boolean
   scan_successful: boolean
   incidents: Array<{ incident_id: string; campaign_id: string; kind: IncidentKind; reason: string }>
 }
 
 export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | "funding_provenance_missing"
+
+const MONITOR_STALE_AFTER_MS = 20 * 60_000
+const PARTIAL_FINALITY_ALERT_RATE = 0.25
 
 async function recordIncidentCandidate(input: {
   client: Client; campaignId: string; kind: IncidentKind
@@ -101,15 +109,19 @@ export async function monitorRewardCampaigns(input: {
   const ownership = requireRewardCampaignAlertOwnership(input.env)
   const now = input.now ?? nowIso()
   const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)))
-  const heartbeat = await input.client.execute({
-    sql: `SELECT last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
+  const monitorState = await input.client.execute({
+    sql: `SELECT first_attempted_scan_at, last_attempted_scan_at, last_successful_scan_at FROM reward_campaign_monitor_state WHERE monitor_name = 'reward_campaign_integrity'`,
     args: [],
   })
-  const lastSuccess = stringOrNull(rowValue(heartbeat.rows[0], "last_successful_scan_at"))
+  const previousLastAttempt = stringOrNull(rowValue(monitorState.rows[0], "last_attempted_scan_at"))
   const summary: RewardCampaignMonitorSummary = {
     scanned: 0, held: 0, accounting_mismatches: 0, finality_failures: 0,
-    missing_provenance: 0, transient_finality_checks: 0,
-    heartbeat_stale: Boolean(lastSuccess && Date.parse(now) - Date.parse(lastSuccess) > 20 * 60_000),
+    missing_provenance: 0, finality_checks_attempted: 0, transient_finality_checks: 0,
+    transient_finality_rate: 0,
+    liveness_stale: Boolean(previousLastAttempt && Date.parse(now) - Date.parse(previousLastAttempt) > MONITOR_STALE_AFTER_MS),
+    coverage_stale: false,
+    wholly_blind: false,
+    partial_finality_degraded: false,
     scan_successful: false,
     incidents: [],
   }
@@ -188,6 +200,7 @@ export async function monitorRewardCampaigns(input: {
       summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_provenance_missing", reason })
       continue
     }
+    summary.finality_checks_attempted += 1
     if (!provider || !chainVerified) {
       summary.transient_finality_checks += 1
       continue
@@ -214,18 +227,41 @@ export async function monitorRewardCampaigns(input: {
     }
   }
   summary.scan_successful = summary.transient_finality_checks === 0
-  if (summary.scan_successful) {
-    await input.client.execute({
-      sql: `
-        INSERT INTO reward_campaign_monitor_state (monitor_name, last_successful_scan_at, updated_at)
-        VALUES ('reward_campaign_integrity', ?1, ?1)
-        ON CONFLICT (monitor_name) DO UPDATE SET
-          last_successful_scan_at = excluded.last_successful_scan_at,
-          updated_at = excluded.updated_at
-      `,
-      args: [now],
-    })
-  }
+  summary.transient_finality_rate = summary.finality_checks_attempted === 0
+    ? 0
+    : summary.transient_finality_checks / summary.finality_checks_attempted
+  summary.wholly_blind = summary.finality_checks_attempted > 0
+    && summary.transient_finality_checks === summary.finality_checks_attempted
+  summary.partial_finality_degraded = summary.transient_finality_checks > 0
+    && !summary.wholly_blind
+    && summary.transient_finality_rate >= PARTIAL_FINALITY_ALERT_RATE
+  const updatedState = await input.client.execute({
+    sql: `
+      INSERT INTO reward_campaign_monitor_state (
+        monitor_name, first_attempted_scan_at, last_attempted_scan_at,
+        last_successful_scan_at, updated_at
+      ) VALUES (
+        'reward_campaign_integrity',
+        CAST(?1 AS TIMESTAMPTZ), CAST(?1 AS TIMESTAMPTZ),
+        CASE WHEN CAST(?2 AS BOOLEAN) THEN CAST(?1 AS TIMESTAMPTZ) ELSE NULL END,
+        CAST(?1 AS TIMESTAMPTZ)
+      )
+      ON CONFLICT (monitor_name) DO UPDATE SET
+        last_attempted_scan_at = excluded.last_attempted_scan_at,
+        last_successful_scan_at = CASE
+          WHEN CAST(?2 AS BOOLEAN) THEN excluded.last_successful_scan_at
+          ELSE reward_campaign_monitor_state.last_successful_scan_at
+        END,
+        updated_at = excluded.updated_at
+      RETURNING first_attempted_scan_at, last_successful_scan_at
+    `,
+    args: [now, summary.scan_successful],
+  })
+  const firstAttempt = stringOrNull(rowValue(updatedState.rows[0], "first_attempted_scan_at"))
+  const lastSuccess = stringOrNull(rowValue(updatedState.rows[0], "last_successful_scan_at"))
+  const coverageReference = lastSuccess ?? firstAttempt
+  summary.coverage_stale = !summary.scan_successful
+    && Boolean(coverageReference && Date.parse(now) - Date.parse(coverageReference) > MONITOR_STALE_AFTER_MS)
   return summary
 }
 
