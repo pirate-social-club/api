@@ -49,7 +49,7 @@ describe("reward campaign reconciler", () => {
     }
   })
 
-  test("fails closed unless campaign and accrual flags plus an identity provider are configured", async () => {
+  test("fails closed unless campaign flags, identity provider, and alert ownership are configured", async () => {
     let listed = false
     const summary = await reconcileRewardCampaigns({
       env: { ...env(), REWARDS_ACCRUAL_ENABLED: "false" } as never,
@@ -62,6 +62,23 @@ describe("reward campaign reconciler", () => {
       controlPlaneClient: {} as never,
     })
     expect(summary.enabled).toBe(false)
+    expect(listed).toBe(false)
+
+    const withoutAlertOwnership = await reconcileRewardCampaigns({
+      env: {
+        ...env(),
+        REWARDS_CAMPAIGN_ALERT_OWNER: undefined,
+        REWARDS_CAMPAIGN_ALERT_DESTINATION: undefined,
+      } as never,
+      communityRepository: {
+        listActiveCommunities: async () => {
+          listed = true
+          return []
+        },
+      } as never,
+      controlPlaneClient: {} as never,
+    })
+    expect(withoutAlertOwnership.enabled).toBe(false)
     expect(listed).toBe(false)
   })
 
