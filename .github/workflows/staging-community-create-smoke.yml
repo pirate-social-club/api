@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Check out core dependency source
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pirate-social-club/core
           path: core
@@ -48,7 +48,7 @@ jobs:
         # services/api depends on @pirate-social-club/karaoke-runtime via
         # file:../../../web/packages/karaoke-runtime. Keep this pinned to the
         # same compatible web commit used by api-ci.yml.
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           repository: pirate-social-club/web
           ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
@@ -60,7 +60,7 @@ jobs:
           ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.2.21
 
