@@ -7,12 +7,54 @@ const DEFAULT_MAX_PRIORITY_FEE_PER_GAS_WEI = 2_000_000_000n
 const DEFAULT_GAS_LIMIT_CAP = 1_500_000n
 const DEFAULT_GAS_ESTIMATE_BUFFER_BPS = 12_000n
 const GAS_LIMIT_PADDING = 15_000n
+const DEFAULT_NONCE_COLLISION_MAX_ATTEMPTS = 6
+const DEFAULT_NONCE_COLLISION_RETRY_DELAY_MS = 2_000
 
 export type DirectTxGasPolicy = {
   maxFeePerGasCapWei: bigint
   maxPriorityFeePerGasCapWei: bigint
   gasLimitCap: bigint
   gasEstimateBufferBps: bigint
+}
+
+export function isRetryableDirectTxNonceCollisionError(error: unknown): boolean {
+  const directMessage = typeof error === "object" && error != null && "message" in error
+    ? String((error as { message?: unknown }).message ?? "")
+    : String(error ?? "")
+  const nestedMessage = typeof error === "object" && error != null && "error" in error
+    ? String((error as { error?: { message?: unknown } }).error?.message ?? "")
+    : ""
+  const message = `${directMessage}\n${nestedMessage}`
+  return /replacement (?:transaction )?underpriced|replacement fee too low/i.test(message)
+}
+
+export async function withDirectTxNonceCollisionRetry<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxAttempts?: number
+    delayMs?: number
+    sleep?: (ms: number) => Promise<void>
+  } = {},
+): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? DEFAULT_NONCE_COLLISION_MAX_ATTEMPTS
+  const delayMs = options.delayMs ?? DEFAULT_NONCE_COLLISION_RETRY_DELAY_MS
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      // A replacement-underpriced response means this raw transaction was
+      // rejected because another transaction won the nonce race. No new hash
+      // was broadcast, so resolving the pending nonce again is safe.
+      if (attempt === maxAttempts || !isRetryableDirectTxNonceCollisionError(error)) {
+        throw error
+      }
+      await sleep(delayMs)
+    }
+  }
+
+  throw new Error("direct_tx_nonce_collision_retry_exhausted")
 }
 
 function parseUintEnv(raw: string | undefined, fieldName: string, fallback: bigint): ConfigResult<bigint> {
@@ -165,14 +207,16 @@ export async function sendContractTxWithPolicy(params: {
     gasPolicy: params.gasPolicy,
   })
   try {
-    return await params.signer.sendTransaction({
-      to,
-      data,
-      value: params.value ?? 0n,
-      gasLimit: overrides.gasLimit,
-      maxFeePerGas: overrides.maxFeePerGas,
-      maxPriorityFeePerGas: overrides.maxPriorityFeePerGas,
-    })
+    return await withDirectTxNonceCollisionRetry(() =>
+      params.signer.sendTransaction({
+        to,
+        data,
+        value: params.value ?? 0n,
+        gasLimit: overrides.gasLimit,
+        maxFeePerGas: overrides.maxFeePerGas,
+        maxPriorityFeePerGas: overrides.maxPriorityFeePerGas,
+      }),
+    )
   } catch (error) {
     const alreadyKnownTxHash = extractAlreadyKnownRawTransactionHash(error)
     if (!alreadyKnownTxHash) {
