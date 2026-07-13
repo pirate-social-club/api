@@ -82,6 +82,8 @@ export type HnsAuthorityHealthResult = {
 }
 
 const MAX_HNS_ROOT_LABEL_LENGTH = 63
+const HNS_ROOT_LABEL_BLACKLIST = new Set(["example", "invalid", "local", "localhost", "test"])
+const HNS_ROOT_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/u
 const HNS_VERIFIER_TIMEOUT_MS = 12_000
 
 export function normalizeHnsRootLabel(value: string): string {
@@ -108,7 +110,12 @@ export function normalizeHnsRootLabel(value: string): string {
 }
 
 export function assertHnsRootLabel(value: string): void {
-  if (!value || value.length > MAX_HNS_ROOT_LABEL_LENGTH) {
+  if (
+    !value
+    || value.length > MAX_HNS_ROOT_LABEL_LENGTH
+    || !HNS_ROOT_LABEL_PATTERN.test(value)
+    || HNS_ROOT_LABEL_BLACKLIST.has(value)
+  ) {
     throw badRequestError("HNS root label must be a protocol root label")
   }
 
@@ -123,18 +130,6 @@ export function assertHnsRootLabel(value: string): void {
     }
   }
 
-  const verifyRange = value.startsWith("xn--") && value.length > "xn--".length
-    ? value.slice("xn--".length)
-    : value
-
-  if (!verifyRange || verifyRange.startsWith("-") || verifyRange.endsWith("-") || value.includes(".") || verifyRange.includes("--")) {
-    throw badRequestError("HNS root label must be a protocol root label")
-  }
-
-  const allowedPattern = value.startsWith("xn--") ? /^[a-z0-9-]+$/u : /^[a-z0-9_-]+$/u
-  if (!allowedPattern.test(verifyRange)) {
-    throw badRequestError("HNS root label must be a protocol root label")
-  }
 }
 
 export function getHnsVerifierBaseUrl(env: Env): string | null {
