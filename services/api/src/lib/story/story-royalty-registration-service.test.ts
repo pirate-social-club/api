@@ -272,6 +272,7 @@ describe("maybeRegisterStoryRoyaltyForAsset rights holds", () => {
       commercialRevSharePct: 0,
       upstreamAssetRefs: null,
       assetKind: "video_file",
+      accessMode: "public",
       bundle: null,
       primaryContentHash: `0x${"1".repeat(64)}`,
     })).rejects.toThrow("rights_hold_blocked")

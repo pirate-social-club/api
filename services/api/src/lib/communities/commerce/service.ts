@@ -510,6 +510,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
         commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
         upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
         assetKind: asset.asset_kind,
+        accessMode: asset.access_mode,
         bundle: input.bundle ?? null,
         primaryContentHash: resolvedPrimaryContentHash,
       })
@@ -1069,6 +1070,8 @@ export async function createAssetForPost(input: {
             commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
             upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
             assetKind: input.assetKind,
+            // Story metadata is permanent: an unknown access mode must never expose media.
+            accessMode: input.post.access_mode ?? "locked",
             bundle: input.bundle ?? null,
             primaryContentHash: resolvedPrimaryContentHash,
             royaltyShares: storyRoyaltySharesForRegistration,
@@ -1642,6 +1645,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
             commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
             upstreamAssetRefs: post.upstream_asset_refs ?? null,
             assetKind: asset.asset_kind,
+            accessMode: asset.access_mode,
             bundle,
             primaryContentHash: resolvedPrimaryContentHash,
           }),
