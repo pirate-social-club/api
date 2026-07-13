@@ -395,12 +395,14 @@ export async function completeNamespaceVerificationSession(
     // capabilities can be derived from it rather than assuming it. Only
     // meaningful on the Pirate-managed path; null for owner-managed sessions.
     let authorityHealthVerified: number | null = null
+    let authorityProvisioningEvidence: Awaited<ReturnType<typeof publishHnsChallenge>> | null = null
+    let authorityHealthEvidence: Awaited<ReturnType<typeof checkHnsAuthorityHealth>> | null = null
     const ownershipSnapshot = deriveAcceptedHnsSnapshot(row, verificationResult)
     if (ownershipSnapshot.pirateDnsAuthorityVerified === 1) {
       try {
         // Provision the child zone AND publish the session nonce in one write —
         // a bare ensure-zone would leave the health check nothing to read back.
-        await publishHnsChallenge(env, {
+        authorityProvisioningEvidence = await publishHnsChallenge(env, {
           rootLabel: requireNormalizedRootLabel(row),
           challengeHost: row.challenge_host,
           challengeTxtValue: row.challenge_txt_value ?? "",
@@ -410,6 +412,7 @@ export async function completeNamespaceVerificationSession(
             rootLabel: requireNormalizedRootLabel(row),
             challengeHost: row.challenge_host,
           })
+          authorityHealthEvidence = health
           // A serving-path result is REQUIRED: challenge_served === null means
           // the check could not observe the zone being served, which is not
           // evidence of health.
@@ -441,6 +444,22 @@ export async function completeNamespaceVerificationSession(
         throw caught
       }
     }
+
+    // Preserve every response that contributes to the accepted assertion set.
+    // In particular, authority health must be auditable independently from the
+    // ownership proof that preceded it.
+    verificationEvidence = {
+      ...verificationEvidence,
+      authority_provisioning: authorityProvisioningEvidence,
+      authority_health: authorityHealthEvidence,
+    }
+    const evidenceResolverPath = [
+      observationProvider,
+      authorityProvisioningEvidence?.observation_provider,
+      authorityHealthEvidence?.observation_provider,
+    ].filter((provider, index, providers): provider is string => (
+      typeof provider === "string" && provider.length > 0 && providers.indexOf(provider) === index
+    ))
 
     // Re-derive with health in hand so pirate_web_routing_allowed /
     // pirate_subdomain_issuance_allowed reflect assertion 3 instead of assuming
@@ -565,7 +584,7 @@ export async function completeNamespaceVerificationSession(
           verificationId,
           requireNormalizedRootLabel(row),
           observationProvider,
-          JSON.stringify([observationProvider]),
+          JSON.stringify(evidenceResolverPath),
           JSON.stringify(verificationEvidence),
           updatedAt,
         ],
