@@ -26,8 +26,6 @@ export type KaraokeAttemptCompletionReason =
   | "provider_unavailable"
   | "session_error"
 
-export type KaraokeTimingTrend = "early" | "late" | "mixed" | "on_time"
-
 export interface RecordKaraokeAttemptResult {
   inserted: boolean
   rankEligible: boolean

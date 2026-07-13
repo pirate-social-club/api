@@ -33,7 +33,7 @@ export type OpenRouterModel = {
   } | null
 }
 
-export type OpenRouterModelsResponse = {
+type OpenRouterModelsResponse = {
   data?: OpenRouterModel[]
 }
 
