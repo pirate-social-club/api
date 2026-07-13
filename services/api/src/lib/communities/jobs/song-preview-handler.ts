@@ -2,8 +2,9 @@ import { trimEnv } from "../../env-strings"
 import { openCommunityWriteClient } from "../community-read-access"
 import { generateSongPreviewForBundle } from "../../song-artifacts/song-artifact-preview-service"
 import { getSongArtifactBundle, updateSongArtifactBundlePreview } from "../../song-artifacts/song-artifact-repository"
+import { permanentPreviewFailureCode } from "../../song-artifacts/song-preview-failure"
 import { syncLockedSongPreviewMediaRefsForBundle } from "../../posts/community-post-mutation-store"
-import { HttpError, providerUnavailable } from "../../errors"
+import { HttpError, providerUnavailable, SONG_CONTENT_HASH_MISMATCH_CODE } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import type { CommunityJobHandlerInput } from "./handler-types"
@@ -103,6 +104,18 @@ function previewFailureMessage(error: unknown): string {
   return message || "preview_generation_failed"
 }
 
+function previewServiceFailureCode(body: string | null): string {
+  if (!body) return "song_preview_rejected"
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown }
+    return typeof parsed.code === "string" && parsed.code.trim()
+      ? parsed.code.trim()
+      : "song_preview_rejected"
+  } catch {
+    return "song_preview_rejected"
+  }
+}
+
 async function markRemoteSongPreviewFailed(
   input: CommunityJobHandlerInput,
   songArtifactBundleId: string,
@@ -162,9 +175,22 @@ async function runRemoteSongPreviewGenerate(
   }
 
   if (!response.ok) {
+    const body = await readErrorBody(response)
+    // A 4xx is a deterministic fault in the bundle itself. Wrapping it as
+    // providerUnavailable would mark it retryable and burn every attempt
+    // re-downloading bytes that will never hash differently.
+    if (response.status >= 400 && response.status < 500) {
+      throw new HttpError(
+        response.status,
+        previewServiceFailureCode(body),
+        "Song preview service rejected the bundle",
+        false,
+        { body, status: response.status },
+      )
+    }
     throw providerUnavailable("Song preview service rejected the request", {
       status: response.status,
-      body: await readErrorBody(response),
+      body,
     })
   }
 
@@ -213,6 +239,7 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
       await completedPreviewPostSyncer(input, songArtifactBundleId)
       return result
     } catch (error) {
+      const permanentCode = permanentPreviewFailureCode(error)
       if (error instanceof HttpError && error.details) {
         console.warn(JSON.stringify({
           event: "song_preview.remote.failed",
@@ -224,7 +251,24 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
           song_artifact_bundle: songArtifactBundleId,
         }))
       }
+      if (permanentCode === SONG_CONTENT_HASH_MISMATCH_CODE) {
+        // Distinct event so integrity faults are alertable on their own, rather than
+        // buried among transient preview-container failures.
+        console.error(JSON.stringify({
+          event: "song_preview.content_hash_mismatch",
+          community_id: input.job.community_id,
+          details: error instanceof HttpError ? error.details : null,
+          job_id: input.job.job_id,
+          service: "api",
+          song_artifact_bundle: songArtifactBundleId,
+        }))
+      }
       await markRemoteSongPreviewFailed(input, songArtifactBundleId, error)
+      if (permanentCode) {
+        // Terminal: completing with a failed result stops the retry loop. Throwing here
+        // would retry a fault that cannot succeed.
+        return `failed:${permanentCode}`
+      }
       throw error
     }
   }
@@ -235,12 +279,32 @@ export async function runSongPreviewGenerate(input: CommunityJobHandlerInput): P
     })
   }
 
-  const result = await generateSongPreviewForBundle({
-    env: input.env,
-    communityId: input.job.community_id,
-    songArtifactBundleId,
-    expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
-  })
+  let result: string | null
+  try {
+    result = await generateSongPreviewForBundle({
+      env: input.env,
+      communityId: input.job.community_id,
+      songArtifactBundleId,
+      expectedPrimaryAudioContentHash: payload?.primary_audio_content_hash ?? null,
+    })
+  } catch (error) {
+    const permanentCode = permanentPreviewFailureCode(error)
+    if (permanentCode === SONG_CONTENT_HASH_MISMATCH_CODE) {
+      console.error(JSON.stringify({
+        event: "song_preview.content_hash_mismatch",
+        community_id: input.job.community_id,
+        details: error instanceof HttpError ? error.details : null,
+        job_id: input.job.job_id,
+        service: "api",
+        song_artifact_bundle: songArtifactBundleId,
+      }))
+    }
+    if (permanentCode) {
+      await markRemoteSongPreviewFailed(input, songArtifactBundleId, error)
+      return `failed:${permanentCode}`
+    }
+    throw error
+  }
   await completedPreviewPostSyncer(input, songArtifactBundleId)
   return result
 }

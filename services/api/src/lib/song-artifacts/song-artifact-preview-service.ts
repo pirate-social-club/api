@@ -1,4 +1,4 @@
-import { badRequestError, notFoundError } from "../errors"
+import { badRequestError, notFoundError, songContentHashMismatchError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { sha256Hex } from "../crypto"
@@ -34,7 +34,11 @@ export async function verifySongArtifactSourceContentHash(input: {
     input.uploadContentHash !== sourceContentHash
     || input.bundleContentHash !== sourceContentHash
   ) {
-    throw badRequestError("Primary audio content hash does not match downloaded bytes")
+    throw songContentHashMismatchError("Primary audio content hash does not match downloaded bytes", {
+      bundle_content_hash: input.bundleContentHash,
+      source_content_hash: sourceContentHash,
+      upload_content_hash: input.uploadContentHash,
+    })
   }
   return sourceContentHash
 }
