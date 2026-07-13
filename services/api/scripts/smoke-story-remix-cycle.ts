@@ -1534,7 +1534,7 @@ async function main(): Promise<void> {
         apiBaseUrl,
         env,
         subject: buyerSubject,
-        privateKey: readEnv("PIRATE_SMOKE_BUYER_PRIVATE_KEY") || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY,
+        privateKey: requireEnv("PIRATE_SMOKE_BUYER_PRIVATE_KEY"),
       })
       console.log("[smoke] buyer", {
         user: buyer.userId,

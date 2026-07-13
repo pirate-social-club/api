@@ -1242,7 +1242,7 @@ async function main(): Promise<void> {
     apiBaseUrl,
     env,
     subject: `story-video-royalty-e2e-buyer-${runId}`,
-    privateKey: readEnvAlias("PIRATE_E2E_BUYER_PRIVATE_KEY", "PIRATE_SMOKE_BUYER_PRIVATE_KEY") || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY,
+    privateKey: requireEnvAlias("PIRATE_E2E_BUYER_PRIVATE_KEY", "PIRATE_SMOKE_BUYER_PRIVATE_KEY"),
   })
   console.log("[e2e] buyer", {
     user: buyer.userId,
