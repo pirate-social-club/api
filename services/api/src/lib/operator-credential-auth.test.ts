@@ -13,6 +13,7 @@ import type { Env } from "../env"
 import type { DbExecutor } from "./db-helpers"
 
 const SECRET = "test-operator-secret-with-high-entropy-shape"
+const DATABASE_TEST_TIMEOUT_MS = 15_000
 
 const cleanups: Array<() => Promise<void>> = []
 
@@ -206,7 +207,7 @@ describe("authenticateOperatorCredential", () => {
       authorization: `Operator opc_expired.${SECRET}`,
       now: () => Date.parse("2026-06-29T00:00:00.000Z"),
     })).rejects.toThrow("Authentication failed")
-  })
+  }, DATABASE_TEST_TIMEOUT_MS)
 
   test("parses scopes_json strictly and fails closed", async () => {
     for (const [id, scopesJson] of [
@@ -302,7 +303,7 @@ describe("authenticateOperatorCredential", () => {
       now: () => Date.parse("2026-06-29T00:06:00.000Z"),
     })
     expect(await lastUsedAt(client)).toBe("2026-06-29T00:06:00.000Z")
-  })
+  }, DATABASE_TEST_TIMEOUT_MS)
 })
 
 describe("requireOperatorScope", () => {
