@@ -77,6 +77,40 @@ function resolveRoyaltyPolicyInput(value: string | null | undefined): string | N
   return policy ?? NativeRoyaltyPolicy.LAP
 }
 
+export function isRetryableStoryParentVaultTransferError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const isPreflightCall = message.includes("eth_fillTransaction") || message.includes("eth_call")
+  return isPreflightCall
+    && message.toLowerCase().includes("execution reverted")
+    && !message.toLowerCase().includes("transaction hash")
+}
+
+export async function withStoryParentVaultTransferRetry<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxAttempts?: number
+    delayMs?: number
+    sleep?: (ms: number) => Promise<void>
+  } = {},
+): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? 8
+  const delayMs = options.delayMs ?? 5_000
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (attempt === maxAttempts || !isRetryableStoryParentVaultTransferError(error)) {
+        throw error
+      }
+      await sleep(delayMs)
+    }
+  }
+
+  throw new Error("story_parent_royalty_vault_transfer_retry_exhausted")
+}
+
 export async function payStoryRoyaltyOnBehalfForPurchase(input: StoryRoyaltyPurchaseSettlementInput): Promise<StoryRoyaltyPaymentResult> {
   if (testRoyaltySettlementExecutor) {
     return {
@@ -149,12 +183,17 @@ export async function transferStoryRoyaltyToParentVault(input: StoryParentRoyalt
     transport: http(resolveStoryRpcUrl(input.env)),
     chainId: resolveStoryChainName(input.env),
   })
-  const transfer = await storyClient.royalty.transferToVault({
-    ipId: childIpId as `0x${string}`,
-    ancestorIpId: parentIpId as `0x${string}`,
-    royaltyPolicy: resolveRoyaltyPolicyInput(input.royaltyPolicy) as `0x${string}` | NativeRoyaltyPolicy,
-    token: WIP_TOKEN_ADDRESS,
-  })
+  // Story can confirm the royalty payment before the policy exposes the
+  // descendant revenue as claimable. Retry only the preflight simulation
+  // revert; ambiguous post-broadcast failures must remain non-retryable.
+  const transfer = await withStoryParentVaultTransferRetry(() =>
+    storyClient.royalty.transferToVault({
+      ipId: childIpId as `0x${string}`,
+      ancestorIpId: parentIpId as `0x${string}`,
+      royaltyPolicy: resolveRoyaltyPolicyInput(input.royaltyPolicy) as `0x${string}` | NativeRoyaltyPolicy,
+      token: WIP_TOKEN_ADDRESS,
+    }),
+  )
   const transferTxHash = String(transfer.txHash || "")
   if (!transferTxHash) {
     throw new Error("story_parent_royalty_vault_transfer_missing_tx_hash")
