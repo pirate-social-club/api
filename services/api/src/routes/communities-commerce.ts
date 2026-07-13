@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import {
   createCommunityListing,
   createCommunityPurchaseQuote,
@@ -41,6 +41,9 @@ import type {
   UpdateCommunityPricingPolicyRequest,
 } from "../types"
 import { emitRoyaltyEarnedBatch } from "../lib/notifications/notification-emitters"
+import { recoverRequestedLockedAssetDelivery } from "../lib/communities/jobs/locked-asset-delivery-recovery"
+import type { CommunityJobRepository } from "../lib/communities/jobs/runner-types"
+import { withRequestControlPlaneClients } from "../lib/runtime-deps"
 import {
   decodePublicAssetId,
   decodePublicListingId,
@@ -49,6 +52,15 @@ import {
 
 const DEFAULT_COMMERCE_LIST_LIMIT = 25
 const MAX_COMMERCE_LIST_LIMIT = 100
+
+function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 function commerceListLimit(value: string | undefined): number {
   if (value === undefined) {
@@ -160,13 +172,32 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
 
   communities.get("/:communityId/assets/:assetId", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const assetId = decodePublicAssetId(c.req.param("assetId"))
     const result = await getCommunityAsset({
       env: c.env,
       userId: actor.userId,
       communityId,
-      assetId: decodePublicAssetId(c.req.param("assetId")),
+      assetId,
       communityRepository,
     })
+    if (result.locked_delivery_status === "requested") {
+      getWaitUntil(c)?.(withRequestControlPlaneClients(async () => {
+        try {
+          await recoverRequestedLockedAssetDelivery({
+            env: c.env,
+            communityId,
+            assetId,
+            communityRepository: communityRepository as unknown as CommunityJobRepository,
+          })
+        } catch (error) {
+          console.error("[commerce] requested asset delivery recovery failed (fail-soft)", {
+            community_id: communityId,
+            asset_id: assetId,
+            error,
+          })
+        }
+      }))
+    }
     return c.json(result, 200)
   })
 
