@@ -3,6 +3,7 @@ import { isProductionEnv } from "../helpers"
 import type { Env } from "../../env"
 
 type HnsExpiryEvidence = {
+  expiry_root_exists?: boolean | null
   expiry_height?: number | null
   expiry_anchor_height?: number | null
   expiry_anchor_block_hash?: string | null
@@ -230,6 +231,7 @@ export async function inspectHnsRoot(
   input: {
     rootLabel: string
     challengeHost?: string | null
+    signal?: AbortSignal
   },
 ): Promise<HnsInspectResult> {
   assertHnsRootLabel(input.rootLabel)
@@ -239,7 +241,9 @@ export async function inspectHnsRoot(
   if (input.challengeHost?.trim()) {
     params.set("challenge_host", input.challengeHost.trim())
   }
-  return request<HnsInspectResult>(env, `/inspect-public?${params.toString()}`)
+  return request<HnsInspectResult>(env, `/inspect-public?${params.toString()}`, {
+    signal: input.signal,
+  })
 }
 
 export async function verifyHnsTxtRecord(
