@@ -3,7 +3,7 @@ import { isLocalEnvironment } from "../../helpers"
 import type { AssetRow } from "./row-types"
 import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
-import { createStoryRoyaltyVaultReader } from "./royalty-allocation-verifier"
+import { createStoryRoyaltyVaultReader } from "./story-royalty-vault-reader"
 import {
   type StoryRoyaltyAllocationVerificationResult,
   type StoryRoyaltyVaultReader,
