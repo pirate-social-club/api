@@ -1,7 +1,10 @@
 import type { KaraokeScoringPolicy, KaraokeStreamingSttAdapter } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../env"
-import { decryptActiveCommunityElevenLabsKey } from "../communities/assistant-policy/credential-service"
+import {
+  CommunityAssistantCredentialNotFoundError,
+  decryptActiveCommunityElevenLabsKey,
+} from "../communities/assistant-policy/credential-service"
 import { ElevenLabsKaraokeSttAdapter } from "./elevenlabs-stt-adapter"
 import { FakeKaraokeStreamingSttAdapter } from "./fake-stt-adapter"
 
@@ -31,11 +34,22 @@ async function buildProviderAdapter(input: {
   const { communityId, env, policy } = input
   switch (policy.provider) {
     case "elevenlabs": {
-      const apiKey = await decryptActiveCommunityElevenLabsKey({
-        env,
-        communityId,
-        missingCredentialMessage: "ElevenLabs API key is required before starting karaoke",
-      }).catch(() => null)
+      // Local/test runtimes without a control-plane database intentionally use
+      // the fake adapter. Production must always perform the scoped lookup.
+      if ((env.ENVIRONMENT ?? "").toLowerCase() !== "production" && !env.CONTROL_PLANE_DATABASE_URL?.trim()) {
+        return null
+      }
+      let apiKey: string | null
+      try {
+        apiKey = await decryptActiveCommunityElevenLabsKey({
+          env,
+          communityId,
+          missingCredentialMessage: "ElevenLabs API key is required before starting karaoke",
+        })
+      } catch (error) {
+        if (!(error instanceof CommunityAssistantCredentialNotFoundError)) throw error
+        apiKey = null
+      }
       if (!apiKey?.trim()) return null
       return new ElevenLabsKaraokeSttAdapter({
         apiKey,

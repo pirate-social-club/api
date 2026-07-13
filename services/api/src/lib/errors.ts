@@ -102,7 +102,10 @@ export function errorResponse(error: unknown): { status: number; body: { code: s
     body: {
       code: "internal_error",
       message,
-      retryable: false,
+      // Unknown failures may be transient (deploy rollover, database/network
+      // blip, overloaded runtime). Deliberate terminal failures must use a
+      // typed HttpError whose explicit retryability is preserved above.
+      retryable: true,
     },
   }
 }

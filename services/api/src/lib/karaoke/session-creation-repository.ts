@@ -31,6 +31,7 @@ export interface KaraokeSessionCreationRecord extends KaraokeSessionCreationKey 
 
 export type ClaimKaraokeSessionCreationResult =
   | { kind: "claimed"; record: KaraokeSessionCreationRecord }
+  | { kind: "failed"; record: KaraokeSessionCreationRecord }
   | { kind: "initialized"; record: KaraokeSessionCreationRecord }
   | { kind: "pending"; record: KaraokeSessionCreationRecord }
 
@@ -153,6 +154,9 @@ export async function claimKaraokeSessionCreation(input: {
   }
   if (record.status === "initialized" && record.expiresAt > input.now) {
     return { kind: "initialized", record }
+  }
+  if (record.status === "failed" && record.expiresAt > input.now) {
+    return { kind: "failed", record }
   }
   if (record.status === "pending" && record.expiresAt > input.now) {
     return { kind: "pending", record }

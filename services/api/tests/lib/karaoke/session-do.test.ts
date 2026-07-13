@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   KARAOKE_TRANSPORT_PROTOCOL_VERSION,
   encodeKaraokeBinaryFrame,
@@ -9,6 +9,7 @@ import {
   type ScorableKaraokeLine,
 } from "@pirate-social-club/karaoke-runtime";
 import type { Env } from "../../../src/env";
+import { encryptElevenLabsKey } from "../../../src/lib/communities/assistant-policy/credential-crypto";
 import {
   CloudflareKaraokeEffectRunner,
   InMemoryOutboxStore,
@@ -18,6 +19,11 @@ import {
   KaraokeSessionRuntimeDO,
   type DurableObjectContextLike,
 } from "../../../src/lib/karaoke/session-do";
+import { setControlPlanePostgresPoolFactoryForTests } from "../../../src/lib/runtime-deps";
+
+afterEach(() => {
+  setControlPlanePostgresPoolFactoryForTests(null);
+});
 
 interface FakeSqlRow {
   [key: string]: string | number | null;
@@ -416,6 +422,139 @@ function storedSnapshot(storage: FakeKvStorage): StoredKaraokeSessionSnapshot {
 }
 
 describe("KaraokeSessionRuntimeDO", () => {
+  test("resolves a community credential through a request-scoped Postgres client", async () => {
+    const wrapKey = "ab".repeat(32);
+    const encryptedSecret = encryptElevenLabsKey({
+      plaintextKey: "elevenlabs-test-key-1234567890", // gitleaks:allow — synthetic test fixture
+      wrapKey,
+    });
+    let poolsCreated = 0;
+    let poolsClosed = 0;
+    setControlPlanePostgresPoolFactoryForTests(() => {
+      poolsCreated += 1;
+      const query = async (sql: string) => ({
+        rowCount: 1,
+        rows: sql.includes("community_assistant_credentials") ? [{
+          actor_user_id: "user-1",
+          community_assistant_credential_id: "cac-1",
+          community_id: "community-1",
+          created_at: "2026-07-14T00:00:00.000Z",
+          encrypted_secret: encryptedSecret,
+          encryption_key_version: 2,
+          key_last4: "7890",
+          provider: "elevenlabs",
+          revoked_at: null,
+          rotated_from: null,
+          status: "active",
+        }] : [],
+      });
+      return {
+        connect: async () => ({ query, release() {} }),
+        end: async () => { poolsClosed += 1; },
+        query,
+      };
+    });
+    const { ctx } = makeContext();
+    const do_ = new KaraokeSessionRuntimeDO(ctx, {
+      CONTROL_PLANE_DATABASE_URL: "postgres://karaoke.test/control-plane",
+      CREDENTIAL_WRAP_KEY: wrapKey,
+      ENVIRONMENT: "production",
+    } as Env, {});
+
+    const response = await do_.fetch(initDoRequest());
+
+    expect(response.status).toBe(200);
+    expect(poolsCreated).toBe(1);
+    expect(poolsClosed).toBe(1);
+  });
+
+  test("returns a terminal configuration response when the community credential is absent", async () => {
+    let poolsClosed = 0;
+    setControlPlanePostgresPoolFactoryForTests(() => {
+      const query = async () => ({ rowCount: 0, rows: [] });
+      return {
+        connect: async () => ({ query, release() {} }),
+        end: async () => { poolsClosed += 1; },
+        query,
+      };
+    });
+    const { ctx } = makeContext();
+    const do_ = new KaraokeSessionRuntimeDO(ctx, {
+      CONTROL_PLANE_DATABASE_URL: "postgres://karaoke.test/control-plane",
+      CREDENTIAL_WRAP_KEY: "ab".repeat(32),
+      ENVIRONMENT: "production",
+    } as Env, {});
+
+    const response = await do_.fetch(initDoRequest());
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "karaoke_stt_unconfigured_elevenlabs" });
+    expect(poolsClosed).toBe(1);
+  });
+
+  test("aborts a restored socket instead of fake-scoring when provider configuration is unavailable", async () => {
+    const { ctx } = makeContext();
+    const initialized = new KaraokeSessionRuntimeDO(ctx, { ENVIRONMENT: "production" } as Env, {
+      sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+    });
+    expect((await initialized.fetch(initDoRequest())).status).toBe(200);
+
+    setControlPlanePostgresPoolFactoryForTests(() => {
+      const query = async () => ({ rowCount: 0, rows: [] });
+      return { connect: async () => ({ query, release() {} }), end: async () => {}, query };
+    });
+    const restored = new KaraokeSessionRuntimeDO(ctx, {
+      CONTROL_PLANE_DATABASE_URL: "postgres://karaoke.test/control-plane",
+      CREDENTIAL_WRAP_KEY: "ab".repeat(32),
+      ENVIRONMENT: "production",
+    } as Env, {});
+    const sent: string[] = [];
+    let closed: [number | undefined, string | undefined] | null = null;
+    const socket = {
+      close(code?: number, reason?: string) { closed = [code, reason]; },
+      send(value: string) { sent.push(value); },
+    } as unknown as WebSocket;
+
+    await restored.webSocketMessage(socket, JSON.stringify(envelope("start", { postId: "post-1", startedAtAudioMs: 0 })));
+
+    expect(closed as unknown).toEqual([4002, "Karaoke scoring unavailable"]);
+    expect(sent.map((value) => JSON.parse(value))).toContainEqual(expect.objectContaining({
+      code: "karaoke_stt_unconfigured",
+      type: "session_error",
+    }));
+    expect(restored.snapshotForTests()).toBeNull();
+  });
+
+  test("aborts a legacy restored session whose metadata has no community identity", async () => {
+    const { ctx, storage } = makeContext();
+    const initialized = new KaraokeSessionRuntimeDO(ctx, { ENVIRONMENT: "production" } as Env, {
+      sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+    });
+    expect((await initialized.fetch(initDoRequest())).status).toBe(200);
+    const row = storage.sql.snapshot().get("karaoke_session_snapshots")?.[0];
+    if (!row) throw new Error("expected stored karaoke snapshot");
+    const snapshot = JSON.parse(String(row.state_json)) as { runtimeMetadata: { communityId?: string } };
+    delete snapshot.runtimeMetadata.communityId;
+    row.state_json = JSON.stringify(snapshot);
+
+    const restored = new KaraokeSessionRuntimeDO(ctx, { ENVIRONMENT: "production" } as Env, {});
+    let closedCode: number | undefined;
+    const sent: string[] = [];
+    const socket = {
+      close(code?: number) { closedCode = code; },
+      send(value: string) { sent.push(value); },
+    } as unknown as WebSocket;
+
+    await restored.webSocketMessage(socket, JSON.stringify(envelope("start", { postId: "post-1", startedAtAudioMs: 0 })));
+
+    expect(closedCode).toBe(4002);
+    expect(sent.map((value) => JSON.parse(value))).toContainEqual(expect.objectContaining({
+      code: "karaoke_stt_unconfigured",
+      type: "session_error",
+    }));
+    expect(restored.snapshotForTests()).toBeNull();
+  });
+
   test("keeps test-only internal endpoints unavailable in production", async () => {
     const { ctx } = makeContext();
     const do_ = new KaraokeSessionRuntimeDO(ctx, { ENVIRONMENT: "production" } as Env, {});
