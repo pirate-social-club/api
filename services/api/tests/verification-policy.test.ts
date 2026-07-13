@@ -255,7 +255,9 @@ describe("deriveAcceptedHnsSnapshot", () => {
       operation_class: "owner_managed_namespace",
       observation_provider: "web3dns_json_doh",
     }
-    const snapshot = deriveAcceptedHnsSnapshot(row, verification)
+    // Pirate-managed authority, so routing/subdomain capabilities require the
+    // authority-health assertion (see hns-assertion-policy.test.ts).
+    const snapshot = deriveAcceptedHnsSnapshot(row, verification, 1)
     expect(snapshot.rootExists).toBe(1)
     expect(snapshot.rootControlVerified).toBe(1)
     expect(snapshot.expiryHorizonSufficient).toBe(1)
@@ -266,6 +268,11 @@ describe("deriveAcceptedHnsSnapshot", () => {
     expect(snapshot.pirateSubdomainIssuanceAllowed).toBe(1)
     expect(snapshot.controlClass).toBe("single_holder_root")
     expect(snapshot.operationClass).toBe("owner_managed_namespace")
+
+    // Without health evidence the same verification must not grant routing.
+    const unhealthy = deriveAcceptedHnsSnapshot(row, verification, null)
+    expect(unhealthy.pirateWebRoutingAllowed).toBe(0)
+    expect(unhealthy.pirateSubdomainIssuanceAllowed).toBe(0)
   })
 
   test("falls back to row values when verification omits fields", () => {
@@ -358,7 +365,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
       routing_enabled: 1,
       pirate_dns_authority_verified: 1,
     })
-    const snapshot = deriveAcceptedHnsSnapshot(row, null)
+    const snapshot = deriveAcceptedHnsSnapshot(row, null, 1)
     expect(snapshot.clubAttachAllowed).toBe(0)
     expect(snapshot.pirateWebRoutingAllowed).toBe(1)
     expect(snapshot.pirateSubdomainIssuanceAllowed).toBe(0)
@@ -374,7 +381,7 @@ describe("deriveAcceptedHnsSnapshot", () => {
       control_class: "dao_controlled_root",
       operation_class: "routing_only_namespace",
     })
-    const snapshot = deriveAcceptedHnsSnapshot(row, null)
+    const snapshot = deriveAcceptedHnsSnapshot(row, null, 1)
     expect(snapshot.clubAttachAllowed).toBe(0)
     expect(snapshot.pirateWebRoutingAllowed).toBe(1)
     expect(snapshot.pirateSubdomainIssuanceAllowed).toBe(0)
