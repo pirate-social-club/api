@@ -4,12 +4,29 @@ import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError, rateLimited } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { sameLanguageLocale } from "../localization/content-locale"
+import { logPipelineError } from "../observability/pipeline-log"
 import type { Client, InStatement, ReadClient } from "../sql-client"
-import { canGenerateStudyTranslations } from "./post-study-generation-provider"
-import { STUDY_UNIT_GENERATION_VERSION, type StudyUnitRow } from "./post-study-unit-service"
+import {
+  chunkStudyGenerationLines,
+  classifyStudyGenerationError,
+  compactGenerationResultRef,
+  orderedTranslationOptions,
+  studyGenerationChunkSize,
+} from "./post-study-generation-helpers"
+import {
+  canGenerateStudyTranslations,
+  requestStudyPackGeneration,
+  type StudyGeneratedLine,
+} from "./post-study-generation-provider"
+import {
+  ensureStudyUnits,
+  STUDY_UNIT_GENERATION_VERSION,
+  studyWordCount,
+  type StudyUnitRow,
+} from "./post-study-unit-service"
 
 // v5: regenerate translations from the punctuation-canonicalized source lines.
-export const STUDY_LOCALIZATION_GENERATION_VERSION = 5
+const STUDY_LOCALIZATION_GENERATION_VERSION = 5
 
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
@@ -41,6 +58,12 @@ export type StudyPack = {
   study_pack_version: number
   target_language: string
   unavailable_reason: StudyUnavailableReason | null
+}
+
+type StudyGenerationPost = {
+  lyrics: string | null
+  post_id: string
+  source_language: string | null
 }
 
 function readString(value: unknown): string | null {
@@ -197,6 +220,178 @@ export async function hasCompleteReadyStudyLocalizations(input: {
   }) as Record<string, unknown> | null
   const unitCount = Number(row?.unit_count ?? 0)
   return unitCount > 0 && Number(row?.ready_count ?? 0) >= unitCount
+}
+
+export async function createReadyStudyPack(input: {
+  client: Client
+  env: Env
+  post: StudyGenerationPost
+  targetLanguage: string
+}): Promise<StudyPack | null> {
+  const units = await ensureStudyUnits(input.client, input.post)
+  if (units.length === 0) return null
+  // Defensive: refuse to generate translations into the song's own language even if
+  // a stale/racing caller reaches here — same-language translation is never valid.
+  if (isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)) return null
+
+  const generatedLines = new Map<string, StudyGeneratedLine>()
+  const generationFailureCodes: string[] = []
+  const skippedGenerationReasonCodes: string[] = []
+  let skippedGenerationLineCount = 0
+  let failedGenerationChunks = 0
+  let totalGenerationChunks = 0
+  if (canGenerateStudyTranslations(input.env)) {
+    const requestLines = units
+      .filter((unit) => studyWordCount(unit.prompt_text) >= 3)
+      .map((unit) => {
+        const previous = units.find((candidate) => candidate.line_index === unit.line_index - 1)
+        return {
+          lineId: unit.line_id,
+          previous: previous?.prompt_text ?? null,
+          text: unit.prompt_text,
+        }
+      })
+    const chunks = chunkStudyGenerationLines(requestLines, studyGenerationChunkSize(input.env))
+    totalGenerationChunks = chunks.length
+    for (const [chunkIndex, lines] of chunks.entries()) {
+      try {
+        const generated = await requestStudyPackGeneration({
+          env: input.env,
+          lines,
+          sourceLanguage: input.post.source_language,
+          targetLanguage: input.targetLanguage,
+        })
+        for (const line of generated.lines) {
+          generatedLines.set(line.lineId, line)
+        }
+        if (generated.skipped.length > 0) {
+          skippedGenerationLineCount += generated.skipped.length
+          skippedGenerationReasonCodes.push(...generated.skipped.map((line) => line.reason))
+        }
+      } catch (error) {
+        const errorCode = classifyStudyGenerationError(error)
+        failedGenerationChunks += 1
+        generationFailureCodes.push(errorCode)
+        logPipelineError("[song-study] generation chunk failed", {
+          chunk_index: chunkIndex,
+          chunk_line_count: lines.length,
+          error_code: errorCode,
+          post_id: input.post.post_id,
+          target_language: input.targetLanguage,
+        })
+      }
+    }
+  }
+
+  const now = nowIso()
+  const existingLocalizationRows = await input.client.execute({
+    sql: `
+      SELECT unit_id, localization_version, status
+      FROM song_study_unit_localization
+      WHERE target_language = ?1
+        AND unit_id IN (${units.map(() => "?").join(", ")})
+    `,
+    args: [input.targetLanguage, ...units.map((unit) => unit.id)],
+  })
+  const existingLocalizations = new Map(existingLocalizationRows.rows.map((row) => [
+    readString(row.unit_id) ?? "",
+    {
+      localization_version: Number(row.localization_version ?? 0),
+      status: readString(row.status),
+    },
+  ]))
+  let unavailableLineCount = 0
+  const localizationStatements: InStatement[] = []
+  for (const unit of units) {
+    const generatedLine = generatedLines.get(unit.line_id)
+    if (!generatedLine || generatedLine.distractors.length < 3) {
+      unavailableLineCount += 1
+      const existing = existingLocalizations.get(unit.id)
+      if (existing?.status === "ready") {
+        continue
+      }
+      localizationStatements.push({
+        sql: `
+          INSERT INTO song_study_unit_localization (
+            id, unit_id, target_language, localization_version, status,
+            max_attempts, created_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, 'unavailable', 1, ?5, ?5)
+          ON CONFLICT(unit_id, target_language) DO UPDATE SET
+            localization_version = excluded.localization_version,
+            status = 'unavailable',
+            question = NULL,
+            translation_text = NULL,
+            options_json = NULL,
+            correct_option_id = NULL,
+            explanation_text = NULL,
+            max_attempts = excluded.max_attempts,
+            generated_at = NULL,
+            updated_at = excluded.updated_at
+        `,
+        args: [makeId("sul"), unit.id, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
+      })
+      continue
+    }
+    const { correctOptionId, options } = orderedTranslationOptions({
+      generated: generatedLine,
+      lineIndex: unit.line_index,
+    })
+    localizationStatements.push({
+      sql: `
+        INSERT INTO song_study_unit_localization (
+          id, unit_id, target_language, localization_version, status,
+          question, translation_text, options_json, correct_option_id,
+          explanation_text, max_attempts, generated_at, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, 'ready', 'Choose the best translation.', ?5, ?6, ?7, ?8, 1, ?9, ?9, ?9)
+        ON CONFLICT(unit_id, target_language) DO UPDATE SET
+          localization_version = excluded.localization_version,
+          status = 'ready',
+          question = excluded.question,
+          translation_text = excluded.translation_text,
+          options_json = excluded.options_json,
+          correct_option_id = excluded.correct_option_id,
+          explanation_text = excluded.explanation_text,
+          max_attempts = excluded.max_attempts,
+          generated_at = excluded.generated_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        makeId("sul"),
+        unit.id,
+        input.targetLanguage,
+        STUDY_LOCALIZATION_GENERATION_VERSION,
+        generatedLine.translation,
+        JSON.stringify(options),
+        correctOptionId,
+        generatedLine.explanation ?? null,
+        now,
+      ],
+    })
+  }
+  if (localizationStatements.length > 0) {
+    await input.client.batch(localizationStatements, "write")
+  }
+
+  return {
+    generated_at: now,
+    job_result_ref: compactGenerationResultRef({
+      failedChunks: failedGenerationChunks,
+      failureCodes: generationFailureCodes,
+      generatedLineCount: generatedLines.size,
+      skippedLineCount: skippedGenerationLineCount,
+      skippedReasonCodes: skippedGenerationReasonCodes,
+      targetLanguage: input.targetLanguage,
+      totalChunks: totalGenerationChunks,
+      unavailableLineCount,
+    }),
+    source_language: input.post.source_language,
+    status: "ready",
+    study_pack_version: Math.max(STUDY_UNIT_GENERATION_VERSION, STUDY_LOCALIZATION_GENERATION_VERSION),
+    target_language: input.targetLanguage,
+    unavailable_reason: null,
+  }
 }
 
 async function markStudyLocalizationsProcessing(input: {
