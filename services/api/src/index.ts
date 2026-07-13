@@ -672,22 +672,48 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
     const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
-    if (summary.heartbeat_stale) {
+    if (summary.liveness_stale) {
       await captureScheduledWarning(
         env,
-        "Reward campaign integrity monitor heartbeat was stale",
-        "reward_campaign_integrity_heartbeat",
+        "Reward campaign integrity monitor liveness was stale",
+        "reward_campaign_integrity_liveness",
         { errors: 1 },
         { urgency: "high" },
       )
     }
-    if (summary.transient_finality_checks > 0) {
+    if (summary.coverage_stale) {
       await captureScheduledWarning(
         env,
-        "Reward campaign integrity scan had indeterminate finality checks",
-        "reward_campaign_integrity_rpc",
-        { errors: summary.transient_finality_checks },
+        "Reward campaign integrity monitor has not achieved complete finality coverage",
+        "reward_campaign_integrity_coverage",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+        },
         { urgency: "high" },
+      )
+    }
+    if (summary.wholly_blind) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity scan was wholly blind to funding finality",
+        "reward_campaign_integrity_wholly_blind",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+        },
+        { urgency: "high" },
+      )
+    } else if (summary.partial_finality_degraded) {
+      await captureScheduledWarning(
+        env,
+        "Reward campaign integrity scan had a degraded finality provider",
+        "reward_campaign_integrity_partial_finality",
+        {
+          errors: summary.transient_finality_checks,
+          finality_checks_attempted: summary.finality_checks_attempted,
+          transient_finality_rate: summary.transient_finality_rate,
+        },
       )
     }
     if (summary.incidents.length > 0) {
