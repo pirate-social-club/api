@@ -170,5 +170,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  void main()
+  await main()
 }
