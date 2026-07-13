@@ -6,8 +6,8 @@ import type {
 
 import { KaraokeSttEventEmitter } from "./stt-event-emitter"
 
-export const ELEVENLABS_DEFAULT_STT_WEBSOCKET_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
-export const ELEVENLABS_DEFAULT_STT_MODEL = "scribe_v2_realtime"
+const ELEVENLABS_DEFAULT_STT_WEBSOCKET_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+const ELEVENLABS_DEFAULT_STT_MODEL = "scribe_v2_realtime"
 
 // Keep stream→song segment history bounded; committed transcripts always
 // reference very recent audio, so two minutes is ample headroom.

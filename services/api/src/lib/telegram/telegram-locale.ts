@@ -1,4 +1,4 @@
-export const RUNTIME_UI_LOCALES = ["en", "ar", "zh", "ka"] as const
+const RUNTIME_UI_LOCALES = ["en", "ar", "zh", "ka"] as const
 
 export type RuntimeUiLocaleCode = (typeof RUNTIME_UI_LOCALES)[number]
 
