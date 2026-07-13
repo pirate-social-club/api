@@ -132,6 +132,8 @@ export async function getNamespaceVerificationSessionRowForUser(
         nvs.expiry_horizon_sufficient,
         nvs.routing_enabled,
         nvs.pirate_dns_authority_verified,
+        nvs.authority_health_verified,
+        nvs.ownership_source,
         (
           SELECT assertion_value
           FROM namespace_verification_assertions AS nva
@@ -237,6 +239,8 @@ export async function getNamespaceVerificationRowForUser(
         nv.expiry_horizon_sufficient,
         nv.routing_enabled,
         nv.pirate_dns_authority_verified,
+        nv.authority_health_verified,
+        nv.ownership_source,
         (
           SELECT assertion_value
           FROM namespace_verification_assertions AS nva

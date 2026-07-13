@@ -155,6 +155,15 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`,
 ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
   })
 
+  test("skips postgres-only ALTER COLUMN nullability changes for the sqlite mirror", () => {
+    expect(toSqliteCompatibleStatement(
+      "ALTER TABLE reward_campaign_monitor_state ALTER COLUMN first_attempted_scan_at SET NOT NULL;",
+    )).toBeNull()
+    expect(toSqliteCompatibleStatement(
+      "ALTER TABLE reward_campaign_monitor_state ALTER COLUMN last_successful_scan_at DROP NOT NULL;",
+    )).toBeNull()
+  })
+
   test("a ';' inside a block comment does not split the statement", () => {
     const sql = `/* note: run as owner; then grant */ CREATE TABLE t (id TEXT);`
     expect(splitSqlStatements(sql)).toEqual([sql])
