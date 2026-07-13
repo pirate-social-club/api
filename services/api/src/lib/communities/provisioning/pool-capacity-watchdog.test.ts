@@ -1,6 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import type { Env } from "../../../env"
-import { checkScheduledD1PoolCapacity } from "./pool-capacity-watchdog"
+import {
+  checkScheduledD1PoolCapacity,
+  classifyD1PoolCapacity,
+  parseFreeAlertThreshold,
+} from "./pool-capacity-watchdog"
 
 function envWithPoolStats(stats: { total: number; allocated: number; free: number; quarantined: number }, threshold?: string): Env {
   return {
@@ -65,5 +69,24 @@ describe("checkScheduledD1PoolCapacity", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe("D1 pool capacity classification", () => {
+  test("uses the configured threshold and requires free capacity above it", () => {
+    expect(classifyD1PoolCapacity({ total: 30, allocated: 21, free: 9, quarantined: 0 }, "8")).toEqual({
+      total: 30,
+      allocated: 21,
+      free: 9,
+      quarantined: 0,
+      threshold: 8,
+      healthy: true,
+    })
+    expect(classifyD1PoolCapacity({ total: 30, allocated: 22, free: 8, quarantined: 0 }, "8").healthy).toBe(false)
+  })
+
+  test("falls back safely when the threshold is invalid", () => {
+    expect(parseFreeAlertThreshold("not-a-number")).toBe(2)
+    expect(parseFreeAlertThreshold("-1")).toBe(2)
   })
 })
