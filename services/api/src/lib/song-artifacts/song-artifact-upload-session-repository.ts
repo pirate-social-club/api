@@ -13,7 +13,7 @@ export type SongArtifactUploadSessionStatus =
   | "aborting"
   | "aborted"
 
-export type SongArtifactUploadMode = "proxy" | "direct_multipart"
+type SongArtifactUploadMode = "proxy" | "direct_multipart"
 
 export type SongArtifactUploadSessionRow = {
   song_artifact_upload_session_id: string

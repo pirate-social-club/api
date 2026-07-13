@@ -7,13 +7,13 @@ import type { RightsHoldType } from "../rights/rights-review-types"
 // outcomes that need action open a rights_review_cases row and create a
 // rights_holds row that commerce/delivery gates can enforce.
 
-export type VideoRightsOutcome =
+type VideoRightsOutcome =
   | "allow"
   | "allow_with_required_reference"
   | "review_required"
   | "blocked"
 
-export type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
+type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
 
 export type VideoRightsAcrCustomMatch = {
   song_artifact_bundle_id: string | null

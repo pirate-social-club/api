@@ -7,7 +7,7 @@ import {
 } from "../communities/assistant-policy/credential-service"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
 
-export type SongAlignmentReason =
+type SongAlignmentReason =
   | "lyrics_missing"
   | "audio_missing"
   | "elevenlabs_key_missing"

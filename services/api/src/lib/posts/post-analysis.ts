@@ -6,7 +6,7 @@ import {
   resolveOpenAIModerationOutcome,
 } from "./openai-moderation"
 
-export type PostAnalysisOutcome = Pick<Post, "analysis_state" | "content_safety_state" | "status" | "age_gate_policy"> & {
+type PostAnalysisOutcome = Pick<Post, "analysis_state" | "content_safety_state" | "status" | "age_gate_policy"> & {
   providerResult?: Record<string, unknown> | null
 }
 
