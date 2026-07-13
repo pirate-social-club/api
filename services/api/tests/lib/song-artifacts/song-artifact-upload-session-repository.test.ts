@@ -6,6 +6,7 @@ import {
 } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import {
   createSongArtifactUploadSession,
+  isSongArtifactUploadContentHashServerVerified,
   listStaleSongArtifactUploadSessions,
   markSongArtifactUploadSessionAborted,
   markSongArtifactUploadSessionUploaded,
@@ -89,6 +90,27 @@ function sessionInput(overrides: Partial<Parameters<typeof createSongArtifactUpl
 }
 
 describe("song artifact upload session repository", () => {
+  test("treats proxy hashes as verified and direct multipart hashes as unverified", async () => {
+    const setup = await createSetup()
+
+    expect(await isSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+    })).toBe(true)
+
+    await createSongArtifactUploadSession({
+      client: setup.client,
+      session: sessionInput(),
+    })
+
+    expect(await isSongArtifactUploadContentHashServerVerified({
+      client: setup.client,
+      communityId: "cmt_session",
+      songArtifactUploadId: setup.upload.id,
+    })).toBe(false)
+  })
+
   test("creates sessions and performs race-safe transitions", async () => {
     const setup = await createSetup()
 
