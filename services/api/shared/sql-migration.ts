@@ -248,6 +248,17 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
+  // SQLite cannot change an existing column's nullability with ALTER COLUMN.
+  // The local mirror preserves the data migration that surrounds these
+  // PostgreSQL constraints, but cannot enforce the final SET/DROP NOT NULL.
+  if (
+    normalized.startsWith("ALTER TABLE")
+    && normalized.includes(" ALTER COLUMN ")
+    && (normalized.includes(" SET NOT NULL") || normalized.includes(" DROP NOT NULL"))
+  ) {
+    return []
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
     return []
   }

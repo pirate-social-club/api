@@ -124,10 +124,14 @@ describe("hns verification routes", () => {
         status: string
         namespace_verification: string | null
         observation_provider: string | null
+        ownership_source: string | null
+        assertions: { authority_health_verified: boolean | null }
       }
       expect(completedNamespaceBody.status).toBe("verified")
       expect(typeof completedNamespaceBody.namespace_verification).toBe("string")
       expect(completedNamespaceBody.observation_provider).toBe("web3dns_json_doh")
+      expect(completedNamespaceBody.ownership_source).toBeNull()
+      expect(completedNamespaceBody.assertions.authority_health_verified).toBeNull()
 
       expect(calls.some((entry) => entry.url.includes("/inspect-public?"))).toBe(true)
       expect(calls.some((entry) => entry.url.endsWith("/verify-txt-public"))).toBe(true)
@@ -349,8 +353,12 @@ describe("hns verification routes", () => {
       )
       const completedBody = await json(completedNamespaceSession) as {
         namespace_verification: string | null
+        assertions: { authority_health_verified: boolean | null }
+        ownership_source: string | null
       }
       expect(typeof completedBody.namespace_verification).toBe("string")
+      expect(completedBody.assertions.authority_health_verified).toBe(true)
+      expect(completedBody.ownership_source).toBe("hns_parent_chain_txt")
 
       const fetchedNamespaceVerification = await app.request(
         `http://pirate.test/namespace-verifications/${completedBody.namespace_verification}`,
@@ -369,6 +377,7 @@ describe("hns verification routes", () => {
           expiry_horizon_sufficient: boolean | null
           routing_enabled: boolean | null
           pirate_dns_authority_verified: boolean | null
+          authority_health_verified: boolean | null
         }
         capabilities: {
           club_attach_allowed: boolean | null
@@ -377,17 +386,20 @@ describe("hns verification routes", () => {
         }
         control_class: string | null
         operation_class: string | null
+        ownership_source: string | null
       }
       expect(fetchedBody.assertions.root_exists).toBe(true)
       expect(fetchedBody.assertions.root_control_verified).toBe(true)
       expect(fetchedBody.assertions.expiry_horizon_sufficient).toBe(false)
       expect(fetchedBody.assertions.routing_enabled).toBe(true)
       expect(fetchedBody.assertions.pirate_dns_authority_verified).toBe(true)
+      expect(fetchedBody.assertions.authority_health_verified).toBe(true)
       expect(fetchedBody.capabilities.club_attach_allowed).toBe(false)
       expect(fetchedBody.capabilities.pirate_web_routing_allowed).toBe(true)
       expect(fetchedBody.capabilities.pirate_subdomain_issuance_allowed).toBe(false)
       expect(fetchedBody.control_class).toBe("dao_controlled_root")
       expect(fetchedBody.operation_class).toBe("routing_only_namespace")
+      expect(fetchedBody.ownership_source).toBe("hns_parent_chain_txt")
       expect(verifierCalls.some((url) => url.endsWith("/publish-txt"))).toBe(true)
       expect(verifierCalls.some((url) => url.includes("/authority-health?"))).toBe(true)
 

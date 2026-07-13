@@ -198,6 +198,7 @@ function buildNamespaceAssertions(input: {
   expiry_horizon_sufficient: number | null
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
+  authority_health_verified: number | null
   root_key_proof_verified: number | null
   fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
@@ -209,6 +210,7 @@ function buildNamespaceAssertions(input: {
     expiry_horizon_sufficient: boolOrNull(input.expiry_horizon_sufficient),
     routing_enabled: boolOrNull(input.routing_enabled),
     pirate_dns_authority_verified: boolOrNull(input.pirate_dns_authority_verified),
+    authority_health_verified: boolOrNull(input.authority_health_verified),
     root_key_proof_verified: boolOrNull(input.root_key_proof_verified),
     fabric_publish_verified: boolOrNull(input.fabric_publish_verified),
     anchor_fresh_enough: boolOrNull(input.anchor_fresh_enough),
@@ -308,6 +310,7 @@ export function serializeNamespaceVerificationSession(
     capabilities: buildNamespaceCapabilities(row),
     control_class: row.control_class,
     operation_class: row.operation_class,
+    ownership_source: row.ownership_source,
     observation_provider: row.observation_provider,
     evidence_bundle_ref: row.evidence_bundle_ref,
     failure_reason: row.failure_reason,
@@ -343,6 +346,7 @@ export function serializeNamespaceVerification(row: NamespaceVerificationRow): N
     capabilities: buildNamespaceCapabilities(row),
     control_class: row.control_class,
     operation_class: row.operation_class,
+    ownership_source: row.ownership_source,
     observation_provider: row.observation_provider,
     evidence_bundle_ref: row.evidence_bundle_ref,
     accepted_at: unixSeconds(row.accepted_at),
