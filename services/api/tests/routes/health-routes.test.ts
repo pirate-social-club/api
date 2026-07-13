@@ -10,6 +10,68 @@ describe("health route", () => {
     expect(body).toEqual({ ok: true })
   })
 
+  test("GET /health/provisioning reports live healthy pool capacity", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      backend: "d1_native",
+      pool_capacity: { free: 10, threshold: 8, healthy: true },
+    })
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  })
+
+  test("GET /health/provisioning is degraded at the pool threshold", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 22, free: 8, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error_code: "d1_pool_low_capacity",
+      pool_capacity: { free: 8, threshold: 8, healthy: false },
+    })
+  })
+
+  test("GET /health/provisioning fails closed when capacity cannot be read", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1PoolStats: async () => ({ ok: false as const, code: "shard_unavailable" }),
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error_code: "d1_pool_stats_unavailable",
+    })
+  })
+
   test("CORS denies cross-origin access when no origins are configured", async () => {
     const response = await app.request("http://pirate.test/health", {
       headers: { origin: "https://app.pirate.test" },
