@@ -19,12 +19,13 @@ function productionApp(): Hono<{ Bindings: Env }> {
   return app
 }
 
-function recoveryApp(input: { scope: typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE | typeof REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE; recover: (value: Record<string, unknown>) => Promise<{ campaign_id: string; status: string }> }) {
+function recoveryApp(input: { scope: typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE | typeof REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE; recover: (value: Record<string, unknown>) => Promise<{ campaign_id: string; status: string }>; alert?: (campaignId: string, incidentId: string) => void }) {
   const app = withErrors(new Hono<{ Bindings: Env }>())
   app.post("/operator/reward_campaigns/:campaignId/incidents/:incidentId/recover", createRewardCampaignRecoveryHandler({
     authenticate: async () => ({ authType: "operator_credential", operatorCredentialId: "opc_test", operatorActorId: "reward-operator", scopes: [input.scope] }),
     getClient: (() => ({} as Client)) as typeof import("../lib/runtime-deps").getControlPlaneClient,
     recover: async (value) => input.recover(value as unknown as Record<string, unknown>),
+    alertRecovery: async (_env, campaignId, incidentId) => { input.alert?.(campaignId, incidentId); return true },
   }))
   return app
 }
@@ -56,12 +57,15 @@ describe("reward campaign incident recovery route", () => {
 
   test("reaches recovery with the dedicated scope and returns the restored campaign", async () => {
     let received: Record<string, unknown> | null = null
+    let alerted: [string, string] | null = null
     const response = await recoveryApp({
       scope: REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
       recover: async (value) => { received = value; return { campaign_id: String(value.campaignId), status: "active" } },
+      alert: (campaignId, incidentId) => { alerted = [campaignId, incidentId] },
     }).fetch(request(), {} as Env)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ campaign_id: "rcp_test", status: "active" })
     expect(received).toMatchObject({ campaignId: "rcp_test", incidentId: "rci_test", incidentVersion: 3, resolutionNote: "resolved", operatorActorId: "reward-operator" })
+    expect(alerted).toEqual(["rcp_test", "rci_test"])
   })
 })

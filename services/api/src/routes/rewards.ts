@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono"
+import type { Env } from "../env"
 import { authenticateOperatorCredential, requireOperatorScope, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE } from "../lib/operator-credential-auth"
 import { recoverRewardCampaignIncident } from "../lib/rewards/reward-campaign-recovery"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
@@ -17,6 +18,7 @@ import {
   type RewardCampaignTarget,
 } from "../lib/rewards/reward-campaign-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { captureScheduledWarning } from "../lib/ops-alerts/scheduled"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityReadClient } from "../lib/communities/community-read-access"
 import { rowValue, stringOrNull } from "../lib/sql-row"
@@ -28,6 +30,13 @@ const operatorRouteDefaults = {
   authenticate: authenticateOperatorCredential,
   recover: recoverRewardCampaignIncident,
   getClient: getControlPlaneClient,
+  alertRecovery: async (env: Env, campaignId: string, incidentId: string) => captureScheduledWarning(
+    env,
+    "Reward campaign operational hold recovered",
+    `reward_campaign_recovery:${campaignId}:${incidentId}`,
+    { campaign_id: campaignId, incident_id: incidentId },
+    { urgency: "low" },
+  ),
 }
 type RewardOperatorRouteServices = typeof operatorRouteDefaults
 
@@ -231,14 +240,19 @@ export function createRewardCampaignRecoveryHandler(services: RewardOperatorRout
     })
     requireOperatorScope(operator, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE)
     const body = await c.req.json<{ incident_version?: unknown; resolution_note?: unknown }>().catch(() => null)
+    const campaignId = c.req.param("campaignId") ?? ""
+    const incidentId = c.req.param("incidentId") ?? ""
     const result = await services.recover({
       env: c.env,
       client: services.getClient(c.env),
-      campaignId: c.req.param("campaignId") ?? "",
-      incidentId: c.req.param("incidentId") ?? "",
+      campaignId,
+      incidentId,
       incidentVersion: Number(body?.incident_version),
       resolutionNote: typeof body?.resolution_note === "string" ? body.resolution_note : "",
       operatorActorId: operator.operatorActorId,
+    })
+    await services.alertRecovery(c.env, campaignId, incidentId).catch((error) => {
+      console.error("[reward-campaigns] recovery alert failed", { campaign_id: campaignId, incident_id: incidentId, error })
     })
     return c.json(result, 200)
   }

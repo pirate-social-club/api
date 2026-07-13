@@ -107,14 +107,21 @@ export async function monitorRewardCampaigns(input: { env: Env; client: Client; 
       UPDATE reward_campaign_incidents i
       SET resolved_at = ?1, resolved_by = 'scheduled_monitor',
           resolution_note = 'Funding provenance backfilled', incident_version = incident_version + 1
-      WHERE i.incident_kind = 'funding_provenance_missing' AND i.resolved_at IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM reward_campaign_funding_effects f
-          WHERE f.reward_campaign_id = i.reward_campaign_id AND f.status = 'confirmed'
-            AND (f.confirmed_block_number IS NULL OR f.confirmed_block_hash IS NULL)
-        )
+      WHERE i.reward_campaign_incident_id IN (
+        SELECT candidate.reward_campaign_incident_id
+        FROM reward_campaign_incidents candidate
+        WHERE candidate.incident_kind = 'funding_provenance_missing'
+          AND candidate.resolved_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM reward_campaign_funding_effects f
+            WHERE f.reward_campaign_id = candidate.reward_campaign_id AND f.status = 'confirmed'
+              AND (f.confirmed_block_number IS NULL OR f.confirmed_block_hash IS NULL)
+          )
+        ORDER BY candidate.opened_at, candidate.reward_campaign_incident_id
+        LIMIT ?2
+      )
     `,
-    args: [now],
+    args: [now, limit],
   })
   const mismatches = await input.client.execute({
     sql: `SELECT * FROM reward_campaign_accounting_reconciliation WHERE counters_match = FALSE ORDER BY reward_campaign_id LIMIT ?1`, args: [limit],
