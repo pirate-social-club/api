@@ -141,6 +141,7 @@ export async function getAssetRow(
              story_publish_tx_ref, story_asset_version_id,
              story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
              story_write_condition, royalty_allocation_status, royalty_allocation_fingerprint,
+             royalty_allocation_projection_synced,
              locked_delivery_status, locked_delivery_ref, locked_delivery_error,
              locked_delivery_storage_ref, locked_delivery_secret_json, created_at, updated_at
       FROM assets
@@ -193,6 +194,7 @@ export async function getAssetRow(
     story_write_condition: stringOrNull(row, "story_write_condition"),
     royalty_allocation_status: requiredString(row, "royalty_allocation_status") as AssetRow["royalty_allocation_status"],
     royalty_allocation_fingerprint: stringOrNull(row, "royalty_allocation_fingerprint"),
+    royalty_allocation_projection_synced: numberOrNull(row, "royalty_allocation_projection_synced") ?? 1,
     locked_delivery_status: requiredString(row, "locked_delivery_status") as Asset["locked_delivery_status"],
     locked_delivery_ref: stringOrNull(row, "locked_delivery_ref"),
     locked_delivery_error: stringOrNull(row, "locked_delivery_error"),
