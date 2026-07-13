@@ -18,6 +18,7 @@ export type HnsNamespaceRevalidationSummary = {
   downgraded: number
   staled: number
   deferred: number
+  leasesApproachingExpiry: number
   errors: number
   deadlineReached: boolean
 }
@@ -28,9 +29,6 @@ type RevalidationCandidate = {
   rootLabel: string
   expiresAt: string
   rootExists: number
-  rootControlVerified: number | null
-  pirateDnsAuthorityVerified: number | null
-  authorityHealthVerified: number | null
 }
 
 type RevalidationConfig = {
@@ -109,9 +107,6 @@ function toCandidate(row: QueryResultRow): RevalidationCandidate {
     rootLabel: requiredString(row, "normalized_root_label"),
     expiresAt: requiredString(row, "expires_at"),
     rootExists: nullableBooleanInteger(row, "root_exists") ?? 0,
-    rootControlVerified: nullableBooleanInteger(row, "root_control_verified"),
-    pirateDnsAuthorityVerified: nullableBooleanInteger(row, "pirate_dns_authority_verified"),
-    authorityHealthVerified: nullableBooleanInteger(row, "authority_health_verified"),
   }
 }
 
@@ -128,10 +123,7 @@ async function selectCandidates(
         nv.source_namespace_verification_session_id,
         nv.normalized_root_label,
         nv.expires_at,
-        nv.root_exists,
-        nv.root_control_verified,
-        nv.pirate_dns_authority_verified,
-        nv.authority_health_verified
+        nv.root_exists
       FROM namespace_verifications AS nv
       WHERE nv.family = 'hns'
         AND nv.status = 'verified'
@@ -208,19 +200,28 @@ function evidenceStatement(input: {
   }
 }
 
-function expiryCapabilityValues(candidate: RevalidationCandidate): {
-  clubAttachAllowed: number
-  pirateSubdomainIssuanceAllowed: number
+export function hnsNamespaceRevalidationAlertState(summary: HnsNamespaceRevalidationSummary): {
+  allDeferred: boolean
+  massDeferred: boolean
+  leaseExpiryRisk: boolean
 } {
   return {
-    clubAttachAllowed: candidate.rootControlVerified === 1 ? 1 : 0,
-    pirateSubdomainIssuanceAllowed:
-      candidate.rootControlVerified === 1
-        && candidate.pirateDnsAuthorityVerified === 1
-        && candidate.authorityHealthVerified === 1
-        ? 1
-        : 0,
+    allDeferred: summary.attempted > 0 && summary.deferred === summary.attempted,
+    massDeferred:
+      summary.deferred >= 5
+      && summary.deferred * 2 >= summary.attempted,
+    leaseExpiryRisk: summary.leasesApproachingExpiry > 0,
   }
+}
+
+function leaseNeedsAttention(
+  candidate: RevalidationCandidate,
+  now: Date,
+  intervalSeconds: number,
+): boolean {
+  const expiresAt = Date.parse(candidate.expiresAt)
+  return Number.isFinite(expiresAt)
+    && expiresAt <= now.getTime() + intervalSeconds * 1000
 }
 
 async function refreshCandidate(input: {
@@ -231,7 +232,6 @@ async function refreshCandidate(input: {
   nextExpiry: string
 }): Promise<void> {
   const evidenceBundleId = makeId("nev")
-  const capabilities = expiryCapabilityValues(input.candidate)
   await input.client.batch([
     evidenceStatement({
       candidate: input.candidate,
@@ -245,18 +245,34 @@ async function refreshCandidate(input: {
         UPDATE namespace_verifications
         SET root_exists = 1,
             expiry_horizon_sufficient = 1,
-            club_attach_allowed = ?2,
-            pirate_subdomain_issuance_allowed = ?3,
-            evidence_bundle_ref = ?4,
-            expires_at = ?5,
-            updated_at = ?6
+            club_attach_allowed = CASE WHEN EXISTS (
+              SELECT 1
+              FROM namespace_verification_assertions AS current_assertion
+              WHERE current_assertion.namespace_verification_id = ?1
+                AND current_assertion.assertion_name = 'root_control_verified'
+                AND current_assertion.assertion_value = 1
+                AND current_assertion.status = 'accepted'
+            ) THEN 1 ELSE 0 END,
+            pirate_subdomain_issuance_allowed = CASE WHEN (
+              SELECT COUNT(*)
+              FROM namespace_verification_assertions AS current_assertion
+              WHERE current_assertion.namespace_verification_id = ?1
+                AND current_assertion.assertion_name IN (
+                  'root_control_verified',
+                  'pirate_dns_authority_verified',
+                  'authority_health_verified'
+                )
+                AND current_assertion.assertion_value = 1
+                AND current_assertion.status = 'accepted'
+            ) = 3 THEN 1 ELSE 0 END,
+            evidence_bundle_ref = ?2,
+            expires_at = ?3,
+            updated_at = ?4
         WHERE namespace_verification_id = ?1
           AND status = 'verified'
       `,
       args: [
         input.candidate.namespaceVerificationId,
-        capabilities.clubAttachAllowed,
-        capabilities.pirateSubdomainIssuanceAllowed,
         evidenceBundleId,
         input.nextExpiry,
         input.now,
@@ -285,14 +301,54 @@ async function refreshCandidate(input: {
       sql: `
         UPDATE namespace_verification_capabilities
         SET capability_value = CASE capability_name
-              WHEN 'club_attach_allowed' THEN ?2
-              WHEN 'pirate_subdomain_issuance_allowed' THEN ?3
+              WHEN 'club_attach_allowed' THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM namespace_verification_assertions AS current_assertion
+                WHERE current_assertion.namespace_verification_id = ?1
+                  AND current_assertion.assertion_name = 'root_control_verified'
+                  AND current_assertion.assertion_value = 1
+                  AND current_assertion.status = 'accepted'
+              ) THEN 1 ELSE 0 END
+              WHEN 'pirate_subdomain_issuance_allowed' THEN CASE WHEN (
+                SELECT COUNT(*)
+                FROM namespace_verification_assertions AS current_assertion
+                WHERE current_assertion.namespace_verification_id = ?1
+                  AND current_assertion.assertion_name IN (
+                    'root_control_verified',
+                    'pirate_dns_authority_verified',
+                    'authority_health_verified'
+                  )
+                  AND current_assertion.assertion_value = 1
+                  AND current_assertion.status = 'accepted'
+              ) = 3 THEN 1 ELSE 0 END
               ELSE capability_value
             END,
-            status = 'accepted',
-            source_evidence_bundle_id = ?4,
-            last_revalidated_at = ?5,
-            updated_at = ?5
+            status = CASE capability_name
+              WHEN 'club_attach_allowed' THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM namespace_verification_assertions AS current_assertion
+                WHERE current_assertion.namespace_verification_id = ?1
+                  AND current_assertion.assertion_name = 'root_control_verified'
+                  AND current_assertion.assertion_value = 1
+                  AND current_assertion.status = 'accepted'
+              ) THEN 'accepted' ELSE 'stale' END
+              WHEN 'pirate_subdomain_issuance_allowed' THEN CASE WHEN (
+                SELECT COUNT(*)
+                FROM namespace_verification_assertions AS current_assertion
+                WHERE current_assertion.namespace_verification_id = ?1
+                  AND current_assertion.assertion_name IN (
+                    'root_control_verified',
+                    'pirate_dns_authority_verified',
+                    'authority_health_verified'
+                  )
+                  AND current_assertion.assertion_value = 1
+                  AND current_assertion.status = 'accepted'
+              ) = 3 THEN 'accepted' ELSE 'stale' END
+              ELSE status
+            END,
+            source_evidence_bundle_id = ?2,
+            last_revalidated_at = ?3,
+            updated_at = ?3
         WHERE namespace_verification_id = ?1
           AND capability_name IN ('club_attach_allowed', 'pirate_subdomain_issuance_allowed')
           AND EXISTS (
@@ -304,8 +360,6 @@ async function refreshCandidate(input: {
       `,
       args: [
         input.candidate.namespaceVerificationId,
-        capabilities.clubAttachAllowed,
-        capabilities.pirateSubdomainIssuanceAllowed,
         evidenceBundleId,
         input.now,
       ],
@@ -513,6 +567,7 @@ export async function sweepHnsNamespaceRevalidations(input: {
     downgraded: 0,
     staled: 0,
     deferred: 0,
+    leasesApproachingExpiry: 0,
     errors: 0,
     deadlineReached: false,
   }
@@ -527,10 +582,17 @@ export async function sweepHnsNamespaceRevalidations(input: {
   const candidates = await selectCandidates(input.client, nowIso, dueBefore, config.batchSize)
   summary.candidates = candidates.length
 
-  for (const candidate of candidates) {
+  for (const [candidateIndex, candidate] of candidates.entries()) {
     const inspectionBudgetMs = deadline - clock() - WRITE_TIME_RESERVE_MS
     if (inspectionBudgetMs <= 0) {
       summary.deadlineReached = true
+      summary.leasesApproachingExpiry += candidates
+        .slice(candidateIndex)
+        .filter((pendingCandidate) => leaseNeedsAttention(
+          pendingCandidate,
+          now,
+          config.intervalSeconds,
+        )).length
       break
     }
     summary.attempted += 1
@@ -554,9 +616,15 @@ export async function sweepHnsNamespaceRevalidations(input: {
         } else {
           await recordDeferredAttempt({ client: input.client, candidate, inspection, now: nowIso })
           summary.deferred += 1
+          if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {
+            summary.leasesApproachingExpiry += 1
+          }
         }
       } catch {
         summary.errors += 1
+        if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {
+          summary.leasesApproachingExpiry += 1
+        }
       }
       continue
     }
@@ -618,13 +686,22 @@ export async function sweepHnsNamespaceRevalidations(input: {
       ) {
         await downgradeCandidate({ client: input.client, candidate, inspection, now: nowIso })
         summary.downgraded += 1
+        if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {
+          summary.leasesApproachingExpiry += 1
+        }
         continue
       }
 
       await recordDeferredAttempt({ client: input.client, candidate, inspection, now: nowIso })
       summary.deferred += 1
+      if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {
+        summary.leasesApproachingExpiry += 1
+      }
     } catch {
       summary.errors += 1
+      if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {
+        summary.leasesApproachingExpiry += 1
+      }
     }
   }
 

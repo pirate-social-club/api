@@ -64,6 +64,7 @@ import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import {
+  hnsNamespaceRevalidationAlertState,
   isHnsNamespaceRevalidationEnabled,
   sweepHnsNamespaceRevalidations,
 } from "./lib/verification/namespace-revalidation-cron"
@@ -784,6 +785,30 @@ async function revalidateScheduledHnsNamespaces(env: Env): Promise<void> {
     })
     if (summary.candidates > 0 || summary.errors > 0) {
       console.info("[hns-revalidation] swept", JSON.stringify(summary))
+    }
+    const alertState = hnsNamespaceRevalidationAlertState(summary)
+    if (alertState.allDeferred || alertState.massDeferred) {
+      console.warn("[hns-revalidation] observations deferred", JSON.stringify({
+        ...summary,
+        alert: alertState.allDeferred ? "all_deferred" : "mass_deferred",
+      }))
+      await captureScheduledWarning(
+        env,
+        "HNS namespace revalidation observations were broadly deferred",
+        "hns_namespace_revalidation_deferred",
+        { ...summary, count: summary.deferred },
+        { urgency: "high" },
+      )
+    }
+    if (alertState.leaseExpiryRisk) {
+      console.warn("[hns-revalidation] ownership leases approaching expiry", JSON.stringify(summary))
+      await captureScheduledWarning(
+        env,
+        "HNS namespace ownership leases are approaching expiry without refresh",
+        "hns_namespace_revalidation_lease_expiry",
+        { ...summary, count: summary.leasesApproachingExpiry },
+        { urgency: "high" },
+      )
     }
     if (summary.errors > 0) {
       await captureScheduledWarning(
