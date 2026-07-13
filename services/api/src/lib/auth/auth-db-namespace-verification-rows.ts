@@ -29,6 +29,8 @@ export type NamespaceVerificationSessionRow = {
   expiry_horizon_sufficient: number | null
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
+  authority_health_verified: number | null
+  ownership_source: NamespaceVerificationSession["ownership_source"]
   root_key_proof_verified: number | null
   fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
@@ -64,6 +66,8 @@ export type NamespaceVerificationRow = {
   expiry_horizon_sufficient: number | null
   routing_enabled: number | null
   pirate_dns_authority_verified: number | null
+  authority_health_verified: number | null
+  ownership_source: NamespaceVerification["ownership_source"]
   root_key_proof_verified: number | null
   fabric_publish_verified: number | null
   anchor_fresh_enough: number | null
@@ -107,6 +111,8 @@ export function toNamespaceVerificationSessionRow(row: unknown): NamespaceVerifi
     expiry_horizon_sufficient: numberOrNull(rowValue(row, "expiry_horizon_sufficient")),
     routing_enabled: numberOrNull(rowValue(row, "routing_enabled")),
     pirate_dns_authority_verified: numberOrNull(rowValue(row, "pirate_dns_authority_verified")),
+    authority_health_verified: numberOrNull(rowValue(row, "authority_health_verified")),
+    ownership_source: stringOrNull(rowValue(row, "ownership_source")) as NamespaceVerificationSession["ownership_source"],
     root_key_proof_verified: numberOrNull(rowValue(row, "root_key_proof_verified")),
     fabric_publish_verified: numberOrNull(rowValue(row, "fabric_publish_verified")),
     anchor_fresh_enough: numberOrNull(rowValue(row, "anchor_fresh_enough")),
@@ -144,6 +150,8 @@ export function toNamespaceVerificationRow(row: unknown): NamespaceVerificationR
     expiry_horizon_sufficient: numberOrNull(rowValue(row, "expiry_horizon_sufficient")),
     routing_enabled: numberOrNull(rowValue(row, "routing_enabled")),
     pirate_dns_authority_verified: numberOrNull(rowValue(row, "pirate_dns_authority_verified")),
+    authority_health_verified: numberOrNull(rowValue(row, "authority_health_verified")),
+    ownership_source: stringOrNull(rowValue(row, "ownership_source")) as NamespaceVerification["ownership_source"],
     root_key_proof_verified: numberOrNull(rowValue(row, "root_key_proof_verified")),
     fabric_publish_verified: numberOrNull(rowValue(row, "fabric_publish_verified")),
     anchor_fresh_enough: numberOrNull(rowValue(row, "anchor_fresh_enough")),

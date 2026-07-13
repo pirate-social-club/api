@@ -9222,6 +9222,14 @@ const spec = {
             ],
             "nullable": true
           },
+          "ownership_source": {
+            "type": "string",
+            "enum": [
+              "hns_parent_chain_txt",
+              "owner_authoritative_dns_txt"
+            ],
+            "nullable": true
+          },
           "observation_provider": {
             "type": "string",
             "nullable": true
@@ -9330,6 +9338,14 @@ const spec = {
               "routing_only_namespace",
               "pirate_delegated_namespace",
               "owner_signed_updates_namespace"
+            ],
+            "nullable": true
+          },
+          "ownership_source": {
+            "type": "string",
+            "enum": [
+              "hns_parent_chain_txt",
+              "owner_authoritative_dns_txt"
             ],
             "nullable": true
           },
@@ -17069,6 +17085,10 @@ const spec = {
             "nullable": true
           },
           "pirate_dns_authority_verified": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "authority_health_verified": {
             "type": "boolean",
             "nullable": true
           },

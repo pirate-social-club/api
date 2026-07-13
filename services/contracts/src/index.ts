@@ -650,6 +650,7 @@ export type NamespaceVerificationAssertions = {
   expiry_horizon_sufficient?: boolean | null;
   routing_enabled?: boolean | null;
   pirate_dns_authority_verified?: boolean | null;
+  authority_health_verified?: boolean | null;
   root_key_proof_verified?: boolean | null;
   fabric_publish_verified?: boolean | null;
   anchor_fresh_enough?: boolean | null;
@@ -683,6 +684,7 @@ export type NamespaceVerificationSession = {
   capabilities?: NamespaceVerificationCapabilities | null;
   control_class?: "single_holder_root" | "multisig_controlled_root" | "dao_controlled_root" | "burned_or_immutable_root" | null;
   operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | "owner_signed_updates_namespace" | null;
+  ownership_source?: "hns_parent_chain_txt" | "owner_authoritative_dns_txt" | null;
   observation_provider?: string | null;
   evidence_bundle_ref?: string | null;
   failure_reason?: string | null;
@@ -702,6 +704,7 @@ export type NamespaceVerification = {
   capabilities: NamespaceVerificationCapabilities;
   control_class?: "single_holder_root" | "multisig_controlled_root" | "dao_controlled_root" | "burned_or_immutable_root" | null;
   operation_class?: "owner_managed_namespace" | "routing_only_namespace" | "pirate_delegated_namespace" | "owner_signed_updates_namespace" | null;
+  ownership_source?: "hns_parent_chain_txt" | "owner_authoritative_dns_txt" | null;
   observation_provider?: string | null;
   evidence_bundle_ref?: string | null;
   accepted_at: number;

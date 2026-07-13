@@ -33,6 +33,8 @@ function stubRow(overrides: Partial<NamespaceVerificationSessionRow> = {}): Name
     expiry_horizon_sufficient: null,
     routing_enabled: null,
     pirate_dns_authority_verified: null,
+    authority_health_verified: null,
+    ownership_source: null,
     root_key_proof_verified: null,
     fabric_publish_verified: null,
     anchor_fresh_enough: null,
