@@ -7,7 +7,7 @@ const SIGNING_CLAIM_TTL_MS = 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export type OperatorKind = "booking" | "rewards"
-export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout"
+type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -47,8 +47,8 @@ export interface OperatorSettleResult {
   state: OperatorSettleState
 }
 
-export interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
-export type TxLiveness = "success" | "failed" | "pending" | "absent"
+interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
+type TxLiveness = "success" | "failed" | "pending" | "absent"
 export interface ChainPrimitives {
   pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>

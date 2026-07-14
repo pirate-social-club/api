@@ -4,7 +4,6 @@ import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
 import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
-import { resolvePirateCheckoutSourceChainName } from "../commerce/checkout-config"
 
 const BASE_MAINNET_CHAIN_ID = 8453
 const BASE_SEPOLIA_CHAIN_ID = 84532
@@ -75,10 +74,6 @@ export function resolveBookingSettlementChainId(env: Env): number {
 
 export function resolveRewardsSettlementChainId(env: Env): number {
   return resolveSettlementChainId(env, "rewards")
-}
-
-export function resolveBookingSettlementChainName(chainId: number): string {
-  return resolvePirateCheckoutSourceChainName(chainId)
 }
 
 function resolveSettlementUsdcTokenAddress(env: Env, kind: SettlementOperatorKind): string {

@@ -85,7 +85,7 @@ export interface ProcessCommunityInput {
   summary: BookingSettlementSweepSummary
   shouldStop: () => boolean
 }
-export type ProcessCommunityFn = (input: ProcessCommunityInput) => Promise<void>
+type ProcessCommunityFn = (input: ProcessCommunityInput) => Promise<void>
 
 export interface SweepBookingSettlementsInput {
   env: Env
@@ -150,7 +150,7 @@ export async function sweepDueBookingSettlements(input: SweepBookingSettlementsI
 }
 
 /** Default per-community processor: enumerate due + resume candidates from D1, then settle each. */
-export async function processCommunityBookingSettlements(input: ProcessCommunityInput): Promise<void> {
+async function processCommunityBookingSettlements(input: ProcessCommunityInput): Promise<void> {
   let dueIds: string[] = []
   let resumeIds: string[] = []
   const handle = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)

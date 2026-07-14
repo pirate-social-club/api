@@ -4,7 +4,7 @@ import { makeId } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 
 export type BookingSettlementEffectKind = "booking_payout" | "booking_refund"
-export type BookingSettlementEffectStatus = "submitted" | "confirmed" | "failed"
+type BookingSettlementEffectStatus = "submitted" | "confirmed" | "failed"
 
 export interface BookingSettlementEffectRow {
   booking_settlement_effect_id: string

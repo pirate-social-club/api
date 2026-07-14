@@ -76,7 +76,7 @@ export interface ResolveDueResult {
   acted: boolean
 }
 
-export function isBookingSettlementAmbiguousReviewEnabled(env: Env): boolean {
+function isBookingSettlementAmbiguousReviewEnabled(env: Env): boolean {
   return String(env.BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED ?? "").trim().toLowerCase() === "true"
 }
 

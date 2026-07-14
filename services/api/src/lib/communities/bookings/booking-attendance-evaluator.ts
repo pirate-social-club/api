@@ -15,7 +15,7 @@ export interface AttendanceConfig {
   minSoloAttendanceMs: number // sustained in-window presence required to count as "attended"
 }
 
-export const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
+const DEFAULT_ATTENDANCE_CONFIG: AttendanceConfig = {
   staleMs: 90_000, // heartbeats every 30s; 3 missed = stale
   minOverlapMs: 10 * 60_000, // 10 minutes
   overlapSlotFraction: 0.5, // or 50% of the slot, whichever is smaller
