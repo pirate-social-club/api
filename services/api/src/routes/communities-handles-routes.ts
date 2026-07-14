@@ -2,15 +2,17 @@ import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   claimCommunityHandle,
-  getCommunityHandleStatus,
-  getCommunityHandlePolicy,
-  getMyCommunityHandle,
-  listCommunityHandles,
   quoteCommunityHandle,
   reserveCommunityHandle,
   revokeCommunityHandle,
-  updateCommunityHandlePolicy,
 } from "../lib/communities/handles/handle-claim-service"
+import { updateCommunityHandlePolicy } from "../lib/communities/handles/handle-policy-service"
+import {
+  getCommunityHandlePolicy,
+  getCommunityHandleStatus,
+  getMyCommunityHandle,
+  listCommunityHandles,
+} from "../lib/communities/handles/handle-read-service"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
