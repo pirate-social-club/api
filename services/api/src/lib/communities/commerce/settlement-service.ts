@@ -110,7 +110,7 @@ import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
 type CommunitySettlementRepository = CommunityDatabaseBindingRepository & Pick<CommunityReadRepository, "listActiveCommunities">
 
-export type RoyaltyEarningEventForNotification = {
+type RoyaltyEarningEventForNotification = {
   recipientUserId: string
   communityId: string
   assetId: string

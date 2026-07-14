@@ -107,7 +107,7 @@ export async function loadStoryRoyaltyAllocationProjectionRows(input: {
   }))
 }
 
-export async function upsertStoryRoyaltyAllocationProjection(input: {
+async function upsertStoryRoyaltyAllocationProjection(input: {
   env: Env
   projection: StoryRoyaltyAllocationProjectionRow
   controlPlaneClient?: Pick<Client, "execute">

@@ -50,7 +50,6 @@ import type {
   AssetAccessResponse,
   Env,
   Post,
-  SongArtifactBundle,
   SongArtifactUpload,
 } from "../../../types"
 import type { CommunityJobCheckpoint } from "../jobs/store"
@@ -63,7 +62,7 @@ export type LockedDeliverySecret = {
 
 const abiCoder = AbiCoder.defaultAbiCoder()
 
-export function sameStoryAddress(left: string | null | undefined, right: string | null | undefined): boolean {
+function sameStoryAddress(left: string | null | undefined, right: string | null | undefined): boolean {
   return String(left || "").toLowerCase() === String(right || "").toLowerCase()
 }
 
@@ -247,7 +246,7 @@ export async function encryptLockedPayload(bytes: Uint8Array): Promise<{
   }
 }
 
-export function encodeStoryAccessAuxData(input: {
+function encodeStoryAccessAuxData(input: {
   vaultUuid: number
   caller: string
   accessRef: `0x${string}`
@@ -735,30 +734,6 @@ export async function prepareLockedAssetDelivery(input: {
     }
     throw error instanceof Error ? error : new Error(errorMessage)
   }
-}
-
-export async function prepareLockedSongAssetDelivery(input: {
-  env: Env
-  communityId: string
-  assetId: string
-  creatorWalletAddress: string
-  bundle: SongArtifactBundle
-  rightsBasis: Post["rights_basis"]
-  upstreamAssetRefs: string[] | null
-}): Promise<Awaited<ReturnType<typeof prepareLockedAssetDelivery>>> {
-  return await prepareLockedAssetDelivery({
-    env: input.env,
-    communityId: input.communityId,
-    assetId: input.assetId,
-    creatorWalletAddress: input.creatorWalletAddress,
-    storageRef: input.bundle.primary_audio.storage_ref,
-    mimeType: input.bundle.primary_audio.mime_type,
-    contentHash: input.bundle.primary_audio.content_hash ?? null,
-    artifactKind: "primary_audio",
-    bundleId: input.bundle.id.replace(/^sab_/, ""),
-    rightsBasis: input.rightsBasis,
-    upstreamAssetRefs: input.upstreamAssetRefs,
-  })
 }
 
 export async function fetchPrimaryAssetContent(input: {
