@@ -1,26 +1,22 @@
 import type {
   CommunityHandle,
   CommunityHandleClaimRequest,
-  CommunityHandlePolicy,
-  CommunityHandlePolicySettings,
   CommunityHandleQuote,
   CommunityHandleQuoteRequest,
   CommunityHandleReserveRequest,
   CommunityHandleRevokeRequest,
   CommunityHandleProtocolIssuance,
   Env,
-  UpdateCommunityHandlePolicyRequest,
 } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
 import { HttpError, conflictError, badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { withTransaction } from "../../transactions"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
-import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { DbExecutor } from "../../db-helpers"
-import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
 import {
@@ -33,35 +29,18 @@ import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-servi
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
 import { parseBitcoinAddress, type ParsedBitcoinAddress } from "../../bitcoin/bitcoin-address"
 import type { WalletAttachmentRecord } from "../../auth/repositories"
-
-type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
-export type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
-
-export type NamespacePolicyRow = {
-  namespace_handle_policy_id: string
-  community_id: string
-  namespace_id: string
-  display_label: string
-  normalized_label: string
-  route_family: string | null
-  policy_template: CommunityHandlePolicy["policy_template"]
-  pricing_model: HandlePricingModel | null
-  claims_enabled: boolean
-  settings_json: string | null
-  updated_at: string | null
-}
-
-type HandleClaimSettings = {
-  flat_price_cents?: number
-  premium_price_cents?: number
-  premium_max_length?: number
-  min_length?: number
-  max_length?: number
-  quote_ttl_seconds?: number
-  reserved_labels?: string[]
-  special_price_cents_by_label?: Record<string, number>
-  issuance_mode?: "app_internal" | "spaces_subspace"
-}
+import {
+  type HandleClaimSettings,
+  type HandleCommunityRepository,
+  type HandlePricingModel,
+  type NamespacePolicyRow,
+  getNamespacePolicy,
+  namespaceSupportsSpacesSubspace,
+  normalizeCommunityHandleLabel,
+  parseHandleClaimSettings,
+  protocolIssuanceRequired,
+  withHandlePrefix,
+} from "./handle-policy-service"
 
 type Availability =
   | "available"
@@ -88,85 +67,8 @@ const RESERVED_LABELS = new Set([
   "support",
 ])
 
-function normalizeCommunityHandleLabel(desiredLabel: unknown): {
-  labelNormalized: string
-  labelDisplay: string
-} {
-  if (typeof desiredLabel !== "string") {
-    throw badRequestError("Invalid desired_label")
-  }
-  const trimmed = desiredLabel.trim().toLowerCase()
-  const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed
-  const withoutSuffix = withoutAt.includes("@") ? withoutAt.slice(0, withoutAt.indexOf("@")) : withoutAt
-
-  const isAsciiLabel = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(withoutSuffix)
-  const isPunycodeLabel = /^xn--[a-z0-9-]+$/u.test(withoutSuffix)
-  if (!withoutSuffix || (!isAsciiLabel && !isPunycodeLabel)) {
-    throw badRequestError("Invalid desired_label")
-  }
-
-  return {
-    labelNormalized: withoutSuffix,
-    labelDisplay: withoutSuffix,
-  }
-}
-
-function parseSettings(raw: string | null): HandleClaimSettings {
-  if (!raw?.trim()) {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    return {
-      flat_price_cents: finiteNonNegativeInteger(parsed.flat_price_cents),
-      premium_price_cents: finiteNonNegativeInteger(parsed.premium_price_cents),
-      premium_max_length: finitePositiveInteger(parsed.premium_max_length),
-      min_length: finitePositiveInteger(parsed.min_length),
-      max_length: finitePositiveInteger(parsed.max_length),
-      quote_ttl_seconds: finitePositiveInteger(parsed.quote_ttl_seconds),
-      issuance_mode: parsed.issuance_mode === "spaces_subspace" ? "spaces_subspace" : undefined,
-      reserved_labels: Array.isArray(parsed.reserved_labels)
-        ? parsed.reserved_labels.filter((value): value is string => typeof value === "string")
-        : undefined,
-      special_price_cents_by_label: parseSpecialPrices(parsed.special_price_cents_by_label),
-    }
-  } catch {
-    throw internalError("Community handle policy settings are malformed", {
-      reason: "invalid_settings_json",
-    })
-  }
-}
-
-function parseSpecialPrices(value: unknown): Record<string, number> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined
-  }
-  const entries = Object.entries(value)
-    .map(([label, price]) => {
-      const parsedPrice = finiteNonNegativeInteger(price)
-      if (parsedPrice == null) return null
-      return [normalizeCommunityHandleLabel(label).labelNormalized, parsedPrice] as const
-    })
-    .filter((entry): entry is readonly [string, number] => entry != null)
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined
-}
-
-function finiteNonNegativeInteger(value: unknown): number | undefined {
-  const numeric = typeof value === "number" ? value : Number(value)
-  return Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined
-}
-
-function finitePositiveInteger(value: unknown): number | undefined {
-  const numeric = typeof value === "number" ? value : Number(value)
-  return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined
-}
-
 function addSeconds(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString()
-}
-
-export function withPrefix(prefix: string, value: string): string {
-  return value.startsWith(`${prefix}_`) ? value : `${prefix}_${value}`
 }
 
 function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
@@ -196,20 +98,6 @@ function protocolSnameForHandle(labelNormalized: string, parentSpace: string): s
   return `${labelNormalized}@${parentSpace.startsWith("@") ? parentSpace.slice(1) : parentSpace}`
 }
 
-export function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
-  return {
-    id: withPrefix("nhp", row.namespace_handle_policy_id),
-    object: "community_handle_policy",
-    community: withPrefix("com", row.community_id),
-    namespace: withPrefix("ns", row.namespace_id),
-    policy_template: row.policy_template,
-    pricing_model: row.pricing_model,
-    claims_enabled: row.claims_enabled,
-    settings: parseSettings(row.settings_json),
-    updated_at: nullableUnixSeconds(row.updated_at),
-  }
-}
-
 function serializeProtocolIssuance(row: QueryResultRow): CommunityHandleProtocolIssuance | null {
   const status = stringOrNull(rowValue(row, "protocol_issuance_status"))
   if (!status) {
@@ -226,17 +114,17 @@ function serializeProtocolIssuance(row: QueryResultRow): CommunityHandleProtocol
 export function serializeHandle(row: QueryResultRow): CommunityHandle {
   const protocolIssuance = serializeProtocolIssuance(row)
   return {
-    id: withPrefix("ch", requiredString(row, "community_handle_id")),
+    id: withHandlePrefix("ch", requiredString(row, "community_handle_id")),
     object: "community_handle",
-    community: withPrefix("com", requiredString(row, "community_id")),
-    namespace: withPrefix("ns", requiredString(row, "namespace_id")),
-    user: withPrefix("usr", requiredString(row, "user_id")),
+    community: withHandlePrefix("com", requiredString(row, "community_id")),
+    namespace: withHandlePrefix("ns", requiredString(row, "namespace_id")),
+    user: withHandlePrefix("usr", requiredString(row, "user_id")),
     label: requiredString(row, "label_display"),
     label_normalized: requiredString(row, "label_normalized"),
     status: requiredString(row, "status") as CommunityHandle["status"],
     issuance_source: requiredString(row, "issuance_source") as CommunityHandle["issuance_source"],
     quote: stringOrNull(rowValue(row, "handle_claim_quote_id"))
-      ? withPrefix("hcq", String(stringOrNull(rowValue(row, "handle_claim_quote_id"))))
+      ? withHandlePrefix("hcq", String(stringOrNull(rowValue(row, "handle_claim_quote_id"))))
       : null,
     price_cents: requiredNumber(row, "price_cents"),
     currency: "USD",
@@ -251,16 +139,6 @@ export function serializeHandle(row: QueryResultRow): CommunityHandle {
     ...(protocolIssuance ? { protocol_issuance: protocolIssuance } : {}),
     created: unixSeconds(requiredString(row, "created_at")),
   }
-}
-
-function protocolIssuanceRequired(settings: HandleClaimSettings): boolean {
-  return settings.issuance_mode === "spaces_subspace"
-}
-
-function namespaceSupportsSpacesSubspace(policy: Pick<NamespacePolicyRow, "display_label" | "normalized_label" | "route_family">): boolean {
-  return policy.route_family === "spaces"
-    || policy.display_label.startsWith("@")
-    || policy.normalized_label.startsWith("@")
 }
 
 function requireProtocolIssuanceSupport(
@@ -355,10 +233,10 @@ function serializeQuote(row: QueryResultRow, input: {
 }): CommunityHandleQuote {
   const priceCents = requiredNumber(row, "price_cents")
   return {
-    id: withPrefix("hcq", requiredString(row, "handle_claim_quote_id")),
+    id: withHandlePrefix("hcq", requiredString(row, "handle_claim_quote_id")),
     object: "community_handle_quote",
-    community: withPrefix("com", requiredString(row, "community_id")),
-    namespace: withPrefix("ns", requiredString(row, "namespace_id")),
+    community: withHandlePrefix("com", requiredString(row, "community_id")),
+    namespace: withHandlePrefix("ns", requiredString(row, "namespace_id")),
     desired_label: input.desiredLabel,
     label: requiredString(row, "label_display"),
     label_normalized: requiredString(row, "label_normalized"),
@@ -418,38 +296,6 @@ async function expireStaleHandleQuotes(input: {
     `,
     args: [input.communityId, input.now, input.userId ?? null],
   })
-}
-
-export async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
-  const result = await executor.execute({
-    sql: `
-      SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
-             nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
-             nhp.claims_enabled, nhp.settings_json, nhp.updated_at
-      FROM namespace_bindings nb
-      LEFT JOIN namespace_handle_policies nhp
-        ON nhp.namespace_id = nb.namespace_id
-      WHERE nb.community_id = ?1
-        AND nb.status = 'active'
-      LIMIT 1
-    `,
-    args: [communityId],
-  })
-  const row = result.rows[0]
-  if (!row) return null
-  return {
-    namespace_handle_policy_id: stringOrNull(rowValue(row, "namespace_handle_policy_id")) ?? `nhp_${communityId}`,
-    community_id: requiredString(row, "community_id"),
-    namespace_id: requiredString(row, "namespace_id"),
-    display_label: requiredString(row, "display_label"),
-    normalized_label: requiredString(row, "normalized_label"),
-    route_family: stringOrNull(rowValue(row, "route_family")),
-    policy_template: (stringOrNull(rowValue(row, "policy_template")) ?? "standard") as CommunityHandlePolicy["policy_template"],
-    pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
-    claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) !== 0,
-    settings_json: stringOrNull(rowValue(row, "settings_json")),
-    updated_at: stringOrNull(rowValue(row, "updated_at")),
-  }
 }
 
 async function getBlockingHandleForLabel(
@@ -551,67 +397,6 @@ function availabilityDetails(availability: Availability, reason: string): Record
   return { availability, reason }
 }
 
-function assertPolicyTemplate(value: unknown): CommunityHandlePolicy["policy_template"] {
-  if (value === "standard" || value === "premium" || value === "membership_gated" || value === "custom") {
-    return value
-  }
-  throw badRequestError("Invalid policy_template")
-}
-
-function assertPricingModel(value: unknown): HandlePricingModel | null {
-  if (value == null) return null
-  if (value === "free" || value === "flat_by_length" || value === "custom_curve" || value === "gated_then_flat") {
-    return value
-  }
-  throw badRequestError("Invalid pricing_model")
-}
-
-function optionalIntegerSetting(
-  value: unknown,
-  key: keyof CommunityHandlePolicySettings,
-  options: { min: number },
-): number | undefined {
-  if (value == null) return undefined
-  const numeric = typeof value === "number" ? value : Number(value)
-  if (!Number.isInteger(numeric) || numeric < options.min) {
-    throw badRequestError(`${String(key)} must be an integer >= ${options.min}`)
-  }
-  return numeric
-}
-
-function optionalIssuanceModeSetting(value: unknown): HandleClaimSettings["issuance_mode"] {
-  if (value == null || value === "app_internal") return undefined
-  if (value === "spaces_subspace") return "spaces_subspace"
-  throw badRequestError("issuance_mode must be app_internal or spaces_subspace")
-}
-
-function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefined): HandleClaimSettings {
-  if (!input) return {}
-  const settings: HandleClaimSettings = {
-    flat_price_cents: optionalIntegerSetting(input.flat_price_cents, "flat_price_cents", { min: 0 }),
-    premium_price_cents: optionalIntegerSetting(input.premium_price_cents, "premium_price_cents", { min: 0 }),
-    premium_max_length: optionalIntegerSetting(input.premium_max_length, "premium_max_length", { min: 1 }),
-    min_length: optionalIntegerSetting(input.min_length, "min_length", { min: 1 }),
-    max_length: optionalIntegerSetting(input.max_length, "max_length", { min: 1 }),
-    quote_ttl_seconds: optionalIntegerSetting(input.quote_ttl_seconds, "quote_ttl_seconds", { min: 60 }),
-    issuance_mode: optionalIssuanceModeSetting(input.issuance_mode),
-    reserved_labels: Array.isArray(input.reserved_labels)
-      ? input.reserved_labels.map((label) => normalizeCommunityHandleLabel(label).labelNormalized)
-      : undefined,
-    special_price_cents_by_label: parseSpecialPrices(input.special_price_cents_by_label),
-  }
-  if (
-    settings.min_length != null
-    && settings.max_length != null
-    && settings.min_length > settings.max_length
-  ) {
-    throw badRequestError("min_length must be <= max_length")
-  }
-  return Object.fromEntries(
-    Object.entries(settings).filter(([, value]) => value !== undefined),
-  ) as HandleClaimSettings
-}
-
 export async function requireClaimAccess(input: {
   client: DbExecutor
   communityId: string
@@ -623,75 +408,6 @@ export async function requireClaimAccess(input: {
     return { isMember }
   }
   throw eligibilityFailed("Community membership is required to claim names")
-}
-
-export async function updateCommunityHandlePolicy(input: {
-  env: Env
-  userId: string
-  communityId: string
-  body: UpdateCommunityHandlePolicyRequest
-  communityRepository: HandleCommunityRepository
-}): Promise<CommunityHandlePolicy> {
-  await requireCommunityOwner({
-    communityId: input.communityId,
-    userId: input.userId,
-    communityRepository: input.communityRepository,
-  })
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const current = await getNamespacePolicy(db.client, input.communityId)
-    if (!current) {
-      throw eligibilityFailed("Community names are not available for this community")
-    }
-    const nextSettings = "settings" in input.body
-      ? sanitizeSettings(input.body.settings ?? null)
-      : parseSettings(current.settings_json)
-    if (protocolIssuanceRequired(nextSettings) && !namespaceSupportsSpacesSubspace(current)) {
-      throw badRequestError("spaces_subspace issuance requires a Spaces namespace")
-    }
-    const updatedAt = nowIso()
-    await db.client.execute({
-      sql: `
-        INSERT INTO namespace_handle_policies (
-          namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-          membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9
-        )
-        ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
-          policy_template = excluded.policy_template,
-          pricing_model = excluded.pricing_model,
-          membership_required_for_claim = excluded.membership_required_for_claim,
-          claims_enabled = excluded.claims_enabled,
-          settings_json = excluded.settings_json,
-          updated_at = excluded.updated_at
-      `,
-      args: [
-        current.namespace_handle_policy_id,
-        input.communityId,
-        current.namespace_id,
-        "policy_template" in input.body
-          ? assertPolicyTemplate(input.body.policy_template)
-          : current.policy_template,
-        "pricing_model" in input.body
-          ? assertPricingModel(input.body.pricing_model)
-          : current.pricing_model,
-        1,
-        "claims_enabled" in input.body
-          ? input.body.claims_enabled === true ? 1 : 0
-          : current.claims_enabled ? 1 : 0,
-        JSON.stringify(nextSettings),
-        updatedAt,
-      ],
-    })
-    const updated = await getNamespacePolicy(db.client, input.communityId)
-    if (!updated) {
-      throw internalError("Updated community handle policy row is missing")
-    }
-    return serializePolicy(updated)
-  } finally {
-    db.close()
-  }
 }
 
 export async function reserveCommunityHandle(input: {
@@ -734,7 +450,7 @@ export async function reserveCommunityHandleOnClient(
   if (!policy) {
     throw eligibilityFailed("Community names are not available for this community")
   }
-  const settings = parseSettings(policy.settings_json)
+  const settings = parseHandleClaimSettings(policy.settings_json)
   assertLabelLength(input.desired.labelNormalized, settings)
   if (isReservedLabel(input.desired.labelNormalized, settings)) {
     const reason = "Desired label is already reserved"
@@ -865,7 +581,7 @@ export async function quoteCommunityHandle(input: {
     if (!policy.claims_enabled) {
       throw eligibilityFailed("Community name claims are currently disabled")
     }
-    const settings = parseSettings(policy.settings_json)
+    const settings = parseHandleClaimSettings(policy.settings_json)
     const claimAccess = await requireClaimAccess({
       client: db.client,
       communityId: input.communityId,
@@ -1200,7 +916,7 @@ async function assertClaimQuoteStillClaimable(input: {
   if (!policy.claims_enabled) {
     throw eligibilityFailed("Community name claims are currently disabled")
   }
-  const settings = parseSettings(policy.settings_json)
+  const settings = parseHandleClaimSettings(policy.settings_json)
   await requireClaimAccess({
     client: input.executor,
     communityId: input.communityId,
