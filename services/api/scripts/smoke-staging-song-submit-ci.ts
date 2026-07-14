@@ -170,4 +170,33 @@ console.log("[song-smoke] post created", { id: postId, status, asset })
 if (status !== "published") fail(`post status is "${status}", expected "published"`)
 if (!asset) fail("post published without an asset — Story royalty registration did not succeed")
 
-console.log("[song-smoke] PASS — song post published with a registered asset")
+// "An asset exists" only proves registration RAN. It says nothing about what we
+// registered, which is how #415 stayed invisible: Story registration fired while the
+// preview job — the only thing that hash-verifies the primary audio — was still queued.
+// mediaHash was therefore null, and because the canonical media block is all-or-nothing,
+// mediaUrl + mediaHash + mediaType were ALL dropped from one-shot on-chain metadata. The
+// song still played, because animation_url does not depend on the hash, so every check we
+// had stayed green.
+//
+// #415's contract is: registration waits for verification. Assert it. The preview job is
+// what sets content_hash_verified_at, so if the asset is registered the preview must have
+// completed first.
+const bundles = await requestJson({
+  method: "GET",
+  url: `${apiBase}/communities/${publicCommunityId}/song-artifacts`,
+  token,
+  okStatuses: [200],
+}) as { items?: Array<{ id?: unknown; preview_status?: unknown }> }
+
+const publishedBundle = (bundles.items ?? []).find((item) => item.id === bundleId)
+if (!publishedBundle) fail(`song artifact bundle ${bundleId} not found after publish`)
+
+if (publishedBundle.preview_status !== "completed") {
+  fail(
+    `asset was registered while the bundle preview_status was "${String(publishedBundle.preview_status)}" — `
+    + "Story registration ran before the primary audio hash was verified, so the on-chain "
+    + "metadata is missing mediaUrl/mediaHash/mediaType (regression of #415)",
+  )
+}
+
+console.log("[song-smoke] PASS — song post published with a registered asset, hash-verified before registration")
