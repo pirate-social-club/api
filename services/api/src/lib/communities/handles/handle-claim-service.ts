@@ -1,8 +1,6 @@
 import type {
   CommunityHandle,
   CommunityHandleClaimRequest,
-  CommunityHandleListResponse,
-  CommunityHandleMeResponse,
   CommunityHandlePolicy,
   CommunityHandlePolicySettings,
   CommunityHandleQuote,
@@ -10,7 +8,6 @@ import type {
   CommunityHandleReserveRequest,
   CommunityHandleRevokeRequest,
   CommunityHandleProtocolIssuance,
-  CommunityHandleStatusResponse,
   Env,
   UpdateCommunityHandlePolicyRequest,
 } from "../../../types"
@@ -21,7 +18,7 @@ import { withTransaction } from "../../transactions"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
-import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import { openCommunityWriteClient } from "../community-read-access"
 import type { DbExecutor } from "../../db-helpers"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
@@ -38,9 +35,9 @@ import { parseBitcoinAddress, type ParsedBitcoinAddress } from "../../bitcoin/bi
 import type { WalletAttachmentRecord } from "../../auth/repositories"
 
 type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
-type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+export type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
-type NamespacePolicyRow = {
+export type NamespacePolicyRow = {
   namespace_handle_policy_id: string
   community_id: string
   namespace_id: string
@@ -168,7 +165,7 @@ function addSeconds(iso: string, seconds: number): string {
   return new Date(Date.parse(iso) + seconds * 1000).toISOString()
 }
 
-function withPrefix(prefix: string, value: string): string {
+export function withPrefix(prefix: string, value: string): string {
   return value.startsWith(`${prefix}_`) ? value : `${prefix}_${value}`
 }
 
@@ -177,7 +174,7 @@ function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
   return trimmed.startsWith(`${prefix}_${prefix}_`) ? trimmed.slice(prefix.length + 1) : trimmed
 }
 
-const HANDLE_PROTOCOL_ISSUANCE_SELECT = `
+export const HANDLE_PROTOCOL_ISSUANCE_SELECT = `
   ch.*,
   hpi.public_status AS protocol_issuance_status,
   hpi.sname AS protocol_issuance_sname,
@@ -185,7 +182,7 @@ const HANDLE_PROTOCOL_ISSUANCE_SELECT = `
   hpi.issued_at AS protocol_issuance_issued_at
 `
 
-const HANDLE_PROTOCOL_ISSUANCE_JOIN = `
+export const HANDLE_PROTOCOL_ISSUANCE_JOIN = `
   LEFT JOIN community_handle_protocol_issuances hpi
     ON hpi.community_handle_id = ch.community_handle_id
 `
@@ -199,7 +196,7 @@ function protocolSnameForHandle(labelNormalized: string, parentSpace: string): s
   return `${labelNormalized}@${parentSpace.startsWith("@") ? parentSpace.slice(1) : parentSpace}`
 }
 
-function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
+export function serializePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
   return {
     id: withPrefix("nhp", row.namespace_handle_policy_id),
     object: "community_handle_policy",
@@ -226,7 +223,7 @@ function serializeProtocolIssuance(row: QueryResultRow): CommunityHandleProtocol
   }
 }
 
-function serializeHandle(row: QueryResultRow): CommunityHandle {
+export function serializeHandle(row: QueryResultRow): CommunityHandle {
   const protocolIssuance = serializeProtocolIssuance(row)
   return {
     id: withPrefix("ch", requiredString(row, "community_handle_id")),
@@ -423,7 +420,7 @@ async function expireStaleHandleQuotes(input: {
   })
 }
 
-async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
+export async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
   const result = await executor.execute({
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
@@ -475,7 +472,7 @@ async function getBlockingHandleForLabel(
   return result.rows[0] ?? null
 }
 
-async function getActiveHandleForUser(
+export async function getActiveHandleForUser(
   executor: DbExecutor,
   namespaceId: string,
   userId: string,
@@ -615,7 +612,7 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
   ) as HandleClaimSettings
 }
 
-async function requireClaimAccess(input: {
+export async function requireClaimAccess(input: {
   client: DbExecutor
   communityId: string
   userId: string
@@ -626,110 +623,6 @@ async function requireClaimAccess(input: {
     return { isMember }
   }
   throw eligibilityFailed("Community membership is required to claim names")
-}
-
-export async function getMyCommunityHandle(input: {
-  env: Env
-  userId: string
-  communityId: string
-  communityRepository: HandleCommunityRepository
-}): Promise<CommunityHandleMeResponse> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community) {
-    throw notFoundError("Community not found")
-  }
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
-    if (!policy) {
-      return { handle: null }
-    }
-    const handle = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
-    return { handle: handle ? serializeHandle(handle) : null }
-  } finally {
-    db.close()
-  }
-}
-
-export async function getCommunityHandleStatus(input: {
-  env: Env
-  userId: string
-  communityId: string
-  communityRepository: HandleCommunityRepository
-}): Promise<CommunityHandleStatusResponse> {
-  const community = await input.communityRepository.getCommunityById(input.communityId)
-  if (!community) {
-    throw notFoundError("Community not found")
-  }
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
-    if (!policy) {
-      return {
-        available: false,
-        reason: "Community names are not available for this community",
-        claims_enabled: null,
-        namespace: null,
-      }
-    }
-    if (!policy.claims_enabled) {
-      return {
-        available: false,
-        reason: "Community name claims are currently disabled",
-        claims_enabled: false,
-        namespace: withPrefix("ns", policy.namespace_id),
-      }
-    }
-    const access = await requireClaimAccess({
-      client: db.client,
-      communityId: input.communityId,
-      userId: input.userId,
-    }).catch((error: unknown) => {
-      if (error instanceof HttpError && error.code === "eligibility_failed") {
-        return { blockedReason: error.message }
-      }
-      throw error
-    })
-    if ("blockedReason" in access) {
-      return {
-        available: false,
-        reason: access.blockedReason,
-        claims_enabled: true,
-        namespace: withPrefix("ns", policy.namespace_id),
-      }
-    }
-    return {
-      available: true,
-      reason: null,
-      claims_enabled: true,
-      namespace: withPrefix("ns", policy.namespace_id),
-    }
-  } finally {
-    db.close()
-  }
-}
-
-export async function getCommunityHandlePolicy(input: {
-  env: Env
-  userId: string
-  communityId: string
-  communityRepository: HandleCommunityRepository
-}): Promise<CommunityHandlePolicy> {
-  await requireCommunityOwner({
-    communityId: input.communityId,
-    userId: input.userId,
-    communityRepository: input.communityRepository,
-  })
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
-    if (!policy) {
-      throw eligibilityFailed("Community names are not available for this community")
-    }
-    return serializePolicy(policy)
-  } finally {
-    db.close()
-  }
 }
 
 export async function updateCommunityHandlePolicy(input: {
@@ -796,48 +689,6 @@ export async function updateCommunityHandlePolicy(input: {
       throw internalError("Updated community handle policy row is missing")
     }
     return serializePolicy(updated)
-  } finally {
-    db.close()
-  }
-}
-
-export async function listCommunityHandles(input: {
-  env: Env
-  userId: string
-  communityId: string
-  status?: string | null
-  communityRepository: HandleCommunityRepository
-}): Promise<CommunityHandleListResponse> {
-  await requireCommunityOwner({
-    communityId: input.communityId,
-    userId: input.userId,
-    communityRepository: input.communityRepository,
-  })
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
-    if (!policy) {
-      throw eligibilityFailed("Community names are not available for this community")
-    }
-    const status = input.status?.trim()
-    const allowedStatuses = new Set(["active", "grace_period", "expired", "revoked", "reserved"])
-    if (status && !allowedStatuses.has(status)) {
-      throw badRequestError("Invalid handle status")
-    }
-    const result = await db.client.execute({
-      sql: `
-        SELECT ${HANDLE_PROTOCOL_ISSUANCE_SELECT}
-        FROM community_handles ch
-        ${HANDLE_PROTOCOL_ISSUANCE_JOIN}
-        WHERE ch.community_id = ?1
-          AND ch.namespace_id = ?2
-          AND (?3 IS NULL OR ch.status = ?3)
-        ORDER BY ch.created_at DESC
-        LIMIT 200
-      `,
-      args: [input.communityId, policy.namespace_id, status || null],
-    })
-    return { handles: result.rows.map(serializeHandle) }
   } finally {
     db.close()
   }
