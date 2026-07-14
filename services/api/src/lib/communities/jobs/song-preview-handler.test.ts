@@ -302,4 +302,73 @@ describe("runSongPreviewGenerate", () => {
     errorSpy.mockRestore()
     warnSpy.mockRestore()
   })
+
+  test("raises an ops alert for the mismatch, not just a log line", async () => {
+    capturePreviewFailureUpdates()
+    const alertPayloads: unknown[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.startsWith("https://ops.example/")) {
+        alertPayloads.push(JSON.parse(String(init?.body ?? "{}")) as unknown)
+        return Response.json({ ok: true })
+      }
+      return Response.json({
+        code: "song_content_hash_mismatch",
+        message: "Primary audio content hash does not match downloaded bytes",
+      }, { status: 422 })
+    }) as typeof globalThis.fetch
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {})
+
+    const result = await runSongPreviewGenerate({
+      env: {
+        SONG_PREVIEW_SERVICE_URL: "https://preview.example/preview",
+        SONG_PREVIEW_SHARED_SECRET: "shared-secret",
+        CONTROL_PLANE_DATABASE_URL: "file::memory:",
+        OPS_ALERT_WEBHOOK_URL: "https://ops.example/hook",
+      } as Env,
+      job: testJob({ payload_json: JSON.stringify({ song_artifact_bundle: "sab_payload" }) }),
+      communityRepository: {} as never,
+    })
+
+    expect(result).toBe("failed:song_content_hash_mismatch")
+    // Without this the mismatch is "alertable" but nothing actually alerts on it.
+    expect(alertPayloads).toHaveLength(1)
+    const alert = JSON.stringify(alertPayloads[0])
+    expect(alert).toContain("song_content_hash_mismatch")
+    // An alert that omits which community and which bundle is not actionable.
+    expect(alert).toContain("com_test")
+    expect(alert).toContain("sab_payload")
+    expect(alert).toContain("HIGH")
+
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  test("a failing alert sink does not turn a terminal mismatch into a retry", async () => {
+    capturePreviewFailureUpdates()
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.startsWith("https://ops.example/")) throw new Error("alert sink down")
+      return Response.json({ code: "song_content_hash_mismatch" }, { status: 422 })
+    }) as typeof globalThis.fetch
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {})
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {})
+
+    const result = await runSongPreviewGenerate({
+      env: {
+        SONG_PREVIEW_SERVICE_URL: "https://preview.example/preview",
+        SONG_PREVIEW_SHARED_SECRET: "shared-secret",
+        CONTROL_PLANE_DATABASE_URL: "file::memory:",
+        OPS_ALERT_WEBHOOK_URL: "https://ops.example/hook",
+      } as Env,
+      job: testJob({ payload_json: JSON.stringify({ song_artifact_bundle: "sab_payload" }) }),
+      communityRepository: {} as never,
+    })
+
+    expect(result).toBe("failed:song_content_hash_mismatch")
+
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
 })
