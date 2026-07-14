@@ -203,7 +203,11 @@ export interface BookingPaymentExpectation {
   senderAddress: string
 }
 export type BookingPaymentVerification =
-  | { kind: "verified"; senderAddress: string; txRef: string; blockNumber?: number; blockHash?: string }
+  // blockTimestamp lets a caller judge WHEN the transfer was mined, not merely that it was.
+  // Reward funding uses it to honour a transfer broadcast before its quote expired even when
+  // confirmation only arrives afterwards, without letting a genuinely late transfer revive
+  // stale terms.
+  | { kind: "verified"; senderAddress: string; txRef: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
   | { kind: "pending"; reason?: string } // not yet final / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
 
@@ -217,7 +221,7 @@ type FinalityReceipt = MinimalReceipt & { blockNumber: number; blockHash: string
 type FinalityProvider = {
   send(method: string, params: unknown[]): Promise<unknown>
   getTransactionReceipt(txHash: string): Promise<FinalityReceipt | null>
-  getBlock(blockTag: number | "safe"): Promise<{ number: number; hash: string | null } | null>
+  getBlock(blockTag: number | "safe"): Promise<{ number: number; hash: string | null; timestamp?: number } | null>
   getBlockNumber(): Promise<number>
 }
 
@@ -288,7 +292,13 @@ async function classifyFinalizedPaymentReceipt(input: {
   }
   const evaluated = evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
   return evaluated.kind === "verified"
-    ? { ...evaluated, blockNumber: receipt.blockNumber, blockHash: receipt.blockHash.toLowerCase() }
+    ? {
+        ...evaluated,
+        blockNumber: receipt.blockNumber,
+        blockHash: receipt.blockHash.toLowerCase(),
+        // Already fetched above for the canonicality check, so this costs no extra RPC call.
+        blockTimestamp: canonicalBlock.timestamp,
+      }
     : evaluated
 }
 

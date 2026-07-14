@@ -512,6 +512,126 @@ describe("rewards routes", () => {
     expect(await json(paused)).toMatchObject({ status: "paused", funded_cents: 100000 })
   })
 
+  test("a transfer broadcast before expiry still funds the campaign when confirmation is resumed after expiry", async () => {
+    // The money-stranding case. A wallet broadcasts valid USDC, the confirm request is lost, the
+    // quote lapses, and the client resumes with the SAME hash on reload. Refusing on wall-clock
+    // alone would leave real USDC in the treasury that no campaign can ever claim.
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-funding-late-confirm")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "late-confirm-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "late-confirm-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+
+    // The confirm request never reached the server, so the quote is still `quoted` with no hash.
+    // Then it lapses.
+    const expiresAt = "2020-01-01T00:00:00.000Z"
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [quote.id, expiresAt],
+    })
+
+    // The chain says the transfer was mined one minute BEFORE the quote expired.
+    const minedAt = Math.floor(Date.parse(expiresAt) / 1000) - 60
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+      blockTimestamp: minedAt,
+    }))
+
+    const txHash = `0x${"b".repeat(64)}`
+    const resumed = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: txHash }),
+      },
+      ctx.env,
+    )
+    expect(resumed.status).toBe(200)
+    expect(await json(resumed)).toMatchObject({ id: quote.id, status: "confirmed", tx_hash: txHash })
+
+    // The money reached the campaign: it is fully funded and live, not stranded.
+    const funded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(await json(funded)).toMatchObject({ status: "active", funded_cents: 100000 })
+  })
+
+  test("a transfer mined after expiry cannot revive stale campaign terms", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-funding-post-expiry")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "post-expiry-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "post-expiry-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+
+    const expiresAt = "2020-01-01T00:00:00.000Z"
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [quote.id, expiresAt],
+    })
+
+    // The chain says the transfer was mined one minute AFTER the quote expired.
+    const minedAt = Math.floor(Date.parse(expiresAt) / 1000) + 60
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+      blockTimestamp: minedAt,
+    }))
+
+    const rejected = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"c".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(rejected.status).toBe(409)
+    expect(await json(rejected)).toMatchObject({ code: "funding_quote_expired" })
+
+    // The campaign is not funded, and the effect records why the transfer was refused.
+    const unfunded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(await json(unfunded)).toMatchObject({ funded_cents: 0 })
+    const effect = await ctx.client.execute({
+      sql: "SELECT status, failure_reason FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [quote.id],
+    })
+    expect(effect.rows[0]).toMatchObject({
+      status: "failed",
+      failure_reason: "funding_confirmed_after_quote_expiry",
+    })
+  })
+
   test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
@@ -565,7 +685,11 @@ describe("rewards routes", () => {
     })
     const expiredConfirm = await confirm(expired.id, "d")
     expect(expiredConfirm.status).toBe(409)
-    expect(verificationCalls).toBe(2)
+    expect(await json(expiredConfirm)).toMatchObject({ code: "funding_quote_expired" })
+    // A lapsed quote is now verified rather than refused on wall-clock alone: only the chain can
+    // say whether the transfer was mined in time. This stub reports no block timestamp, so the
+    // transfer cannot be proven timely and is refused — fail closed.
+    expect(verificationCalls).toBe(3)
 
     for (const [reason, hex] of [["wrong_transfer_recipient", "e"], ["wrong_transfer_amount", "f"]] as const) {
       const rejected = await quote(10000, `rejected-${reason}`)
