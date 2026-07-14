@@ -13,16 +13,9 @@ import { makeId, nowIso } from "../../helpers"
 import { withTransaction } from "../../transactions"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
-import { unixSeconds } from "../../../serializers/time"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { DbExecutor } from "../../db-helpers"
 import { requireCommunityOwner } from "../commerce/access"
-import {
-  resolvePirateCheckoutOperatorAddress,
-  resolvePirateCheckoutSourceChainId,
-  resolvePirateCheckoutSourceChainName,
-  resolvePirateCheckoutUsdcTokenAddress,
-} from "../commerce/checkout-config"
 import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
 import { parseBitcoinAddress, type ParsedBitcoinAddress } from "../../bitcoin/bitcoin-address"
@@ -30,14 +23,12 @@ import type { WalletAttachmentRecord } from "../../auth/repositories"
 import {
   type HandleClaimSettings,
   type HandleCommunityRepository,
-  type HandlePricingModel,
   type NamespacePolicyRow,
   getNamespacePolicy,
   namespaceSupportsSpacesSubspace,
   normalizeCommunityHandleLabel,
   parseHandleClaimSettings,
   protocolIssuanceRequired,
-  withHandlePrefix,
 } from "./handle-policy-service"
 import { requireHandleClaimAccess } from "./handle-access"
 import {
@@ -47,35 +38,16 @@ import {
   getBlockingHandleForLabel,
   serializeHandle,
 } from "./handle-row-store"
-
-type Availability =
-  | "available"
-  | "taken"
-  | "reserved"
-  | "already_claimed_by_viewer"
-  | "viewer_has_claim"
-  | "namespace_unavailable"
-
-const DEFAULT_MIN_LABEL_LENGTH = 3
-const DEFAULT_MAX_LABEL_LENGTH = 32
-const DEFAULT_PREMIUM_MAX_LENGTH = 4
-const DEFAULT_HANDLE_QUOTE_TTL_SECONDS = 10 * 60
-const RESERVED_LABELS = new Set([
-  "admin",
-  "administrator",
-  "help",
-  "mod",
-  "moderator",
-  "official",
-  "owner",
-  "security",
-  "staff",
-  "support",
-])
-
-function addSeconds(iso: string, seconds: number): string {
-  return new Date(Date.parse(iso) + seconds * 1000).toISOString()
-}
+import {
+  DEFAULT_HANDLE_QUOTE_TTL_SECONDS,
+  type HandleAvailability,
+  addHandleQuoteSeconds,
+  assertHandleLabelLength,
+  handleAvailabilityDetails,
+  isReservedHandleLabel,
+  resolveHandlePrice,
+  serializeHandleQuote,
+} from "./handle-quote-domain"
 
 function normalizeSubmittedPrefixedId(prefix: string, value: string): string {
   const trimmed = value.trim()
@@ -171,63 +143,6 @@ async function requireProtocolOwnerWalletForClaim(input: {
   }
 }
 
-function serializeQuote(row: QueryResultRow, input: {
-  env: Env
-  eligible: boolean
-  availability: Availability
-  reason: string | null
-  desiredLabel: string
-  protocolIssuanceRequired?: boolean
-  protocolIssuanceEligible?: boolean
-  protocolIssuanceReason?: string | null
-}): CommunityHandleQuote {
-  const priceCents = requiredNumber(row, "price_cents")
-  return {
-    id: withHandlePrefix("hcq", requiredString(row, "handle_claim_quote_id")),
-    object: "community_handle_quote",
-    community: withHandlePrefix("com", requiredString(row, "community_id")),
-    namespace: withHandlePrefix("ns", requiredString(row, "namespace_id")),
-    desired_label: input.desiredLabel,
-    label: requiredString(row, "label_display"),
-    label_normalized: requiredString(row, "label_normalized"),
-    eligible: input.eligible,
-    availability: input.availability,
-    reason: input.reason,
-    price_cents: priceCents,
-    currency: "USD",
-    pricing_model: stringOrNull(rowValue(row, "pricing_model")) as CommunityHandleQuote["pricing_model"],
-    pricing_tier: stringOrNull(rowValue(row, "pricing_tier")),
-    protocol_issuance_required: input.protocolIssuanceRequired === true,
-    protocol_issuance_eligible: input.protocolIssuanceRequired === true
-      ? input.protocolIssuanceEligible === true
-      : true,
-    protocol_issuance_reason: input.protocolIssuanceRequired === true
-      ? input.protocolIssuanceReason ?? null
-      : null,
-    payment_instructions: input.eligible && priceCents > 0
-      ? buildPaymentInstructions(input.env, priceCents)
-      : null,
-    quote_ttl_seconds: requiredNumber(row, "quote_ttl_seconds"),
-    quoted_at: unixSeconds(requiredString(row, "quoted_at")),
-    expires_at: unixSeconds(requiredString(row, "expires_at")),
-  }
-}
-
-function buildPaymentInstructions(env: Env, priceCents: number): NonNullable<CommunityHandleQuote["payment_instructions"]> {
-  const chainId = resolvePirateCheckoutSourceChainId(env)
-  return {
-    chain: {
-      chain_namespace: "eip155",
-      chain_id: chainId,
-      display_name: resolvePirateCheckoutSourceChainName(chainId),
-    },
-    token_address: resolvePirateCheckoutUsdcTokenAddress(env),
-    recipient_address: resolvePirateCheckoutOperatorAddress(env),
-    amount_atomic: String(BigInt(priceCents) * 10_000n),
-    amount_display: (priceCents / 100).toFixed(2),
-  }
-}
-
 async function expireStaleHandleQuotes(input: {
   executor: Client | Transaction
   communityId: string
@@ -246,65 +161,6 @@ async function expireStaleHandleQuotes(input: {
     `,
     args: [input.communityId, input.now, input.userId ?? null],
   })
-}
-
-function resolvePrice(input: {
-  labelNormalized: string
-  policy: NamespacePolicyRow
-  settings: HandleClaimSettings
-}): {
-  priceCents: number
-  pricingModel: HandlePricingModel | null
-  pricingTier: string | null
-} {
-  const pricingModel = input.policy.pricing_model ?? (
-    input.settings.flat_price_cents == null ? "free" : "flat_by_length"
-  )
-  if (pricingModel === "custom_curve") {
-    throw eligibilityFailed("Custom handle pricing is not available yet")
-  }
-  if (pricingModel === "free") {
-    return { priceCents: 0, pricingModel, pricingTier: "free" }
-  }
-
-  const specialPriceCents = input.settings.special_price_cents_by_label?.[input.labelNormalized]
-  if (specialPriceCents != null) {
-    return { priceCents: specialPriceCents, pricingModel, pricingTier: "special" }
-  }
-
-  const premiumMaxLength = input.settings.premium_max_length ?? DEFAULT_PREMIUM_MAX_LENGTH
-  const isPremium = input.policy.policy_template === "premium" && input.labelNormalized.length <= premiumMaxLength
-  const priceCents = isPremium
-    ? input.settings.premium_price_cents ?? input.settings.flat_price_cents ?? 0
-    : input.settings.flat_price_cents ?? 0
-
-  return {
-    priceCents,
-    pricingModel,
-    pricingTier: isPremium ? "premium" : "standard",
-  }
-}
-
-function assertLabelLength(labelNormalized: string, settings: HandleClaimSettings): void {
-  const minLength = settings.min_length ?? DEFAULT_MIN_LABEL_LENGTH
-  const maxLength = settings.max_length ?? DEFAULT_MAX_LABEL_LENGTH
-  if (labelNormalized.length < minLength) {
-    throw badRequestError(`desired_label must be at least ${minLength} characters`)
-  }
-  if (labelNormalized.length > maxLength) {
-    throw badRequestError(`desired_label must be at most ${maxLength} characters`)
-  }
-}
-
-function isReservedLabel(labelNormalized: string, settings: HandleClaimSettings): boolean {
-  if (RESERVED_LABELS.has(labelNormalized)) {
-    return true
-  }
-  return new Set((settings.reserved_labels ?? []).map((label) => normalizeCommunityHandleLabel(label).labelNormalized)).has(labelNormalized)
-}
-
-function availabilityDetails(availability: Availability, reason: string): Record<string, unknown> {
-  return { availability, reason }
 }
 
 export async function reserveCommunityHandle(input: {
@@ -348,10 +204,10 @@ export async function reserveCommunityHandleOnClient(
     throw eligibilityFailed("Community names are not available for this community")
   }
   const settings = parseHandleClaimSettings(policy.settings_json)
-  assertLabelLength(input.desired.labelNormalized, settings)
-  if (isReservedLabel(input.desired.labelNormalized, settings)) {
+  assertHandleLabelLength(input.desired.labelNormalized, settings)
+  if (isReservedHandleLabel(input.desired.labelNormalized, settings)) {
     const reason = "Desired label is already reserved"
-    throw conflictError(reason, availabilityDetails("reserved", reason))
+    throw conflictError(reason, handleAvailabilityDetails("reserved", reason))
   }
   const blockingHandle = await getBlockingHandleForLabel(client, policy.namespace_id, input.desired.labelNormalized)
   if (blockingHandle) {
@@ -359,7 +215,7 @@ export async function reserveCommunityHandleOnClient(
     const reason = status === "reserved"
       ? "Desired label is already reserved"
       : "Desired label is unavailable"
-    throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+    throw conflictError(reason, handleAvailabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
   }
 
   const now = nowIso()
@@ -485,14 +341,14 @@ export async function quoteCommunityHandle(input: {
       userId: input.userId,
     })
 
-    assertLabelLength(desired.labelNormalized, settings)
+    assertHandleLabelLength(desired.labelNormalized, settings)
     const activeForUser = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
     const blockingForLabel = await getBlockingHandleForLabel(db.client, policy.namespace_id, desired.labelNormalized)
 
     let eligible = true
-    let availability: Availability = "available"
+    let availability: HandleAvailability = "available"
     let reason: string | null = null
-    if (isReservedLabel(desired.labelNormalized, settings)) {
+    if (isReservedHandleLabel(desired.labelNormalized, settings)) {
       eligible = false
       availability = "reserved"
       reason = "Desired label is reserved"
@@ -511,7 +367,7 @@ export async function quoteCommunityHandle(input: {
       reason = status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
     }
 
-    const price = resolvePrice({
+    const price = resolveHandlePrice({
       labelNormalized: desired.labelNormalized,
       policy,
       settings,
@@ -558,7 +414,7 @@ export async function quoteCommunityHandle(input: {
         && stringOrNull(rowValue(row, "pricing_tier")) === price.pricingTier
     })
     if (existingQuote) {
-      return serializeQuote(existingQuote, {
+      return serializeHandleQuote(existingQuote, {
         env: input.env,
         desiredLabel: desired.labelDisplay,
         eligible,
@@ -569,7 +425,7 @@ export async function quoteCommunityHandle(input: {
         protocolIssuanceReason,
       })
     }
-    const expiresAt = addSeconds(quotedAt, quoteTtlSeconds)
+    const expiresAt = addHandleQuoteSeconds(quotedAt, quoteTtlSeconds)
     const quoteId = makeId("hcq")
 
     await db.client.execute({
@@ -614,7 +470,7 @@ export async function quoteCommunityHandle(input: {
     if (!row) {
       throw internalError("Created handle quote row is missing")
     }
-    return serializeQuote(row, {
+    return serializeHandleQuote(row, {
       env: input.env,
       desiredLabel: desired.labelDisplay,
       eligible,
@@ -822,14 +678,14 @@ async function assertClaimQuoteStillClaimable(input: {
 
   const labelNormalized = requiredString(input.quote, "label_normalized")
   const labelDisplay = requiredString(input.quote, "label_display")
-  if (isReservedLabel(labelNormalized, settings)) {
+  if (isReservedHandleLabel(labelNormalized, settings)) {
     const reason = "Desired label is reserved"
-    throw eligibilityFailed(reason, availabilityDetails("reserved", reason))
+    throw eligibilityFailed(reason, handleAvailabilityDetails("reserved", reason))
   }
   const activeForUser = await getActiveHandleForUser(input.executor, policy.namespace_id, input.userId)
   if (activeForUser) {
     const activeLabel = requiredString(activeForUser, "label_normalized")
-    const availability: Availability = activeLabel === labelNormalized
+    const availability: HandleAvailability = activeLabel === labelNormalized
       ? "already_claimed_by_viewer"
       : "viewer_has_claim"
     const reason = input.paymentVerified
@@ -837,7 +693,7 @@ async function assertClaimQuoteStillClaimable(input: {
       : activeLabel === labelNormalized
         ? "Desired label is already active for this community"
         : "You already have an active name in this community"
-    throw conflictError(reason, availabilityDetails(availability, reason))
+    throw conflictError(reason, handleAvailabilityDetails(availability, reason))
   }
   const blockingForLabel = await getBlockingHandleForLabel(input.executor, policy.namespace_id, labelNormalized)
   if (blockingForLabel) {
@@ -845,7 +701,7 @@ async function assertClaimQuoteStillClaimable(input: {
     const reason = input.paymentVerified
       ? "Payment was verified, but this name became unavailable before the claim completed"
       : status === "reserved" ? "Desired label is reserved" : "Desired label is unavailable"
-    throw conflictError(reason, availabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
+    throw conflictError(reason, handleAvailabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
   }
 
   return {
@@ -1097,7 +953,7 @@ export async function applyHandleClaimWrites(
     if (blocking) {
       const blockingStatus = requiredString(blocking, "status")
       const reason = "Payment was verified, but this name became unavailable before the claim completed"
-      throw conflictError(reason, availabilityDetails(blockingStatus === "reserved" ? "reserved" : "taken", reason))
+      throw conflictError(reason, handleAvailabilityDetails(blockingStatus === "reserved" ? "reserved" : "taken", reason))
     }
     throw error
   } finally {
