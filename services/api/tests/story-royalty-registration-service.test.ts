@@ -615,8 +615,12 @@ describe("story royalty registration service", () => {
         ipRoyaltyVault: originalVault,
         royaltyDistributionTxHash: originalTx,
         storyLicenseTermsId: "17",
+        storyIpMetadataHash: "0x1111111111111111111111111111111111111111111111111111111111111111",
+        storyNftMetadataHash: "0x1111111111111111111111111111111111111111111111111111111111111111",
         storyRoyaltyRegistrationStatus: "registered",
       })
+      expect(result?.storyIpMetadataUri).toContain("/ip.json")
+      expect(result?.storyNftMetadataUri).toContain("/nft.json")
     } finally {
       db.close()
     }

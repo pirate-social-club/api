@@ -38,6 +38,10 @@ export type StoryRoyaltyRegistrationResult = {
   storyIpId: string
   storyIpNftContract: string
   storyIpNftTokenId: string
+  storyIpMetadataUri: string
+  storyIpMetadataHash: string
+  storyNftMetadataUri: string
+  storyNftMetadataHash: string
   ipRoyaltyVault: string | null
   storyLicenseTermsId: string | null
   storyLicenseTemplate: string | null
@@ -50,8 +54,23 @@ export type StoryRoyaltyRegistrationResult = {
 }
 
 type StoryRoyaltyRegistrationTestResult =
-  & Omit<StoryRoyaltyRegistrationResult, "ipRoyaltyVault" | "royaltyDistributionTxHash">
-  & { ipRoyaltyVault?: string | null; royaltyDistributionTxHash?: string | null }
+  & Omit<
+    StoryRoyaltyRegistrationResult,
+    | "ipRoyaltyVault"
+    | "royaltyDistributionTxHash"
+    | "storyIpMetadataUri"
+    | "storyIpMetadataHash"
+    | "storyNftMetadataUri"
+    | "storyNftMetadataHash"
+  >
+  & {
+    ipRoyaltyVault?: string | null
+    royaltyDistributionTxHash?: string | null
+    storyIpMetadataUri?: string
+    storyIpMetadataHash?: string
+    storyNftMetadataUri?: string
+    storyNftMetadataHash?: string
+  }
 
 type ResolvedDerivativeParent = {
   ipId: `0x${string}`
@@ -781,6 +800,10 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
           ...result,
           ipRoyaltyVault: result.ipRoyaltyVault ?? null,
           royaltyDistributionTxHash: result.royaltyDistributionTxHash ?? null,
+          storyIpMetadataUri: result.storyIpMetadataUri ?? "ipfs://test-story-ip-metadata",
+          storyIpMetadataHash: result.storyIpMetadataHash ?? `0x${"00".repeat(32)}`,
+          storyNftMetadataUri: result.storyNftMetadataUri ?? "ipfs://test-story-nft-metadata",
+          storyNftMetadataHash: result.storyNftMetadataHash ?? `0x${"00".repeat(32)}`,
         }
       : null
   }
@@ -916,6 +939,10 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       storyIpId: derivativeIpId,
       storyIpNftContract: spgNftContract,
       storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
+      storyIpMetadataUri: metadata.ipMetadataUri,
+      storyIpMetadataHash: metadata.ipMetadataHash,
+      storyNftMetadataUri: metadata.nftMetadataUri,
+      storyNftMetadataHash: metadata.nftMetadataHash,
       ipRoyaltyVault,
       storyLicenseTermsId: null,
       storyLicenseTemplate: null,
@@ -963,6 +990,10 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     storyIpId: originalResponse.ipId!,
     storyIpNftContract: spgNftContract,
     storyIpNftTokenId: originalResponse.tokenId!.toString(),
+    storyIpMetadataUri: metadata.ipMetadataUri,
+    storyIpMetadataHash: metadata.ipMetadataHash,
+    storyNftMetadataUri: metadata.nftMetadataUri,
+    storyNftMetadataHash: metadata.nftMetadataHash,
     ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
     storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
     storyLicenseTemplate: null,
