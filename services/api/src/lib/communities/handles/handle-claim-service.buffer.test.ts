@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { applyHandleClaimWrites, reserveCommunityHandleOnClient } from "./handle-claim-service"
+import { applyHandleClaimWrites } from "./handle-claim-service"
+import { reserveCommunityHandleOnClient } from "./handle-reservation-service"
 import type { Client } from "../../sql-client"
 
 /**

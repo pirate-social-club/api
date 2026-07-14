@@ -3,9 +3,11 @@ import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   claimCommunityHandle,
   quoteCommunityHandle,
+} from "../lib/communities/handles/handle-claim-service"
+import {
   reserveCommunityHandle,
   revokeCommunityHandle,
-} from "../lib/communities/handles/handle-claim-service"
+} from "../lib/communities/handles/handle-reservation-service"
 import { updateCommunityHandlePolicy } from "../lib/communities/handles/handle-policy-service"
 import {
   getCommunityHandlePolicy,
