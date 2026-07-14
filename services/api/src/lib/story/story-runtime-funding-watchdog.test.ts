@@ -2,7 +2,10 @@ import { parseEther } from "ethers"
 import { beforeEach, describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
-import type { StoryRuntimeSignerBalance } from "./story-runtime-funding"
+import {
+  listStoryRuntimeSignerAddresses,
+  type StoryRuntimeSignerBalance,
+} from "./story-runtime-funding"
 import {
   resetStoryRuntimeFundingWatchdogStateForTests,
   resolveStorySignerExplorerUrl,
@@ -10,7 +13,7 @@ import {
 } from "./story-runtime-funding-watchdog"
 
 // A valid throwaway private key so listStoryRuntimeSignerAddresses (the
-// "configured?" guard) resolves all three signers. Never used to sign anything.
+// "configured?" guard) resolves every signer. Never used to sign anything.
 const DUMMY_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 
 // Defaults with no gas env: worst-case tx = 1.5M gas * 5 gwei = 0.0075 IP.
@@ -29,6 +32,7 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
 
 const ADDR: Record<string, `0x${string}`> = {
   "story-operator": "0xc77Ad4de7d179FFFBa417cA24c055d86Af69F4BB",
+  "story-entitlement-class-configurer": "0xbE03F72356A82F830811c1f487Bc18400CB85734",
   "story-cdr-writer": "0x9d5Dc963A948a77091c905854fB9036CbFA9e9FB",
   "story-settlement": "0x526331ddA08972173C485b874956818E8a0b7D2F",
 }
@@ -56,6 +60,15 @@ describe("runStoryRuntimeFundingWatchdog", () => {
       `https://www.storyscan.io/address/${ADDR["story-settlement"]}`,
     )
     expect(resolveStorySignerExplorerUrl(1, ADDR["story-settlement"])).toBeNull()
+  })
+
+  test("includes the entitlement configurer in the runtime funding inventory", () => {
+    expect(listStoryRuntimeSignerAddresses(baseEnv()).map((signer) => signer.name)).toEqual([
+      "story-operator",
+      "story-entitlement-class-configurer",
+      "story-cdr-writer",
+      "story-settlement",
+    ])
   })
 
   test("no alerts when every signer is above its warn threshold", async () => {
@@ -99,6 +112,16 @@ describe("runStoryRuntimeFundingWatchdog", () => {
     expect(result.alerts[0].explorerUrl).toBe(
       `https://aeneid.storyscan.io/address/${ADDR["story-settlement"]}`,
     )
+    expect(result.alerts[0].warnThresholdWei).toBe(parseEther(CDR_THRESHOLD_IP))
+  })
+
+  test("catches an entitlement configurer below its funding floor", async () => {
+    const result = await runStoryRuntimeFundingWatchdog(baseEnv(), {
+      fetchBalances: fetchStub({ "story-entitlement-class-configurer": "0.1826" }),
+    })
+    expect(result.alerts).toHaveLength(1)
+    expect(result.alerts[0].name).toBe("story-entitlement-class-configurer")
+    expect(result.alerts[0].severity).toBe("critical")
     expect(result.alerts[0].warnThresholdWei).toBe(parseEther(CDR_THRESHOLD_IP))
   })
 

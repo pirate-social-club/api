@@ -18,6 +18,7 @@ resolve that.
 | Signer env var | Gates | Enforced floor |
 | --- | --- | --- |
 | `STORY_OPERATOR_PRIVATE_KEY` (`story-operator`) | Song/video **royalty registration** (mint + attach PIL terms) | **TARGET** (0.5 IP) — the royalty-registration path asserts the operator against the target, not the min |
+| `STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY` (`story-entitlement-class-configurer`) | Entitlement-class configuration during publishing | MIN (0.25 IP) |
 | `STORY_CDR_WRITER_PRIVATE_KEY` (`story-cdr-writer`) | Locked-asset CDR allocate/write (paid delivery) | MIN (0.25 IP) |
 | `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` (`story-settlement`) | Music purchase settlement / royalty sync | MIN (0.25 IP) |
 | `STORY_RUNTIME_FUNDER_PRIVATE_KEY` (falls back to `STORY_CONTRACT_OWNER_PRIVATE_KEY`) | Source wallet the top-up script sends **from** | n/a — keep it funded |
@@ -59,7 +60,7 @@ infisical run --project-config-dir ../../../core --env staging --path /services/
   bun run fund:story-runtime-signers --signer=story-operator --target-balance-wei=700000000000000000
 ```
 
-- Omit `--signer=` to top up all three signers.
+- Omit `--signer=` to top up all four signers.
 - `--target-balance-wei` overrides the default target for this run (wei; 0.7 IP =
   `700000000000000000`).
 - The funder must itself hold enough IP (see step 3). This was the exact fix for
