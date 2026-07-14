@@ -3,6 +3,7 @@ import { Hono } from "hono"
 
 import {
   isPublicReadCacheRequest,
+  NO_STORE_CACHE_HEADERS,
   PUBLIC_READ_CACHE_CONTROL,
   PUBLIC_READ_CDN_CACHE_CONTROL,
   setPublicReadCacheHeaders,
@@ -74,5 +75,23 @@ describe("public read cache headers", () => {
 
     expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=15, stale-while-revalidate=15")
+  })
+})
+
+describe("operational endpoint no-store headers", () => {
+  test("marks every cache tier no-store so the CDN never serves a stale version/health body", () => {
+    expect(NO_STORE_CACHE_HEADERS["cache-control"]).toBe("no-store")
+    expect(NO_STORE_CACHE_HEADERS["cdn-cache-control"]).toBe("no-store")
+    expect(NO_STORE_CACHE_HEADERS["cloudflare-cdn-cache-control"]).toBe("no-store")
+  })
+
+  test("applying the headers to a JSON response sets all three cache tiers", async () => {
+    const app = new Hono()
+    app.get("/__version", (c) => c.json({ service: "api" }, 200, { ...NO_STORE_CACHE_HEADERS }))
+    const response = await app.request("https://api.pirate.sc/__version")
+
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("no-store")
   })
 })

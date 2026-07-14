@@ -34,6 +34,7 @@ import verification from "./routes/verification"
 import walletIdentities from "./routes/wallet-identities"
 import {
   isPublicReadCacheRequest,
+  NO_STORE_CACHE_HEADERS,
 } from "./routes/cache-headers"
 import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
@@ -196,7 +197,7 @@ app.use("*", async (_c, next) => {
   await withRequestControlPlaneClients(next)
 })
 
-app.get("/health", (c) => c.json({ ok: true }))
+app.get("/health", (c) => c.json({ ok: true }, 200, { ...NO_STORE_CACHE_HEADERS }))
 app.get("/health/provisioning", async (c) => {
   const shardConfigured = Boolean(c.env.COMMUNITY_D1_SHARD)
   const regionConfigured = Boolean(String(c.env.COMMUNITY_D1_SHARD_REGION ?? "").trim())
@@ -250,11 +251,11 @@ app.get("/health/provisioning", async (c) => {
       ...(ok ? {} : { error_code: "d1_pool_low_capacity" }),
     },
     ok ? 200 : 503,
-    { "cache-control": "no-store" },
+    { ...NO_STORE_CACHE_HEADERS },
   )
 })
 app.get("/__version", async (c) => c.json(await buildVersionPayload(c.env), 200, {
-  "cache-control": "no-store",
+  ...NO_STORE_CACHE_HEADERS,
 }))
 app.route("/", discovery)
 app.route("/", agents)
