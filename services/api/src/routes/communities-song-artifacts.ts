@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import type { Context } from "hono"
 import {
   createSongArtifactUpload,
   fetchSongArtifactContent,
@@ -37,6 +38,15 @@ import {
   submitTraceRequestFields,
   withSubmitTraceTiming,
 } from "../lib/observability/submit-trace"
+
+function getWaitUntil(c: Context<AuthenticatedEnv>): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
 
 type CompleteSongArtifactMultipartUploadRequest = {
   upload_id: string
@@ -241,6 +251,7 @@ export function registerCommunitySongArtifactRoutes(communities: Hono<Authentica
       communityId,
       body,
       communityRepository,
+      waitUntil: getWaitUntil(c),
     })
     return c.json(result, 201)
   })
