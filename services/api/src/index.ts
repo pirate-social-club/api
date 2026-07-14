@@ -848,6 +848,11 @@ const SCHEDULED_JOB_CONCURRENCY = 2
 // under the 60s cron interval (no overlapping invocations stacking connections)
 // and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
 const SCHEDULED_BATCH_DEADLINE_MS = 30_000
+// Booking settlement and royalty verification occupy the first two concurrency
+// slots. Guarantee that community delivery jobs also start even when both money
+// paths run past the batch start deadline; otherwise queued preview/publish jobs
+// can remain unclaimed indefinitely with attempt_count=0.
+const SCHEDULED_MINIMUM_PRIORITY_STARTS = 3
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
@@ -972,6 +977,7 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
         limit: SCHEDULED_JOB_CONCURRENCY,
         lock,
+        minimumStartsBeforeDeadline: SCHEDULED_MINIMUM_PRIORITY_STARTS,
         onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
         onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
         onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),

@@ -14,6 +14,8 @@
  *   opening. NOTE: this does NOT cancel an in-flight task — a task that already
  *   started may still run past the deadline (and past the next cron boundary).
  *   It is a connection-burst mitigation, not a hard overlap guard.
+ * - `minimumStartsBeforeDeadline`: ordered prefix that must start even after the
+ *   deadline. Use sparingly for recovery paths that cannot safely be deferred.
  *
  * Tasks are named so logs/metrics are stable across the handler's per-minute
  * rotation. A task that rejects does NOT abort the others; its error is routed to
@@ -28,6 +30,7 @@ export interface NamedTask {
 export interface RunWithConcurrencyOptions {
   onError?: (error: unknown, name: string) => void
   deadlineMs?: number
+  minimumStartsBeforeDeadline?: number
   now?: () => number
 }
 
@@ -43,14 +46,20 @@ export async function runWithConcurrencyLimit(
 ): Promise<RunResult> {
   if (tasks.length === 0) return { skipped: [], started: [] }
 
-  const { onError, deadlineMs, now = () => Date.now() } = options
+  const {
+    onError,
+    deadlineMs,
+    minimumStartsBeforeDeadline = 0,
+    now = () => Date.now(),
+  } = options
+  const protectedStartCount = Math.max(0, Math.min(tasks.length, Math.trunc(minimumStartsBeforeDeadline)))
   const start = now()
   const pastDeadline = (): boolean => deadlineMs != null && now() - start >= deadlineMs
 
   let next = 0
   const worker = async (): Promise<void> => {
     while (next < tasks.length) {
-      if (pastDeadline()) return
+      if (next >= protectedStartCount && pastDeadline()) return
       const task = tasks[next]!
       next += 1
       try {
@@ -89,6 +98,7 @@ export interface RunScheduledBatchInput {
   tasks: ReadonlyArray<NamedTask>
   limit: number
   deadlineMs?: number
+  minimumStartsBeforeDeadline?: number
   now?: () => number
   onError?: (error: unknown, name: string) => void
   onSkipped?: (skipped: string[]) => void
@@ -111,6 +121,7 @@ export async function runScheduledBatch(input: RunScheduledBatchInput): Promise<
   try {
     const result = await runWithConcurrencyLimit(input.tasks, input.limit, {
       deadlineMs: input.deadlineMs,
+      minimumStartsBeforeDeadline: input.minimumStartsBeforeDeadline,
       now: input.now,
       onError: input.onError,
     })

@@ -111,6 +111,28 @@ describe("runWithConcurrencyLimit", () => {
     expect(result.skipped).toEqual(["t3", "t4"]) // deferred names surfaced for telemetry
   })
 
+  test("starts the protected prefix even when the first concurrency wave crosses the deadline", async () => {
+    let clock = 1_000
+    const ran: string[] = []
+    const tasks: NamedTask[] = ["booking", "royalty", "community-jobs", "maintenance"].map((name) => ({
+      name,
+      run: async () => {
+        ran.push(name)
+        clock += 31_000
+      },
+    }))
+
+    const result = await runWithConcurrencyLimit(tasks, 2, {
+      deadlineMs: 30_000,
+      minimumStartsBeforeDeadline: 3,
+      now: () => clock,
+    })
+
+    expect(ran).toEqual(["booking", "royalty", "community-jobs"])
+    expect(result.started).toEqual(["booking", "royalty", "community-jobs"])
+    expect(result.skipped).toEqual(["maintenance"])
+  })
+
   test("no deadline runs the whole batch regardless of elapsed time", async () => {
     let clock = 0
     const tasks: NamedTask[] = ["a", "b", "c", "d"].map((name) => ({ name, run: async () => { clock += 10_000 } }))
