@@ -463,7 +463,7 @@ Successful response:
   "buyer": {
     "kind": "wallet",
     "wallet_address": "0x2000000000000000000000000000000000000002",
-    "chain_ref": "eip155:8453"
+    "chain_ref": "eip155:84532"
   },
   "price_cents": 10000,
   "currency": "USD",
@@ -477,10 +477,10 @@ Successful response:
   "payment_instructions": {
     "chain": {
       "chain_namespace": "eip155",
-      "chain_id": 8453,
+      "chain_id": 84532,
       "display_name": "Base"
     },
-    "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "token_address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
     "recipient_address": "0x...",
     "amount_atomic": "100000000",
     "amount_display": "100.00"
@@ -541,7 +541,7 @@ Success returns:
     "status": "active",
     "owner_kind": "wallet",
     "owner_wallet_address": "0x2000000000000000000000000000000000000002",
-    "chain_ref": "eip155:8453",
+    "chain_ref": "eip155:84532",
     "price_paid_cents": 10000,
     "currency": "USD",
     "issued_at": 1770000100,
@@ -586,7 +586,7 @@ rtk env infisical run --project-config-dir ../../../core --env prod --path /serv
   --label olivia
 ```
 
-Production claim example, using a funded Base mainnet buyer wallet:
+Production claim example, using a funded Base Sepolia buyer wallet:
 
 ```bash
 rtk env infisical run --project-config-dir ../../../core --env prod --path /services/api -- \
