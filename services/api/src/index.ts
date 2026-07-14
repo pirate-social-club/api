@@ -729,7 +729,13 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
           env,
           "Reward campaign integrity incident",
           `reward_campaign_integrity:${incident.incident_id}`,
-          { campaign_id: incident.campaign_id, incident_kind: incident.kind, reason: incident.reason },
+          {
+            incident_id: incident.incident_id,
+            campaign_id: incident.campaign_id,
+            incident_kind: incident.kind,
+            reason: incident.reason,
+            ...incident.details,
+          },
           { urgency: incident.kind === "funding_provenance_missing" ? "low" : "high" },
         )
         if (delivered) {

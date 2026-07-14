@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
-import { monitorRewardCampaigns } from "./reward-campaign-monitor"
+import { monitorRewardCampaigns, rewardCampaignAccountingAlertDetails } from "./reward-campaign-monitor"
 
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -58,5 +58,28 @@ describe("reward campaign monitor enable gate", () => {
     })).rejects.toThrow("reward_campaign_alert_delivery_not_configured")
 
     expect(queries).toBe(0)
+  })
+})
+
+describe("reward campaign incident alert evidence", () => {
+  test("reports signed stored-minus-computed accounting deltas without number coercion", () => {
+    expect(rewardCampaignAccountingAlertDetails({
+      stored_funded_cents: "100",
+      computed_funded_cents: "100",
+      stored_reserved_cents: "1",
+      computed_reserved_cents: "0",
+      stored_credited_cents: "0",
+      computed_credited_cents: "2",
+    })).toEqual({
+      stored_funded_cents: "100",
+      computed_funded_cents: "100",
+      funded_delta_cents: "0",
+      stored_reserved_cents: "1",
+      computed_reserved_cents: "0",
+      reserved_delta_cents: "1",
+      stored_credited_cents: "0",
+      computed_credited_cents: "2",
+      credited_delta_cents: "-2",
+    })
   })
 })

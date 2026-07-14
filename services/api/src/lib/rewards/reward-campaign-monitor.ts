@@ -28,13 +28,53 @@ export type RewardCampaignMonitorSummary = {
   wholly_blind: boolean
   partial_finality_degraded: boolean
   scan_successful: boolean
-  incidents: Array<{ incident_id: string; campaign_id: string; kind: IncidentKind; reason: string }>
+  incidents: Array<{
+    incident_id: string
+    campaign_id: string
+    kind: IncidentKind
+    reason: string
+    details: Record<string, unknown>
+  }>
 }
 
 export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | "funding_provenance_missing"
 
 const MONITOR_STALE_AFTER_MS = 20 * 60_000
 const PARTIAL_FINALITY_ALERT_RATE = 0.25
+
+function integerText(value: unknown): string | null {
+  if (typeof value === "bigint") return value.toString()
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value)
+  if (typeof value === "string" && /^-?\d+$/u.test(value.trim())) return value.trim()
+  return null
+}
+
+function centsDelta(stored: unknown, computed: unknown): string | null {
+  const storedText = integerText(stored)
+  const computedText = integerText(computed)
+  if (storedText === null || computedText === null) return null
+  return (BigInt(storedText) - BigInt(computedText)).toString()
+}
+
+export function rewardCampaignAccountingAlertDetails(row: Record<string, unknown>): Record<string, unknown> {
+  const storedFunded = rowValue(row, "stored_funded_cents")
+  const computedFunded = rowValue(row, "computed_funded_cents")
+  const storedReserved = rowValue(row, "stored_reserved_cents")
+  const computedReserved = rowValue(row, "computed_reserved_cents")
+  const storedCredited = rowValue(row, "stored_credited_cents")
+  const computedCredited = rowValue(row, "computed_credited_cents")
+  return {
+    stored_funded_cents: storedFunded,
+    computed_funded_cents: computedFunded,
+    funded_delta_cents: centsDelta(storedFunded, computedFunded),
+    stored_reserved_cents: storedReserved,
+    computed_reserved_cents: computedReserved,
+    reserved_delta_cents: centsDelta(storedReserved, computedReserved),
+    stored_credited_cents: storedCredited,
+    computed_credited_cents: computedCredited,
+    credited_delta_cents: centsDelta(storedCredited, computedCredited),
+  }
+}
 
 function emptyMonitorSummary(enabled: boolean): RewardCampaignMonitorSummary {
   return {
@@ -176,11 +216,11 @@ export async function monitorRewardCampaigns(input: {
   for (const row of mismatches.rows) {
     const campaignId = requiredString(row, "reward_campaign_id")
     summary.accounting_mismatches += 1
-    const details = { stored_funded_cents: rowValue(row, "stored_funded_cents"), computed_funded_cents: rowValue(row, "computed_funded_cents"), stored_reserved_cents: rowValue(row, "stored_reserved_cents"), computed_reserved_cents: rowValue(row, "computed_reserved_cents"), stored_credited_cents: rowValue(row, "stored_credited_cents"), computed_credited_cents: rowValue(row, "computed_credited_cents") }
+    const details = rewardCampaignAccountingAlertDetails(row)
     const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch", details, ...ownership, now, rowLocks })
     if (!recorded) continue
     if (recorded.held) summary.held += 1
-    summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch" })
+    summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch", details })
   }
   const effectFilter = `f.status = 'confirmed' AND c.status IN ('scheduled','active','paused','operational_hold','exhausted','ended')`
   const effectCount = await input.client.execute({
@@ -211,10 +251,11 @@ export async function monitorRewardCampaigns(input: {
     if (rowValue(row, "confirmed_block_number") == null || !stringOrNull(rowValue(row, "confirmed_block_hash"))) {
       const reason = "confirmed_funding_provenance_missing"
       summary.missing_provenance += 1
-      const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_provenance_missing", reason, details: { tx_hash: stringOrNull(rowValue(row, "tx_hash")) }, ...ownership, now, rowLocks })
+      const details = { tx_hash: stringOrNull(rowValue(row, "tx_hash")) }
+      const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_provenance_missing", reason, details, ...ownership, now, rowLocks })
       if (!recorded) continue
       if (recorded.held) summary.held += 1
-      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_provenance_missing", reason })
+      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_provenance_missing", reason, details })
       continue
     }
     summary.finality_checks_attempted += 1
@@ -240,7 +281,7 @@ export async function monitorRewardCampaigns(input: {
       const recorded = await recordIncidentCandidate({ client: input.client, campaignId, kind: "funding_finality_failure", reason: result.reason, details, ...ownership, now, rowLocks })
       if (!recorded) continue
       if (recorded.held) summary.held += 1
-      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_finality_failure", reason: result.reason })
+      summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "funding_finality_failure", reason: result.reason, details })
     }
   }
   summary.scan_successful = summary.transient_finality_checks === 0
