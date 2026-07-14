@@ -175,7 +175,7 @@ export function resolveVisualPolicyDecision(
   }
 }
 
-export function combineVisualPolicyDecisions(decisions: VisualPolicyResolvedDecision[]): VisualPolicyResolvedDecision {
+function combineVisualPolicyDecisions(decisions: VisualPolicyResolvedDecision[]): VisualPolicyResolvedDecision {
   let policyDecision: VisualPolicyAction = "allow"
   const reasonCodes: string[] = []
   let adultSignal = false
@@ -199,7 +199,7 @@ function normalizeEnum<T extends string>(value: unknown, allowed: readonly T[]):
   return typeof value === "string" && (allowed as readonly string[]).includes(value) ? value as T : null
 }
 
-export function normalizeVisualClassifierFacts(value: unknown): VisualClassifierFacts | null {
+function normalizeVisualClassifierFacts(value: unknown): VisualClassifierFacts | null {
   if (!value || typeof value !== "object") return null
   const record = value as Record<string, unknown>
   const facts = {
