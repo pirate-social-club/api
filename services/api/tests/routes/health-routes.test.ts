@@ -33,7 +33,11 @@ describe("health route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
 
-  test("GET /health/provisioning is degraded at the pool threshold", async () => {
+  // Low-but-nonzero capacity is a WARNING. It must NOT fail this probe: deploy
+  // smokes gate on it, and a warning that blocks every deploy is what kept web
+  // off production for a full day on 2026-07-13. `healthy` stays false so the
+  // capacity watchdog (which alerts on !healthy) still fires.
+  test("GET /health/provisioning is degraded but OK at the pool threshold", async () => {
     const response = await app.request("http://pirate.test/health/provisioning", {}, {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
@@ -47,12 +51,38 @@ describe("health route", () => {
       } as never,
     })
 
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      ok: false,
-      error_code: "d1_pool_low_capacity",
+      ok: true,
+      degraded: true,
+      degraded_reason: "d1_pool_low_capacity",
       pool_capacity: { free: 8, threshold: 8, healthy: false },
     })
+  })
+
+  test("GET /health/provisioning fails closed when the pool is exhausted", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 30, free: 0, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body).toMatchObject({
+      ok: false,
+      error_code: "d1_pool_exhausted",
+      pool_capacity: { free: 0, threshold: 8, healthy: false },
+    })
+    // Exhaustion is an outage, not a warning — it must not be reported as merely degraded.
+    expect(body).not.toHaveProperty("degraded")
   })
 
   test("GET /health/provisioning fails closed when capacity cannot be read", async () => {

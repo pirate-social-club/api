@@ -237,20 +237,31 @@ app.get("/health/provisioning", async (c) => {
     )
   }
 
+  // Low capacity is a WARNING, not an outage. `classifyD1PoolCapacity` keeps its
+  // meaning (healthy = free > threshold) because the capacity watchdog alerts on
+  // `!healthy` — do not widen it here or low-capacity alerts go silent.
+  //
+  // Only genuine exhaustion breaks provisioning, so only exhaustion may fail this
+  // probe. Deploy smokes gate on this endpoint, and a *warning* that blocks every
+  // deploy is what kept web off production for a full day on 2026-07-13.
+  // Allocation itself still fails loudly on its own path (`d1_pool_exhausted`
+  // from the provisioning backend), so nothing is masked by reporting 200 here.
   const capacity = classifyD1PoolCapacity(result.value, c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
-  const ok = capacity.healthy
+  const exhausted = capacity.free <= 0
+  const degraded = !capacity.healthy && !exhausted
   return c.json(
     {
-      ok,
+      ok: !exhausted,
       backend: "d1_native",
       shard_configured: true,
       region_configured: true,
       admin_configured: true,
       environment: c.env.ENVIRONMENT ?? null,
       pool_capacity: capacity,
-      ...(ok ? {} : { error_code: "d1_pool_low_capacity" }),
+      ...(degraded ? { degraded: true, degraded_reason: "d1_pool_low_capacity" } : {}),
+      ...(exhausted ? { error_code: "d1_pool_exhausted" } : {}),
     },
-    ok ? 200 : 503,
+    exhausted ? 503 : 200,
     { "cache-control": "no-store" },
   )
 })
