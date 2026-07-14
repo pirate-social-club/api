@@ -274,7 +274,7 @@ function applyMachineAccessPlatformOverrides(input: {
   return effectivePolicy
 }
 
-export function omittedSurface(
+function omittedSurface(
   surface: ConfigurableMachineAccessSurface,
   reason: OmittedStructuredSurfaceReason = "community_opt_out",
 ): OmittedStructuredSurface {
@@ -358,7 +358,7 @@ export async function getCommunityMachineAccessPolicy(input: {
   })
 }
 
-export async function getResolvedCommunityMachineAccessPolicy(input: {
+async function getResolvedCommunityMachineAccessPolicy(input: {
   env: Env
   communityRepository: CommunityMachineAccessRepository
   communityId: string

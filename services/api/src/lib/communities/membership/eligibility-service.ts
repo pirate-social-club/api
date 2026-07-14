@@ -50,7 +50,7 @@ function getRequiredWalletScore(policy: GatePolicy | null): number | null {
   return requiredScore
 }
 
-export function buildWalletScoreStatus(
+function buildWalletScoreStatus(
   user: User,
   policy: GatePolicy | null,
 ): JoinEligibility["wallet_score_status"] {

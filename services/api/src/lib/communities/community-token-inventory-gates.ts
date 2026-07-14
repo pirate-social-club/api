@@ -263,7 +263,7 @@ export function formatAssetFilterLabel(filter: Erc721InventoryAssetMatch): strin
   return values.join(" ")
 }
 
-export function normalizeInventoryMatchValue(value: unknown): Erc721InventoryMatchValue | null {
+function normalizeInventoryMatchValue(value: unknown): Erc721InventoryMatchValue | null {
   const values = Array.isArray(value) ? value : [value]
   if (values.length === 0 || values.length > MAX_INVENTORY_MATCH_VALUES_PER_KEY) {
     return null
