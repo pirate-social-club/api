@@ -15,8 +15,3 @@ export function parseJsonArray<T = unknown>(value: unknown): T[] | null {
     return null
   }
 }
-
-export function parseWeekdayJson(value: unknown): number[] | undefined {
-  const arr = parseJsonArray<number>(value)
-  return arr ?? undefined
-}
