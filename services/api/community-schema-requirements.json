@@ -1,0 +1,38 @@
+{
+  "$comment": [
+    "Community-template (per-community D1 shard) migrations that THIS API commit requires.",
+    "",
+    "This manifest travels with the API commit, so the web release can ask a precise",
+    "question before deploying: 'does every live community shard satisfy the schema",
+    "requirements of the API I am about to pin?'",
+    "",
+    "It exists because nothing used to gate that, and it broke production twice:",
+    "  1124 -> async post publish broken on 25 shards",
+    "  1127 -> every publish failed: 'no such column: story_ip_metadata_uri'",
+    "and left one latent defect (1126, see below).",
+    "",
+    "Verified by core/scripts/community/verify-community-schema-requirements.ts.",
+    "",
+    "WHEN YOU ADD A MIGRATION THAT NEW API CODE READS OR WRITES, ADD IT HERE.",
+    "If the code path runs regardless of feature flags, it is 'unconditional'.",
+    "If it only runs behind a flag bundle, declare it under 'features' instead —",
+    "then the fleet only has to satisfy it when that feature is being enabled."
+  ],
+  "version": 1,
+  "unconditional": [
+    "1124_community_job_checkpoints.sql",
+    "1127_asset_story_metadata_refs.sql"
+  ],
+  "features": {
+    "rewards": {
+      "flags": [
+        "REWARDS_CAMPAIGNS_ENABLED",
+        "REWARDS_ACCRUAL_ENABLED"
+      ],
+      "migrations": [
+        "1126_reward_qualification_outbox.sql"
+      ],
+      "note": "The outbox INSERT runs inside the study/karaoke attempt's OWN transaction (post-study-service.ts, karaoke-attempt-finalize-service.ts), armed by REWARDS_CAMPAIGNS_ENABLED && REWARDS_ACCRUAL_ENABLED. If 1126 is absent when both flags are on, the INSERT fails and rolls back the whole attempt — a fleet-wide outage of Study and Karaoke, which are LIVE and working. 1126 is currently MISSING on all 93 allocated production shards. The rewards enablement workflow MUST run the verifier with --features rewards and apply 1126 across the fleet BEFORE either flag is changed. Do not apply it merely to make the release gate green; it is deliberately feature-conditional."
+    }
+  }
+}
