@@ -2,8 +2,8 @@ import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   claimCommunityHandle,
-  quoteCommunityHandle,
 } from "../lib/communities/handles/handle-claim-service"
+import { quoteCommunityHandle } from "../lib/communities/handles/handle-quote-service"
 import {
   reserveCommunityHandle,
   revokeCommunityHandle,
