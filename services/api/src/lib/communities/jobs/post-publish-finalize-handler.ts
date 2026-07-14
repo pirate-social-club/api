@@ -40,6 +40,7 @@ import { parseJobPayload } from "./payload"
 // COMMUNITY_JOB_MAX_ATTEMPTS (8) so a stalled preview still leaves attempts for the
 // registration itself rather than exhausting the job's budget on waiting.
 const STORY_HASH_VERIFICATION_WAIT_ATTEMPTS = 5
+export const SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR = "Song primary audio hash verification is still pending"
 
 type PostPublishFinalizePayload = {
   post_id?: string | null
@@ -656,7 +657,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
     })
 
     if (shouldWaitForSongContentHashVerification({ bundle, attemptCount: input.job.attempt_count })) {
-      throw providerUnavailable("Song primary audio hash verification is still pending", {
+      throw providerUnavailable(SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR, {
         attempt_count: input.job.attempt_count,
         reason: "song_content_hash_verification_pending",
         song_artifact_bundle: bundle?.id ?? null,

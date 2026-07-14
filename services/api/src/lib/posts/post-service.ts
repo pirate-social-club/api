@@ -38,10 +38,14 @@ import {
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
-import { enqueueCommunityJob } from "../communities/jobs/store"
+import {
+  enqueueCommunityJob,
+  findLatestCommunityJobBySubjectAndType,
+} from "../communities/jobs/store"
 import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
+import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
 import { conflictError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
 import { withRequestControlPlaneClients } from "../runtime-deps"
@@ -62,6 +66,67 @@ type PostCommunityWriteOpener = typeof openCommunityWriteClient
 let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
 let songPostAssetCreatorForRuntime: SongPostAssetCreator = createSongAssetForPost
 let postCommunityWriteOpenerForRuntime: PostCommunityWriteOpener = openCommunityWriteClient
+
+async function processImmediatePostPublishFinalize(input: {
+  env: Env
+  communityId: string
+  jobId: string
+  songArtifactBundleId: string | null
+  communityRepository: CommunityJobRepository
+}): Promise<void> {
+  const finalizeResult = await processCommunityJobById({
+    env: input.env,
+    communityId: input.communityId,
+    jobId: input.jobId,
+    communityRepository: input.communityRepository,
+  })
+  if (
+    finalizeResult?.status !== "failed"
+    || finalizeResult.error_code !== SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR
+    || !input.songArtifactBundleId
+  ) {
+    return
+  }
+
+  // Async locked-song submission can race the preview job that verifies the
+  // primary audio hash. Run that exact prerequisite, then immediately retry
+  // finalize instead of waiting for the global community rotation.
+  const db = await postCommunityWriteOpenerForRuntime(
+    input.env,
+    input.communityRepository,
+    input.communityId,
+  )
+  let previewJob
+  try {
+    previewJob = await findLatestCommunityJobBySubjectAndType({
+      client: db.client,
+      jobType: "song_preview_generate",
+      subjectType: "song_artifact_bundle",
+      subjectId: input.songArtifactBundleId,
+    })
+  } finally {
+    db.close()
+  }
+  if (!previewJob || (previewJob.status !== "queued" && previewJob.status !== "failed")) {
+    return
+  }
+
+  const previewResult = await processCommunityJobById({
+    env: input.env,
+    communityId: input.communityId,
+    jobId: previewJob.job_id,
+    communityRepository: input.communityRepository,
+  })
+  if (previewResult?.status !== "succeeded") {
+    return
+  }
+  await processCommunityJobById({
+    env: input.env,
+    communityId: input.communityId,
+    jobId: input.jobId,
+    communityRepository: input.communityRepository,
+  })
+}
 
 export function setPostAssetCreatorsForTests(input: {
   createAssetForPost?: PostAssetCreator | null
@@ -435,10 +500,11 @@ export async function createPost(input: {
         const jobId = postPublishFinalizeJobId
         input.waitUntil?.(withRequestControlPlaneClients(async () => {
           try {
-            await processCommunityJobById({
+            await processImmediatePostPublishFinalize({
               env: input.env,
               communityId: input.communityId,
               jobId,
+              songArtifactBundleId: post.song_artifact_bundle_id ?? null,
               communityRepository: input.communityRepository as unknown as CommunityJobRepository,
             })
           } catch (error) {
