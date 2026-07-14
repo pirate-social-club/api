@@ -24,7 +24,11 @@ const CDR_THRESHOLD_IP = "0.2725" // 0.25 + 3*0.0075
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
   return {
-    STORY_RUNTIME_PRIVATE_KEY: DUMMY_KEY,
+    STORY_OPERATOR_PRIVATE_KEY: DUMMY_KEY,
+    STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY: DUMMY_KEY,
+    STORY_CDR_WRITER_PRIVATE_KEY: DUMMY_KEY,
+    STORY_ACCESS_CONTROLLER_PRIVATE_KEY: DUMMY_KEY,
+    MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY: DUMMY_KEY,
     STORY_CHAIN_ID: "1315",
     ...overrides,
   } as unknown as Env
@@ -146,7 +150,12 @@ describe("runStoryRuntimeFundingWatchdog", () => {
 
   test("skips quietly when signer keys are unconfigured (no RPC, no error)", async () => {
     let fetched = false
-    const result = await runStoryRuntimeFundingWatchdog(baseEnv({ STORY_RUNTIME_PRIVATE_KEY: undefined }), {
+    const result = await runStoryRuntimeFundingWatchdog(baseEnv({
+      STORY_OPERATOR_PRIVATE_KEY: undefined,
+      STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY: undefined,
+      STORY_CDR_WRITER_PRIVATE_KEY: undefined,
+      MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY: undefined,
+    }), {
       fetchBalances: async () => {
         fetched = true
         return []

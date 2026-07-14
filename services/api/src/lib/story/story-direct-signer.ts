@@ -60,9 +60,9 @@ export function resolveStoryDirectSignerConfig(params: {
   }
 }
 
-export function resolveStoryOperatorDirectSigner(env: Pick<Env, "STORY_RUNTIME_PRIVATE_KEY" | "STORY_OPERATOR_PRIVATE_KEY" | "STORY_OPERATOR_PKP_ADDRESS">): ConfigResult<StoryDirectSignerConfig | null> {
+export function resolveStoryOperatorDirectSigner(env: Pick<Env, "STORY_OPERATOR_PRIVATE_KEY" | "STORY_OPERATOR_PKP_ADDRESS">): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
-    privateKeyValue: env.STORY_OPERATOR_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyValue: env.STORY_OPERATOR_PRIVATE_KEY,
     privateKeyField: "STORY_OPERATOR_PRIVATE_KEY",
     expectedAddressValue: env.STORY_OPERATOR_PKP_ADDRESS,
     expectedAddressField: "STORY_OPERATOR_PKP_ADDRESS",
@@ -72,20 +72,20 @@ export function resolveStoryOperatorDirectSigner(env: Pick<Env, "STORY_RUNTIME_P
 export function resolveStoryEntitlementClassConfigurerDirectSigner(
   env: Pick<
     Env,
-    "STORY_RUNTIME_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS"
+    "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY" | "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS"
   >,
 ): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
-    privateKeyValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY,
     privateKeyField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY",
     expectedAddressValue: env.STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS,
     expectedAddressField: "STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS",
   })
 }
 
-export function resolveStoryCdrWriterDirectSigner(env: Pick<Env, "STORY_RUNTIME_PRIVATE_KEY" | "STORY_CDR_WRITER_PRIVATE_KEY" | "STORY_CDR_WRITER_PKP_ADDRESS">): ConfigResult<StoryDirectSignerConfig | null> {
+export function resolveStoryCdrWriterDirectSigner(env: Pick<Env, "STORY_CDR_WRITER_PRIVATE_KEY" | "STORY_CDR_WRITER_PKP_ADDRESS">): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
-    privateKeyValue: env.STORY_CDR_WRITER_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyValue: env.STORY_CDR_WRITER_PRIVATE_KEY,
     privateKeyField: "STORY_CDR_WRITER_PRIVATE_KEY",
     expectedAddressValue: env.STORY_CDR_WRITER_PKP_ADDRESS,
     expectedAddressField: "STORY_CDR_WRITER_PKP_ADDRESS",
@@ -93,10 +93,10 @@ export function resolveStoryCdrWriterDirectSigner(env: Pick<Env, "STORY_RUNTIME_
 }
 
 export function resolveStoryAccessControllerDirectSigner(
-  env: Pick<Env, "STORY_RUNTIME_PRIVATE_KEY" | "STORY_ACCESS_CONTROLLER_PRIVATE_KEY" | "STORY_ACCESS_CONTROLLER_PKP_ADDRESS">,
+  env: Pick<Env, "STORY_ACCESS_CONTROLLER_PRIVATE_KEY" | "STORY_ACCESS_CONTROLLER_PKP_ADDRESS">,
 ): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
-    privateKeyValue: env.STORY_ACCESS_CONTROLLER_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyValue: env.STORY_ACCESS_CONTROLLER_PRIVATE_KEY,
     privateKeyField: "STORY_ACCESS_CONTROLLER_PRIVATE_KEY",
     expectedAddressValue: env.STORY_ACCESS_CONTROLLER_PKP_ADDRESS,
     expectedAddressField: "STORY_ACCESS_CONTROLLER_PKP_ADDRESS",
@@ -104,10 +104,10 @@ export function resolveStoryAccessControllerDirectSigner(
 }
 
 export function resolveStorySettlementDirectSigner(
-  env: Pick<Env, "STORY_RUNTIME_PRIVATE_KEY" | "MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY" | "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS">,
+  env: Pick<Env, "MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY" | "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS">,
 ): ConfigResult<StoryDirectSignerConfig | null> {
   return resolveStoryDirectSignerConfig({
-    privateKeyValue: env.MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY ?? env.STORY_RUNTIME_PRIVATE_KEY,
+    privateKeyValue: env.MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY,
     privateKeyField: "MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY",
     expectedAddressValue: env.MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS,
     expectedAddressField: "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS",
