@@ -216,14 +216,6 @@ export async function createSongArtifactUploadSession(input: {
   return created
 }
 
-export async function getSongArtifactUploadSession(input: {
-  client: Client
-  communityId: string
-  sessionId: string
-}): Promise<SongArtifactUploadSessionRow | null> {
-  return await getSessionRow(input)
-}
-
 export async function requireSongArtifactUploadSession(input: {
   client: Client
   communityId: string
