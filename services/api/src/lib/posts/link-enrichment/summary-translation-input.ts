@@ -4,7 +4,7 @@ export type StoredLinkSummaryTranslationInput = {
   key_points: string[]
 }
 
-export function emptyStoredLinkSummaryTranslationInput(): StoredLinkSummaryTranslationInput {
+function emptyStoredLinkSummaryTranslationInput(): StoredLinkSummaryTranslationInput {
   return {
     summary_paragraph: null,
     short_summary: null,
