@@ -29,7 +29,7 @@ Successful response:
   "buyer": {
     "kind": "wallet",
     "wallet_address": "0x2000000000000000000000000000000000000002",
-    "chain_ref": "eip155:8453"
+    "chain_ref": "eip155:84532"
   },
   "price_cents": 25000,
   "currency": "USD",
@@ -42,10 +42,10 @@ Successful response:
   "payment_instructions": {
     "chain": {
       "chain_namespace": "eip155",
-      "chain_id": 8453,
+      "chain_id": 84532,
       "display_name": "Base"
     },
-    "token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "token_address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
     "recipient_address": "0x...",
     "amount_atomic": "250000000",
     "amount_display": "250.00"
@@ -75,7 +75,7 @@ Successful response:
     "status": "active",
     "owner_kind": "wallet",
     "owner_wallet_address": "0x2000000000000000000000000000000000000002",
-    "chain_ref": "eip155:8453",
+    "chain_ref": "eip155:84532",
     "price_paid_cents": 25000,
     "currency": "USD",
     "issued_at": 1770000100,
