@@ -105,7 +105,7 @@ function resolveWorstCaseTxWei(env: Env): bigint {
 // story-royalty-registration-service: storyOperatorMinimumBalanceWei =
 // resolveStoryRuntimeSignerTargetBalanceWei), while other signers use the MIN.
 // Mirror that here so the watchdog fires against the level actually enforced.
-function resolveEnforcedFloorWei(env: Env, name: StoryRuntimeSignerName): bigint {
+export function resolveEnforcedFloorWei(env: Env, name: StoryRuntimeSignerName): bigint {
   return name === "story-operator"
     ? resolveStoryRuntimeSignerTargetBalanceWei(env)
     : resolveStoryRuntimeSignerMinBalanceWei(env)
