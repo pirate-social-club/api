@@ -5,7 +5,6 @@ import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
 import type {
   CommunityGateRuleRow,
-  GatePolicy,
   MembershipGateEvaluation,
   SuggestedVerificationProvider,
 } from "./gate-types"
@@ -22,15 +21,6 @@ export type {
   CommunityGateRuleRow,
   MembershipGateEvaluation,
 } from "./gate-types"
-
-export async function satisfiesMembershipGatePolicy(input: {
-  env: Env
-  policy: GatePolicy | null
-  user: User
-  walletAttachments: WalletAttachmentSummary[]
-}): Promise<boolean> {
-  return (await evaluateMembershipGatePolicy(input)).satisfied
-}
 
 export async function satisfiesMembershipGateRules(input: {
   env: Env
