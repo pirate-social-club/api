@@ -6,8 +6,40 @@ import {
   postModerationPublishFailure,
   resolveFinalPostModeration,
   shouldRunPostPublishFinalize,
+  shouldWaitForSongContentHashVerification,
   songAnalysisPublishFailure,
 } from "./post-publish-finalize-handler"
+
+describe("shouldWaitForSongContentHashVerification", () => {
+  test("waits while the preview job has not hash-verified the primary audio yet", () => {
+    // Registering now would publish IP metadata with no mediaUrl/mediaHash/mediaType,
+    // permanently — the on-chain write is one-shot.
+    expect(shouldWaitForSongContentHashVerification({
+      bundle: { preview_status: "pending" } as SongArtifactBundle,
+      attemptCount: 0,
+    })).toBe(true)
+  })
+
+  test("gives up waiting once the budget is spent, so a stalled preview cannot strand the asset", () => {
+    expect(shouldWaitForSongContentHashVerification({
+      bundle: { preview_status: "pending" } as SongArtifactBundle,
+      attemptCount: 5,
+    })).toBe(false)
+  })
+
+  test("does not wait once the preview has completed or failed", () => {
+    for (const preview_status of ["completed", "failed"] as const) {
+      expect(shouldWaitForSongContentHashVerification({
+        bundle: { preview_status } as SongArtifactBundle,
+        attemptCount: 0,
+      })).toBe(false)
+    }
+  })
+
+  test("does not wait when the post has no song bundle", () => {
+    expect(shouldWaitForSongContentHashVerification({ bundle: null, attemptCount: 0 })).toBe(false)
+  })
+})
 
 describe("shouldRunPostPublishFinalize", () => {
   test("only processing posts are eligible for finalize jobs", () => {

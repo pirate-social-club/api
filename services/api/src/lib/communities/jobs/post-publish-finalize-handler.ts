@@ -1,7 +1,7 @@
 import { getUserRepository } from "../../auth/repositories"
 import { openCommunityWriteClient } from "../community-read-access"
 import { nowIso } from "../../helpers"
-import { HttpError, internalError, notFoundError } from "../../errors"
+import { HttpError, internalError, notFoundError, providerUnavailable } from "../../errors"
 import type { DbExecutor } from "../../db-helpers"
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import { getListingRowByAssetId } from "../commerce/shared"
@@ -34,6 +34,12 @@ import type { CommunityJobHandlerInput } from "./handler-types"
 import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
+
+// Attempts spent waiting for the preview job to hash-verify the primary audio before we
+// give up and register without the canonical media block. Deliberately below
+// COMMUNITY_JOB_MAX_ATTEMPTS (8) so a stalled preview still leaves attempts for the
+// registration itself rather than exhausting the job's budget on waiting.
+const STORY_HASH_VERIFICATION_WAIT_ATTEMPTS = 5
 
 type PostPublishFinalizePayload = {
   post_id?: string | null
@@ -410,6 +416,24 @@ async function enqueueLockedAssetDeliveryIfRequested(input: {
   })
 }
 
+// Story registration is one-shot, and it only publishes mediaUrl/mediaHash/mediaType when
+// the primary audio has been hash-verified — the ONLY thing that verifies it is the preview
+// job. Registering while that job is still pending permanently drops the canonical media
+// block from the on-chain metadata, and nothing looks broken afterwards, because
+// animation_url does not depend on the hash. So wait for the preview to land.
+//
+// The wait is bounded: a preview that never completes must not strand the asset forever, and
+// registering without the media block is always safe — an unverified hash is never published,
+// we only lose the fields. A bundle with no preview window is created "completed", so this
+// cannot block a song that will never have a preview.
+export function shouldWaitForSongContentHashVerification(input: {
+  bundle: Pick<SongArtifactBundle, "preview_status"> | null
+  attemptCount: number
+}): boolean {
+  if (input.bundle?.preview_status !== "pending") return false
+  return input.attemptCount < STORY_HASH_VERIFICATION_WAIT_ATTEMPTS
+}
+
 export function buildSongPreviewJobRequest(bundle: Pick<SongArtifactBundle, "id" | "preview_status" | "preview_window" | "primary_audio"> | null): {
   payloadJson: string
   subjectId: string
@@ -630,6 +654,14 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
       bundle,
       createdAt: nowIso(),
     })
+
+    if (shouldWaitForSongContentHashVerification({ bundle, attemptCount: input.job.attempt_count })) {
+      throw providerUnavailable("Song primary audio hash verification is still pending", {
+        attempt_count: input.job.attempt_count,
+        reason: "song_content_hash_verification_pending",
+        song_artifact_bundle: bundle?.id ?? null,
+      })
+    }
 
     let postWithAsset = post
     try {
