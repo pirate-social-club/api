@@ -29,6 +29,7 @@ let globalListResult: unknown
 let globalGetResult: unknown
 let globalQuoteResult: unknown
 let globalCancelResult: unknown
+let globalResolveResult: unknown
 let communityCancelResult: unknown
 let throwMissingSchema = false
 
@@ -37,6 +38,7 @@ const calls: Record<string, unknown[]> = {
   globalGet: [],
   globalQuote: [],
   globalCancel: [],
+  globalResolve: [],
   communityList: [],
   communityGet: [],
   communityQuote: [],
@@ -52,6 +54,7 @@ function resetMocks(): void {
     quote: { hold_id: "hld_global", gross_cents: 5000 },
   }
   globalCancelResult = { ok: true, already: false, cancelledBy: "booker", booking: bookingView }
+  globalResolveResult = { ok: true, outcome: "completed", settled: true, underReview: false, pending: false }
   communityCancelResult = { ok: true, already: false, cancelledBy: "booker", booking: bookingView }
   throwMissingSchema = false
 }
@@ -122,8 +125,10 @@ function routeServices(): CommunityBookingsRouteServices {
       return globalCancelResult
     },
     startGlobalBookingSession: async () => ({ ok: false, reason: "not_found" }),
-    completeGlobalBooking: async () => ({ ok: false, reason: "not_found" }),
-    noShowGlobalBooking: async () => ({ ok: false, reason: "not_found" }),
+    resolveGlobalBookingByParty: async (input: unknown) => {
+      calls.globalResolve.push(input)
+      return globalResolveResult
+    },
     attachGlobalBookingSession: async () => ({ ok: false, reason: "not_found" }),
     heartbeatGlobalBookingSession: async () => ({ ok: false, reason: "not_found" }),
   } as unknown as CommunityBookingsRouteServices
@@ -237,5 +242,42 @@ describe("community booking global routing", () => {
     expect(res.status).toBe(409)
     expect(await json(res)).toMatchObject({ error: "cancellation_terms_changed", preview: { refund_cents: 0 } })
     expect(calls.communityCancel[0]).toMatchObject({ expectedRefundCents: 5000 })
+  })
+
+  test("uses attendance-decided settlement for both legacy outcome labels", async () => {
+    for (const action of ["complete", "no-show"]) {
+      const res = await loadApp().request(`http://pirate.test/cmt_route/bookings/bkg_global/${action}`, {
+        method: "POST",
+      }, env())
+
+      expect(res.status).toBe(200)
+      expect(await json(res)).toMatchObject({
+        booking: { booking_id: "bkg_global" },
+        outcome: "completed",
+        settled: true,
+        under_review: false,
+        settlement_pending: false,
+      })
+    }
+
+    expect(calls.globalResolve).toHaveLength(2)
+    expect(calls.globalResolve[0]).toMatchObject({ bookingId: "bkg_global", actorUserId: "usr_actor" })
+    expect(calls.globalResolve[1]).toMatchObject({ bookingId: "bkg_global", actorUserId: "usr_actor" })
+  })
+
+  test("blocks premature compatibility settlement and reports pending effects", async () => {
+    globalResolveResult = { ok: false, reason: "session_not_ended" }
+    const early = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_global/complete", {
+      method: "POST",
+    }, env())
+    expect(early.status).toBe(409)
+    expect(await json(early)).toEqual({ error: "session_not_ended" })
+
+    globalResolveResult = { ok: true, outcome: "settling", settled: true, underReview: false, pending: true }
+    const pending = await loadApp().request("http://pirate.test/cmt_route/bookings/bkg_global/no-show", {
+      method: "POST",
+    }, env())
+    expect(pending.status).toBe(202)
+    expect(await json(pending)).toMatchObject({ settlement_pending: true, outcome: "settling" })
   })
 })

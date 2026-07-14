@@ -42,9 +42,7 @@ import {
 import {
   attachGlobalBookingSession as attachGlobalBookingSessionReal,
   cancelGlobalBooking as cancelGlobalBookingReal,
-  completeGlobalBooking as completeGlobalBookingReal,
   heartbeatGlobalBookingSession as heartbeatGlobalBookingSessionReal,
-  noShowGlobalBooking as noShowGlobalBookingReal,
   startGlobalBookingSession as startGlobalBookingSessionReal,
 } from "../lib/bookings/booking-lifecycle-service"
 import {
@@ -52,6 +50,7 @@ import {
   getGlobalBookingForParty as getGlobalBookingForPartyReal,
   listGlobalBookingsForUser as listGlobalBookingsForUserReal,
 } from "../lib/bookings/booking-read-service"
+import { resolveGlobalBookingByParty as resolveGlobalBookingByPartyReal } from "../lib/bookings/booking-settlement-evaluator"
 import { getControlPlaneClient as getControlPlaneClientReal } from "../lib/runtime-deps"
 import {
   getResolvedCommunityRouteContext as getResolvedCommunityRouteContextReal,
@@ -88,8 +87,7 @@ export type CommunityBookingsRouteServices = {
   confirmGlobalBookingHold: typeof confirmGlobalBookingHoldReal
   cancelGlobalBooking: typeof cancelGlobalBookingReal
   startGlobalBookingSession: typeof startGlobalBookingSessionReal
-  completeGlobalBooking: typeof completeGlobalBookingReal
-  noShowGlobalBooking: typeof noShowGlobalBookingReal
+  resolveGlobalBookingByParty: typeof resolveGlobalBookingByPartyReal
   attachGlobalBookingSession: typeof attachGlobalBookingSessionReal
   heartbeatGlobalBookingSession: typeof heartbeatGlobalBookingSessionReal
 }
@@ -118,8 +116,7 @@ const realCommunityBookingsRouteServices: CommunityBookingsRouteServices = {
   confirmGlobalBookingHold: confirmGlobalBookingHoldReal,
   cancelGlobalBooking: cancelGlobalBookingReal,
   startGlobalBookingSession: startGlobalBookingSessionReal,
-  completeGlobalBooking: completeGlobalBookingReal,
-  noShowGlobalBooking: noShowGlobalBookingReal,
+  resolveGlobalBookingByParty: resolveGlobalBookingByPartyReal,
   attachGlobalBookingSession: attachGlobalBookingSessionReal,
   heartbeatGlobalBookingSession: heartbeatGlobalBookingSessionReal,
 }
@@ -147,6 +144,12 @@ function isMissingGlobalBookingsSchema(error: unknown): boolean {
 
 function hasPostgresControlPlane(env: AuthenticatedEnv["Bindings"]): boolean {
   return /^(postgres|postgresql):\/\//iu.test(String(env.CONTROL_PLANE_DATABASE_URL ?? "").trim())
+}
+
+function settlementReasonStatus(reason: "not_found" | "not_settleable" | "session_not_ended" | "settlement_failed"): 404 | 409 | 502 {
+  if (reason === "not_found") return 404
+  if (reason === "settlement_failed") return 502
+  return 409
 }
 
 async function tryGlobalBookings<T>(
@@ -542,14 +545,15 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     return c.json({ booking: result.booking, already_live: result.already }, 200)
   })
 
-  // Slice D: complete a live session (live → completed → settled); pays the host. Host-only.
+  // Compatibility aliases: both labels use the same attendance-decided settlement as the canonical
+  // global routes. The caller chooses when to request resolution, never the financial outcome.
   communities.post("/:communityId/bookings/:bookingId/complete", async (c) => {
     const services = routeServices()
     const { actor, communityId, communityRepository } = await services.getResolvedCommunityRouteContext(c)
     const bookingId = c.req.param("bookingId")
     const nowUtc = new Date().toISOString()
     const globalResult = await tryGlobalBookings(c.env, (executor) =>
-      services.completeGlobalBooking({
+      services.resolveGlobalBookingByParty({
         env: c.env,
         executor,
         bookingId,
@@ -558,8 +562,21 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       })
     )
     if (globalResult.available) {
-      if (globalResult.value.ok) return c.json({ booking: globalResult.value.booking, already_settled: globalResult.value.already }, 200)
-      return c.json({ error: globalResult.value.reason }, globalResult.value.reason === "not_found" ? 404 : 409)
+      if (!globalResult.value.ok) {
+        return c.json({ error: globalResult.value.reason }, settlementReasonStatus(globalResult.value.reason))
+      }
+      const booking = await services.getGlobalBookingForParty({
+        executor: services.getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+      })
+      return c.json({
+        booking,
+        outcome: globalResult.value.outcome,
+        settled: globalResult.value.settled,
+        under_review: globalResult.value.underReview,
+        settlement_pending: globalResult.value.pending,
+      }, globalResult.value.pending ? 202 : 200)
     }
     const result = await services.completeCommunityBooking({
       env: c.env, communityRepository, communityId,
@@ -569,14 +586,13 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
     return c.json({ booking: result.booking, already_settled: result.already }, 200)
   })
 
-  // Slice D: report a no-show on a live booking. The actor reports the OTHER party absent.
   communities.post("/:communityId/bookings/:bookingId/no-show", async (c) => {
     const services = routeServices()
     const { actor, communityId, communityRepository } = await services.getResolvedCommunityRouteContext(c)
     const bookingId = c.req.param("bookingId")
     const nowUtc = new Date().toISOString()
     const globalResult = await tryGlobalBookings(c.env, (executor) =>
-      services.noShowGlobalBooking({
+      services.resolveGlobalBookingByParty({
         env: c.env,
         executor,
         bookingId,
@@ -585,8 +601,21 @@ export function registerCommunityBookingsRoutes(communities: Hono<AuthenticatedE
       })
     )
     if (globalResult.available) {
-      if (globalResult.value.ok) return c.json({ booking: globalResult.value.booking, already_resolved: globalResult.value.already }, 200)
-      return c.json({ error: globalResult.value.reason }, globalResult.value.reason === "not_found" ? 404 : 409)
+      if (!globalResult.value.ok) {
+        return c.json({ error: globalResult.value.reason }, settlementReasonStatus(globalResult.value.reason))
+      }
+      const booking = await services.getGlobalBookingForParty({
+        executor: services.getControlPlaneClient(c.env),
+        bookingId,
+        actorUserId: actor.userId,
+      })
+      return c.json({
+        booking,
+        outcome: globalResult.value.outcome,
+        settled: globalResult.value.settled,
+        under_review: globalResult.value.underReview,
+        settlement_pending: globalResult.value.pending,
+      }, globalResult.value.pending ? 202 : 200)
     }
     const result = await services.noShowCommunityBooking({
       env: c.env, communityRepository, communityId,
