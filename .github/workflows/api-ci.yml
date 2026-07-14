@@ -13,6 +13,8 @@ on:
       - "services/shared/**"
       - "services/song-preview-container/**"
       - "services/zkpassport-verifier-container/**"
+  merge_group:
+    types: [checks_requested]
   push:
     branches:
       - main
