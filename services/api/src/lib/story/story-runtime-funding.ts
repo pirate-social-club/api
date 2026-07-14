@@ -9,12 +9,14 @@ import {
 } from "./story-runtime-config"
 import {
   resolveStoryCdrWriterDirectSigner,
+  resolveStoryEntitlementClassConfigurerDirectSigner,
   resolveStoryOperatorDirectSigner,
   resolveStorySettlementDirectSigner,
 } from "./story-direct-signer"
 
 export const STORY_RUNTIME_SIGNERS = [
   { name: "story-operator" },
+  { name: "story-entitlement-class-configurer" },
   { name: "story-cdr-writer" },
   { name: "story-settlement" },
 ] as const
@@ -102,6 +104,12 @@ function resolveStoryRuntimeSignerAddress(
     const signer = resolveStoryOperatorDirectSigner(env)
     if (!signer.ok) throw new Error(signer.error)
     if (!signer.value) throw new Error("STORY_OPERATOR_PRIVATE_KEY missing/invalid")
+    return getAddress(signer.value.address) as `0x${string}`
+  }
+  if (signerName === "story-entitlement-class-configurer") {
+    const signer = resolveStoryEntitlementClassConfigurerDirectSigner(env)
+    if (!signer.ok) throw new Error(signer.error)
+    if (!signer.value) throw new Error("STORY_ENTITLEMENT_CLASS_CONFIGURER_PRIVATE_KEY missing/invalid")
     return getAddress(signer.value.address) as `0x${string}`
   }
   if (signerName === "story-cdr-writer") {

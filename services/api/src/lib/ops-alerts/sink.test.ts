@@ -61,6 +61,47 @@ describe("sendOpsAlerts", () => {
     expect(result).toEqual({ delivered: false, sent: 0, sink: "email" })
   })
 
+  test("includes Story signer funding and explorer details in email summaries", async () => {
+    const sent: Array<{ html?: string; text?: string }> = []
+    const env = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { html?: string; text?: string }) => {
+          sent.push(message)
+          return { messageId: "msg_test" }
+        },
+      },
+    } as unknown as Env
+
+    await sendOpsAlerts(env, [{
+      key: "scheduled_warning:story_runtime_funding_watchdog:high",
+      severity: "high",
+      title: "Story signer story-settlement is below its funding floor",
+      count: 1,
+      community_ids: [],
+      details: {
+        task: "story_runtime_funding_watchdog",
+        signer: "story-settlement",
+        address: "0x526331ddA08972173C485b874956818E8a0b7D2F",
+        explorer_url: "https://aeneid.storyscan.io/address/0x526331ddA08972173C485b874956818E8a0b7D2F",
+        balance_ip: "0.147085117992178802",
+        enforced_floor_ip: "0.25",
+        target_balance_ip: "0.5",
+        top_up_to_target_ip: "0.352914882007821198",
+      },
+    }])
+
+    expect(sent[0]?.text).toContain("address: 0x526331ddA08972173C485b874956818E8a0b7D2F")
+    expect(sent[0]?.text).toContain("explorer_url: https://aeneid.storyscan.io/address/")
+    expect(sent[0]?.text).toContain("balance_ip: 0.147085117992178802")
+    expect(sent[0]?.text).toContain("top_up_to_target_ip: 0.352914882007821198")
+    expect(sent[0]?.html).toContain(
+      '<a href="https://aeneid.storyscan.io/address/0x526331ddA08972173C485b874956818E8a0b7D2F">',
+    )
+  })
+
   test("summarizes failed communities instead of dumping long JSON", async () => {
     const sent: Array<{ text?: string }> = []
     const env = {

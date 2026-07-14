@@ -88,7 +88,7 @@ Required env for staging:
 Required env for --settle-purchase:
   PIRATE_CHECKOUT_RPC_URL
   PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
-  PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY, PIRATE_SMOKE_BUYER_PRIVATE_KEY, or PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
+  PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY or PIRATE_SMOKE_BUYER_PRIVATE_KEY
 
 Required staging Worker secrets for --recording-enabled --replay-access-mode:
   AGORA_CLOUD_RECORDING_CUSTOMER_ID
@@ -1442,8 +1442,10 @@ async function main(): Promise<void> {
 
     const buyerPrivateKey = readEnv(env, "PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY")
       || readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
-      || env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY
       || null
+    if (settle && !buyerPrivateKey) {
+      throw new Error("PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY or PIRATE_SMOKE_BUYER_PRIVATE_KEY is required for --settle-purchase")
+    }
     const buyer = await createSession({
       apiBaseUrl,
       env,

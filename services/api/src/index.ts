@@ -62,6 +62,7 @@ import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-se
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
+import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import {
   hnsNamespaceRevalidationAlertState,
@@ -884,6 +885,11 @@ const handler: ExportedHandler<Env> = {
     ctx.waitUntil(
       runStoryRuntimeFundingWatchdog(env).catch((error) => {
         console.error("[scheduled] story funding watchdog crashed (fail-soft)", error)
+      }),
+    )
+    ctx.waitUntil(
+      runRuntimeWalletFundingWatchdog(env).catch((error) => {
+        console.error("[scheduled] runtime wallet funding watchdog crashed (fail-soft)", error)
       }),
     )
     ctx.waitUntil(

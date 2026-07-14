@@ -116,18 +116,35 @@ export async function ensureStoryPublishOperatorAuthorized(params: {
   provider: JsonRpcProvider
   operatorAddress: string
 }): Promise<void> {
+  await setStoryPublishOperatorAuthorization({ ...params, active: true })
+}
+
+export async function setStoryPublishOperatorAuthorization(params: {
+  env: Pick<
+    Env,
+    | "STORY_CONTRACT_OWNER_PRIVATE_KEY"
+    | "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
+    | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
+  > & StoryDeliveryContractEnv
+  provider: JsonRpcProvider
+  operatorAddress: string
+  active: boolean
+}): Promise<void> {
   const operatorAddress = getAddress(params.operatorAddress)
   const deliveryContracts = resolveStoryDeliveryContracts(params.env)
   const contract = new Contract(deliveryContracts.assetPublishCoordinatorV1, PUBLISH_COORDINATOR_ABI, params.provider)
   const active = Boolean(await contract.isPublishOperator(operatorAddress))
-  if (active) return
+  if (active === params.active) return
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
     contractAddress: deliveryContracts.assetPublishCoordinatorV1,
     abi: PUBLISH_COORDINATOR_ABI,
     functionName: "setPublishOperator",
-    args: [operatorAddress, true],
+    args: [operatorAddress, params.active],
   })
 }
 
@@ -204,17 +221,34 @@ export async function ensureStoryAccessSignerAuthorized(params: {
   provider: JsonRpcProvider
   signerAddress: string
 }): Promise<void> {
+  await setStoryAccessSignerAuthorization({ ...params, active: true })
+}
+
+export async function setStoryAccessSignerAuthorization(params: {
+  env: Pick<
+    Env,
+    | "STORY_CONTRACT_OWNER_PRIVATE_KEY"
+    | "STORY_DIRECT_TX_MAX_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_MAX_PRIORITY_FEE_PER_GAS_WEI"
+    | "STORY_DIRECT_TX_GAS_LIMIT_MAX"
+    | "STORY_DIRECT_TX_GAS_ESTIMATE_BUFFER_BPS"
+    | "STORY_TX_WAIT_TIMEOUT_MS"
+  > & StoryDeliveryContractEnv
+  provider: JsonRpcProvider
+  signerAddress: string
+  active: boolean
+}): Promise<void> {
   const signerAddress = getAddress(params.signerAddress)
   const deliveryContracts = resolveStoryDeliveryContracts(params.env)
   const contract = new Contract(deliveryContracts.pirateSignerRegistry, PIRATE_SIGNER_REGISTRY_ABI, params.provider)
   const active = Boolean(await contract.isActiveSigner(signerAddress))
-  if (active) return
+  if (active === params.active) return
   await ensureOwnerAuthorizedCall({
     env: params.env,
     provider: params.provider,
     contractAddress: deliveryContracts.pirateSignerRegistry,
     abi: PIRATE_SIGNER_REGISTRY_ABI,
     functionName: "setSigner",
-    args: [signerAddress, true],
+    args: [signerAddress, params.active],
   })
 }
