@@ -11,14 +11,16 @@ import { requireCommunityOwner } from "../commerce/access"
 import {
   HANDLE_PROTOCOL_ISSUANCE_JOIN,
   HANDLE_PROTOCOL_ISSUANCE_SELECT,
-  type HandleCommunityRepository,
   getActiveHandleForUser,
-  getNamespacePolicy,
   requireClaimAccess,
   serializeHandle,
-  serializePolicy,
-  withPrefix,
 } from "./handle-claim-service"
+import {
+  type HandleCommunityRepository,
+  getNamespacePolicy,
+  serializeHandlePolicy,
+  withHandlePrefix,
+} from "./handle-policy-service"
 
 export async function getMyCommunityHandle(input: {
   env: Env
@@ -69,7 +71,7 @@ export async function getCommunityHandleStatus(input: {
         available: false,
         reason: "Community name claims are currently disabled",
         claims_enabled: false,
-        namespace: withPrefix("ns", policy.namespace_id),
+        namespace: withHandlePrefix("ns", policy.namespace_id),
       }
     }
     const access = await requireClaimAccess({
@@ -87,14 +89,14 @@ export async function getCommunityHandleStatus(input: {
         available: false,
         reason: access.blockedReason,
         claims_enabled: true,
-        namespace: withPrefix("ns", policy.namespace_id),
+        namespace: withHandlePrefix("ns", policy.namespace_id),
       }
     }
     return {
       available: true,
       reason: null,
       claims_enabled: true,
-      namespace: withPrefix("ns", policy.namespace_id),
+      namespace: withHandlePrefix("ns", policy.namespace_id),
     }
   } finally {
     db.close()
@@ -118,7 +120,7 @@ export async function getCommunityHandlePolicy(input: {
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }
-    return serializePolicy(policy)
+    return serializeHandlePolicy(policy)
   } finally {
     db.close()
   }
