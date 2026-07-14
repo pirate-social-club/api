@@ -38,10 +38,7 @@ import {
   enqueuePostLabelIfNeeded,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
-import {
-  enqueueCommunityJob,
-  findLatestCommunityJobBySubjectAndType,
-} from "../communities/jobs/store"
+import { enqueueCommunityJob } from "../communities/jobs/store"
 import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
@@ -335,7 +332,7 @@ export async function createPost(input: {
     }
     const tx = await db.client.transaction("write")
     let draft: PostWriteDraft
-    let shouldKickPublishFinalize = false
+    let postPublishFinalizeJobId: string | null = null
     const requireStoryRoyaltyRegistration = true
     try {
       draft = await insertPost({
@@ -405,7 +402,7 @@ export async function createPost(input: {
           status: "pending",
           createdAt,
         })
-        await enqueueCommunityJob({
+        const job = await enqueueCommunityJob({
           client: tx,
           communityId: input.communityId,
           jobType: "post_publish_finalize",
@@ -415,7 +412,7 @@ export async function createPost(input: {
           createdAt,
           dedupe: false,
         })
-        shouldKickPublishFinalize = true
+        postPublishFinalizeJobId = job.job_id
       }
 
       await tx.commit()
@@ -434,23 +431,24 @@ export async function createPost(input: {
     }
 
     if (input.body.publish_mode === "async") {
-      if (shouldKickPublishFinalize) {
+      if (postPublishFinalizeJobId) {
+        const jobId = postPublishFinalizeJobId
         input.waitUntil?.(withRequestControlPlaneClients(async () => {
-          const job = await findLatestCommunityJobBySubjectAndType({
-            client: db.client,
-            jobType: "post_publish_finalize",
-            subjectType: "post",
-            subjectId: post.post_id,
-          })
-          if (!job || (job.status !== "queued" && job.status !== "running")) {
-            return
+          try {
+            await processCommunityJobById({
+              env: input.env,
+              communityId: input.communityId,
+              jobId,
+              communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+            })
+          } catch (error) {
+            console.error("[posts] immediate publish finalize job processing failed", {
+              community_id: input.communityId,
+              post_id: post.post_id,
+              job_id: jobId,
+              error,
+            })
           }
-          await processCommunityJobById({
-            env: input.env,
-            communityId: input.communityId,
-            jobId: job.job_id,
-            communityRepository: input.communityRepository as unknown as CommunityJobRepository,
-          })
         }))
       }
       await input.communityRepository.recordCommunityPostProjection({

@@ -1,8 +1,10 @@
 import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import { enqueueCommunityJob } from "../communities/jobs/store"
+import { processCommunityJobById } from "../communities/jobs/runner"
+import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { analysisBlocked, badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
 import { sha256Hex } from "../crypto"
 import { analyzeSongBundle } from "./song-artifact-analysis"
 import { shouldSkipSongAcr } from "./song-acr-bypass"
@@ -106,6 +108,7 @@ export async function createSongArtifactBundle(input: {
   communityId: string
   body: CreateSongArtifactBundleRequest
   communityRepository: SongArtifactCommunityRepository
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<SongArtifactBundle> {
   const lyrics = input.body.lyrics?.trim() || ""
   const title = input.body.title?.trim() || ""
@@ -309,7 +312,7 @@ export async function createSongArtifactBundle(input: {
 
     if (finalized.preview_status === "pending") {
       const songArtifactBundleId = finalized.id.replace(/^sab_/, "")
-      await withSongBundleStep("enqueue preview generation job", {
+      const job = await withSongBundleStep("enqueue preview generation job", {
         community_id: input.communityId,
         song_artifact_bundle: finalized.id,
       }, () => enqueueCommunityJob({
@@ -324,6 +327,23 @@ export async function createSongArtifactBundle(input: {
           preview_window: finalized.preview_window,
         }),
         createdAt: nowIso(),
+      }))
+      input.waitUntil?.(withRequestControlPlaneClients(async () => {
+        try {
+          await processCommunityJobById({
+            env: input.env,
+            communityId: input.communityId,
+            jobId: job.job_id,
+            communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+          })
+        } catch (error) {
+          console.error("[song-artifacts] immediate preview job processing failed", {
+            community_id: input.communityId,
+            song_artifact_bundle: finalized.id,
+            job_id: job.job_id,
+            error,
+          })
+        }
       }))
     }
 
