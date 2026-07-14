@@ -32,7 +32,7 @@ import {
   type StoryRuntimeSignerName,
 } from "./story-runtime-funding"
 
-export const STORY_RUNTIME_FUNDING_WATCHDOG_TASK = "story_runtime_funding_watchdog"
+const STORY_RUNTIME_FUNDING_WATCHDOG_TASK = "story_runtime_funding_watchdog"
 
 // Don't hit the Story RPC more than this often even though the cron fires every
 // minute. A slow-draining wallet does not need sub-5-minute detection.
