@@ -21,6 +21,7 @@ Mounted in `services/api/src/index.ts`:
 - `/` for agent routes
 - `/admin/bot-users`
 - `/admin/debug`
+- `/admin/ops`
 - `/community-media`
 - `/comments`
 - `/communities`
@@ -56,6 +57,7 @@ Mounted in `services/api/src/index.ts`:
 | `/analytics/*` | `src/routes/analytics.ts` | `tests/routes/analytics-routes.test.ts` | direct | Covers client analytics ingestion, allowlisted properties, and unsupported event rejection. |
 | `/admin/bot-users` | `src/routes/bot-users.ts` | `tests/routes/bot-users-routes.test.ts` | direct | Bot-user management endpoints. |
 | `/admin/debug/post-pipeline` | `src/routes/debug-pipeline.ts` | `tests/routes/debug-pipeline-routes.test.ts` | direct | Admin-only diagnostic endpoint for post translation/summary pipeline state. |
+| `/admin/ops/wallets` | `src/routes/ops-wallets.ts` | `tests/routes/ops-wallets-routes.test.ts` | direct | Admin-only operator-wallet balance report (Story runtime signers + runtime funding watchdog wallets). |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
 | `/oauth/device_*` | `src/routes/oauth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covers Freedom Desktop device authorization start, pending poll, user approval, access-token issuance, and refresh-token rotation. |

@@ -20,6 +20,7 @@ import { normalizeDirectSignerPrivateKey } from "../story/story-direct-signer"
 import {
   resolveStoryChainId,
   resolveStoryRpcUrl,
+  resolveStoryRuntimeSignerMinBalanceWei,
   resolveStoryRuntimeSignerTargetBalanceWei,
 } from "../story/story-runtime-config"
 import { captureScheduledWarning } from "./scheduled"
@@ -71,6 +72,7 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 
 function explorerAddressUrl(chainId: number, address: string): string | null {
   if (chainId === 1315) return `https://aeneid.storyscan.io/address/${address}`
+  if (chainId === 1514) return `https://www.storyscan.io/address/${address}`
   if (chainId === 84532) return `https://sepolia.basescan.org/address/${address}`
   if (chainId === 8453) return `https://basescan.org/address/${address}`
   return null
@@ -95,6 +97,53 @@ function storyFunderSpec(env: Env): RuntimeWalletFundingSpec | null {
       resolveStoryRuntimeSignerTargetBalanceWei(env),
     ),
   }
+}
+
+// The contract owner sends authorization txs (story-runtime-authorization) with
+// its own gas, so it needs monitoring whenever it is NOT already covered as the
+// story-runtime-funder fallback: i.e. a dedicated funder key exists and the two
+// addresses differ.
+function storyContractOwnerSpec(env: Env): RuntimeWalletFundingSpec | null {
+  const ownerKey = normalizeDirectSignerPrivateKey(env.STORY_CONTRACT_OWNER_PRIVATE_KEY)
+  const funderKey = normalizeDirectSignerPrivateKey(env.STORY_RUNTIME_FUNDER_PRIVATE_KEY)
+  if (!ownerKey || !funderKey) return null
+  const ownerAddress = getAddress(new Wallet(ownerKey).address) as `0x${string}`
+  if (ownerAddress === getAddress(new Wallet(funderKey).address)) return null
+  return {
+    name: "story-contract-owner",
+    address: ownerAddress,
+    chainId: resolveStoryChainId(env),
+    rpcUrl: resolveStoryRpcUrl(env),
+    nativeSymbol: "IP",
+    nativeMinWei: positiveBigInt(
+      env.STORY_CONTRACT_OWNER_MIN_BALANCE_WEI,
+      resolveStoryRuntimeSignerMinBalanceWei(env),
+    ),
+  }
+}
+
+// Endaoment payouts fall back to the checkout operator key, which is already
+// monitored as base-checkout-operator. A spec is only needed when a dedicated
+// payout key points at a different wallet.
+function endaomentPayoutSpec(
+  env: Env,
+  floors: { nativeMinWei: bigint; usdcMinAtomic: bigint },
+): RuntimeWalletFundingSpec | null {
+  const payoutKey = normalizeDirectSignerPrivateKey(env.ENDAOMENT_PAYOUT_PRIVATE_KEY)
+  if (!payoutKey) return null
+  const address = getAddress(new Wallet(payoutKey).address) as `0x${string}`
+  const checkoutKey = normalizeDirectSignerPrivateKey(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY)
+  if (checkoutKey && address === getAddress(new Wallet(checkoutKey).address)) return null
+  const chainIdRaw = Number.parseInt(String(env.ENDAOMENT_CHAIN_ID ?? "").trim(), 10)
+  return baseSpec({
+    name: "endaoment-payout",
+    address,
+    chainId: Number.isInteger(chainIdRaw) && chainIdRaw > 0 ? chainIdRaw : resolvePirateCheckoutSourceChainId(env),
+    rpcUrl: String(env.ENDAOMENT_RPC_URL ?? "").trim() || resolvePirateCheckoutRpcUrl(env),
+    usdcAddress: String(env.ENDAOMENT_USDC_TOKEN_ADDRESS ?? "").trim() || resolvePirateCheckoutUsdcTokenAddress(env),
+    nativeMinWei: floors.nativeMinWei,
+    usdcMinAtomic: floors.usdcMinAtomic,
+  })
 }
 
 function baseSpec(params: {
@@ -138,6 +187,7 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
     }
   }
   append("story-runtime-funder", () => storyFunderSpec(env))
+  append("story-contract-owner", () => storyContractOwnerSpec(env))
 
   if (hasAny(env, ["PIRATE_CHECKOUT_OPERATOR_ADDRESS", "PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY"])) {
     append("base-checkout-operator", () => baseSpec({
@@ -172,7 +222,66 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
       usdcMinAtomic,
     }))
   }
+  if (hasAny(env, ["ENDAOMENT_PAYOUT_PRIVATE_KEY"])) {
+    append("endaoment-payout", () => endaomentPayoutSpec(env, { nativeMinWei, usdcMinAtomic }))
+  }
   return specs
+}
+
+export type RuntimeWalletFundingStatus = {
+  wallet: string
+  address: `0x${string}`
+  chainId: number
+  explorerUrl: string | null
+  native: { symbol: "ETH" | "IP"; balanceWei: bigint; floorWei: bigint; ok: boolean } | null
+  token: { symbol: "USDC"; balanceAtomic: bigint; floorAtomic: bigint; ok: boolean } | null
+  error?: string
+}
+
+// On-demand balance report for the ops wallets route: same specs and readers
+// as the watchdog, but never alerts and never rate-limits.
+export async function getRuntimeWalletFundingStatuses(
+  env: Env,
+  options?: {
+    specs?: RuntimeWalletFundingSpec[]
+    readNativeBalance?: (spec: RuntimeWalletFundingSpec) => Promise<bigint>
+    readTokenBalance?: (spec: RuntimeWalletFundingSpec) => Promise<bigint>
+  },
+): Promise<RuntimeWalletFundingStatus[]> {
+  const specs = options?.specs ?? listRuntimeWalletFundingSpecs(env)
+  const nativeReader = options?.readNativeBalance ?? readNativeBalance
+  const tokenReader = options?.readTokenBalance ?? readTokenBalance
+  return Promise.all(specs.map(async (spec): Promise<RuntimeWalletFundingStatus> => {
+    const status: RuntimeWalletFundingStatus = {
+      wallet: spec.name,
+      address: spec.address,
+      chainId: spec.chainId,
+      explorerUrl: explorerAddressUrl(spec.chainId, spec.address),
+      native: null,
+      token: null,
+    }
+    try {
+      const nativeBalance = await nativeReader(spec)
+      status.native = {
+        symbol: spec.nativeSymbol,
+        balanceWei: nativeBalance,
+        floorWei: spec.nativeMinWei,
+        ok: nativeBalance >= spec.nativeMinWei,
+      }
+      if (spec.token) {
+        const tokenBalance = await tokenReader(spec)
+        status.token = {
+          symbol: spec.token.symbol,
+          balanceAtomic: tokenBalance,
+          floorAtomic: spec.token.minAtomic,
+          ok: tokenBalance >= spec.token.minAtomic,
+        }
+      }
+    } catch (error) {
+      status.error = error instanceof Error ? error.message : String(error)
+    }
+    return status
+  }))
 }
 
 async function readNativeBalance(spec: RuntimeWalletFundingSpec): Promise<bigint> {
