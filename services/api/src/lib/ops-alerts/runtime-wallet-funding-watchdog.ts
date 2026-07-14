@@ -126,11 +126,21 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
   const nativeMinWei = positiveBigInt(env.BASE_RUNTIME_OPERATOR_MIN_BALANCE_WEI, DEFAULT_BASE_NATIVE_MIN_WEI)
   const usdcMinAtomic = positiveBigInt(env.BASE_RUNTIME_OPERATOR_MIN_USDC_ATOMIC, DEFAULT_BASE_USDC_MIN_ATOMIC)
   const specs: RuntimeWalletFundingSpec[] = []
-  const storyFunder = storyFunderSpec(env)
-  if (storyFunder) specs.push(storyFunder)
+  const append = (name: string, resolve: () => RuntimeWalletFundingSpec | null): void => {
+    try {
+      const spec = resolve()
+      if (spec) specs.push(spec)
+    } catch (error) {
+      console.error(`[${TASK}] wallet configuration skipped (fail-soft)`, {
+        wallet: name,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  append("story-runtime-funder", () => storyFunderSpec(env))
 
   if (hasAny(env, ["PIRATE_CHECKOUT_OPERATOR_ADDRESS", "PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY"])) {
-    specs.push(baseSpec({
+    append("base-checkout-operator", () => baseSpec({
       name: "base-checkout-operator",
       address: resolvePirateCheckoutOperatorAddress(env),
       chainId: resolvePirateCheckoutSourceChainId(env),
@@ -141,7 +151,7 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
     }))
   }
   if (hasAny(env, ["PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS", "PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY"])) {
-    specs.push(baseSpec({
+    append("base-booking-operator", () => baseSpec({
       name: "base-booking-operator",
       address: resolveBookingSettlementOperatorAddress(env),
       chainId: resolveBookingSettlementChainId(env),
@@ -152,7 +162,7 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
     }))
   }
   if (hasAny(env, ["PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS", "PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY"])) {
-    specs.push(baseSpec({
+    append("base-rewards-operator", () => baseSpec({
       name: "base-rewards-operator",
       address: resolveRewardsSettlementOperatorAddress(env),
       chainId: resolveRewardsSettlementChainId(env),
