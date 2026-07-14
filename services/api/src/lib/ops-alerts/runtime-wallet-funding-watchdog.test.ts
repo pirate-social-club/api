@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
 import {
+  listRuntimeWalletFundingSpecs,
   resetRuntimeWalletFundingWatchdogStateForTests,
   runRuntimeWalletFundingWatchdog,
   type RuntimeWalletFundingSpec,
@@ -33,6 +34,16 @@ const BASE_OPERATOR: RuntimeWalletFundingSpec = {
 beforeEach(() => resetRuntimeWalletFundingWatchdogStateForTests())
 
 describe("runRuntimeWalletFundingWatchdog", () => {
+  test("keeps valid wallets when another wallet has incomplete configuration", () => {
+    const specs = listRuntimeWalletFundingSpecs({
+      STORY_RUNTIME_FUNDER_PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+      STORY_RPC_URL: "https://aeneid.storyrpc.io",
+      PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: BASE_OPERATOR.address,
+    } as Env)
+
+    expect(specs.map((spec) => spec.name)).toEqual(["story-runtime-funder"])
+  })
+
   test("alerts on a dry Story funder and Base native/USDC balances", async () => {
     const result = await runRuntimeWalletFundingWatchdog({} as Env, {
       specs: [STORY_FUNDER, BASE_OPERATOR],
