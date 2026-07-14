@@ -6781,6 +6781,26 @@ const spec = {
         ]
       }
     },
+    "/reward_campaign_capabilities": {
+      "get": {
+        "operationId": "reward_campaign_capabilities_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get live campaign-creation guardrails",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaignCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/reward_campaigns": {
       "post": {
         "operationId": "reward_campaigns_create",
@@ -16154,6 +16174,64 @@ const spec = {
           },
           "balance_cents": {
             "type": "integer"
+          }
+        }
+      },
+      "RewardCampaignCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "min_budget_cents",
+          "max_budget_cents",
+          "max_reward_cents",
+          "min_duration_seconds",
+          "max_duration_seconds",
+          "default_duration_seconds",
+          "eligible_activities",
+          "chain_id",
+          "token_address"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "min_budget_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_budget_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_reward_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min_duration_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_duration_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "default_duration_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "eligible_activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+            }
+          },
+          "chain_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "token_address": {
+            "type": "string"
           }
         }
       },
