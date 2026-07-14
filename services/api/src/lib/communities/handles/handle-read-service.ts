@@ -8,13 +8,13 @@ import type {
 import { HttpError, badRequestError, eligibilityFailed, notFoundError } from "../../errors"
 import { openCommunityReadClient } from "../community-read-access"
 import { requireCommunityOwner } from "../commerce/access"
+import { requireHandleClaimAccess } from "./handle-access"
 import {
   HANDLE_PROTOCOL_ISSUANCE_JOIN,
   HANDLE_PROTOCOL_ISSUANCE_SELECT,
   getActiveHandleForUser,
-  requireClaimAccess,
   serializeHandle,
-} from "./handle-claim-service"
+} from "./handle-row-store"
 import {
   type HandleCommunityRepository,
   getNamespacePolicy,
@@ -74,7 +74,7 @@ export async function getCommunityHandleStatus(input: {
         namespace: withHandlePrefix("ns", policy.namespace_id),
       }
     }
-    const access = await requireClaimAccess({
+    const access = await requireHandleClaimAccess({
       client: db.client,
       communityId: input.communityId,
       userId: input.userId,
