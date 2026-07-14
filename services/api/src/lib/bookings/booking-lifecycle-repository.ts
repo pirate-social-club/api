@@ -11,7 +11,7 @@ export interface BookingLifecycleSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-export interface ReserveBookingSettlementIntentInput {
+interface ReserveBookingSettlementIntentInput {
   bookingId: string;
   fromStatus: "confirmed" | "live";
   toStatus: "cancelled_by_host" | "cancelled_by_booker" | "completed" | "no_show_host" | "no_show_booker";
@@ -19,18 +19,18 @@ export interface ReserveBookingSettlementIntentInput {
   nowUtc: string;
 }
 
-export interface FlagBookingSettlementDisputedInput {
+interface FlagBookingSettlementDisputedInput {
   bookingId: string;
   fromStatus: "confirmed" | "live";
   nowUtc: string;
 }
 
-export interface MarkBookingSettlementAmbiguousInput {
+interface MarkBookingSettlementAmbiguousInput {
   bookingId: string;
   nowUtc: string;
 }
 
-export interface ResolveBookingSettlementReviewInput {
+interface ResolveBookingSettlementReviewInput {
   bookingId: string;
   resolution: "completed" | "no_show_host" | "no_show_booker";
   refundCents: number;
@@ -41,7 +41,7 @@ export interface ResolveBookingSettlementReviewInput {
   nowUtc: string;
 }
 
-export interface FinalizeBookingSettlementInput {
+interface FinalizeBookingSettlementInput {
   bookingId: string;
   fromStatus: "cancelled_by_host" | "cancelled_by_booker" | "completed" | "no_show_host" | "no_show_booker";
   finalStatus: "settled" | "refunded";
@@ -50,7 +50,7 @@ export interface FinalizeBookingSettlementInput {
   nowUtc: string;
 }
 
-export interface AttachAttendanceSessionInput {
+interface AttachAttendanceSessionInput {
   sessionId: string;
   bookingId: string;
   party: AttendanceParty;
@@ -59,7 +59,7 @@ export interface AttachAttendanceSessionInput {
   attachedAt: string;
 }
 
-export interface HeartbeatAttendanceSessionInput {
+interface HeartbeatAttendanceSessionInput {
   heartbeatId: string;
   sessionId: string;
   bookingId: string;
@@ -67,7 +67,7 @@ export interface HeartbeatAttendanceSessionInput {
   seenAt: string;
 }
 
-export type HeartbeatAttendanceSessionResult =
+type HeartbeatAttendanceSessionResult =
   | { ok: true; session: AttendanceSession; heartbeat: AttendanceHeartbeat }
   | { ok: false; reason: "not-found" };
 

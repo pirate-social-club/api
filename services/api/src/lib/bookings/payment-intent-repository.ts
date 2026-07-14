@@ -33,7 +33,7 @@ export interface CreatePaymentIntentInput {
   updatedAt?: string;
 }
 
-export interface ReservePaymentIntentInput {
+interface ReservePaymentIntentInput {
   paymentIntentId: string;
   claimToken: string;
   claimExpiresAt: string;
@@ -42,21 +42,21 @@ export interface ReservePaymentIntentInput {
   nowUtc: string;
 }
 
-export interface ClaimPaymentIntentInput {
+interface ClaimPaymentIntentInput {
   paymentIntentId: string;
   claimToken: string;
   nowUtc: string;
 }
 
-export interface VerifyPaymentIntentInput extends ClaimPaymentIntentInput {
+interface VerifyPaymentIntentInput extends ClaimPaymentIntentInput {
   verifiedSenderAddress: string;
 }
 
-export type CreateOrGetPaymentIntentResult =
+type CreateOrGetPaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "replay-conflict" };
 
-export type ReservePaymentIntentResult =
+type ReservePaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "not-reservable" | "reused-tx" };
 

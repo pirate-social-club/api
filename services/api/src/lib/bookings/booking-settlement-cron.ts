@@ -92,7 +92,7 @@ export interface SweepGlobalBookingSettlementsInput {
   process?: ProcessGlobalBookingSettlementsFn;
 }
 
-export interface ProcessGlobalBookingSettlementsInput {
+interface ProcessGlobalBookingSettlementsInput {
   env: Env;
   client: Client;
   nowUtc: string;
@@ -102,7 +102,7 @@ export interface ProcessGlobalBookingSettlementsInput {
   shouldStop: () => boolean;
 }
 
-export type ProcessGlobalBookingSettlementsFn = (input: ProcessGlobalBookingSettlementsInput) => Promise<void>;
+type ProcessGlobalBookingSettlementsFn = (input: ProcessGlobalBookingSettlementsInput) => Promise<void>;
 
 export async function sweepGlobalBookingSettlements(input: SweepGlobalBookingSettlementsInput): Promise<GlobalBookingSettlementSweepSummary> {
   const now = input.now ?? (() => Date.now());
@@ -134,7 +134,7 @@ export async function sweepGlobalBookingSettlements(input: SweepGlobalBookingSet
   return summary;
 }
 
-export async function processGlobalBookingSettlements(input: ProcessGlobalBookingSettlementsInput): Promise<void> {
+async function processGlobalBookingSettlements(input: ProcessGlobalBookingSettlementsInput): Promise<void> {
   const due = await input.client.execute({
     sql: `SELECT booking_id
           FROM bookings.bookings

@@ -22,7 +22,7 @@ export interface BookingSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-export interface CreateBookingProfileInput {
+interface CreateBookingProfileInput {
   hostUserId: string;
   displayHeadline?: string | null;
   bio?: string | null;
@@ -38,7 +38,7 @@ export interface CreateBookingProfileInput {
   updatedAt?: string;
 }
 
-export interface UpdateBookingProfileInput {
+interface UpdateBookingProfileInput {
   displayHeadline?: string | null;
   bio?: string | null;
   topics?: string[] | null;
@@ -51,9 +51,9 @@ export interface UpdateBookingProfileInput {
   updatedAt: string;
 }
 
-export type UpsertBookingProfileInput = CreateBookingProfileInput;
+type UpsertBookingProfileInput = CreateBookingProfileInput;
 
-export interface CreateAvailabilityRuleInput {
+interface CreateAvailabilityRuleInput {
   ruleId: string;
   hostUserId: string;
   byWeekday: number[];
@@ -66,7 +66,7 @@ export interface CreateAvailabilityRuleInput {
   updatedAt?: string;
 }
 
-export interface UpdateAvailabilityRuleInput {
+interface UpdateAvailabilityRuleInput {
   byWeekday?: number[];
   startLocal?: string;
   endLocal?: string;
@@ -76,7 +76,7 @@ export interface UpdateAvailabilityRuleInput {
   updatedAt: string;
 }
 
-export interface CreateAvailabilityExceptionInput {
+interface CreateAvailabilityExceptionInput {
   exceptionId: string;
   hostUserId: string;
   kind: "block" | "open";
@@ -85,13 +85,13 @@ export interface CreateAvailabilityExceptionInput {
   createdAt: string;
 }
 
-export interface UpdateAvailabilityExceptionInput {
+interface UpdateAvailabilityExceptionInput {
   kind?: "block" | "open";
   startUtc?: string;
   endUtc?: string;
 }
 
-export interface CreatePriceRuleInput {
+interface CreatePriceRuleInput {
   priceRuleId: string;
   hostUserId: string;
   matchWeekday?: number[] | null;
@@ -104,7 +104,7 @@ export interface CreatePriceRuleInput {
   updatedAt?: string;
 }
 
-export interface UpdatePriceRuleInput {
+interface UpdatePriceRuleInput {
   matchWeekday?: number[] | null;
   matchLocalStart?: string | null;
   matchLocalEnd?: string | null;

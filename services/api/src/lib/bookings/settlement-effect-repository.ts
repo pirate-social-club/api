@@ -10,7 +10,7 @@ export interface SettlementEffectSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-export interface BeginSettlementEffectAttemptInput {
+interface BeginSettlementEffectAttemptInput {
   bookingSettlementEffectId?: string;
   bookingId: string;
   effectKind: BookingSettlementEffectKind;
@@ -20,11 +20,11 @@ export interface BeginSettlementEffectAttemptInput {
   nowUtc: string;
 }
 
-export type BeginSettlementEffectAttemptResult =
+type BeginSettlementEffectAttemptResult =
   | { ok: true; action: "created" | "retry" | "existing-submitted" | "existing-confirmed"; effect: BookingSettlementEffect }
   | { ok: false; reason: "replay-conflict" | "effect-conflict" | "broadcast-reconciliation-required" };
 
-export interface MirrorSettlementCoordinatorInput {
+interface MirrorSettlementCoordinatorInput {
   idempotencyKey: string;
   coordinatorRef: string;
   coordinatorState: string;
@@ -33,7 +33,7 @@ export interface MirrorSettlementCoordinatorInput {
   nowUtc: string;
 }
 
-export type MirrorSettlementCoordinatorResult =
+type MirrorSettlementCoordinatorResult =
   | { ok: true; effect: BookingSettlementEffect }
   | { ok: false; reason: "not-found" | "mirror-conflict" | "unknown-coordinator-state" };
 

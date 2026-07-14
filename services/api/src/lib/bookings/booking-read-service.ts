@@ -5,8 +5,8 @@ import type { ProfileRepository } from "../auth/repositories";
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers";
 
 export type BookingViewerRole = "host" | "booker";
-export type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
-export type BookingSettlementStatus = "pending" | "live" | "settling" | "settled" | "refunded" | "disputed";
+type BookingSettlementReviewResolution = "completed" | "no_show_host" | "no_show_booker";
+type BookingSettlementStatus = "pending" | "live" | "settling" | "settled" | "refunded" | "disputed";
 
 export interface BookingReadSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;

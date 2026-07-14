@@ -117,7 +117,7 @@ export interface BookingPaymentExpectation {
   senderAddress: string;
 }
 
-export type BookingPaymentVerification =
+type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
   | { kind: "pending" }
   | { kind: "rejected"; reason: string };
@@ -191,7 +191,7 @@ async function createOrGetIntent(input: {
   return { intent: result.intent, ...snapshot };
 }
 
-export interface PaymentInstructions {
+interface PaymentInstructions {
   payment_intent_id: string;
   version: number;
   chain_id: number;
@@ -206,7 +206,7 @@ export interface PaymentInstructions {
   wallet_attachment_required: boolean;
 }
 
-export interface BookingSnapshot {
+interface BookingSnapshot {
   booking_id: string;
   hold_id: string;
   host_user_id: string;

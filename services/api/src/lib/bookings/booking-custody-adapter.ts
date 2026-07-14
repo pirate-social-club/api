@@ -35,21 +35,10 @@ interface GlobalBookingOperatorEffectContext {
   confirmPollMs?: number[];
 }
 
-export interface GlobalBookingSettlementCoordinator {
+interface GlobalBookingSettlementCoordinator {
   settle(req: OperatorSettleRequest): Promise<OperatorSettleResult>;
   confirm(req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult>;
   reconcile(req: OperatorSettleRequest): Promise<OperatorSettleResult>;
-}
-
-let coordinatorForTests: GlobalBookingSettlementCoordinator | null = null;
-let confirmPollPlanForTests: number[] | null = null;
-
-export function setGlobalBookingSettlementCoordinatorForTests(coordinator: GlobalBookingSettlementCoordinator | null): void {
-  coordinatorForTests = coordinator;
-}
-
-export function setGlobalBookingSettlementConfirmPollPlanForTests(delaysMs: number[] | null): void {
-  confirmPollPlanForTests = delaysMs;
 }
 
 function realCoordinator(env: Env): GlobalBookingSettlementCoordinator {
@@ -61,10 +50,6 @@ function realCoordinator(env: Env): GlobalBookingSettlementCoordinator {
     confirm: (req, txHash) => stub.confirm(req, txHash),
     reconcile: (req) => stub.reconcile(req),
   };
-}
-
-function coordinator(env: Env): GlobalBookingSettlementCoordinator {
-  return coordinatorForTests ?? realCoordinator(env);
 }
 
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000];
@@ -130,9 +115,9 @@ export async function executeGlobalBookingOperatorEffect(
     return { txRef: begun.effect.settlementRef };
   }
 
-  let settled = await coordinator(ctx.env).settle(req);
+  let settled = await realCoordinator(ctx.env).settle(req);
   for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
-    settled = await coordinator(ctx.env).reconcile(req);
+    settled = await realCoordinator(ctx.env).reconcile(req);
   }
 
   await mirrorCoordinator(ctx, effect, settled);
@@ -179,9 +164,9 @@ export async function executeGlobalBookingOrphanPaymentRefund(
     recipientAddress: recipient,
   };
 
-  let settled = await coordinator(ctx.env).settle(req);
+  let settled = await realCoordinator(ctx.env).settle(req);
   for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
-    settled = await coordinator(ctx.env).reconcile(req);
+    settled = await realCoordinator(ctx.env).reconcile(req);
   }
   if (settled.state === "confirmed") return { txRef: settled.txHash! };
   if (settled.state === "replaced" || settled.state === "failed_onchain") {
@@ -218,11 +203,11 @@ async function ledgerConfirm(ctx: GlobalBookingOperatorEffectContext, effect: Gl
 }
 
 async function pollConfirm(ctx: { env: Env; confirmPollMs?: number[] }, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
-  const plan = ctx.confirmPollMs ?? confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS;
-  let result = await coordinator(ctx.env).confirm(req, txHash);
+  const plan = ctx.confirmPollMs ?? DEFAULT_CONFIRM_POLL_MS;
+  let result = await realCoordinator(ctx.env).confirm(req, txHash);
   for (let i = 0; result.state === "broadcast" && i < plan.length; i++) {
     await sleep(plan[i]);
-    result = await coordinator(ctx.env).confirm(req, txHash);
+    result = await realCoordinator(ctx.env).confirm(req, txHash);
   }
   return result;
 }

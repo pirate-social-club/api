@@ -14,7 +14,7 @@ export interface BookingHoldSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-export interface CreateHostSlotLockInput {
+interface CreateHostSlotLockInput {
   lockId: string;
   hostUserId: string;
   slotStartUtc: string;
@@ -28,7 +28,7 @@ export interface CreateHostSlotLockInput {
   updatedAt?: string;
 }
 
-export interface CreateBookingHoldInput {
+interface CreateBookingHoldInput {
   holdId: string;
   hostUserId: string;
   bookerUserId: string;
@@ -42,17 +42,17 @@ export interface CreateBookingHoldInput {
   updatedAt?: string;
 }
 
-export interface CreateHoldWithSlotLockInput {
+interface CreateHoldWithSlotLockInput {
   nowUtc: string;
   lock: CreateHostSlotLockInput;
   hold: CreateBookingHoldInput;
 }
 
-export type SlotLockResult =
+type SlotLockResult =
   | { ok: true; lock: HostSlotLock }
   | { ok: false; reason: "slot-conflict" };
 
-export type CreateHoldWithSlotLockResult =
+type CreateHoldWithSlotLockResult =
   | { ok: true; hold: BookingHold; lock: HostSlotLock }
   | { ok: false; reason: "slot-conflict" };
 
