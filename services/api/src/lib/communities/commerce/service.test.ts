@@ -15,6 +15,10 @@ const maybeRegisterStoryRoyaltyForAsset = mock(async () => {
     storyIpId: "0x1111111111111111111111111111111111111111",
     storyIpNftContract: "0x2222222222222222222222222222222222222222",
     storyIpNftTokenId: "17",
+    storyIpMetadataUri: "ipfs://story-ip-metadata",
+    storyIpMetadataHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    storyNftMetadataUri: "ipfs://story-nft-metadata",
+    storyNftMetadataHash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     ipRoyaltyVault: "0x7777777777777777777777777777777777777777",
     storyLicenseTemplate: "0x3333333333333333333333333333333333333333",
     storyLicenseTermsId: registrationLicenseTermsId,
@@ -82,6 +86,10 @@ function assetRow(overrides: Partial<AssetRow> = {}): AssetRow {
     story_ip_id: null,
     story_ip_nft_contract: null,
     story_ip_nft_token_id: null,
+    story_ip_metadata_uri: null,
+    story_ip_metadata_hash: null,
+    story_nft_metadata_uri: null,
+    story_nft_metadata_hash: null,
     ip_royalty_vault: null,
     story_license_template: null,
     story_license_terms_id: null,
@@ -168,32 +176,36 @@ function fakeClient(initial: AssetRow) {
         if (statement.sql.includes("UPDATE assets") && statement.args && statement.args.length >= 28) {
           row = {
             ...row,
-            commercial_rev_share_pct: statement.args[26] as AssetRow["commercial_rev_share_pct"],
-            license_preset: statement.args[25] as AssetRow["license_preset"],
+            commercial_rev_share_pct: statement.args[30] as AssetRow["commercial_rev_share_pct"],
+            license_preset: statement.args[29] as AssetRow["license_preset"],
             publication_status: statement.args[2] as AssetRow["publication_status"],
-            story_asset_version_id: statement.args[19] as AssetRow["story_asset_version_id"],
-            story_cdr_vault_uuid: statement.args[20] as AssetRow["story_cdr_vault_uuid"],
-            story_derivative_parent_ip_ids_json: statement.args[14] as AssetRow["story_derivative_parent_ip_ids_json"],
-            story_derivative_registered_at: statement.args[15] as AssetRow["story_derivative_registered_at"],
-            story_entitlement_token_id: statement.args[22] as AssetRow["story_entitlement_token_id"],
+            story_asset_version_id: statement.args[23] as AssetRow["story_asset_version_id"],
+            story_cdr_vault_uuid: statement.args[24] as AssetRow["story_cdr_vault_uuid"],
+            story_derivative_parent_ip_ids_json: statement.args[18] as AssetRow["story_derivative_parent_ip_ids_json"],
+            story_derivative_registered_at: statement.args[19] as AssetRow["story_derivative_registered_at"],
+            story_entitlement_token_id: statement.args[26] as AssetRow["story_entitlement_token_id"],
             story_error: statement.args[4] as AssetRow["story_error"],
             story_ip_id: statement.args[5] as AssetRow["story_ip_id"],
             story_ip_nft_contract: statement.args[6] as AssetRow["story_ip_nft_contract"],
             story_ip_nft_token_id: statement.args[7] as AssetRow["story_ip_nft_token_id"],
-            ip_royalty_vault: statement.args[8] as AssetRow["ip_royalty_vault"],
-            story_license_template: statement.args[11] as AssetRow["story_license_template"],
-            story_license_terms_id: statement.args[10] as AssetRow["story_license_terms_id"],
-            story_namespace: statement.args[21] as AssetRow["story_namespace"],
-            story_publish_model: statement.args[9] as AssetRow["story_publish_model"],
-            story_publish_tx_ref: statement.args[18] as AssetRow["story_publish_tx_ref"],
-            story_read_condition: statement.args[23] as AssetRow["story_read_condition"],
-            story_revenue_token: statement.args[16] as AssetRow["story_revenue_token"],
-            story_royalty_policy: statement.args[12] as AssetRow["story_royalty_policy"],
-            story_royalty_policy_id: statement.args[13] as AssetRow["story_royalty_policy_id"],
-            story_royalty_registration_status: statement.args[17] as AssetRow["story_royalty_registration_status"],
+            story_ip_metadata_uri: statement.args[8] as AssetRow["story_ip_metadata_uri"],
+            story_ip_metadata_hash: statement.args[9] as AssetRow["story_ip_metadata_hash"],
+            story_nft_metadata_uri: statement.args[10] as AssetRow["story_nft_metadata_uri"],
+            story_nft_metadata_hash: statement.args[11] as AssetRow["story_nft_metadata_hash"],
+            ip_royalty_vault: statement.args[12] as AssetRow["ip_royalty_vault"],
+            story_license_template: statement.args[15] as AssetRow["story_license_template"],
+            story_license_terms_id: statement.args[14] as AssetRow["story_license_terms_id"],
+            story_namespace: statement.args[25] as AssetRow["story_namespace"],
+            story_publish_model: statement.args[13] as AssetRow["story_publish_model"],
+            story_publish_tx_ref: statement.args[22] as AssetRow["story_publish_tx_ref"],
+            story_read_condition: statement.args[27] as AssetRow["story_read_condition"],
+            story_revenue_token: statement.args[20] as AssetRow["story_revenue_token"],
+            story_royalty_policy: statement.args[16] as AssetRow["story_royalty_policy"],
+            story_royalty_policy_id: statement.args[17] as AssetRow["story_royalty_policy_id"],
+            story_royalty_registration_status: statement.args[21] as AssetRow["story_royalty_registration_status"],
             story_status: statement.args[3] as AssetRow["story_status"],
-            story_write_condition: statement.args[24] as AssetRow["story_write_condition"],
-            updated_at: statement.args[27] as AssetRow["updated_at"],
+            story_write_condition: statement.args[28] as AssetRow["story_write_condition"],
+            updated_at: statement.args[31] as AssetRow["updated_at"],
           }
           return { rows: [] }
         }
@@ -243,6 +255,10 @@ function fakeCreateClient() {
       story_ip_id: args[16] as AssetRow["story_ip_id"],
       story_ip_nft_contract: args[17] as AssetRow["story_ip_nft_contract"],
       story_ip_nft_token_id: args[18] as AssetRow["story_ip_nft_token_id"],
+      story_ip_metadata_uri: args[46] as AssetRow["story_ip_metadata_uri"],
+      story_ip_metadata_hash: args[47] as AssetRow["story_ip_metadata_hash"],
+      story_nft_metadata_uri: args[48] as AssetRow["story_nft_metadata_uri"],
+      story_nft_metadata_hash: args[49] as AssetRow["story_nft_metadata_hash"],
       ip_royalty_vault: args[19] as AssetRow["ip_royalty_vault"],
       story_publish_model: args[20] as AssetRow["story_publish_model"],
       story_license_terms_id: args[21] as AssetRow["story_license_terms_id"],
@@ -342,6 +358,10 @@ describe("createAssetForPost existing asset resume", () => {
     expect(asset.story_royalty_registration_status).toBe("registered")
     expect(asset.story_ip).toBe("0x1111111111111111111111111111111111111111")
     expect(asset.story_license_terms).toBe("42")
+    expect(asset.story_ip_metadata_uri).toBe("ipfs://story-ip-metadata")
+    expect(asset.story_ip_metadata_hash).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    expect(asset.story_nft_metadata_uri).toBe("ipfs://story-nft-metadata")
+    expect(asset.story_nft_metadata_hash).toBe("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
   })
 
   test("keeps an existing asset retryable when the Story registration reattempt fails", async () => {
@@ -416,7 +436,13 @@ describe("createAssetForPost allocation projection state", () => {
     expect(fake.allocationInsertStatements).toHaveLength(1)
     const assetInsert = fake.assetInsertStatements[0]
     expect(assetInsert.sql).toContain("royalty_allocation_projection_synced")
-    expect(assetInsert.args?.at(-1)).toBe(0)
+    expect(assetInsert.args?.[45]).toBe(0)
+    expect(assetInsert.args?.slice(46)).toEqual([
+      "ipfs://story-ip-metadata",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ipfs://story-nft-metadata",
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ])
   })
 
   test("syncs a registered derivative allocation without license terms", async () => {

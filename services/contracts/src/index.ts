@@ -1617,6 +1617,10 @@ export type Asset = {
   story_ip?: string | null;
   story_ip_nft_contract?: string | null;
   story_ip_nft_token?: string | null;
+  story_ip_metadata_uri?: string | null;
+  story_ip_metadata_hash?: string | null;
+  story_nft_metadata_uri?: string | null;
+  story_nft_metadata_hash?: string | null;
   story_publish_model?: "pirate_v1" | "story_ip_v1";
   story_license_terms?: string | null;
   story_license_template?: string | null;

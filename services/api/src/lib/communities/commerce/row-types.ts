@@ -27,6 +27,10 @@ export type AssetRow = {
   story_ip_id: string | null
   story_ip_nft_contract: string | null
   story_ip_nft_token_id: string | null
+  story_ip_metadata_uri: string | null
+  story_ip_metadata_hash: string | null
+  story_nft_metadata_uri: string | null
+  story_nft_metadata_hash: string | null
   ip_royalty_vault: string | null
   story_publish_model: "pirate_v1" | "story_ip_v1"
   story_license_terms_id: string | null

@@ -291,6 +291,10 @@ type StoryRegistrationFieldState = {
   storyIpId: string | null
   storyIpNftContract: string | null
   storyIpNftTokenId: string | null
+  storyIpMetadataUri: string | null
+  storyIpMetadataHash: string | null
+  storyNftMetadataUri: string | null
+  storyNftMetadataHash: string | null
   ipRoyaltyVault: string | null
   storyPublishModel: "pirate_v1" | "story_ip_v1"
   storyLicenseTermsId: string | null
@@ -317,6 +321,10 @@ function storyRegistrationFieldStateFromAsset(asset: AssetRow, overrides: Partia
     storyIpId: asset.story_ip_id,
     storyIpNftContract: asset.story_ip_nft_contract,
     storyIpNftTokenId: asset.story_ip_nft_token_id,
+    storyIpMetadataUri: asset.story_ip_metadata_uri,
+    storyIpMetadataHash: asset.story_ip_metadata_hash,
+    storyNftMetadataUri: asset.story_nft_metadata_uri,
+    storyNftMetadataHash: asset.story_nft_metadata_hash,
     ipRoyaltyVault: asset.ip_royalty_vault,
     storyPublishModel: asset.story_publish_model,
     storyLicenseTermsId: asset.story_license_terms_id,
@@ -345,6 +353,10 @@ function emptyStoryRegistrationFieldState(overrides: Partial<StoryRegistrationFi
     storyIpId: null,
     storyIpNftContract: null,
     storyIpNftTokenId: null,
+    storyIpMetadataUri: null,
+    storyIpMetadataHash: null,
+    storyNftMetadataUri: null,
+    storyNftMetadataHash: null,
     ipRoyaltyVault: null,
     storyPublishModel: "pirate_v1",
     storyLicenseTermsId: null,
@@ -375,6 +387,10 @@ function applyReusableOriginalRegistrationFields(
   state.storyIpId = reusableOriginalRegistration.story_ip_id
   state.storyIpNftContract = reusableOriginalRegistration.story_ip_nft_contract
   state.storyIpNftTokenId = reusableOriginalRegistration.story_ip_nft_token_id
+  state.storyIpMetadataUri = reusableOriginalRegistration.story_ip_metadata_uri
+  state.storyIpMetadataHash = reusableOriginalRegistration.story_ip_metadata_hash
+  state.storyNftMetadataUri = reusableOriginalRegistration.story_nft_metadata_uri
+  state.storyNftMetadataHash = reusableOriginalRegistration.story_nft_metadata_hash
   state.ipRoyaltyVault = reusableOriginalRegistration.ip_royalty_vault
   state.storyPublishModel = reusableOriginalRegistration.story_publish_model
   state.storyLicenseTermsId = reusableOriginalRegistration.story_license_terms_id
@@ -403,6 +419,10 @@ function applyRoyaltyRegistrationFields(
   state.storyIpId = royaltyRegistration.storyIpId
   state.storyIpNftContract = royaltyRegistration.storyIpNftContract
   state.storyIpNftTokenId = royaltyRegistration.storyIpNftTokenId
+  state.storyIpMetadataUri = royaltyRegistration.storyIpMetadataUri
+  state.storyIpMetadataHash = royaltyRegistration.storyIpMetadataHash
+  state.storyNftMetadataUri = royaltyRegistration.storyNftMetadataUri
+  state.storyNftMetadataHash = royaltyRegistration.storyNftMetadataHash
   state.ipRoyaltyVault = royaltyRegistration.ipRoyaltyVault ?? null
   state.storyPublishModel = "story_ip_v1"
   state.storyLicenseTermsId = royaltyRegistration.storyLicenseTermsId
@@ -553,26 +573,30 @@ async function retryExistingStoryRoyaltyRegistration(input: {
           story_ip_id = ?6,
           story_ip_nft_contract = ?7,
           story_ip_nft_token_id = ?8,
-          ip_royalty_vault = ?9,
-          story_publish_model = ?10,
-          story_license_terms_id = ?11,
-          story_license_template = ?12,
-          story_royalty_policy = ?13,
-          story_royalty_policy_id = ?14,
-          story_derivative_parent_ip_ids_json = ?15,
-          story_derivative_registered_at = ?16,
-          story_revenue_token = ?17,
-          story_royalty_registration_status = ?18,
-          story_publish_tx_ref = ?19,
-          story_asset_version_id = ?20,
-          story_cdr_vault_uuid = ?21,
-          story_namespace = ?22,
-          story_entitlement_token_id = ?23,
-          story_read_condition = ?24,
-          story_write_condition = ?25,
-          license_preset = ?26,
-          commercial_rev_share_pct = ?27,
-          updated_at = ?28
+          story_ip_metadata_uri = ?9,
+          story_ip_metadata_hash = ?10,
+          story_nft_metadata_uri = ?11,
+          story_nft_metadata_hash = ?12,
+          ip_royalty_vault = ?13,
+          story_publish_model = ?14,
+          story_license_terms_id = ?15,
+          story_license_template = ?16,
+          story_royalty_policy = ?17,
+          story_royalty_policy_id = ?18,
+          story_derivative_parent_ip_ids_json = ?19,
+          story_derivative_registered_at = ?20,
+          story_revenue_token = ?21,
+          story_royalty_registration_status = ?22,
+          story_publish_tx_ref = ?23,
+          story_asset_version_id = ?24,
+          story_cdr_vault_uuid = ?25,
+          story_namespace = ?26,
+          story_entitlement_token_id = ?27,
+          story_read_condition = ?28,
+          story_write_condition = ?29,
+          license_preset = ?30,
+          commercial_rev_share_pct = ?31,
+          updated_at = ?32
       WHERE community_id = ?1
         AND asset_id = ?2
     `,
@@ -585,6 +609,10 @@ async function retryExistingStoryRoyaltyRegistration(input: {
       storyRegistration.storyIpId,
       storyRegistration.storyIpNftContract,
       storyRegistration.storyIpNftTokenId,
+      storyRegistration.storyIpMetadataUri,
+      storyRegistration.storyIpMetadataHash,
+      storyRegistration.storyNftMetadataUri,
+      storyRegistration.storyNftMetadataHash,
       storyRegistration.ipRoyaltyVault,
       storyRegistration.storyPublishModel,
       storyRegistration.storyLicenseTermsId,
@@ -621,6 +649,10 @@ async function retryExistingStoryRoyaltyRegistration(input: {
     story_ip_id: storyRegistration.storyIpId,
     story_ip_nft_contract: storyRegistration.storyIpNftContract,
     story_ip_nft_token_id: storyRegistration.storyIpNftTokenId,
+    story_ip_metadata_uri: storyRegistration.storyIpMetadataUri,
+    story_ip_metadata_hash: storyRegistration.storyIpMetadataHash,
+    story_nft_metadata_uri: storyRegistration.storyNftMetadataUri,
+    story_nft_metadata_hash: storyRegistration.storyNftMetadataHash,
     story_license_template: storyRegistration.storyLicenseTemplate,
     story_license_terms_id: storyRegistration.storyLicenseTermsId,
     story_namespace: storyRegistration.storyNamespace,
@@ -1061,7 +1093,8 @@ export async function createAssetForPost(input: {
         story_cdr_vault_uuid, story_namespace, story_entitlement_token_id, story_read_condition,
         story_write_condition, locked_delivery_storage_ref, locked_delivery_secret_json,
         royalty_allocation_status, royalty_allocation_version, royalty_allocation_fingerprint,
-        royalty_allocation_projection_synced
+        royalty_allocation_projection_synced,
+        story_ip_metadata_uri, story_ip_metadata_hash, story_nft_metadata_uri, story_nft_metadata_hash
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7,
         ?8, ?9, ?10, ?11,
@@ -1072,7 +1105,8 @@ export async function createAssetForPost(input: {
         ?30, ?31, ?32, ?33, ?33,
         ?34, ?35, ?36, ?37, ?38,
         ?39, ?40, ?41, ?42,
-        ?43, ?44, ?45, ?46
+        ?43, ?44, ?45, ?46,
+        ?47, ?48, ?49, ?50
       )
     `,
     args: [
@@ -1122,6 +1156,10 @@ export async function createAssetForPost(input: {
       ROYALTY_ALLOCATION_VERSION,
       royaltyAllocationFingerprint,
       allocationStatements.length === 0 ? 1 : 0,
+      storyRegistration.storyIpMetadataUri,
+      storyRegistration.storyIpMetadataHash,
+      storyRegistration.storyNftMetadataUri,
+      storyRegistration.storyNftMetadataHash,
     ],
   }
   if (allocationStatements.length > 0) {
@@ -1646,31 +1684,35 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           story_ip_id = ?6,
           story_ip_nft_contract = ?7,
           story_ip_nft_token_id = ?8,
-          ip_royalty_vault = ?9,
-          story_publish_model = ?10,
-          story_license_terms_id = ?11,
-          story_license_template = ?12,
-          story_royalty_policy = ?13,
-          story_royalty_policy_id = ?14,
-          story_derivative_parent_ip_ids_json = ?15,
-          story_derivative_registered_at = ?16,
-          story_revenue_token = ?17,
-          story_royalty_registration_status = ?18,
-          story_publish_tx_ref = ?19,
-          story_asset_version_id = ?20,
-          story_cdr_vault_uuid = ?21,
-          story_namespace = ?22,
-          story_entitlement_token_id = ?23,
-          story_read_condition = ?24,
-          story_write_condition = ?25,
+          story_ip_metadata_uri = ?9,
+          story_ip_metadata_hash = ?10,
+          story_nft_metadata_uri = ?11,
+          story_nft_metadata_hash = ?12,
+          ip_royalty_vault = ?13,
+          story_publish_model = ?14,
+          story_license_terms_id = ?15,
+          story_license_template = ?16,
+          story_royalty_policy = ?17,
+          story_royalty_policy_id = ?18,
+          story_derivative_parent_ip_ids_json = ?19,
+          story_derivative_registered_at = ?20,
+          story_revenue_token = ?21,
+          story_royalty_registration_status = ?22,
+          story_publish_tx_ref = ?23,
+          story_asset_version_id = ?24,
+          story_cdr_vault_uuid = ?25,
+          story_namespace = ?26,
+          story_entitlement_token_id = ?27,
+          story_read_condition = ?28,
+          story_write_condition = ?29,
           locked_delivery_status = 'ready',
-          locked_delivery_ref = ?26,
+          locked_delivery_ref = ?30,
           locked_delivery_error = NULL,
-          locked_delivery_storage_ref = ?27,
-          locked_delivery_secret_json = ?28,
-          license_preset = ?29,
-          commercial_rev_share_pct = ?30,
-          updated_at = ?31
+          locked_delivery_storage_ref = ?31,
+          locked_delivery_secret_json = ?32,
+          license_preset = ?33,
+          commercial_rev_share_pct = ?34,
+          updated_at = ?35
       WHERE community_id = ?1
         AND asset_id = ?2
     `,
@@ -1683,6 +1725,10 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       storyRegistration.storyIpId,
       storyRegistration.storyIpNftContract,
       storyRegistration.storyIpNftTokenId,
+      storyRegistration.storyIpMetadataUri,
+      storyRegistration.storyIpMetadataHash,
+      storyRegistration.storyNftMetadataUri,
+      storyRegistration.storyNftMetadataHash,
       storyRegistration.ipRoyaltyVault,
       storyRegistration.storyPublishModel,
       storyRegistration.storyLicenseTermsId,
