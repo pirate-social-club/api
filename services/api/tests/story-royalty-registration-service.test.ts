@@ -746,7 +746,6 @@ describe("story royalty registration service", () => {
     const unavailableEnv = {
       LOCAL_COMMUNITY_DB_ROOT: unavailableRootDir,
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
-      STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
     } as Env
     const unavailable = await createUnavailableAsset({
       env: unavailableEnv,

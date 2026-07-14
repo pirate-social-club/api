@@ -116,7 +116,6 @@
     "AGORA_APP_ID": "d902e3752b4a4e638a31c4510d34d8a4",
     "ELEVENLABS_FORCE_ALIGNMENT_URL": "https://api.elevenlabs.io/v1/forced-alignment",
     "CREDENTIAL_WRAP_KEY_VERSION": "2",
-    "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
     "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
     "PASSPORT_API_URL": "https://api.passport.xyz",
     "PASSPORT_SCORER_ID": "12028"
@@ -259,7 +258,6 @@
         "HNS_NAMESPACE_REVALIDATION_BATCH_SIZE": "25",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
-        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
         "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
         "PASSPORT_API_URL": "https://api.passport.xyz",
         "PASSPORT_SCORER_ID": "12028"
@@ -434,7 +432,6 @@
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
 	        "STAGING_TEST_AUTH_ENABLED": "true",
-	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
 	        "PASSPORT_SCORER_ID": "12028"
@@ -593,7 +590,6 @@
         "COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD": "15",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
-	        "COMMUNITY_PROVISION_DEFAULT_GROUP_LOCATION": "aws-us-east-1",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
 	        "PASSPORT_SCORER_ID": "12028"
