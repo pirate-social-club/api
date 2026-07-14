@@ -5,8 +5,8 @@ import {
   quoteCommunityHandle,
   reserveCommunityHandle,
   revokeCommunityHandle,
-  updateCommunityHandlePolicy,
 } from "../lib/communities/handles/handle-claim-service"
+import { updateCommunityHandlePolicy } from "../lib/communities/handles/handle-policy-service"
 import {
   getCommunityHandlePolicy,
   getCommunityHandleStatus,
