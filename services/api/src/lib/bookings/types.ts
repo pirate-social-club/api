@@ -99,7 +99,7 @@ export type BookingStatus =
   | "refunded"
   | "disputed";
 
-export type BookingOutcome =
+type BookingOutcome =
   | "completed"
   | "no_show_host"
   | "no_show_booker"

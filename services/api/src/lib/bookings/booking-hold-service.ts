@@ -40,7 +40,7 @@ interface BusyInterval {
   endUtc: string;
 }
 
-export interface ResolvedBookingSlot {
+interface ResolvedBookingSlot {
   startUtc: string;
   endUtc: string;
   priceCents: number;
@@ -98,7 +98,7 @@ export interface CreateGlobalBookingHoldInput {
   nowUtc: string;
 }
 
-export interface GlobalBookingHoldResponse {
+interface GlobalBookingHoldResponse {
   hold_id: string;
   community_id: string | null;
   source_community_id: string | null;
