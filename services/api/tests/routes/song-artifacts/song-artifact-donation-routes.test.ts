@@ -397,7 +397,6 @@ describe("song artifact donation routes", () => {
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x4444444444444444444444444444444444444444",
-      STORY_ROYALTY_COMMERCIAL_REV_SHARE_PCT: "10",
     })
     cleanup = ctx.cleanup
 

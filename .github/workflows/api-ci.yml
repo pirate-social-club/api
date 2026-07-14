@@ -8,7 +8,6 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
-      - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
@@ -24,7 +23,6 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
-      - "services/community-protocol-prover-runpod/**"
       - "services/contracts/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
@@ -652,28 +650,3 @@ jobs:
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
         if: always()
 
-  community-protocol-prover-runpod:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-
-      - name: Start iron-proxy egress audit
-        uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
-        with:
-          version: 0.41.0
-          egress-rules: egress-rules.yaml
-          warn: true
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.11"
-
-      - name: Run prover tests
-        run: python -m unittest discover -s services/community-protocol-prover-runpod -p 'test_*.py'
-
-      - name: Show iron-proxy egress summary
-        uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
-        if: always()

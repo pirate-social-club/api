@@ -10,9 +10,6 @@ Backend services for Pirate.
 - `services/contracts`
 - `services/efp-shared`
 - `services/shared`
-- `services/community-protocol-issuer`
-- `services/community-protocol-subsd`
-- `services/community-protocol-prover-runpod`
 - `services/zkpassport-verifier-container`
 
 ## Default Checks

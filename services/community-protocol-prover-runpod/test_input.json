@@ -1,8 +1,0 @@
-{
-  "input": {
-    "batch_id": "pib_local_test",
-    "parent_space": "@pesto",
-    "proof_input_ref": "file-artifact://local-test",
-    "proof_input_base64": "AQID"
-  }
-}
