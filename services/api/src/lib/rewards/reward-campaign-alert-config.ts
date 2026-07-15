@@ -5,7 +5,7 @@ export type RewardCampaignAlertOwnership = {
   destination: string
 }
 
-export function hasConfiguredOpsAlertDeliverySink(env: Env): boolean {
+function hasConfiguredOpsAlertDeliverySink(env: Env): boolean {
   const emailReady = Boolean(
     env.OPS_ALERT_EMAIL
     && String(env.OPS_ALERT_EMAIL_TO ?? "").trim()

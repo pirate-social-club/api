@@ -72,7 +72,7 @@ function resolveCommunityJobDurableAttemptDeadlineMs(
     : DEFAULT_DURABLE_ATTEMPT_DEADLINE_MS
 }
 
-export function resolveCommunityJobStaleCheckpointTimeoutMs(
+function resolveCommunityJobStaleCheckpointTimeoutMs(
   env: Pick<Env, "COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS">,
 ): number {
   const raw = String(env.COMMUNITY_JOB_STALE_CHECKPOINT_TIMEOUT_MS || "").trim()

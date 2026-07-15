@@ -88,7 +88,7 @@ interface SqliteOutboxStoreOptions {
   now?: () => number;
 }
 
-export class SqliteOutboxStore implements OutboxStore {
+class SqliteOutboxStore implements OutboxStore {
   private readonly storage: DurableObjectStorage;
   private readonly now: () => number;
 

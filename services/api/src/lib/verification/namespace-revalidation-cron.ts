@@ -56,7 +56,7 @@ export function isHnsNamespaceRevalidationEnabled(env: Env): boolean {
   return env.HNS_NAMESPACE_REVALIDATION_ENABLED?.trim().toLowerCase() === "true"
 }
 
-export function resolveHnsNamespaceRevalidationConfig(env: Env): RevalidationConfig {
+function resolveHnsNamespaceRevalidationConfig(env: Env): RevalidationConfig {
   const enabled = isHnsNamespaceRevalidationEnabled(env)
   const intervalSeconds = parseBoundedInteger(
     env.HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS,

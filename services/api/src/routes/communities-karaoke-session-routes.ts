@@ -145,7 +145,7 @@ export function setKaraokePayloadRouteDepsForTests(
   }
 }
 
-export async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
+async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
   c: Context<E>,
   input: {
     communityId: string

@@ -150,10 +150,6 @@ function clipToolResult(value: unknown, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 24)).trimEnd()}... [tool result truncated]`
 }
 
-export function clipAssistantToolResult(value: unknown, maxChars = MAX_TOOL_RESULT_CHARS): string {
-  return clipToolResult(value, maxChars)
-}
-
 function toolError(message: string) {
   return {
     error: "tool_failed",

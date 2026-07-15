@@ -72,10 +72,6 @@ export function agoraCloudRecordingConfigFromEnv(env: Env): AgoraCloudRecordingC
   }
 }
 
-export function isAgoraCloudRecordingConfigured(env: Env): boolean {
-  return agoraCloudRecordingConfigFromEnv(env) !== null
-}
-
 export async function startAgoraCloudRecording(input: {
   config: AgoraCloudRecordingConfig
   recording: AgoraCloudRecordingStartInput
