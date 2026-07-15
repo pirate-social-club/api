@@ -437,10 +437,6 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
-  const canProcessSongPreviewJobs = Boolean(
-    env.SONG_PREVIEW_SHARED_SECRET?.trim()
-      && (env.SONG_PREVIEW_SERVICE_URL?.trim() || env.SONG_PREVIEW_SERVICE),
-  )
   try {
     const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
       env,
@@ -507,7 +503,6 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
-      skipJobTypes: canProcessSongPreviewJobs ? [] : ["song_preview_generate"],
     })
     if (summary.processed_jobs > 0 || summary.failed_communities.length > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({
