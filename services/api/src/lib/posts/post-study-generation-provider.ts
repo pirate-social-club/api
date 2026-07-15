@@ -33,6 +33,7 @@ type ParsedGeneratedLine = {
 
 const DEFAULT_STUDY_GENERATION_MODEL = "google/gemini-2.5-flash-lite-preview-09-2025"
 const DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS = 4_096
+const DEFAULT_STUDY_GENERATION_TIMEOUT_MS = 30_000
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
@@ -159,6 +160,7 @@ export async function requestStudyPackGeneration(input: {
   ) || DEFAULT_STUDY_GENERATION_MODEL
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
+    ?? DEFAULT_STUDY_GENERATION_TIMEOUT_MS
   const maxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)
     ?? DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS
   const requestedLines = new Map(input.lines.map((line) => [line.lineId, line.text]))
