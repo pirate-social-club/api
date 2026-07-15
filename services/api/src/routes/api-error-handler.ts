@@ -3,14 +3,20 @@ import type { Env } from "../env"
 import { HttpError, errorResponse } from "../lib/errors"
 import { logPipelineError } from "../lib/observability/pipeline-log"
 
+export function requestIdForContext(c: Context<{ Bindings: Env }>): string {
+  return c.req.header("cf-ray") ?? crypto.randomUUID()
+}
+
 export function apiErrorHandler(error: Error, c: Context<{ Bindings: Env }>): Response {
+  const requestId = requestIdForContext(c)
   if (!(error instanceof HttpError) || error.status >= 500) {
-    console.error("[api-worker]", error)
+    console.error("[api-worker]", `request_id=${requestId}`, error)
     const details = error instanceof HttpError ? error.details : null
     const causeDetails = details?.cause_details && typeof details.cause_details === "object"
       ? details.cause_details as Record<string, unknown>
       : null
     logPipelineError("[api-worker] unhandled request error", {
+      request_id: requestId,
       route: c.req.path,
       method: c.req.method,
       status: error instanceof HttpError ? String(error.status) : "500",
@@ -23,11 +29,12 @@ export function apiErrorHandler(error: Error, c: Context<{ Bindings: Env }>): Re
       error: error.message,
     })
   }
-  const response = errorResponse(error)
+  const response = errorResponse(error, requestId)
   return new Response(JSON.stringify(response.body), {
     status: response.status,
     headers: {
       "content-type": "application/json",
+      "x-request-id": requestId,
     },
   })
 }
