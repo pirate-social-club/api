@@ -18,7 +18,6 @@ import {
   deriveStoryAssetVersionId,
   deriveStoryNamespace,
   encodeCompositeReadConditionData,
-  encodeTokenGateConditionData,
   encodeWriteConditionOperatorData,
   hashBytes32FromParts,
 } from "../../story/story-identifiers"
@@ -68,6 +67,16 @@ const abiCoder = AbiCoder.defaultAbiCoder()
 
 function sameStoryAddress(left: string | null | undefined, right: string | null | undefined): boolean {
   return String(left || "").toLowerCase() === String(right || "").toLowerCase()
+}
+
+export function requireLockedAssetCompositeReadCondition(
+  env: Pick<Env, "STORY_COMPOSITE_READ_CONDITION_ADDRESS">,
+): string {
+  const address = resolveStoryCompositeReadConditionAddress(env)
+  if (!address) {
+    throw badRequestError("STORY_COMPOSITE_READ_CONDITION_ADDRESS is required for locked asset publishing")
+  }
+  return address
 }
 
 type LockedAssetDeliveryResult = {
@@ -466,8 +475,7 @@ export async function prepareLockedAssetDelivery(input: {
   })
   const namespace = deriveStoryNamespace(assetVersionId)
   const entitlementTokenId = deriveEntitlementTokenId(assetVersionId)
-  const readConditionAddress = resolveStoryCompositeReadConditionAddress(input.env)
-    ?? STORY_DELIVERY_CONTRACTS.tokenGateCondition
+  const readConditionAddress = requireLockedAssetCompositeReadCondition(input.env)
   const writeConditionAddress = STORY_DELIVERY_CONTRACTS.signedAccessConditionV1
   const lockedDeliveryRef = buildAssetContentPath(input.communityId, input.assetId)
   let fallbackLockedDeliveryMetadataJson = JSON.stringify({
@@ -536,18 +544,12 @@ export async function prepareLockedAssetDelivery(input: {
         throw badRequestError("STORY_CDR_WRITER_PRIVATE_KEY missing/invalid")
       }
       const deliveryContracts = resolveStoryDeliveryContracts(input.env)
-      const readConditionData = sameStoryAddress(readConditionAddress, STORY_DELIVERY_CONTRACTS.tokenGateCondition)
-        ? encodeTokenGateConditionData({
-          entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
-          tokenId: entitlementTokenId,
-          minBalance: 1n,
-        })
-        : encodeCompositeReadConditionData({
-          entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
-          tokenId: entitlementTokenId,
-          minBalance: 1n,
-          namespace,
-        })
+      const readConditionData = encodeCompositeReadConditionData({
+        entitlementTokenAddress: deliveryContracts.purchaseEntitlementToken,
+        tokenId: entitlementTokenId,
+        minBalance: 1n,
+        namespace,
+      })
       const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
       let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
       try {

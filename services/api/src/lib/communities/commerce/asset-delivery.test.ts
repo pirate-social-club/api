@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { preparedLockedDeliveryMatches, type PreparedLockedDeliveryCoordinates } from "./asset-delivery"
+import {
+  preparedLockedDeliveryMatches,
+  requireLockedAssetCompositeReadCondition,
+  type PreparedLockedDeliveryCoordinates,
+} from "./asset-delivery"
 
 const expected = {
   storyAssetVersionId: `0x${"11".repeat(32)}`,
@@ -49,5 +53,20 @@ describe("preparedLockedDeliveryMatches", () => {
       prepared: prepared({ lockedDeliveryMetadataJson: "" }),
       expected,
     })).toBe(false)
+  })
+})
+
+describe("requireLockedAssetCompositeReadCondition", () => {
+  test("fails closed instead of publishing a new legacy token-gate vault", () => {
+    expect(() => requireLockedAssetCompositeReadCondition({
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: undefined,
+    })).toThrow("STORY_COMPOSITE_READ_CONDITION_ADDRESS is required for locked asset publishing")
+  })
+
+  test("returns a configured composite condition address", () => {
+    const address = "0x1111111111111111111111111111111111111111"
+    expect(requireLockedAssetCompositeReadCondition({
+      STORY_COMPOSITE_READ_CONDITION_ADDRESS: address,
+    })).toBe(address)
   })
 })

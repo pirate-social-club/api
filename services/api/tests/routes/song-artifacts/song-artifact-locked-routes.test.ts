@@ -2272,8 +2272,8 @@ describe("song artifact locked routes", () => {
     )
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.vault_uuid).toBe(4242)
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_scope).toBe("asset.share")
-    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.read_condition_address).toBe(
-      "0x29a859d9012ffc73443af5e3264c1605d44f6bcc",
+    expect(buyerAccessAfterPurchaseBody.story_cdr_access?.read_condition_address.toLowerCase()).toBe(
+      compositeReadConditionAddress,
     )
     expect(buyerAccessAfterPurchaseBody.story_cdr_access?.access_aux_data_hex).toBe("0x")
 
