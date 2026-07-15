@@ -24,12 +24,12 @@ describe("assertSettlementModeCanExecuteAllocations", () => {
     expect(() => assertSettlementModeCanExecuteAllocations(
       [performerLeg()],
       "delivery_only_story_settlement",
-    )).toThrow(/not available yet/)
+    )).toThrow(/recipient payout is not configured/)
   })
 
   test("allows story_payout legs under royalty-native settlement", () => {
-    // Asset purchases execute the on-chain Story vault distribution, so the buyer tx is a valid
-    // settlement reference here.
+    // Asset finalization gates on a confirmed story_royalty_payment effect and adopts that on-chain
+    // transaction as the settlement ref, so the payout has genuinely executed.
     const snapshot = [performerLeg({ recipient_type: "creator", recipient_ref: "usr_creator" })]
     expect(assertSettlementModeCanExecuteAllocations(snapshot, "royalty_native_story_payment"))
       .toBe(snapshot)
@@ -55,6 +55,6 @@ describe("assertSettlementModeCanExecuteAllocations", () => {
       performerLeg({ share_bps: 5_000, amount_usd: 5 }),
     ]
     expect(() => assertSettlementModeCanExecuteAllocations(snapshot, "delivery_only_story_settlement"))
-      .toThrow(/not available yet/)
+      .toThrow(/recipient payout is not configured/)
   })
 })

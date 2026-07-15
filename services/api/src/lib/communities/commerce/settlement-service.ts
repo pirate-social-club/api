@@ -53,6 +53,7 @@ import {
 } from "./list-cursors"
 import {
   assertExecutableQuoteAllocationSnapshot,
+  assertSettlementModeCanExecuteAllocations,
   extractDonationCompatibilityFields,
   parseQuoteAllocationSnapshot,
 } from "./allocation"
@@ -294,8 +295,15 @@ async function finalizeLocalPurchaseSettlement(input: {
 
     for (const allocation of input.allocationSnapshot) {
       const charityPayout = input.charityPayouts.get(getAllocationExecutionKey(allocation)) ?? null
-      const allocationStatus = allocation.settlement_strategy === "story_payout" || charityPayout ? "confirmed" : "pending"
-      const allocationSettlementRef = allocation.settlement_strategy === "story_payout"
+      // A story_payout leg only settles a recipient under royalty-native mode, where the caller has
+      // already confirmed the on-chain story_royalty_payment effect and adopted its transaction as
+      // settlementTxRef. Under delivery-only mode no payout executes, so such a leg must NOT be
+      // recorded confirmed from the buyer funding tx — it stays pending. Defense in depth behind the
+      // quote-time guard, for any delivery-only quote issued before that guard existed.
+      const storyPayoutExecuted = allocation.settlement_strategy === "story_payout"
+        && input.quote.settlement_mode === "royalty_native_story_payment"
+      const allocationStatus = storyPayoutExecuted || charityPayout ? "confirmed" : "pending"
+      const allocationSettlementRef = storyPayoutExecuted
         ? settlementTxRef
         : charityPayout?.settlementRef ?? null
       const allocationSubmittedAt = allocationStatus === "confirmed" ? input.createdAt : null
@@ -747,8 +755,14 @@ async function settleCommunityPurchaseForBuyer(input: {
       throw badRequestError("Purchase quote has expired")
     }
     const createdAt = nowIso()
-    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
-      parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
+    // Re-validate the persisted snapshot against its settlement mode before reserving the attempt or
+    // verifying buyer funding, so a delivery-only quote issued before the quote-time guard cannot be
+    // settled (and the buyer is never asked to pay for something we cannot pay out).
+    const allocationSnapshot = assertSettlementModeCanExecuteAllocations(
+      assertExecutableQuoteAllocationSnapshot(
+        parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
+      ),
+      quote.settlement_mode,
     )
     if (!quote.asset_id && allocationSnapshot.some((allocation) => allocation.recipient_type === "charity")) {
       throw badRequestError("Non-asset purchase donations are not supported until charity payout routing is enabled")

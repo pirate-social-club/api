@@ -110,12 +110,12 @@ export function assertExecutableQuoteAllocationSnapshot(
 /**
  * Fail closed when a quote would create a `story_payout` leg that settlement cannot actually pay.
  *
- * Settlement (settlement-service.ts) marks every `story_payout` leg `confirmed` using the buyer's
- * funding transaction as its settlement_ref. That is only legitimate under
- * `royalty_native_story_payment`, where an on-chain Story vault distribution executes the payout.
- * Under `delivery_only_story_settlement` — the mode for live-room tickets and paid replays — there
- * is no payout execution, so a payable `story_payout` leg would be recorded as settled while its
- * recipient (host/performer) is never paid.
+ * At finalization the asset path (settlement-service.ts) requires a confirmed `story_royalty_payment`
+ * effect and adopts THAT on-chain transaction as the leg's settlement_ref — returning `pending`
+ * until the payout has executed. The non-asset path has no such gate: under
+ * `delivery_only_story_settlement` (live-room tickets and paid replays) a `story_payout` leg is
+ * marked `confirmed` using the buyer's funding transaction, so the recipient (host/performer) is
+ * never paid while the ledger records the leg as settled.
  *
  * Until non-asset payout execution exists, refuse to create such a quote rather than issue a
  * checkout that looks successful while funds stay in platform custody. Free targets ($0 legs) and
@@ -134,7 +134,7 @@ export function assertSettlementModeCanExecuteAllocations(
   ))
   if (unbackedStoryPayout) {
     throw eligibilityFailed(
-      "Paid live-room tickets and paid replays are not available yet: recipient payout execution is not implemented",
+      "This paid purchase is unavailable because recipient payout is not configured",
     )
   }
 
