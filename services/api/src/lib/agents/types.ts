@@ -59,14 +59,6 @@ export type AgentOwnershipRecord = {
   updated_at: string
 }
 
-export type AgentDelegatedCredentialIssueRequest = {
-  current_ownership_record_id?: string | null
-}
-
-export type AgentDelegatedCredentialRefreshRequest = {
-  refresh_token: string
-}
-
 export type AgentDelegatedCredential = {
   agent_delegated_credential_id: string
   agent_id: string

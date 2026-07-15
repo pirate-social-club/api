@@ -109,7 +109,7 @@ function replayMatches(input: {
   return true;
 }
 
-export interface BookingPaymentExpectation {
+interface BookingPaymentExpectation {
   chainId: number;
   tokenAddress: string;
   recipientAddress: string;

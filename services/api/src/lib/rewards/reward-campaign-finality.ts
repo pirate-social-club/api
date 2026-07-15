@@ -1,6 +1,6 @@
 import { JsonRpcProvider } from "ethers"
 
-export type RewardCampaignFinalityReceipt = {
+type RewardCampaignFinalityReceipt = {
   blockNumber: number
   blockHash: string
 }

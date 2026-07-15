@@ -321,12 +321,12 @@ function resolveRequestedMinimumAge(
   return Math.max(...minimumAges)
 }
 
-export type SelfStartResult = {
+type SelfStartResult = {
   upstreamSessionRef: string
   launch: SelfVerificationLaunch
 }
 
-export type SelfVerifiedClaims = {
+type SelfVerifiedClaims = {
   age_over_18: boolean
   minimum_age?: number | null
   nationality: string | null

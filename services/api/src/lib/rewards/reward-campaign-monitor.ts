@@ -37,7 +37,7 @@ export type RewardCampaignMonitorSummary = {
   }>
 }
 
-export type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | "funding_provenance_missing"
+type IncidentKind = "accounting_mismatch" | "funding_finality_failure" | "funding_provenance_missing"
 
 const MONITOR_STALE_AFTER_MS = 20 * 60_000
 const PARTIAL_FINALITY_ALERT_RATE = 0.25
