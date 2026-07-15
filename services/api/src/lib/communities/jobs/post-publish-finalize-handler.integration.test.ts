@@ -116,12 +116,13 @@ const client = {
 const commerceShared = await import("../commerce/shared")
 const { getListingRowByAssetId: getRealListingRowByAssetId } = await import("../commerce/queries")
 
-mock.module("../community-read-access", () => ({
+const postPublishFinalizeDependencies = {
   openCommunityWriteClient: mock(async () => ({
     client,
     close: mock(() => {}),
   })),
-}))
+  getControlPlaneClient: mock(() => ({})),
+}
 
 mock.module("../../posts/community-post-query-store", () => ({
   getPostById: mock(async () => state.post),
@@ -166,10 +167,6 @@ mock.module("../../posts/community-post-publish-request-store", () => ({
   markPostPublishRequestStatus: mock(async (input: { status: string }) => {
     state.requestStatuses.push(input.status)
   }),
-}))
-
-mock.module("../../runtime-deps", () => ({
-  getControlPlaneClient: mock(() => ({})),
 }))
 
 mock.module("../../song-artifacts/song-artifact-analysis", () => ({
@@ -258,7 +255,20 @@ mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
 
-const { reconcileStuckPostPublishFinalizeJobs, runPostPublishFinalize } = await import("./post-publish-finalize-handler")
+const {
+  reconcileStuckPostPublishFinalizeJobs: reconcileStuckPostPublishFinalizeJobsImpl,
+  runPostPublishFinalize: runPostPublishFinalizeImpl,
+} = await import("./post-publish-finalize-handler")
+
+function runPostPublishFinalize(input: Parameters<typeof runPostPublishFinalizeImpl>[0]) {
+  return runPostPublishFinalizeImpl(input, postPublishFinalizeDependencies as never)
+}
+
+function reconcileStuckPostPublishFinalizeJobs(
+  input: Parameters<typeof reconcileStuckPostPublishFinalizeJobsImpl>[0],
+) {
+  return reconcileStuckPostPublishFinalizeJobsImpl(input, postPublishFinalizeDependencies as never)
+}
 
 function communityRepository() {
   return {

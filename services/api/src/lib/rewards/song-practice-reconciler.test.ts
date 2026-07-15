@@ -36,7 +36,7 @@ const shardState: {
   milestones: [],
 }
 
-mock.module("../communities/community-read-access", () => ({
+const songPracticeRewardsDependencies = {
   openCommunityWriteClient: mock(async () => ({
     client: {
       execute: mock(async (statement: InStatement | string): Promise<QueryResult> => {
@@ -55,7 +55,11 @@ mock.module("../communities/community-read-access", () => ({
     },
     close: mock(() => {}),
   })),
-}))
+}
+
+function reconcile(input: Parameters<typeof reconcileSongPracticeRewards>[0]) {
+  return reconcileSongPracticeRewards(input, songPracticeRewardsDependencies as never)
+}
 
 function statementSql(statement: InStatement | string): string {
   return typeof statement === "string" ? statement : statement.sql
@@ -301,7 +305,7 @@ describe("song practice rewards reconciler", () => {
 
   test("disabled reconciliation does not enumerate communities", async () => {
     let listed = false
-    const summary = await reconcileSongPracticeRewards({
+    const summary = await reconcile({
       env: {} as Env,
       communityRepository: {
         listActiveCommunities: async () => {
@@ -335,7 +339,7 @@ describe("song practice rewards reconciler", () => {
     }))
     const controlPlane = createControlPlaneClient()
 
-    const summary = await reconcileSongPracticeRewards({
+    const summary = await reconcile({
       env: env({
         REWARDS_DAILY_USER_CAP_CENTS: "25",
         REWARDS_STREAK_MILESTONE_7_CENTS: "0",
@@ -353,7 +357,7 @@ describe("song practice rewards reconciler", () => {
     expect(controlPlane.transactionCount).toBe(3)
     expect(controlPlane.closedTransactionCount).toBe(3)
 
-    const replay = await reconcileSongPracticeRewards({
+    const replay = await reconcile({
       env: env({
         REWARDS_DAILY_USER_CAP_CENTS: "25",
         REWARDS_STREAK_MILESTONE_7_CENTS: "0",
@@ -380,7 +384,7 @@ describe("song practice rewards reconciler", () => {
     }))
     const controlPlane = createControlPlaneClient()
 
-    const first = await reconcileSongPracticeRewards({
+    const first = await reconcile({
       env: env({
         REWARDS_DAILY_USER_CAP_CENTS: "100",
         REWARDS_STREAK_MILESTONE_7_CENTS: "0",
@@ -391,7 +395,7 @@ describe("song practice rewards reconciler", () => {
       maxQualifiedDaysPerCommunity: 2,
       lookbackDays: 10_000,
     })
-    const second = await reconcileSongPracticeRewards({
+    const second = await reconcile({
       env: env({
         REWARDS_DAILY_USER_CAP_CENTS: "100",
         REWARDS_STREAK_MILESTONE_7_CENTS: "0",
@@ -419,7 +423,7 @@ describe("song practice rewards reconciler", () => {
     }]
     const controlPlane = createControlPlaneClient()
 
-    const summary = await reconcileSongPracticeRewards({
+    const summary = await reconcile({
       env: env({ REWARDS_DAILY_USER_CAP_CENTS: "300" }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
@@ -442,7 +446,7 @@ describe("song practice rewards reconciler", () => {
       post_id: "post_rewards",
       user_id: "usr_rewards",
     }]
-    const replayAfterRebuild = await reconcileSongPracticeRewards({
+    const replayAfterRebuild = await reconcile({
       env: env({ REWARDS_DAILY_USER_CAP_CENTS: "300" }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,
@@ -465,7 +469,7 @@ describe("song practice rewards reconciler", () => {
     }]
     const controlPlane = createControlPlaneClient()
 
-    const summary = await reconcileSongPracticeRewards({
+    const summary = await reconcile({
       env: env({ REWARDS_DAILY_USER_CAP_CENTS: "40" }),
       communityRepository: repository() as never,
       controlPlaneClient: controlPlane.client,

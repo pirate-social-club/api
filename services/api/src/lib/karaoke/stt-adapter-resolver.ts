@@ -16,6 +16,14 @@ export interface ResolveKaraokeSttAdapterInput {
   attemptId: string
 }
 
+type KaraokeSttAdapterDependencies = {
+  decryptActiveCommunityElevenLabsKey: typeof decryptActiveCommunityElevenLabsKey
+}
+
+const karaokeSttAdapterDependencies: KaraokeSttAdapterDependencies = {
+  decryptActiveCommunityElevenLabsKey,
+}
+
 /** Raised when an enabled scoring policy has no usable real STT adapter in production. */
 export class KaraokeSttConfigurationError extends Error {
   readonly code: string
@@ -30,7 +38,7 @@ async function buildProviderAdapter(input: {
   communityId: string
   env: Env
   policy: Extract<KaraokeScoringPolicy, { kind: "enabled" }>
-}): Promise<KaraokeStreamingSttAdapter | null> {
+}, dependencies: KaraokeSttAdapterDependencies): Promise<KaraokeStreamingSttAdapter | null> {
   const { communityId, env, policy } = input
   switch (policy.provider) {
     case "elevenlabs": {
@@ -41,7 +49,7 @@ async function buildProviderAdapter(input: {
       }
       let apiKey: string | null
       try {
-        apiKey = await decryptActiveCommunityElevenLabsKey({
+        apiKey = await dependencies.decryptActiveCommunityElevenLabsKey({
           env,
           communityId,
           missingCredentialMessage: "ElevenLabs API key is required before starting karaoke",
@@ -79,7 +87,10 @@ async function buildProviderAdapter(input: {
  * speech; in dev/test it falls back to the in-memory fake adapter so local runs
  * and the workerd integration suite work without external STT services.
  */
-export async function resolveKaraokeSttAdapter(input: ResolveKaraokeSttAdapterInput): Promise<KaraokeStreamingSttAdapter> {
+export async function resolveKaraokeSttAdapter(
+  input: ResolveKaraokeSttAdapterInput,
+  dependencies: KaraokeSttAdapterDependencies = karaokeSttAdapterDependencies,
+): Promise<KaraokeStreamingSttAdapter> {
   const { env, policy } = input
   if (policy.kind !== "enabled") {
     return new FakeKaraokeStreamingSttAdapter()
@@ -89,7 +100,7 @@ export async function resolveKaraokeSttAdapter(input: ResolveKaraokeSttAdapterIn
     communityId: input.communityId,
     env,
     policy,
-  })
+  }, dependencies)
   if (adapter) return adapter
 
   if ((env.ENVIRONMENT ?? "").toLowerCase() === "production") {
