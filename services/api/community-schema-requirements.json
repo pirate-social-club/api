@@ -37,5 +37,10 @@
       ],
       "note": "The outbox INSERT runs inside the study/karaoke attempt's OWN transaction (post-study-service.ts, karaoke-attempt-finalize-service.ts), armed by REWARDS_CAMPAIGNS_ENABLED && REWARDS_ACCRUAL_ENABLED. If 1126 is absent when both flags are on, the INSERT fails and rolls back the whole attempt — a fleet-wide outage of Study and Karaoke, which are LIVE and working. A clean read-only production verification on 2026-07-15 confirmed 1126 and the pinned unconditional requirements on all 94 allocated live shards; see docs/attestations/community-schema/production-rewards-2026-07-15.json. The rewards enablement workflow MUST still run the verifier with --features rewards immediately before either flag is changed so newly allocated or drifted shards fail closed."
     }
+  },
+  "deferred": {
+    "1131_song_study_generation_runs.sql": {
+      "rationale": "The migration is present in the pinned Core schema, but this API commit has no production read or write path for song_study_generation_runs. Require fleet rollout when the feature that consumes the table lands."
+    }
   }
 }
