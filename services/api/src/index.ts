@@ -314,13 +314,16 @@ app.post("/__debug/ops-alert", async (c) => {
   if (c.env.ENVIRONMENT === "production") {
     return c.json({ error: "not_found" }, 404)
   }
-  await captureScheduledWarning(
+  const delivered = await captureScheduledWarning(
     c.env,
     "Ops alert smoke test",
     "ops_alert_smoke_test",
     { source: "__debug/ops-alert" },
     { urgency: "high" },
   )
+  if (!delivered) {
+    return c.json({ ok: false, error: "ops_alert_delivery_failed" }, 503)
+  }
   return c.json({ ok: true })
 })
 
