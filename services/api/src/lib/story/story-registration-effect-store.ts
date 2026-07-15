@@ -9,15 +9,19 @@ type EffectStatus = "executing" | "confirmed" | "failed_prebroadcast" | "reconci
 type EffectRow = {
   operationId: string
   registrationKind: RegistrationKind
+  chainId: number
+  signerAddress: string
   creatorWalletAddress: string
   primaryContentHash: string
+  callDataHash: string
   status: EffectStatus
   resultJson: string | null
   attemptCount: number
 }
 
 const SELECT_COLUMNS = `
-  operation_id, registration_kind, creator_wallet_address, primary_content_hash,
+  operation_id, registration_kind, chain_id, signer_address, creator_wallet_address,
+  primary_content_hash, call_data_hash,
   status, result_json, attempt_count
 `
 
@@ -29,8 +33,11 @@ function toRow(row: unknown): EffectRow {
   return {
     operationId: requiredString(row, "operation_id"),
     registrationKind: requiredString(row, "registration_kind") as RegistrationKind,
+    chainId: requiredNumber(row, "chain_id"),
+    signerAddress: requiredString(row, "signer_address"),
     creatorWalletAddress: requiredString(row, "creator_wallet_address"),
     primaryContentHash: requiredString(row, "primary_content_hash"),
+    callDataHash: requiredString(row, "call_data_hash"),
     status: requiredString(row, "status") as EffectStatus,
     resultJson: stringOrNull(rowValue(row, "result_json")),
     attemptCount: requiredNumber(row, "attempt_count"),
@@ -48,13 +55,19 @@ async function loadEffect(client: DbExecutor, key: string): Promise<EffectRow> {
 
 function assertSameRequest(row: EffectRow, input: {
   registrationKind: RegistrationKind
+  chainId: number
+  signerAddress: string
   creatorWalletAddress: string
   primaryContentHash: string
+  callDataHash: string
 }): void {
   if (
     row.registrationKind !== input.registrationKind
+    || row.chainId !== input.chainId
+    || row.signerAddress.toLowerCase() !== input.signerAddress.toLowerCase()
     || row.creatorWalletAddress.toLowerCase() !== input.creatorWalletAddress.toLowerCase()
     || row.primaryContentHash.toLowerCase() !== input.primaryContentHash.toLowerCase()
+    || row.callDataHash.toLowerCase() !== input.callDataHash.toLowerCase()
   ) {
     throw new Error("story_registration_effect_request_conflict")
   }
@@ -65,8 +78,11 @@ export async function reserveStoryRegistrationEffect<T>(input: {
   communityId: string
   assetId: string
   registrationKind: RegistrationKind
+  chainId: number
+  signerAddress: string
   creatorWalletAddress: string
   primaryContentHash: string
+  callDataHash: string
   now: string
 }): Promise<{ kind: "execute"; operationId: string } | { kind: "confirmed"; result: T }> {
   const key = effectKey(input.communityId, input.assetId)
@@ -75,13 +91,14 @@ export async function reserveStoryRegistrationEffect<T>(input: {
     sql: `
       INSERT OR IGNORE INTO story_registration_effects (
         story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
-        registration_kind, creator_wallet_address, primary_content_hash, status,
-        created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'executing', ?9, ?9)
+        registration_kind, chain_id, signer_address, creator_wallet_address,
+        primary_content_hash, call_data_hash, status, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'executing', ?12, ?12)
     `,
     args: [
       makeId("sre"), input.communityId, input.assetId, key, operationId,
-      input.registrationKind, input.creatorWalletAddress, input.primaryContentHash, input.now,
+      input.registrationKind, input.chainId, input.signerAddress, input.creatorWalletAddress,
+      input.primaryContentHash, input.callDataHash, input.now,
     ],
   })
   if ((inserted.rowsAffected ?? 0) > 0) return { kind: "execute", operationId }

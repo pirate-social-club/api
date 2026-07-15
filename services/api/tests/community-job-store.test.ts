@@ -26,6 +26,8 @@ async function createJobStoreClient() {
       last_checkpoint_at TEXT,
       attempt_started_at TEXT,
       attempt_deadline_at TEXT,
+      attempt_id TEXT,
+      lease_expires_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -61,6 +63,8 @@ describe("community job store", () => {
       jobId: job.job_id,
       now: "2026-06-05T12:00:01.000Z",
       attemptDeadlineAt: "2026-06-05T12:30:01.000Z",
+      attemptId: "cja_first",
+      leaseExpiresAt: "2026-06-05T12:02:01.000Z",
     })
     expect(firstClaim?.status).toBe("running")
     expect(firstClaim?.attempt_count).toBe(1)
@@ -72,6 +76,8 @@ describe("community job store", () => {
       jobId: job.job_id,
       now: "2026-06-05T12:00:02.000Z",
       attemptDeadlineAt: "2026-06-05T12:30:02.000Z",
+      attemptId: "cja_second",
+      leaseExpiresAt: "2026-06-05T12:02:02.000Z",
     })
     expect(secondClaim).toBeNull()
 
@@ -95,6 +101,8 @@ describe("community job store", () => {
       jobId: job.job_id,
       now: "2026-06-05T12:00:01.000Z",
       attemptDeadlineAt: "2026-06-05T12:30:01.000Z",
+      attemptId: "cja_recycle",
+      leaseExpiresAt: "2026-06-05T12:02:01.000Z",
     })
 
     const recycled = await recycleCommunityJobForRetry({
@@ -179,6 +187,8 @@ describe("community job store", () => {
       jobId: job.job_id,
       now: "2026-06-05T12:03:00.000Z",
       attemptDeadlineAt: "2026-06-05T12:33:00.000Z",
+      attemptId: "cja_fresh_budget",
+      leaseExpiresAt: "2026-06-05T12:05:00.000Z",
     })
     expect(claim?.status).toBe("running")
     expect(claim?.attempt_count).toBe(1)

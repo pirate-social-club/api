@@ -167,6 +167,8 @@ async function runStudyGenerationJob(input: {
       last_checkpoint_at: null,
       attempt_started_at: null,
       attempt_deadline_at: null,
+      attempt_id: null,
+      lease_expires_at: null,
       created_at: NOW,
       updated_at: NOW,
     },

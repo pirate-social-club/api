@@ -13,8 +13,11 @@ const REQUEST = {
   communityId: COMMUNITY_ID,
   assetId: ASSET_ID,
   registrationKind: "original" as const,
+  chainId: 1315,
+  signerAddress: "0x9999999999999999999999999999999999999999",
   creatorWalletAddress: "0x1111111111111111111111111111111111111111",
   primaryContentHash: `0x${"22".repeat(32)}`,
+  callDataHash: `0x${"44".repeat(32)}`,
 }
 
 let client: ReturnType<typeof createClient>
@@ -80,5 +83,16 @@ describe("Story registration effect journal", () => {
     expect(retry.kind).toBe("execute")
     if (retry.kind !== "execute") throw new Error("expected retry reservation")
     expect(retry.operationId).not.toBe(first.operationId)
+  })
+
+  test("rejects reuse when any transaction-shaping input changes", async () => {
+    await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+
+    await expect(reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      callDataHash: `0x${"55".repeat(32)}`,
+      now: "2026-07-15T10:00:01.000Z",
+    })).rejects.toThrow("story_registration_effect_request_conflict")
   })
 })

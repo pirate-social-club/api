@@ -5,8 +5,11 @@ CREATE TABLE IF NOT EXISTS story_registration_effects (
   effect_key TEXT NOT NULL UNIQUE,
   operation_id TEXT NOT NULL,
   registration_kind TEXT NOT NULL CHECK (registration_kind IN ('original', 'derivative')),
+  chain_id INTEGER NOT NULL,
+  signer_address TEXT NOT NULL,
   creator_wallet_address TEXT NOT NULL,
   primary_content_hash TEXT NOT NULL,
+  call_data_hash TEXT NOT NULL,
   status TEXT NOT NULL CHECK (
     status IN ('executing', 'confirmed', 'failed_prebroadcast', 'reconciliation_required')
   ),
