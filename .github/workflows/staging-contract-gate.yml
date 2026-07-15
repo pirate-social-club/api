@@ -123,6 +123,15 @@ jobs:
             count=$(bunx playwright test e2e/live-staging.live.spec.ts --project=live-staging --list --grep "$title" 2>&1 | grep -F -c "$title")
             test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
           done
+          mobile_titles=(
+            "joins before a PoW-gated vote, then requests an action-bound proof"
+            "joins from the comment CTA before exposing the mobile composer"
+            "keeps the composer visible but disabled while membership is unknown"
+          )
+          for title in "${mobile_titles[@]}"; do
+            count=$(bunx playwright test e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --list --grep "$title" 2>&1 | grep -F -c "$title")
+            test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
+          done
 
       - name: Verify global booking contract
         timeout-minutes: 10
@@ -143,6 +152,21 @@ jobs:
         timeout-minutes: 10
         working-directory: web
         run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates a real post and comment with a real staging session"
+
+      - name: Verify mobile non-member interaction contracts
+        timeout-minutes: 10
+        working-directory: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          titles=(
+            "joins before a PoW-gated vote, then requests an action-bound proof"
+            "joins from the comment CTA before exposing the mobile composer"
+            "keeps the composer visible but disabled while membership is unknown"
+          )
+          for title in "${titles[@]}"; do
+            bun run test:e2e:required-gate -- e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --grep "$title"
+          done
 
       - name: Upload Playwright report
         if: failure()
