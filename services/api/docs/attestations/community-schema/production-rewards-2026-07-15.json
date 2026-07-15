@@ -1,0 +1,590 @@
+{
+  "fleet": "production",
+  "requirements_version": 1,
+  "requirements_file": "services/api/community-schema-requirements.json",
+  "shard_config": "services/community-d1-shard/wrangler.jsonc",
+  "features_checked": [
+    "rewards"
+  ],
+  "required_migrations": [
+    "1124_community_job_checkpoints.sql",
+    "1127_asset_story_metadata_refs.sql",
+    "1126_reward_qualification_outbox.sql"
+  ],
+  "feature_migrations": {
+    "rewards": [
+      "1126_reward_qualification_outbox.sql"
+    ]
+  },
+  "live_shards": 94,
+  "classified": 94,
+  "summary": {
+    "satisfied": 94
+  },
+  "shards": [
+    {
+      "binding": "DB_CMTY_0002",
+      "database_name": "community-d1-pool-0002-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0005",
+      "database_name": "community-d1-pool-0005-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0001",
+      "database_name": "community-d1-pool-0001-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0006",
+      "database_name": "community-d1-pool-0006-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0007",
+      "database_name": "community-d1-pool-0007-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0003",
+      "database_name": "community-d1-pool-0003-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0004",
+      "database_name": "community-d1-pool-0004-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0008",
+      "database_name": "community-d1-pool-0008-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0015",
+      "database_name": "community-d1-pool-0015-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0009",
+      "database_name": "community-d1-pool-0009-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0013",
+      "database_name": "community-d1-pool-0013-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0010",
+      "database_name": "community-d1-pool-0010-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0016",
+      "database_name": "community-d1-pool-0016-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0014",
+      "database_name": "community-d1-pool-0014-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0011",
+      "database_name": "community-d1-pool-0011-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0012",
+      "database_name": "community-d1-pool-0012-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0019",
+      "database_name": "community-d1-pool-0019-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0021",
+      "database_name": "community-d1-pool-0021-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0023",
+      "database_name": "community-d1-pool-0023-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0017",
+      "database_name": "community-d1-pool-0017-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0022",
+      "database_name": "community-d1-pool-0022-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0018",
+      "database_name": "community-d1-pool-0018-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0024",
+      "database_name": "community-d1-pool-0024-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0020",
+      "database_name": "community-d1-pool-0020-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0025",
+      "database_name": "community-d1-pool-0025-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0031",
+      "database_name": "community-d1-pool-0031-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0027",
+      "database_name": "community-d1-pool-0027-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0028",
+      "database_name": "community-d1-pool-0028-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0026",
+      "database_name": "community-d1-pool-0026-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0030",
+      "database_name": "community-d1-pool-0030-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0029",
+      "database_name": "community-d1-pool-0029-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0032",
+      "database_name": "community-d1-pool-0032-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0033",
+      "database_name": "community-d1-pool-0033-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0038",
+      "database_name": "community-d1-pool-0038-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0037",
+      "database_name": "community-d1-pool-0037-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0036",
+      "database_name": "community-d1-pool-0036-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0034",
+      "database_name": "community-d1-pool-0034-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0039",
+      "database_name": "community-d1-pool-0039-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0035",
+      "database_name": "community-d1-pool-0035-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0040",
+      "database_name": "community-d1-pool-0040-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0041",
+      "database_name": "community-d1-pool-0041-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0042",
+      "database_name": "community-d1-pool-0042-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0045",
+      "database_name": "community-d1-pool-0045-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0044",
+      "database_name": "community-d1-pool-0044-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0047",
+      "database_name": "community-d1-pool-0047-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0046",
+      "database_name": "community-d1-pool-0046-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0048",
+      "database_name": "community-d1-pool-0048-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0043",
+      "database_name": "community-d1-pool-0043-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0049",
+      "database_name": "community-d1-pool-0049-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0050",
+      "database_name": "community-d1-pool-0050-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0051",
+      "database_name": "community-d1-pool-0051-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0052",
+      "database_name": "community-d1-pool-0052-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0055",
+      "database_name": "community-d1-pool-0055-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0054",
+      "database_name": "community-d1-pool-0054-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0053",
+      "database_name": "community-d1-pool-0053-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0056",
+      "database_name": "community-d1-pool-0056-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0057",
+      "database_name": "community-d1-pool-0057-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0058",
+      "database_name": "community-d1-pool-0058-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0063",
+      "database_name": "community-d1-pool-0063-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0060",
+      "database_name": "community-d1-pool-0060-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0062",
+      "database_name": "community-d1-pool-0062-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0059",
+      "database_name": "community-d1-pool-0059-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0061",
+      "database_name": "community-d1-pool-0061-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0064",
+      "database_name": "community-d1-pool-0064-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0065",
+      "database_name": "community-d1-pool-0065-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0066",
+      "database_name": "community-d1-pool-0066-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0068",
+      "database_name": "community-d1-pool-0068-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0067",
+      "database_name": "community-d1-pool-0067-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0069",
+      "database_name": "community-d1-pool-0069-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0070",
+      "database_name": "community-d1-pool-0070-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0071",
+      "database_name": "community-d1-pool-0071-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0072",
+      "database_name": "community-d1-pool-0072-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0073",
+      "database_name": "community-d1-pool-0073-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0075",
+      "database_name": "community-d1-pool-0075-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0074",
+      "database_name": "community-d1-pool-0074-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0077",
+      "database_name": "community-d1-pool-0077-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0078",
+      "database_name": "community-d1-pool-0078-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0076",
+      "database_name": "community-d1-pool-0076-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0079",
+      "database_name": "community-d1-pool-0079-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0080",
+      "database_name": "community-d1-pool-0080-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0082",
+      "database_name": "community-d1-pool-0082-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0081",
+      "database_name": "community-d1-pool-0081-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0084",
+      "database_name": "community-d1-pool-0084-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0083",
+      "database_name": "community-d1-pool-0083-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0085",
+      "database_name": "community-d1-pool-0085-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0087",
+      "database_name": "community-d1-pool-0087-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0086",
+      "database_name": "community-d1-pool-0086-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0088",
+      "database_name": "community-d1-pool-0088-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0089",
+      "database_name": "community-d1-pool-0089-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0090",
+      "database_name": "community-d1-pool-0090-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0091",
+      "database_name": "community-d1-pool-0091-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0092",
+      "database_name": "community-d1-pool-0092-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0094",
+      "database_name": "community-d1-pool-0094-prod",
+      "status": "satisfied",
+      "missing": []
+    },
+    {
+      "binding": "DB_CMTY_0095",
+      "database_name": "community-d1-pool-0095-prod",
+      "status": "satisfied",
+      "missing": []
+    }
+  ]
+}
