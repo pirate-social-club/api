@@ -55,7 +55,7 @@ export class CommunityJobAttemptTimeoutError extends Error {
   }
 }
 
-export class CommunityJobLeaseLostError extends Error {
+class CommunityJobLeaseLostError extends Error {
   constructor(jobId: string) {
     super(`community_job_lease_lost:${jobId}`)
     this.name = "CommunityJobLeaseLostError"
