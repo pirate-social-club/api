@@ -7,6 +7,8 @@ import {
   failStoryRegistrationEffect,
   getStoryRegistrationEffect,
   reserveStoryRegistrationEffect,
+  transitionReconciledStoryRegistrationToConfirmed,
+  transitionRevertedStoryRegistrationToRetryable,
 } from "./story-registration-effect-store"
 
 const COMMUNITY_ID = "cmt_effect"
@@ -152,6 +154,103 @@ describe("Story registration effect journal", () => {
       reason: "transaction is visible so this must not retry",
       now: "2026-07-15T10:00:02.000Z",
     })).rejects.toThrow("story_registration_resolution_conflict")
+  })
+
+  test("confirms a reconciled receipt only for the fenced operation and transaction", async () => {
+    const first = await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    const providerTxRef = `0x${"77".repeat(32)}`
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: true,
+      providerTxRef,
+      errorCode: "story_registration_post_broadcast_error",
+      now: "2026-07-15T10:00:01.000Z",
+    })
+
+    await expect(transitionReconciledStoryRegistrationToConfirmed({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: "sro_obsolete",
+      providerTxRef,
+      result: { storyIpId: "0xabc" },
+      now: "2026-07-15T10:00:02.000Z",
+    })).rejects.toThrow("story_registration_resolution_conflict")
+    await expect(transitionReconciledStoryRegistrationToConfirmed({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: first.operationId,
+      providerTxRef: `0x${"88".repeat(32)}`,
+      result: { storyIpId: "0xabc" },
+      now: "2026-07-15T10:00:02.000Z",
+    })).rejects.toThrow("story_registration_resolution_conflict")
+    await transitionReconciledStoryRegistrationToConfirmed({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: first.operationId,
+      providerTxRef,
+      result: { storyIpId: "0xabc" },
+      now: "2026-07-15T10:00:03.000Z",
+    })
+    await expect(getStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+    })).resolves.toMatchObject({
+      status: "confirmed",
+      providerTxRef,
+      resultJson: JSON.stringify({ storyIpId: "0xabc" }),
+    })
+  })
+
+  test("retries only the fenced transaction after a verified revert and clears its old hash", async () => {
+    const first = await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    const providerTxRef = `0x${"99".repeat(32)}`
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: true,
+      providerTxRef,
+      errorCode: "story_registration_post_broadcast_error",
+      now: "2026-07-15T10:00:01.000Z",
+    })
+    await transitionRevertedStoryRegistrationToRetryable({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: first.operationId,
+      providerTxRef,
+      reason: "receipt reverted in canonical chain block",
+      now: "2026-07-15T10:00:02.000Z",
+    })
+    await expect(getStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+    })).resolves.toMatchObject({
+      status: "failed_prebroadcast",
+      providerTxRef,
+      errorCode: "ops_verified_reverted:receipt reverted in canonical chain block",
+    })
+    await expect(reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      now: "2026-07-15T10:00:03.000Z",
+    })).resolves.toMatchObject({ kind: "execute" })
+    await expect(getStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+    })).resolves.toMatchObject({ status: "executing", providerTxRef: null })
   })
 
   test("rejects reuse when any transaction-shaping input changes", async () => {
