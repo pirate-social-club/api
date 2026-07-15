@@ -218,6 +218,58 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
   return postStatus === "processing"
 }
 
+export async function convergePublishedPostProjection(input: {
+  client: Parameters<typeof markPostPublishRequestStatus>[0]["client"]
+  communityRepository: CommunityJobHandlerInput["communityRepository"]
+  post: Post
+  now: string
+}): Promise<void> {
+  if (input.post.status !== "published") {
+    throw internalError("Published post convergence requires a published post")
+  }
+
+  const existing = await input.communityRepository.getCommunityPostProjectionByPostId(input.post.post_id)
+  const projectedPayloadJson = JSON.stringify(input.post)
+  if (existing) {
+    await input.communityRepository.updateCommunityPostProjectionStatus({
+      postId: input.post.post_id,
+      status: "published",
+      updatedAt: input.now,
+    })
+    await input.communityRepository.updateCommunityPostProjectionPayload({
+      postId: input.post.post_id,
+      projectedPayloadJson,
+      updatedAt: input.now,
+    })
+  } else {
+    const community = await input.communityRepository.getCommunityById(input.post.community_id)
+    if (!community) throw internalError("Community is missing for published post convergence")
+    await input.communityRepository.recordCommunityPostProjection({
+      communityId: input.post.community_id,
+      sourcePostId: input.post.post_id,
+      authorUserId: input.post.author_user_id ?? null,
+      identityMode: input.post.identity_mode,
+      postType: input.post.post_type,
+      status: "published",
+      visibility: input.post.visibility,
+      sourceCreatedAt: input.post.created_at,
+      projectedPayloadJson,
+      actorUserId: input.post.author_user_id ?? community.creator_user_id,
+      createdAt: input.now,
+    })
+  }
+
+  // The saga row becomes terminal only after every derived projection is durable.
+  // A retry can therefore always repair a crash between post publication and projection writes.
+  await markPostPublishRequestStatus({
+    client: input.client,
+    communityId: input.post.community_id,
+    postId: input.post.post_id,
+    status: "succeeded",
+    updatedAt: input.now,
+  })
+}
+
 async function markPostPublishFinalizeFailed(input: {
   client: Parameters<typeof markPostPublishFailed>[0]["executor"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
@@ -353,6 +405,16 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
       })
       let failedPosts = 0
       for (const postId of stuck.postIds) {
+        const current = await getPostById(db.client, postId)
+        if (current?.status === "published") {
+          await convergePublishedPostProjection({
+            client: db.client,
+            communityRepository: input.communityRepository,
+            post: current,
+            now,
+          })
+          continue
+        }
         const result = await markPostPublishFinalizeFailed({
           client: db.client,
           communityRepository: input.communityRepository,
@@ -497,6 +559,18 @@ export async function runPostPublishFinalize(
       throw notFoundError("Post not found")
     }
     if (post.status === "published") {
+      const convergedAt = nowIso()
+      await convergePublishedPostProjection({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        post,
+        now: convergedAt,
+      })
+      await schedulePublicPostCachePurge({
+        env: input.env,
+        communityId: input.job.community_id,
+        postId: post.post_id,
+      })
       return post.post_id
     }
     if (!shouldRunPostPublishFinalize(post.status)) {
@@ -794,23 +868,12 @@ export async function runPostPublishFinalize(
       ageGatePolicy: finalModeration.age_gate_policy,
       now: nowIso(),
     })
-    await markPostPublishRequestStatus({
-      client: db.client,
-      communityId: input.job.community_id,
-      postId: post.post_id,
-      status: "succeeded",
-      updatedAt: nowIso(),
-    })
     const projectionUpdatedAt = nowIso()
-    await input.communityRepository.updateCommunityPostProjectionStatus({
-      postId: post.post_id,
-      status: "published",
-      updatedAt: projectionUpdatedAt,
-    })
-    await input.communityRepository.updateCommunityPostProjectionPayload({
-      postId: post.post_id,
-      projectedPayloadJson: JSON.stringify(published),
-      updatedAt: projectionUpdatedAt,
+    await convergePublishedPostProjection({
+      client: db.client,
+      communityRepository: input.communityRepository,
+      post: published,
+      now: projectionUpdatedAt,
     })
     await schedulePublicPostCachePurge({
       env: input.env,

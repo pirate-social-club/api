@@ -272,6 +272,18 @@ function reconcileStuckPostPublishFinalizeJobs(
 
 function communityRepository() {
   return {
+    getCommunityById: mock(async () => ({
+      community_id: COMMUNITY_ID,
+      creator_user_id: "usr_creator",
+    })),
+    getCommunityPostProjectionByPostId: mock(async () => ({
+      source_post_id: POST_ID,
+    })),
+    recordCommunityPostProjection: mock(async (input: { projectedPayloadJson: string; status: string }) => {
+      state.projectionPayloads.push(input.projectedPayloadJson)
+      state.projectionStatuses.push(input.status)
+      return {}
+    }),
     updateCommunityPostProjectionPayload: mock(async (input: { projectedPayloadJson: string }) => {
       state.projectionPayloads.push(input.projectedPayloadJson)
     }),
@@ -349,6 +361,21 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.markedPublished).toBe(1)
     expect(state.requestStatuses).toEqual(["running", "succeeded"])
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
+      post_id: POST_ID,
+      status: "published",
+    })
+  })
+
+  test("converges a published post before treating a retried finalize as complete", async () => {
+    state.post = basePost({ status: "published" })
+
+    await expect(runPostPublishFinalize(handlerInput())).resolves.toBe(POST_ID)
+
+    expect(state.assetCalls).toBe(0)
+    expect(state.markedPublished).toBe(0)
+    expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.requestStatuses).toEqual(["succeeded"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
       status: "published",
@@ -498,7 +525,7 @@ describe("runPostPublishFinalize integration", () => {
     })
   })
 
-  test("does not downgrade a post that publishes after the stuck scan", async () => {
+  test("converges a post that publishes after the stuck scan", async () => {
     state.reconcileRows = [{ post_id: POST_ID }]
     state.post = basePost({ status: "published" })
 
@@ -517,7 +544,11 @@ describe("runPostPublishFinalize integration", () => {
       failed_communities: [],
     })
     expect(state.markedFailed).toEqual([])
-    expect(state.requestStatuses).toEqual([])
-    expect(state.projectionStatuses).toEqual([])
+    expect(state.requestStatuses).toEqual(["succeeded"])
+    expect(state.projectionStatuses).toEqual(["published"])
+    expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
+      post_id: POST_ID,
+      status: "published",
+    })
   })
 })
