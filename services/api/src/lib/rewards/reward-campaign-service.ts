@@ -35,10 +35,10 @@ import { isPostgresControlPlaneUrl } from "../runtime-deps"
  * status `confirming`, and re-calling confirm with the same hash is idempotent, so a client
  * polls by retrying rather than by interpreting a failure.
  */
-export const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consumed"
-export const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
-export const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
-export const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
+const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consumed"
+const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
+const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
+const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
 
 export type RewardCampaignTarget = {
   communityId: string

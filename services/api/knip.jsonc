@@ -3,6 +3,7 @@
   "entry": [
     "wrangler.jsonc",
     "scripts/**/*.{ts,mjs}",
+    "tests/integration/operator-executor.worker.ts",
     "src/lib/bookings/codecs.tz-probe.ts",
     "tests/**/*.test.ts",
     "tests/integration/env.d.ts",
