@@ -798,7 +798,6 @@ export async function createSongAssetForPost(input: {
 }
 
 export * from "./derivative-source-service"
-export { prepareRequestedLockedAssetDelivery } from "./locked-delivery-service"
 export {
   isCatalogProjectableStoryRegisteredAsset,
   isRoyaltyProjectableStoryRegisteredAsset,

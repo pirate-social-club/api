@@ -9,7 +9,7 @@ export const REQUEST_ID_HEADER = "x-request-id"
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 const MAX_ERROR_BODY_BYTES = 16 * 1024
 
-export type RequestCorrelationVariables = {
+type RequestCorrelationVariables = {
   requestId: string
   actor?: ActorContext | AdminActorContext
 }
