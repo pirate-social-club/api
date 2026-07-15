@@ -94,7 +94,16 @@ export function notImplementedError(message: string): HttpError {
   return new HttpError(501, "not_implemented", message)
 }
 
-export function errorResponse(error: unknown): { status: number; body: { code: string; message: string; retryable?: boolean; details?: Record<string, unknown> | null } } {
+export type ErrorResponseBody = {
+  code: string
+  message: string
+  retryable?: boolean
+  details?: Record<string, unknown> | null
+  request_id?: string
+}
+
+export function errorResponse(error: unknown, requestId: string | null = null): { status: number; body: ErrorResponseBody } {
+  const requestIdField = requestId ? { request_id: requestId } : {}
   if (error instanceof HttpError) {
     return {
       status: error.status,
@@ -103,20 +112,24 @@ export function errorResponse(error: unknown): { status: number; body: { code: s
         message: error.message,
         retryable: error.retryable,
         ...(error.details ? { details: error.details } : {}),
+        ...requestIdField,
       },
     }
   }
 
-  const message = error instanceof Error ? error.message : "Internal server error"
   return {
     status: 500,
     body: {
       code: "internal_error",
-      message,
+      // Never echo the raw exception message: unknown failures can carry
+      // database URLs, shard routing details, or driver internals. The full
+      // error is logged server-side keyed by request_id.
+      message: "Internal server error",
       // Unknown failures may be transient (deploy rollover, database/network
       // blip, overloaded runtime). Deliberate terminal failures must use a
       // typed HttpError whose explicit retryability is preserved above.
       retryable: true,
+      ...requestIdField,
     },
   }
 }
