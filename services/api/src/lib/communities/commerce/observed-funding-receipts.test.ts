@@ -83,6 +83,59 @@ describe("observed funding receipts", () => {
       .rejects.toThrow("Observed funding receipt identity reused with different event data")
   })
 
+  test("re-observes an orphaned receipt at its new canonical-chain block", async () => {
+    const reIncludedBlockNumber = EVENT.blockNumber + 3
+    const reIncludedBlockHash = `0x${"33".repeat(32)}`
+    const client = clientReturning(
+      { rows: [], rowsAffected: 0 },
+      { rows: [row({ finality_status: "orphaned", match_status: "ignored" })] },
+      { rows: [row({
+        block_number: reIncludedBlockNumber,
+        block_hash: reIncludedBlockHash,
+        finality_status: "observed",
+        match_status: "unmatched",
+      })] },
+    )
+
+    await expect(observeFundingReceipt({
+      client,
+      ...EVENT,
+      blockNumber: reIncludedBlockNumber,
+      blockHash: reIncludedBlockHash,
+      source: "indexer",
+      observedAt: "2026-07-15T17:04:00.000Z",
+    })).resolves.toMatchObject({
+      blockNumber: reIncludedBlockNumber,
+      blockHash: reIncludedBlockHash,
+      finalityStatus: "observed",
+      matchStatus: "unmatched",
+    })
+
+    const update = (client.execute as ReturnType<typeof mock>).mock.calls[2]?.[0] as {
+      sql: string
+      args: unknown[]
+    }
+    expect(update.sql).toContain("finality_status = 'orphaned'")
+    expect(update.sql).toContain("match_status = CASE WHEN match_status = 'ignored' THEN 'unmatched'")
+    expect(update.args.slice(1, 4)).toEqual([reIncludedBlockNumber, reIncludedBlockHash, "indexer"])
+  })
+
+  test("rejects a block rewrite until the old inclusion is explicitly orphaned", async () => {
+    const client = clientReturning(
+      { rows: [], rowsAffected: 0 },
+      { rows: [row({ finality_status: "canonical" })] },
+      { rows: [] },
+    )
+
+    await expect(observeFundingReceipt({
+      client,
+      ...EVENT,
+      blockNumber: EVENT.blockNumber + 1,
+      blockHash: `0x${"44".repeat(32)}`,
+      source: "indexer",
+    })).rejects.toThrow("Observed funding receipt block changed before it was orphaned")
+  })
+
   test("marks finality explicitly and only claims canonical receipts", async () => {
     const canonicalClient = clientReturning({
       rows: [row({ finality_status: "canonical" })],

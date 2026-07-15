@@ -2,8 +2,10 @@ import { createClient } from "@libsql/client"
 import { beforeEach, describe, expect, test } from "bun:test"
 import { readFile } from "node:fs/promises"
 import {
+  attestStoryRegistrationNotBroadcast,
   confirmStoryRegistrationEffect,
   failStoryRegistrationEffect,
+  getStoryRegistrationEffect,
   reserveStoryRegistrationEffect,
 } from "./story-registration-effect-store"
 
@@ -88,6 +90,68 @@ describe("Story registration effect journal", () => {
     expect(retry.kind).toBe("execute")
     if (retry.kind !== "execute") throw new Error("expected retry reservation")
     expect(retry.operationId).not.toBe(first.operationId)
+  })
+
+  test("allows an operator-attested no-broadcast incident to be reclaimed without SQL", async () => {
+    const first = await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: true,
+      errorCode: "story_registration_outcome_unknown",
+      now: "2026-07-15T10:00:01.000Z",
+    })
+
+    await expect(attestStoryRegistrationNotBroadcast({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: first.operationId,
+      reason: "checked signer history and provider traces",
+      now: "2026-07-15T10:00:02.000Z",
+    })).resolves.toMatchObject({
+      operationId: first.operationId,
+      status: "failed_prebroadcast",
+      errorCode: "ops_confirmed_no_broadcast:checked signer history and provider traces",
+    })
+
+    await expect(getStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+    })).resolves.toMatchObject({ status: "failed_prebroadcast" })
+    await expect(reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      now: "2026-07-15T10:00:03.000Z",
+    })).resolves.toMatchObject({ kind: "execute" })
+  })
+
+  test("refuses an operator retry attestation when a provider transaction is known", async () => {
+    const first = await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: true,
+      providerTxRef: `0x${"66".repeat(32)}`,
+      errorCode: "story_registration_post_broadcast_error",
+      now: "2026-07-15T10:00:01.000Z",
+    })
+
+    await expect(attestStoryRegistrationNotBroadcast({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      expectedOperationId: first.operationId,
+      reason: "transaction is visible so this must not retry",
+      now: "2026-07-15T10:00:02.000Z",
+    })).rejects.toThrow("story_registration_resolution_conflict")
   })
 
   test("rejects reuse when any transaction-shaping input changes", async () => {

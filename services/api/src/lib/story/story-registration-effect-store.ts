@@ -6,7 +6,7 @@ import { requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-r
 type RegistrationKind = "original" | "derivative"
 type EffectStatus = "executing" | "confirmed" | "failed_prebroadcast" | "reconciliation_required"
 
-type EffectRow = {
+export type StoryRegistrationEffect = {
   operationId: string
   registrationKind: RegistrationKind
   chainId: number
@@ -15,6 +15,8 @@ type EffectRow = {
   primaryContentHash: string
   callDataHash: string
   status: EffectStatus
+  providerTxRef: string | null
+  errorCode: string | null
   resultJson: string | null
   attemptCount: number
 }
@@ -22,14 +24,14 @@ type EffectRow = {
 const SELECT_COLUMNS = `
   operation_id, registration_kind, chain_id, signer_address, creator_wallet_address,
   primary_content_hash, call_data_hash,
-  status, result_json, attempt_count
+  status, provider_tx_ref, error_code, result_json, attempt_count
 `
 
 function effectKey(communityId: string, assetId: string): string {
   return `story_registration:${communityId}:${assetId}`
 }
 
-function toRow(row: unknown): EffectRow {
+function toRow(row: unknown): StoryRegistrationEffect {
   return {
     operationId: requiredString(row, "operation_id"),
     registrationKind: requiredString(row, "registration_kind") as RegistrationKind,
@@ -39,12 +41,14 @@ function toRow(row: unknown): EffectRow {
     primaryContentHash: requiredString(row, "primary_content_hash"),
     callDataHash: requiredString(row, "call_data_hash"),
     status: requiredString(row, "status") as EffectStatus,
+    providerTxRef: stringOrNull(rowValue(row, "provider_tx_ref")),
+    errorCode: stringOrNull(rowValue(row, "error_code")),
     resultJson: stringOrNull(rowValue(row, "result_json")),
     attemptCount: requiredNumber(row, "attempt_count"),
   }
 }
 
-async function loadEffect(client: DbExecutor, key: string): Promise<EffectRow> {
+async function loadEffect(client: DbExecutor, key: string): Promise<StoryRegistrationEffect> {
   const row = await executeFirst(client, {
     sql: `SELECT ${SELECT_COLUMNS} FROM story_registration_effects WHERE effect_key = ?1 LIMIT 1`,
     args: [key],
@@ -53,7 +57,7 @@ async function loadEffect(client: DbExecutor, key: string): Promise<EffectRow> {
   return toRow(row)
 }
 
-function assertSameRequest(row: EffectRow, input: {
+function assertSameRequest(row: StoryRegistrationEffect, input: {
   registrationKind: RegistrationKind
   chainId: number
   signerAddress: string
@@ -71,6 +75,47 @@ function assertSameRequest(row: EffectRow, input: {
   ) {
     throw new Error("story_registration_effect_request_conflict")
   }
+}
+
+export async function getStoryRegistrationEffect(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+}): Promise<StoryRegistrationEffect | null> {
+  const row = await executeFirst(input.client, {
+    sql: `SELECT ${SELECT_COLUMNS} FROM story_registration_effects WHERE effect_key = ?1 LIMIT 1`,
+    args: [effectKey(input.communityId, input.assetId)],
+  })
+  return row ? toRow(row) : null
+}
+
+export async function attestStoryRegistrationNotBroadcast(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+  expectedOperationId: string
+  reason: string
+  now: string
+}): Promise<StoryRegistrationEffect> {
+  const reason = input.reason.trim().replace(/\s+/g, " ").slice(0, 180)
+  if (reason.length < 10) throw new Error("story_registration_resolution_reason_required")
+  const updated = await input.client.execute({
+    sql: `
+      UPDATE story_registration_effects
+      SET status = 'failed_prebroadcast', provider_tx_ref = NULL,
+          error_code = ?3, updated_at = ?4
+      WHERE effect_key = ?1 AND operation_id = ?2
+        AND status = 'reconciliation_required' AND provider_tx_ref IS NULL
+    `,
+    args: [
+      effectKey(input.communityId, input.assetId), input.expectedOperationId,
+      `ops_confirmed_no_broadcast:${reason}`, input.now,
+    ],
+  })
+  if ((updated.rowsAffected ?? 0) === 0) {
+    throw new Error("story_registration_resolution_conflict")
+  }
+  return await loadEffect(input.client, effectKey(input.communityId, input.assetId))
 }
 
 export async function reserveStoryRegistrationEffect<T>(input: {

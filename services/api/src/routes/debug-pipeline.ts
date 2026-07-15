@@ -5,9 +5,14 @@ import { openCommunityReadClient, openCommunityWriteClient } from "../lib/commun
 import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
+import {
+  attestStoryRegistrationNotBroadcast,
+  getStoryRegistrationEffect,
+  type StoryRegistrationEffect,
+} from "../lib/story/story-registration-effect-store"
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
-import { decodePublicCommunityId, decodePublicJobId, decodePublicPostId } from "../lib/public-ids"
+import { decodePublicAssetId, decodePublicCommunityId, decodePublicJobId, decodePublicPostId } from "../lib/public-ids"
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
 
@@ -220,6 +225,98 @@ debugPipeline.post("/community-job/recycle", async (c) => {
         updated_at: result.after.updated_at,
       },
     }, 200)
+  } finally {
+    db.close()
+  }
+})
+
+function storyEffectResponse(effect: StoryRegistrationEffect) {
+  return {
+    operation_id: effect.operationId,
+    registration_kind: effect.registrationKind,
+    chain_id: effect.chainId,
+    signer_address: effect.signerAddress,
+    creator_wallet_address: effect.creatorWalletAddress,
+    primary_content_hash: effect.primaryContentHash,
+    call_data_hash: effect.callDataHash,
+    status: effect.status,
+    provider_tx_ref: effect.providerTxRef,
+    error_code: effect.errorCode,
+    attempt_count: effect.attemptCount,
+  }
+}
+
+debugPipeline.get("/story-registration-effect", async (c) => {
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const rawCommunityId = c.req.query("community_id")?.trim() ?? ""
+  const rawAssetId = c.req.query("asset_id")?.trim() ?? ""
+  if (!rawCommunityId || !rawAssetId) {
+    return c.json({ error: "community_id and asset_id are required" }, 400)
+  }
+
+  const communityId = decodePublicCommunityId(rawCommunityId)
+  const assetId = decodePublicAssetId(rawAssetId)
+  const repository = getCommunityRepository(c.env)
+  const db = await openCommunityReadClient(c.env, repository, communityId)
+  try {
+    const effect = await getStoryRegistrationEffect({ client: db.client, communityId, assetId })
+    if (!effect) return c.json({ error: "story_registration_effect_not_found" }, 404)
+    return c.json({
+      community_id: communityId,
+      asset_id: assetId,
+      effect: storyEffectResponse(effect),
+    })
+  } finally {
+    db.close()
+  }
+})
+
+debugPipeline.post("/story-registration-effect/confirm-no-broadcast", async (c) => {
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json<Record<string, unknown>>()
+  } catch {
+    return c.json({ error: "invalid_json" }, 400)
+  }
+  const rawCommunityId = typeof body.community_id === "string" ? body.community_id.trim() : ""
+  const rawAssetId = typeof body.asset_id === "string" ? body.asset_id.trim() : ""
+  const operationId = typeof body.operation_id === "string" ? body.operation_id.trim() : ""
+  const reason = typeof body.reason === "string" ? body.reason.trim() : ""
+  if (!rawCommunityId || !rawAssetId || !operationId || reason.length < 10) {
+    return c.json({ error: "community_id, asset_id, operation_id, and a detailed reason are required" }, 400)
+  }
+
+  const communityId = decodePublicCommunityId(rawCommunityId)
+  const assetId = decodePublicAssetId(rawAssetId)
+  const repository = getCommunityRepository(c.env)
+  const db = await openCommunityWriteClient(c.env, repository, communityId)
+  try {
+    try {
+      const effect = await attestStoryRegistrationNotBroadcast({
+        client: db.client,
+        communityId,
+        assetId,
+        expectedOperationId: operationId,
+        reason,
+        now: new Date().toISOString(),
+      })
+      return c.json({
+        ok: true,
+        community_id: communityId,
+        asset_id: assetId,
+        effect: storyEffectResponse(effect),
+        next_action: "recycle the owning finalize job; the next reservation may now retry",
+      })
+    } catch (error) {
+      if (error instanceof Error && error.message === "story_registration_resolution_conflict") {
+        return c.json({
+          error: "story_registration_resolution_conflict",
+          message: "effect changed, is not awaiting reconciliation, or already has a transaction reference",
+        }, 409)
+      }
+      throw error
+    }
   } finally {
     db.close()
   }

@@ -475,6 +475,88 @@ function storyErrorChainTransactionHash(error: unknown): string | null {
   return null
 }
 
+const STORY_REGISTRATION_MAX_ATTEMPTS = 3
+const STORY_REGISTRATION_RETRY_BASE_DELAY_MS = 400
+
+type StoryRegistrationFailureDisposition =
+  | "retryable_prebroadcast"
+  | "terminal_prebroadcast"
+  | "ambiguous"
+
+function storyErrorChain(error: unknown): Array<Record<string, unknown>> {
+  const chain: Array<Record<string, unknown>> = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    if (typeof current !== "object") break
+    const value = current as Record<string, unknown>
+    chain.push(value)
+    current = value.cause
+  }
+  return chain
+}
+
+function storyErrorText(chain: Array<Record<string, unknown>>): string {
+  const parts: string[] = []
+  for (const error of chain) {
+    for (const field of ["name", "message", "shortMessage", "details"] as const) {
+      if (typeof error[field] === "string") parts.push(error[field])
+    }
+    if (Array.isArray(error.metaMessages)) {
+      parts.push(...error.metaMessages.filter((message): message is string => typeof message === "string"))
+    }
+  }
+  return parts.join(" | ")
+}
+
+function hasPrebroadcastStageEvidence(chain: Array<Record<string, unknown>>, text: string): boolean {
+  if (chain.some((error) => (
+    error.name === "CallExecutionError" || error.name === "EstimateGasExecutionError"
+  ))) return true
+
+  // viem includes the JSON-RPC request body in RpcRequestError/TimeoutError metadata.
+  // These methods only prepare or simulate a transaction; none can broadcast it.
+  return /["']method["']\s*:\s*["'](?:eth_call|eth_estimateGas|eth_fillTransaction)["']/i.test(text)
+}
+
+export function classifyStoryRegistrationFailure(error: unknown): StoryRegistrationFailureDisposition {
+  const chain = storyErrorChain(error)
+  const text = storyErrorText(chain)
+  if (storyErrorChainTransactionHash(error)) return "ambiguous"
+  if (chain.some((entry) => (
+    entry.name === "TransactionExecutionError"
+    || entry.name === "WaitForTransactionReceiptTimeoutError"
+    || entry.name === "TransactionReceiptNotFoundError"
+  ))) return "ambiguous"
+  if (/eth_sendRawTransaction|eth_sendTransaction/i.test(text)) return "ambiguous"
+  if (!hasPrebroadcastStageEvidence(chain, text)) return "ambiguous"
+
+  const transient = /RPC Request failed|HTTP request failed|fetch failed|Failed to fetch|timed out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|\b(?:429|500|502|503|504)\b|rate.?limit|InternalRpcError|took too long|network error/i.test(text)
+  return transient ? "retryable_prebroadcast" : "terminal_prebroadcast"
+}
+
+export async function withStoryRegistrationRetry<T>(
+  operation: () => Promise<T>,
+  options: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<T> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  let lastError: unknown
+  for (let attempt = 1; attempt <= STORY_REGISTRATION_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      if (
+        attempt >= STORY_REGISTRATION_MAX_ATTEMPTS
+        || classifyStoryRegistrationFailure(error) !== "retryable_prebroadcast"
+      ) throw error
+      await sleep(STORY_REGISTRATION_RETRY_BASE_DELAY_MS * attempt)
+    }
+  }
+  throw lastError
+}
+
 function canonicalStoryRegistrationValue(value: unknown): unknown {
   if (typeof value === "bigint") return { bigint: value.toString() }
   if (value === undefined) return undefined
@@ -949,7 +1031,9 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   try {
     let result: StoryRoyaltyRegistrationResult
     if (rightsBasis === "derivative") {
-      const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest!)
+      const derivativeResponse = await withStoryRegistrationRetry(() =>
+        storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest!),
+      )
       const derivativeIpId = derivativeResponse.ipId!
       providerTxRef = String(derivativeResponse.txHash || "").trim() || null
       const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
@@ -972,7 +1056,9 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
       }
     } else {
-      const originalResponse = await storyClient.ipAsset.registerIpAsset(originalRequest!)
+      const originalResponse = await withStoryRegistrationRetry(() =>
+        storyClient.ipAsset.registerIpAsset(originalRequest!),
+      )
       providerTxRef = String(originalResponse.txHash || "").trim() || null
       result = {
         storyIpId: originalResponse.ipId!,
@@ -1005,16 +1091,22 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     return result
   } catch (error) {
     const broadcastTxRef = storyErrorChainTransactionHash(error) ?? providerTxRef
+    const disposition = broadcastTxRef ? "ambiguous" : classifyStoryRegistrationFailure(error)
+    const reconciliationRequired = disposition === "ambiguous"
     await failStoryRegistrationEffect({
       client: input.client,
       communityId: input.communityId,
       assetId: input.assetId,
       operationId: reserved.operationId,
-      // The SDK owns simulate/sign/send/receipt polling behind one call. Once entered, an
-      // exception cannot prove that broadcast did not happen, even when no hash survives.
-      reconciliationRequired: true,
+      reconciliationRequired,
       providerTxRef: broadcastTxRef,
-      errorCode: broadcastTxRef ? "story_registration_post_broadcast_error" : "story_registration_outcome_unknown",
+      errorCode: broadcastTxRef
+        ? "story_registration_post_broadcast_error"
+        : reconciliationRequired
+          ? "story_registration_outcome_unknown"
+          : disposition === "retryable_prebroadcast"
+            ? "story_registration_prebroadcast_retries_exhausted"
+            : "story_registration_prebroadcast_failed",
       now: nowIso(),
     })
     throw error
