@@ -2,17 +2,15 @@ import { beforeEach, describe, expect, mock, test } from "bun:test"
 import type { KaraokeScoringPolicy } from "@pirate-social-club/karaoke-runtime"
 
 import type { Env } from "../../../src/env"
+import { CommunityAssistantCredentialNotFoundError } from "../../../src/lib/communities/assistant-policy/credential-service"
 import { ElevenLabsKaraokeSttAdapter } from "../../../src/lib/karaoke/elevenlabs-stt-adapter"
 import { FakeKaraokeStreamingSttAdapter } from "../../../src/lib/karaoke/fake-stt-adapter"
+import {
+  KaraokeSttConfigurationError,
+  resolveKaraokeSttAdapter,
+} from "../../../src/lib/karaoke/stt-adapter-resolver"
 
 const decryptActiveCommunityElevenLabsKeyMock = mock(async () => "secret-key")
-
-class MockCommunityAssistantCredentialNotFoundError extends Error {}
-
-mock.module("../../../src/lib/communities/assistant-policy/credential-service", () => ({
-  CommunityAssistantCredentialNotFoundError: MockCommunityAssistantCredentialNotFoundError,
-  decryptActiveCommunityElevenLabsKey: decryptActiveCommunityElevenLabsKeyMock,
-}))
 
 const ENABLED: KaraokeScoringPolicy = {
   kind: "enabled",
@@ -22,13 +20,14 @@ const ENABLED: KaraokeScoringPolicy = {
 }
 
 async function resolve(env: Partial<Env>, policy: KaraokeScoringPolicy = ENABLED) {
-  const { resolveKaraokeSttAdapter } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
   return resolveKaraokeSttAdapter({
     attemptId: "attempt-1",
     communityId: "com_1",
     env: env as Env,
     policy,
     sessionId: "session-1",
+  }, {
+    decryptActiveCommunityElevenLabsKey: decryptActiveCommunityElevenLabsKeyMock,
   })
 }
 
@@ -44,7 +43,9 @@ describe("resolveKaraokeSttAdapter", () => {
   })
 
   test("falls back to the fake adapter when the community ElevenLabs key is absent", async () => {
-    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new MockCommunityAssistantCredentialNotFoundError("missing"))
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(
+      new CommunityAssistantCredentialNotFoundError("elevenlabs", "missing"),
+    )
     const adapter = await resolve({ CONTROL_PLANE_DATABASE_URL: "file:test.db" })
     expect(adapter).toBeInstanceOf(FakeKaraokeStreamingSttAdapter)
   })
@@ -67,13 +68,13 @@ describe("resolveKaraokeSttAdapter", () => {
   })
 
   test("in production, throws instead of silently faking when the community key is missing", async () => {
-    const { KaraokeSttConfigurationError } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
-    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(new MockCommunityAssistantCredentialNotFoundError("missing"))
+    decryptActiveCommunityElevenLabsKeyMock.mockRejectedValue(
+      new CommunityAssistantCredentialNotFoundError("elevenlabs", "missing"),
+    )
     await expect(resolve({ ENVIRONMENT: "production" })).rejects.toBeInstanceOf(KaraokeSttConfigurationError)
   })
 
   test("in production, throws for a provider without an implementation", async () => {
-    const { KaraokeSttConfigurationError } = await import("../../../src/lib/karaoke/stt-adapter-resolver")
     await expect(
       resolve({ ENVIRONMENT: "production", OPENAI_API_KEY: "secret-key" }, { ...ENABLED, provider: "openai" }),
     ).rejects.toBeInstanceOf(KaraokeSttConfigurationError)

@@ -35,6 +35,16 @@ import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runne
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
 
+type PostPublishFinalizeDependencies = {
+  getControlPlaneClient: typeof getControlPlaneClient
+  openCommunityWriteClient: typeof openCommunityWriteClient
+}
+
+const postPublishFinalizeDependencies: PostPublishFinalizeDependencies = {
+  getControlPlaneClient,
+  openCommunityWriteClient,
+}
+
 // Attempts spent waiting for the preview job to hash-verify the primary audio before we
 // give up and register without the canonical media block. Deliberately below
 // COMMUNITY_JOB_MAX_ATTEMPTS (8) so a stalled preview still leaves attempts for the
@@ -321,7 +331,7 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
   maxCommunities?: number
   maxPostsPerCommunity?: number
   now?: string
-}): Promise<PostPublishFinalizeReconcileSummary> {
+}, dependencies: PostPublishFinalizeDependencies = postPublishFinalizeDependencies): Promise<PostPublishFinalizeReconcileSummary> {
   const communityIds = (input.communityIds?.length
     ? input.communityIds
     : (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).map((community) => community.community_id))
@@ -335,7 +345,7 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
   for (const communityId of communityIds) {
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
-      db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      db = await dependencies.openCommunityWriteClient(input.env, input.communityRepository, communityId)
       const stuck = await findStuckPostPublishFinalizePostIds({
         client: db.client,
         cutoffUpdatedAt,
@@ -474,10 +484,13 @@ async function enqueueSongPreviewIfPending(input: {
   })
 }
 
-export async function runPostPublishFinalize(input: CommunityJobHandlerInput): Promise<string | null> {
+export async function runPostPublishFinalize(
+  input: CommunityJobHandlerInput,
+  dependencies: PostPublishFinalizeDependencies = postPublishFinalizeDependencies,
+): Promise<string | null> {
   const payload = parseJobPayload<PostPublishFinalizePayload>(input.job.payload_json)
   const postId = payload?.post_id ?? input.job.subject_id
-  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
+  const db = await dependencies.openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
     const post = await getPostById(db.client, postId)
     if (!post || post.community_id !== input.job.community_id) {
@@ -519,7 +532,7 @@ export async function runPostPublishFinalize(input: CommunityJobHandlerInput): P
       })
     }
 
-    const controlClient = getControlPlaneClient(input.env)
+    const controlClient = dependencies.getControlPlaneClient(input.env)
     let bundle = await getSongArtifactBundle(controlClient, input.job.community_id, post.song_artifact_bundle_id)
     if (!bundle) {
       throw internalError("Song artifact bundle is missing for async finalize")

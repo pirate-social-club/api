@@ -8,6 +8,14 @@ import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { withTransaction } from "../transactions"
 
+type SongPracticeRewardsDependencies = {
+  openCommunityWriteClient: typeof openCommunityWriteClient
+}
+
+const songPracticeRewardsDependencies: SongPracticeRewardsDependencies = {
+  openCommunityWriteClient,
+}
+
 type RewardKind =
   | "study_streak_day"
   | "study_streak_milestone_7"
@@ -368,7 +376,7 @@ export async function reconcileSongPracticeRewards(input: {
   maxCommunities?: number
   maxQualifiedDaysPerCommunity?: number
   lookbackDays?: number
-}): Promise<SongPracticeRewardsReconciliationSummary> {
+}, dependencies: SongPracticeRewardsDependencies = songPracticeRewardsDependencies): Promise<SongPracticeRewardsReconciliationSummary> {
   const config = resolveRewardConfig(input.env)
   const summary = emptySummary(config.enabled)
   if (!config.enabled) return summary
@@ -384,7 +392,7 @@ export async function reconcileSongPracticeRewards(input: {
   for (const communityId of communityIds) {
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
-      db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      db = await dependencies.openCommunityWriteClient(input.env, input.communityRepository, communityId)
       summary.scanned_communities += 1
       const creditedDailyKeys = await existingDailyKeys({
         client: input.controlPlaneClient,
