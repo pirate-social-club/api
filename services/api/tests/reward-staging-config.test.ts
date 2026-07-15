@@ -24,6 +24,11 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x053228674F055FBb94d1B8118638F61a4a6ee512",
       REWARDS_CAMPAIGN_RPC_URL: "https://sepolia.base.org",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x47FfE9baBf7b64636298185dBf63Db9561334956",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
       REWARDS_CAMPAIGN_ALERT_OWNER: "habitant_barber905@simplelogin.com",
       REWARDS_CAMPAIGN_ALERT_DESTINATION: "piratesocialclub@proton.me",
       REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
@@ -40,6 +45,6 @@ describe("staging reward money-loop configuration", () => {
     expect(vars.REWARDS_CAMPAIGNS_ENABLED).toBeUndefined()
     expect(vars.REWARDS_IDENTITY_PROVIDER).toBeUndefined()
     expect(vars.REWARDS_CAMPAIGN_CHAIN_ID).toBeUndefined()
+    expect(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS).toBeUndefined()
   })
 })
-
