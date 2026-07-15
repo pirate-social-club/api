@@ -10,6 +10,7 @@ import {
 } from "viem"
 import { WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import type { Env } from "../../env"
+import { sha256Hex } from "../crypto"
 import {
   resolveStoryRoyaltyPolicyAddress,
   type StoryRoyaltyRegistrationResult,
@@ -43,6 +44,15 @@ const RECOVERY_ABI = parseAbi([
   "event IpRoyaltyVaultDeployed(address ipId, address ipRoyaltyVault)",
 ])
 
+const METADATA_BODY = JSON.stringify({
+  community_id: "cmt_effect",
+  asset_id: "ast_effect",
+  primary_content_hash: `0x${"44".repeat(32)}`,
+  rights_basis: "original",
+  creator_wallet_address: "0x3333333333333333333333333333333333333333",
+})
+const METADATA_HASH = `0x${await sha256Hex(METADATA_BODY)}`
+
 const effect: StoryRegistrationEffect = {
   operationId: "sro_receipt",
   registrationKind: "original",
@@ -62,8 +72,8 @@ const result: StoryRoyaltyRegistrationResult = {
   storyIpId: IP_ID,
   storyIpNftContract: SPG,
   storyIpNftTokenId: "42",
-  storyIpMetadataUri: "ipfs://ip-metadata",
-  storyIpMetadataHash: `0x${"66".repeat(32)}`,
+  storyIpMetadataUri: "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3gq",
+  storyIpMetadataHash: METADATA_HASH,
   storyNftMetadataUri: "ipfs://nft-metadata",
   storyNftMetadataHash: `0x${"77".repeat(32)}`,
   ipRoyaltyVault: "0x4444444444444444444444444444444444444444",
@@ -149,9 +159,13 @@ function receiptClient(overrides: {
   from?: Address
   status?: "success" | "reverted"
   logs?: ReturnType<typeof registrationLog>[]
+  latestBlockNumber?: bigint
+  canonicalBlockHash?: Hash
 } = {}): StoryRegistrationReceiptClient {
   return {
     getChainId: async () => overrides.chainId ?? 1315,
+    getBlockNumber: async () => overrides.latestBlockNumber ?? 127n,
+    getBlock: async () => ({ hash: overrides.canonicalBlockHash ?? BLOCK_HASH }),
     getTransaction: async () => ({ from: overrides.from ?? SIGNER }),
     getTransactionReceipt: async () => ({
       blockHash: BLOCK_HASH,
@@ -170,9 +184,12 @@ describe("Story registration effect receipt resolution", () => {
     await expect(verifyStoryRegistrationReceipt({
       env,
       effect,
+      communityId: "cmt_effect",
+      assetId: "ast_effect",
       providerTxRef: TX_HASH,
       result,
       client: receiptClient(),
+      fetchImpl: async () => new Response(METADATA_BODY, { headers: { "content-type": "application/json" } }),
     })).resolves.toEqual({
       blockHash: BLOCK_HASH,
       blockNumber: "123",
@@ -185,26 +202,44 @@ describe("Story registration effect receipt resolution", () => {
 
   test("fails closed for signer, chain, receipt, event, and result mismatches", async () => {
     await expect(verifyStoryRegistrationReceipt({
-      env, effect, providerTxRef: TX_HASH, result,
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
       client: receiptClient({ from: "0x7777777777777777777777777777777777777777" }),
     })).rejects.toMatchObject({ code: "story_signer_mismatch" })
     await expect(verifyStoryRegistrationReceipt({
-      env, effect, providerTxRef: TX_HASH, result,
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
       client: receiptClient({ chainId: 1514 }),
     })).rejects.toMatchObject({ code: "story_chain_mismatch" })
     await expect(verifyStoryRegistrationReceipt({
-      env, effect, providerTxRef: TX_HASH, result,
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
       client: receiptClient({ status: "reverted" }),
     })).rejects.toMatchObject({ code: "story_receipt_not_successful" })
     await expect(verifyStoryRegistrationReceipt({
-      env, effect, providerTxRef: TX_HASH, result,
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
       client: receiptClient({ logs: [] }),
     })).rejects.toMatchObject({ code: "story_ip_registration_event_mismatch" })
     await expect(verifyStoryRegistrationReceipt({
-      env, effect, providerTxRef: TX_HASH,
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH,
       result: { ...result, storyIpNftTokenId: "43" },
       client: receiptClient(),
     })).rejects.toMatchObject({ code: "story_ip_registration_result_mismatch" })
+  })
+
+  test("requires canonical finality and metadata bound to the journal asset", async () => {
+    await expect(verifyStoryRegistrationReceipt({
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
+      client: receiptClient({ latestBlockNumber: 126n }),
+      fetchImpl: async () => new Response(METADATA_BODY),
+    })).rejects.toMatchObject({ code: "story_receipt_not_final" })
+    await expect(verifyStoryRegistrationReceipt({
+      env, effect, communityId: "cmt_effect", assetId: "ast_effect", providerTxRef: TX_HASH, result,
+      client: receiptClient({ canonicalBlockHash: `0x${"ee".repeat(32)}` }),
+      fetchImpl: async () => new Response(METADATA_BODY),
+    })).rejects.toMatchObject({ code: "story_receipt_reorged" })
+    await expect(verifyStoryRegistrationReceipt({
+      env, effect, communityId: "cmt_other", assetId: "ast_effect", providerTxRef: TX_HASH, result,
+      client: receiptClient(),
+      fetchImpl: async () => new Response(METADATA_BODY),
+    })).rejects.toMatchObject({ code: "story_metadata_identity_mismatch" })
   })
 
   test("separately proves a reverted receipt is safe to retry", async () => {

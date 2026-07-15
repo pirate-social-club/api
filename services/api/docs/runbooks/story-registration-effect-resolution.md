@@ -30,9 +30,10 @@ There are four valid outcomes:
 1. **Receipt is pending or RPC reads disagree:** wait and investigate the RPC
    providers. Do not change the journal.
 2. **Receipt succeeded:** use the successful-receipt action below. It verifies
-   the journal's chain and signer, the canonical Story registry, IP/NFT IDs,
-   metadata events, license or derivative events, royalty vault, and runtime
-   royalty configuration before changing state.
+   the journal's chain and signer, five canonical confirmations, the Story
+   registry, IP/NFT IDs, metadata events and payload identity, license or
+   derivative events, royalty vault, and runtime royalty configuration before
+   changing state.
 3. **Receipt reverted:** use the reverted-receipt action below. A canonical
    reverted receipt proves that retrying cannot duplicate the registration.
 4. **No transaction was broadcast:** use the no-broadcast attestation only
@@ -47,7 +48,9 @@ state still describe exactly what happened.
 ## Successful Receipt
 
 Build the recovery result from the receipt's canonical Story events. The API
-rejects any mismatch; it does not trust these supplied values on their own.
+rejects any mismatch; it does not trust these supplied values on their own. It
+also reads the IP metadata URI and verifies its SHA-256 plus community, asset,
+content hash, rights basis, and creator against the fenced journal request.
 
 ```bash
 curl -sS -X POST \

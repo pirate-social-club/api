@@ -380,6 +380,8 @@ debugPipeline.post("/story-registration-effect/confirm-receipt", async (c) => {
       const evidence = await verifyStoryRegistrationReceipt({
         env: c.env,
         effect,
+        communityId,
+        assetId,
         providerTxRef: fields.providerTxRef,
         result,
       })

@@ -11,6 +11,7 @@ import {
 } from "viem"
 import { WIP_TOKEN_ADDRESS } from "@story-protocol/core-sdk"
 import type { Env } from "../../env"
+import { sha256Hex } from "../crypto"
 import {
   resolveStoryRoyaltyPolicyAddress,
   type StoryRoyaltyRegistrationResult,
@@ -50,6 +51,8 @@ const STORY_RECOVERY_ABI = parseAbi([
   "event IpRoyaltyVaultDeployed(address ipId, address ipRoyaltyVault)",
 ])
 
+const STORY_REGISTRATION_RESOLUTION_MIN_CONFIRMATIONS = 5n
+
 type ReceiptLog = {
   address: Address
   data: Hex
@@ -58,6 +61,8 @@ type ReceiptLog = {
 
 export type StoryRegistrationReceiptClient = {
   getChainId(): Promise<number>
+  getBlockNumber(): Promise<bigint>
+  getBlock(input: { blockNumber: bigint }): Promise<{ hash: Hash }>
   getTransaction(input: { hash: Hash }): Promise<{ from: Address }>
   getTransactionReceipt(input: { hash: Hash }): Promise<{
     blockHash: Hash
@@ -221,6 +226,84 @@ function receiptClientForEnv(env: Env): StoryRegistrationReceiptClient {
   return client as unknown as StoryRegistrationReceiptClient
 }
 
+function storyMetadataReadUrl(env: Env, uri: string): string {
+  if (uri.startsWith("ipfs://")) {
+    const reference = uri.slice("ipfs://".length).replace(/^\/+/, "")
+    const gateway = String(env.IPFS_GATEWAY_URL || "https://psc.myfilebase.com/ipfs").trim().replace(/\/+$/, "")
+    if (/^(?:Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{20,})$/.test(reference)) return `${gateway}/${reference}`
+  }
+  if (uri.startsWith("bzz://")) {
+    const reference = uri.slice("bzz://".length).replace(/^\/+/, "")
+    const gateway = String(env.SWARM_BEE_API_URL || "").trim().replace(/\/+$/, "")
+    if (gateway && /^[0-9a-fA-F]{64}$/.test(reference)) return `${gateway}/bzz/${reference}`
+  }
+  throw new StoryRegistrationResolutionError("story_metadata_uri_unreadable", 409, "Story metadata URI cannot be verified")
+}
+
+async function verifyStoryMetadataIdentity(input: {
+  env: Env
+  effect: StoryRegistrationEffect
+  communityId: string
+  assetId: string
+  result: StoryRoyaltyRegistrationResult
+  fetchImpl?: typeof fetch
+}): Promise<void> {
+  const fetchImpl = input.fetchImpl ?? fetch
+  let response: Response
+  try {
+    response = await fetchImpl(storyMetadataReadUrl(input.env, input.result.storyIpMetadataUri), {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    })
+  } catch (cause) {
+    if (cause instanceof StoryRegistrationResolutionError) throw cause
+    throw new StoryRegistrationResolutionError(
+      "story_metadata_unavailable",
+      503,
+      "Story metadata could not be read; no journal state changed",
+      { cause },
+    )
+  }
+  if (!response.ok) {
+    throw new StoryRegistrationResolutionError("story_metadata_unavailable", 503, "Story metadata could not be read; no journal state changed")
+  }
+  const declaredLength = Number(response.headers.get("content-length") || 0)
+  if (declaredLength > 1_000_000) {
+    throw new StoryRegistrationResolutionError("story_metadata_too_large", 409, "Story metadata exceeds the recovery limit")
+  }
+  let body: string
+  try {
+    body = await response.text()
+  } catch (cause) {
+    throw new StoryRegistrationResolutionError(
+      "story_metadata_unavailable",
+      503,
+      "Story metadata could not be read; no journal state changed",
+      { cause },
+    )
+  }
+  if (body.length > 1_000_000 || `0x${await sha256Hex(body)}`.toLowerCase() !== input.result.storyIpMetadataHash.toLowerCase()) {
+    throw new StoryRegistrationResolutionError("story_metadata_hash_mismatch", 409, "Story metadata does not match its canonical hash")
+  }
+  let metadata: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(body) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid metadata")
+    metadata = parsed as Record<string, unknown>
+  } catch (cause) {
+    throw new StoryRegistrationResolutionError("story_metadata_invalid", 409, "Story metadata is not valid JSON", { cause })
+  }
+  if (
+    metadata.community_id !== input.communityId
+    || metadata.asset_id !== input.assetId
+    || String(metadata.primary_content_hash || "").toLowerCase() !== input.effect.primaryContentHash.toLowerCase()
+    || metadata.rights_basis !== input.effect.registrationKind
+    || String(metadata.creator_wallet_address || "").toLowerCase() !== input.effect.creatorWalletAddress.toLowerCase()
+  ) {
+    throw new StoryRegistrationResolutionError("story_metadata_identity_mismatch", 409, "Story metadata belongs to a different journal request")
+  }
+}
+
 async function readStoryRegistrationReceipt(input: {
   env: Env
   effect: StoryRegistrationEffect
@@ -265,6 +348,30 @@ async function readStoryRegistrationReceipt(input: {
   if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
     throw new StoryRegistrationResolutionError("story_receipt_hash_mismatch", 409, "receipt hash does not match the requested transaction")
   }
+  let latestBlockNumber: bigint
+  let canonicalBlock: { hash: Hash }
+  try {
+    ;[latestBlockNumber, canonicalBlock] = await Promise.all([
+      client.getBlockNumber(),
+      client.getBlock({ blockNumber: receipt.blockNumber }),
+    ])
+  } catch (cause) {
+    throw new StoryRegistrationResolutionError(
+      "story_receipt_finality_unavailable",
+      503,
+      "Story receipt finality could not be verified; no journal state changed",
+      { cause },
+    )
+  }
+  if (canonicalBlock.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+    throw new StoryRegistrationResolutionError("story_receipt_reorged", 409, "receipt block is no longer canonical")
+  }
+  const confirmations = latestBlockNumber >= receipt.blockNumber
+    ? latestBlockNumber - receipt.blockNumber + 1n
+    : 0n
+  if (confirmations < STORY_REGISTRATION_RESOLUTION_MIN_CONFIRMATIONS) {
+    throw new StoryRegistrationResolutionError("story_receipt_not_final", 409, "receipt does not yet have enough confirmations")
+  }
   return { expectedRegistry, hash, receipt }
 }
 
@@ -289,9 +396,12 @@ export async function verifyStoryRegistrationRevertedReceipt(input: {
 export async function verifyStoryRegistrationReceipt(input: {
   env: Env
   effect: StoryRegistrationEffect
+  communityId: string
+  assetId: string
   providerTxRef: string
   result: StoryRoyaltyRegistrationResult
   client?: StoryRegistrationReceiptClient
+  fetchImpl?: typeof fetch
 }): Promise<StoryRegistrationReceiptEvidence> {
   const { expectedRegistry, hash, receipt } = await readStoryRegistrationReceipt(input)
   if (receipt.status !== "success") {
@@ -405,6 +515,7 @@ export async function verifyStoryRegistrationReceipt(input: {
   ) {
     throw new StoryRegistrationResolutionError("story_royalty_result_mismatch", 409, "recovery royalty configuration does not match runtime or receipt")
   }
+  await verifyStoryMetadataIdentity(input)
 
   return {
     blockHash: receipt.blockHash,
