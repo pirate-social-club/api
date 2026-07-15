@@ -13,6 +13,14 @@ async function createSignalsClient() {
     )
   `)
   await client.execute(`
+    CREATE TABLE story_registration_effects (
+      asset_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      provider_tx_ref TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
     CREATE TABLE assets (
       asset_id TEXT PRIMARY KEY,
       royalty_allocation_status TEXT NOT NULL,
@@ -121,6 +129,13 @@ describe("collectCommunityPublishAlertSignals", () => {
         `,
         args: ["job_old_retry", "ast_old_retry", "2026-07-08T10:00:00.000Z", "2026-07-08T10:05:00.000Z"],
       },
+      {
+        sql: `
+          INSERT INTO story_registration_effects (asset_id, status, provider_tx_ref, updated_at)
+          VALUES (?1, 'reconciliation_required', ?2, ?3)
+        `,
+        args: ["ast_story_unknown", `0x${"ab".repeat(32)}`, "2026-07-08T12:04:00.000Z"],
+      },
     ])
 
     const signals = await collectCommunityPublishAlertSignals({
@@ -141,5 +156,7 @@ describe("collectCommunityPublishAlertSignals", () => {
       attempt_count: 2,
       last_checkpoint: "story_publish_submitted",
     })
+    expect(signals.story_registration_reconciliation_required).toBe(1)
+    expect(signals.story_registration_reconciliation_samples[0]?.asset_id).toBe("ast_story_unknown")
   })
 })

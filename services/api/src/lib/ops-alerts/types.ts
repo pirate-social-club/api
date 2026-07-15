@@ -24,6 +24,13 @@ export type RetriedLockedDeliveryJobSample = {
   updated_at: string | null
 }
 
+export type StoryRegistrationReconciliationSample = {
+  asset_id: string
+  status: string
+  provider_tx_ref: string | null
+  updated_at: string | null
+}
+
 export type CommunityPublishAlertSignals = {
   community_id: string
   failure_codes: PublishFailureCount[]
@@ -34,6 +41,8 @@ export type CommunityPublishAlertSignals = {
   stale_locked_delivery_asset_samples: StaleLockedDeliveryAssetSample[]
   retried_locked_delivery_jobs: number
   retried_locked_delivery_job_samples: RetriedLockedDeliveryJobSample[]
+  story_registration_reconciliation_required: number
+  story_registration_reconciliation_samples: StoryRegistrationReconciliationSample[]
 }
 
 export type OpsAlertSeverity = "high" | "medium" | "low"

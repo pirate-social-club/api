@@ -34,6 +34,8 @@ function testJob(overrides: Partial<CommunityJobRow> = {}): CommunityJobRow {
     last_checkpoint_at: null,
     attempt_started_at: null,
     attempt_deadline_at: null,
+    attempt_id: "cja_test",
+    lease_expires_at: "2026-01-01T00:02:00.000Z",
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,

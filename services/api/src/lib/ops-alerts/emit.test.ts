@@ -29,6 +29,8 @@ const signals: CommunityPublishAlertSignals[] = [
     stale_locked_delivery_asset_samples: [],
     retried_locked_delivery_jobs: 0,
     retried_locked_delivery_job_samples: [],
+    story_registration_reconciliation_required: 0,
+    story_registration_reconciliation_samples: [],
   },
   {
     community_id: "c2",
@@ -59,6 +61,13 @@ const signals: CommunityPublishAlertSignals[] = [
       last_checkpoint: "story_publish_submitted",
       updated_at: "2026-07-08T10:02:00.000Z",
     }],
+    story_registration_reconciliation_required: 1,
+    story_registration_reconciliation_samples: [{
+      asset_id: "ast_story_unknown",
+      status: "reconciliation_required",
+      provider_tx_ref: `0x${"ab".repeat(32)}`,
+      updated_at: "2026-07-08T10:03:00.000Z",
+    }],
   },
 ]
 
@@ -75,6 +84,7 @@ describe("ops-alerts emit", () => {
     expect(alerts.find((alert) => alert.key === "stuck_royalty_allocation_projection_sync")?.severity).toBe("high")
     expect(alerts.find((alert) => alert.key === "stale_locked_delivery_requested_assets")?.count).toBe(1)
     expect(alerts.find((alert) => alert.key === "retried_locked_asset_delivery_jobs")?.severity).toBe("medium")
+    expect(alerts.find((alert) => alert.key === "story_registration_reconciliation_required")?.severity).toBe("high")
   })
 
   test("dedupe checks without marking, then suppresses only after sent alerts are marked", async () => {

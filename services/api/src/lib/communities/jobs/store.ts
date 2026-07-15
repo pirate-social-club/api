@@ -59,6 +59,8 @@ export type CommunityJobRow = {
   last_checkpoint_at: string | null
   attempt_started_at: string | null
   attempt_deadline_at: string | null
+  attempt_id: string | null
+  lease_expires_at: string | null
   created_at: string
   updated_at: string
 }
@@ -66,7 +68,7 @@ export type CommunityJobRow = {
 const COMMUNITY_JOB_SELECT_COLUMNS = `
   job_id, community_id, job_type, subject_type, subject_id, status, payload_json, result_ref,
   error_code, attempt_count, available_at, last_checkpoint, last_checkpoint_at,
-  attempt_started_at, attempt_deadline_at, created_at, updated_at
+  attempt_started_at, attempt_deadline_at, attempt_id, lease_expires_at, created_at, updated_at
 `
 
 function toCommunityJobRow(row: unknown): CommunityJobRow {
@@ -86,6 +88,8 @@ function toCommunityJobRow(row: unknown): CommunityJobRow {
     last_checkpoint_at: stringOrNull(rowValue(row, "last_checkpoint_at")),
     attempt_started_at: stringOrNull(rowValue(row, "attempt_started_at")),
     attempt_deadline_at: stringOrNull(rowValue(row, "attempt_deadline_at")),
+    attempt_id: stringOrNull(rowValue(row, "attempt_id")),
+    lease_expires_at: stringOrNull(rowValue(row, "lease_expires_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
@@ -171,11 +175,14 @@ export async function resetStaleRunningCommunityJobs(input: {
           error_code = 'stale_running_timeout',
           available_at = ?3,
           attempt_deadline_at = NULL,
+          attempt_id = NULL,
+          lease_expires_at = NULL,
           updated_at = ?3
       WHERE status = 'running'
         AND (
           (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?2)
-          OR (COALESCE(last_checkpoint_at, updated_at) <= ?1)
+          OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
+          OR (lease_expires_at IS NULL AND COALESCE(last_checkpoint_at, updated_at) <= ?1)
         )
         AND (?4 IS NULL OR community_id = ?4)
     `,
@@ -199,13 +206,16 @@ export async function resetStaleRunningCommunityJobById(input: {
           error_code = 'stale_running_timeout',
           available_at = ?3,
           attempt_deadline_at = NULL,
+          attempt_id = NULL,
+          lease_expires_at = NULL,
           updated_at = ?3
       WHERE job_id = ?1
         AND community_id = ?2
         AND status = 'running'
         AND (
           (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?3)
-          OR (COALESCE(last_checkpoint_at, updated_at) <= ?4)
+          OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
+          OR (lease_expires_at IS NULL AND COALESCE(last_checkpoint_at, updated_at) <= ?4)
         )
     `,
     args: [input.jobId, input.communityId, input.now, input.staleCheckpointBefore],
@@ -299,6 +309,8 @@ export async function enqueueCommunityJob(input: {
     last_checkpoint_at: null,
     attempt_started_at: null,
     attempt_deadline_at: null,
+    attempt_id: null,
+    lease_expires_at: null,
     created_at: input.createdAt,
     updated_at: input.createdAt,
   }
@@ -309,6 +321,8 @@ export async function markCommunityJobRunning(input: {
   jobId: string
   now: string
   attemptDeadlineAt: string
+  attemptId: string
+  leaseExpiresAt: string
 }): Promise<CommunityJobRow | null> {
   const row = await executeFirst(input.client, {
     sql: `
@@ -320,12 +334,14 @@ export async function markCommunityJobRunning(input: {
           last_checkpoint_at = ?2,
           attempt_started_at = ?2,
           attempt_deadline_at = ?3,
+          attempt_id = ?4,
+          lease_expires_at = ?5,
           updated_at = ?2
       WHERE job_id = ?1
         AND status IN ('queued', 'failed')
       RETURNING ${COMMUNITY_JOB_SELECT_COLUMNS}
     `,
-    args: [input.jobId, input.now, input.attemptDeadlineAt],
+    args: [input.jobId, input.now, input.attemptDeadlineAt, input.attemptId, input.leaseExpiresAt],
   })
 
   return row ? toCommunityJobRow(row) : null
@@ -335,10 +351,11 @@ export async function recordCommunityJobCheckpoint(input: {
   client: DbExecutor
   jobId: string
   communityId: string
+  attemptId: string
   checkpoint: CommunityJobCheckpoint
   now: string
   detailsJson?: string | null
-}): Promise<void> {
+}): Promise<boolean> {
   const update = await input.client.execute({
     sql: `
       UPDATE community_jobs
@@ -348,11 +365,12 @@ export async function recordCommunityJobCheckpoint(input: {
       WHERE job_id = ?1
         AND community_id = ?2
         AND status = 'running'
+        AND attempt_id = ?5
     `,
-    args: [input.jobId, input.communityId, input.checkpoint, input.now],
+    args: [input.jobId, input.communityId, input.checkpoint, input.now, input.attemptId],
   })
   if ((update.rowsAffected ?? 0) === 0) {
-    return
+    return false
   }
   await input.client.execute({
     sql: `
@@ -371,15 +389,40 @@ export async function recordCommunityJobCheckpoint(input: {
       input.now,
     ],
   })
+  return true
+}
+
+export async function renewCommunityJobLease(input: {
+  client: DbExecutor
+  jobId: string
+  communityId: string
+  attemptId: string
+  now: string
+  leaseExpiresAt: string
+}): Promise<boolean> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE community_jobs
+      SET lease_expires_at = ?5,
+          updated_at = ?4
+      WHERE job_id = ?1
+        AND community_id = ?2
+        AND status = 'running'
+        AND attempt_id = ?3
+    `,
+    args: [input.jobId, input.communityId, input.attemptId, input.now, input.leaseExpiresAt],
+  })
+  return (result.rowsAffected ?? 0) > 0
 }
 
 export async function markCommunityJobSucceeded(input: {
   client: DbExecutor
   jobId: string
+  attemptId: string
   resultRef?: string | null
   now: string
 }): Promise<CommunityJobRow | null> {
-  await input.client.execute({
+  const update = await input.client.execute({
     sql: `
       UPDATE community_jobs
       SET status = 'succeeded',
@@ -387,12 +430,16 @@ export async function markCommunityJobSucceeded(input: {
           error_code = NULL,
           available_at = NULL,
           attempt_deadline_at = NULL,
+          attempt_id = NULL,
+          lease_expires_at = NULL,
           updated_at = ?3
       WHERE job_id = ?1
+        AND status = 'running'
+        AND attempt_id = ?4
     `,
-    args: [input.jobId, input.resultRef ?? null, input.now],
+    args: [input.jobId, input.resultRef ?? null, input.now, input.attemptId],
   })
-
+  if ((update.rowsAffected ?? 0) === 0) return null
   return getCommunityJobById({
     client: input.client,
     jobId: input.jobId,
@@ -402,23 +449,28 @@ export async function markCommunityJobSucceeded(input: {
 export async function markCommunityJobFailed(input: {
   client: DbExecutor
   jobId: string
+  attemptId: string
   errorCode: string
   availableAt?: string | null
   now: string
 }): Promise<CommunityJobRow | null> {
-  await input.client.execute({
+  const update = await input.client.execute({
     sql: `
       UPDATE community_jobs
       SET status = 'failed',
           error_code = ?2,
           available_at = ?3,
           attempt_deadline_at = NULL,
+          attempt_id = NULL,
+          lease_expires_at = NULL,
           updated_at = ?4
       WHERE job_id = ?1
+        AND status = 'running'
+        AND attempt_id = ?5
     `,
-    args: [input.jobId, input.errorCode, input.availableAt ?? null, input.now],
+    args: [input.jobId, input.errorCode, input.availableAt ?? null, input.now, input.attemptId],
   })
-
+  if ((update.rowsAffected ?? 0) === 0) return null
   return getCommunityJobById({
     client: input.client,
     jobId: input.jobId,
@@ -455,6 +507,8 @@ export async function recycleCommunityJobForRetry(input: {
           last_checkpoint_at = NULL,
           attempt_started_at = NULL,
           attempt_deadline_at = NULL,
+          attempt_id = NULL,
+          lease_expires_at = NULL,
           updated_at = ?4
       WHERE job_id = ?1
         AND community_id = ?2

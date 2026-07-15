@@ -71,6 +71,20 @@ describe("sql migration helpers", () => {
     expect(toSqliteCompatibleStatement("DO $$ BEGIN SELECT 1; END $$;")).toBeNull()
   })
 
+  test("rewrites fixed-length PostgreSQL hex regex checks for sqlite", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE observed_funding_receipts (
+        token_address TEXT NOT NULL CHECK (token_address ~ '^0x[0-9a-f]{40}$'),
+        tx_hash TEXT NOT NULL CHECK (tx_hash ~ '^0x[0-9a-f]{64}$')
+      );
+    `)
+
+    expect(statement).toContain("length(token_address) = 42")
+    expect(statement).toContain("substr(token_address, 3) NOT GLOB '*[^0-9a-f]*'")
+    expect(statement).toContain("length(tx_hash) = 66")
+    expect(statement).not.toContain(" ~ ")
+  })
+
   test("ignores comment-only migrations", () => {
     const sql = `
       -- Retired before runtime wiring.

@@ -5,6 +5,7 @@ import type { Client } from "../sql-client"
 import type { Env } from "../../env"
 import type { Post, SongArtifactBundle } from "../../types"
 import { nowIso } from "../helpers"
+import { sha256Hex } from "../crypto"
 import { resolveStoryOperatorDirectSigner } from "./story-direct-signer"
 import {
   resolveStoryChainId,
@@ -28,6 +29,11 @@ import {
   buildStoryRoyaltyMetadataPayloads,
   type StoryRoyaltyMetadataAccessMode,
 } from "./story-royalty-metadata"
+import {
+  confirmStoryRegistrationEffect,
+  failStoryRegistrationEffect,
+  reserveStoryRegistrationEffect,
+} from "./story-registration-effect-store"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -455,79 +461,36 @@ function capStoryRoyaltyGasLimitField(value: unknown, cap: bigint): bigint | und
   return value
 }
 
-const STORY_REGISTRATION_MAX_ATTEMPTS = 3
-const STORY_REGISTRATION_RETRY_BASE_DELAY_MS = 400
-
-function collectStoryErrorMessages(error: unknown): string {
-  const parts: string[] = []
+function storyErrorChainTransactionHash(error: unknown): string | null {
   const seen = new Set<unknown>()
   let current: unknown = error
   while (current && !seen.has(current)) {
     seen.add(current)
-    const obj = current as { message?: unknown; cause?: unknown }
-    if (typeof obj.message === "string") parts.push(obj.message)
-    else if (!(current instanceof Error)) parts.push(String(current))
-    current = obj.cause
-  }
-  return parts.join(" | ")
-}
-
-// A tx hash or a post-broadcast viem error anywhere in the chain means a
-// transaction may already be in flight; retrying the mint (allowDuplicates:true)
-// could double-mint, so such errors are never retryable.
-function storyErrorChainHasBroadcastTx(error: unknown): boolean {
-  const seen = new Set<unknown>()
-  let current: unknown = error
-  while (current && !seen.has(current)) {
-    seen.add(current)
-    const obj = current as { transactionHash?: unknown; name?: unknown; cause?: unknown }
-    if (typeof obj.transactionHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(obj.transactionHash)) {
-      return true
+    const value = current as { transactionHash?: unknown; cause?: unknown }
+    if (typeof value.transactionHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.transactionHash)) {
+      return value.transactionHash
     }
-    if (
-      obj.name === "TransactionExecutionError" ||
-      obj.name === "WaitForTransactionReceiptTimeoutError" ||
-      obj.name === "TransactionReceiptNotFoundError"
-    ) {
-      return true
-    }
-    current = obj.cause
+    current = value.cause
   }
-  return false
+  return null
 }
 
-// Retry ONLY pre-broadcast transport/simulate failures (the observed
-// `mintAndRegisterIpAndAttachPILTerms reverted ... RPC Request failed` is a viem
-// RpcRequestError from the pre-write eth_call, so no tx was sent). Never retry
-// deterministic failures (insufficient operator funds, gas-policy rejection) or
-// anything that may have already broadcast a tx.
-export function isRetryableStoryRegistrationError(error: unknown): boolean {
-  const message = collectStoryErrorMessages(error)
-  if (/exceeds the balance|insufficient funds|story_royalty_gas_limit_exceeds_policy|funding below floor|funding_below_floor/i.test(message)) {
-    return false
+function canonicalStoryRegistrationValue(value: unknown): unknown {
+  if (typeof value === "bigint") return { bigint: value.toString() }
+  if (value === undefined) return undefined
+  if (value == null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map(canonicalStoryRegistrationValue)
+  const source = value as Record<string, unknown>
+  const result: Record<string, unknown> = {}
+  for (const key of Object.keys(source).sort()) {
+    const canonical = canonicalStoryRegistrationValue(source[key])
+    if (canonical !== undefined) result[key] = canonical
   }
-  if (storyErrorChainHasBroadcastTx(error)) return false
-  return /RPC Request failed|HTTP request failed|fetch failed|Failed to fetch|timed out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|\b(429|500|502|503|504)\b|rate.?limit|InternalRpcError|took too long|network error/i.test(message)
+  return result
 }
 
-function delayMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-export async function withStoryRegistrationRetry<T>(operation: () => Promise<T>): Promise<T> {
-  let lastError: unknown
-  for (let attempt = 1; attempt <= STORY_REGISTRATION_MAX_ATTEMPTS; attempt++) {
-    try {
-      return await operation()
-    } catch (error) {
-      lastError = error
-      if (attempt >= STORY_REGISTRATION_MAX_ATTEMPTS || !isRetryableStoryRegistrationError(error)) {
-        throw error
-      }
-      await delayMs(STORY_REGISTRATION_RETRY_BASE_DELAY_MS * attempt)
-    }
-  }
-  throw lastError
+async function storyRegistrationCallDataHash(value: unknown): Promise<string> {
+  return `0x${await sha256Hex(JSON.stringify(canonicalStoryRegistrationValue(value)))}`
 }
 
 function normalizeStoryRoyaltyRightsBasis(
@@ -809,7 +772,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   }
 
   const rightsBasis = normalizeStoryRoyaltyRightsBasis(input.rightsBasis)
-  if (!rightsBasis) {
+  if (!rightsBasis || rightsBasis === "none") {
     return null
   }
 
@@ -895,26 +858,10 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         percentage: allocation.percentage,
       }))
     : undefined
-  const resolveVault = async (ipId: `0x${string}`): Promise<string | null> => {
-    try {
-      const vault = await storyClient.royalty?.getRoyaltyVaultAddress(ipId)
-      return typeof vault === "string" && vault !== "0x0000000000000000000000000000000000000000" ? vault : null
-    } catch (error) {
-      console.warn("[story] royalty vault lookup failed", {
-        community_id: input.communityId,
-        asset_id: input.assetId,
-        story_ip_id: ipId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      return null
-    }
-  }
-
-  if (rightsBasis === "derivative") {
-    const derivativeResponse = await withStoryRegistrationRetry(() =>
-      storyClient.ipAsset.registerDerivativeIpAsset({
+  const derivativeRequest = rightsBasis === "derivative"
+    ? {
         nft: {
-          type: "mint",
+          type: "mint" as const,
           spgNftContract,
           recipient: input.creatorWalletAddress as `0x${string}`,
           allowDuplicates: true,
@@ -930,78 +877,146 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
           nftMetadataURI: metadata.nftMetadataUri,
           nftMetadataHash: metadata.nftMetadataHash,
         },
-      }),
-    )
-    const derivativeIpId = derivativeResponse.ipId!
-    const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
-
-    return {
-      storyIpId: derivativeIpId,
-      storyIpNftContract: spgNftContract,
-      storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-      storyIpMetadataUri: metadata.ipMetadataUri,
-      storyIpMetadataHash: metadata.ipMetadataHash,
-      storyNftMetadataUri: metadata.nftMetadataUri,
-      storyNftMetadataHash: metadata.nftMetadataHash,
-      ipRoyaltyVault,
-      storyLicenseTermsId: null,
-      storyLicenseTemplate: null,
-      storyRoyaltyPolicy: royaltyPolicy,
-      storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
-      storyRevenueToken: WIP_TOKEN_ADDRESS,
-      storyRoyaltyRegistrationStatus: "registered",
-      storyDerivativeRegisteredAt: nowIso(),
-      royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
+      }
+    : null
+  const originalLicenseTerms = rightsBasis === "original"
+    ? resolvePilTermsForLicense({
+        licensePreset: requireOriginalLicensePreset(input.licensePreset),
+        commercialRevSharePct: input.commercialRevSharePct,
+        defaultMintingFee,
+        currency: WIP_TOKEN_ADDRESS,
+        royaltyPolicy,
+      })
+    : null
+  const originalRequest = originalLicenseTerms
+    ? {
+        nft: {
+          type: "mint" as const,
+          spgNftContract,
+          recipient: input.creatorWalletAddress as `0x${string}`,
+          allowDuplicates: true,
+        },
+        licenseTermsData: [{ terms: originalLicenseTerms, maxLicenseTokens }],
+        royaltyShares,
+        ipMetadata: {
+          ipMetadataURI: metadata.ipMetadataUri,
+          ipMetadataHash: metadata.ipMetadataHash,
+          nftMetadataURI: metadata.nftMetadataUri,
+          nftMetadataHash: metadata.nftMetadataHash,
+        },
+      }
+    : null
+  const registrationRequest = derivativeRequest ?? originalRequest
+  if (!registrationRequest) throw new Error("story_registration_request_missing")
+  const chainId = resolveStoryChainId(input.env)
+  const callDataHash = await storyRegistrationCallDataHash({
+    version: 1,
+    chainId,
+    signerAddress: operator.value.address.toLowerCase(),
+    registrationKind: rightsBasis,
+    request: registrationRequest,
+  })
+  const resolveVault = async (ipId: `0x${string}`): Promise<string | null> => {
+    try {
+      const vault = await storyClient.royalty?.getRoyaltyVaultAddress(ipId)
+      return typeof vault === "string" && vault !== "0x0000000000000000000000000000000000000000" ? vault : null
+    } catch (error) {
+      console.warn("[story] royalty vault lookup failed", {
+        community_id: input.communityId,
+        asset_id: input.assetId,
+        story_ip_id: ipId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return null
     }
   }
 
-  const licenseTerms = resolvePilTermsForLicense({
-    licensePreset: requireOriginalLicensePreset(input.licensePreset),
-    commercialRevSharePct: input.commercialRevSharePct,
-    defaultMintingFee,
-    currency: WIP_TOKEN_ADDRESS,
-    royaltyPolicy,
+  const reserved = await reserveStoryRegistrationEffect<StoryRoyaltyRegistrationResult>({
+    client: input.client,
+    communityId: input.communityId,
+    assetId: input.assetId,
+    registrationKind: rightsBasis,
+    chainId,
+    signerAddress: operator.value.address,
+    creatorWalletAddress: input.creatorWalletAddress,
+    primaryContentHash: input.primaryContentHash,
+    callDataHash,
+    now: nowIso(),
   })
-  const originalResponse = await withStoryRegistrationRetry(() =>
-    storyClient.ipAsset.registerIpAsset({
-      nft: {
-        type: "mint",
-        spgNftContract,
-        recipient: input.creatorWalletAddress as `0x${string}`,
-        allowDuplicates: true,
-      },
-      licenseTermsData: [
-        {
-          terms: licenseTerms,
-          maxLicenseTokens,
-        },
-      ],
-      royaltyShares,
-      ipMetadata: {
-        ipMetadataURI: metadata.ipMetadataUri,
-        ipMetadataHash: metadata.ipMetadataHash,
-        nftMetadataURI: metadata.nftMetadataUri,
-        nftMetadataHash: metadata.nftMetadataHash,
-      },
-    }),
-  )
+  if (reserved.kind === "confirmed") return reserved.result
 
-  return {
-    storyIpId: originalResponse.ipId!,
-    storyIpNftContract: spgNftContract,
-    storyIpNftTokenId: originalResponse.tokenId!.toString(),
-    storyIpMetadataUri: metadata.ipMetadataUri,
-    storyIpMetadataHash: metadata.ipMetadataHash,
-    storyNftMetadataUri: metadata.nftMetadataUri,
-    storyNftMetadataHash: metadata.nftMetadataHash,
-    ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
-    storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
-    storyLicenseTemplate: null,
-    storyRoyaltyPolicy: royaltyPolicy,
-    storyDerivativeParentIpIds: null,
-    storyRevenueToken: WIP_TOKEN_ADDRESS,
-    storyRoyaltyRegistrationStatus: "registered",
-    storyDerivativeRegisteredAt: null,
-    royaltyDistributionTxHash: String(originalResponse.distributeRoyaltyTokensTxHash || originalResponse.txHash || "").trim() || null,
+  let providerTxRef: string | null = null
+  try {
+    let result: StoryRoyaltyRegistrationResult
+    if (rightsBasis === "derivative") {
+      const derivativeResponse = await storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest!)
+      const derivativeIpId = derivativeResponse.ipId!
+      providerTxRef = String(derivativeResponse.txHash || "").trim() || null
+      const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
+      result = {
+        storyIpId: derivativeIpId,
+        storyIpNftContract: spgNftContract,
+        storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
+        storyIpMetadataUri: metadata.ipMetadataUri,
+        storyIpMetadataHash: metadata.ipMetadataHash,
+        storyNftMetadataUri: metadata.nftMetadataUri,
+        storyNftMetadataHash: metadata.nftMetadataHash,
+        ipRoyaltyVault,
+        storyLicenseTermsId: null,
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: royaltyPolicy,
+        storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
+        storyRevenueToken: WIP_TOKEN_ADDRESS,
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: nowIso(),
+        royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
+      }
+    } else {
+      const originalResponse = await storyClient.ipAsset.registerIpAsset(originalRequest!)
+      providerTxRef = String(originalResponse.txHash || "").trim() || null
+      result = {
+        storyIpId: originalResponse.ipId!,
+        storyIpNftContract: spgNftContract,
+        storyIpNftTokenId: originalResponse.tokenId!.toString(),
+        storyIpMetadataUri: metadata.ipMetadataUri,
+        storyIpMetadataHash: metadata.ipMetadataHash,
+        storyNftMetadataUri: metadata.nftMetadataUri,
+        storyNftMetadataHash: metadata.nftMetadataHash,
+        ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
+        storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: royaltyPolicy,
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: WIP_TOKEN_ADDRESS,
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+        royaltyDistributionTxHash: String(originalResponse.distributeRoyaltyTokensTxHash || originalResponse.txHash || "").trim() || null,
+      }
+    }
+    await confirmStoryRegistrationEffect({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.assetId,
+      operationId: reserved.operationId,
+      result,
+      providerTxRef,
+      now: nowIso(),
+    })
+    return result
+  } catch (error) {
+    const broadcastTxRef = storyErrorChainTransactionHash(error) ?? providerTxRef
+    await failStoryRegistrationEffect({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.assetId,
+      operationId: reserved.operationId,
+      // The SDK owns simulate/sign/send/receipt polling behind one call. Once entered, an
+      // exception cannot prove that broadcast did not happen, even when no hash survives.
+      reconciliationRequired: true,
+      providerTxRef: broadcastTxRef,
+      errorCode: broadcastTxRef ? "story_registration_post_broadcast_error" : "story_registration_outcome_unknown",
+      now: nowIso(),
+    })
+    throw error
   }
 }

@@ -85,6 +85,8 @@ async function createCommunityClient() {
       last_checkpoint_at TEXT,
       attempt_started_at TEXT,
       attempt_deadline_at TEXT,
+      attempt_id TEXT,
+      lease_expires_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )

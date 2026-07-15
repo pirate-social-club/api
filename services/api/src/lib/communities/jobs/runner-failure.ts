@@ -39,6 +39,10 @@ export async function recordCommunityJobFailure(input: {
   return await markCommunityJobFailed({
     client: input.client,
     jobId: input.job.job_id,
+    // A NULL attempt id can only come from a job claimed by the pre-lease runtime.
+    // The sentinel deliberately cannot match: leave that transition to the legacy
+    // sweep instead of allowing an unfenced failure write during the deploy window.
+    attemptId: input.job.attempt_id ?? "missing_attempt_id",
     errorCode: message || "community_job_failed",
     availableAt: input.job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS
       ? null

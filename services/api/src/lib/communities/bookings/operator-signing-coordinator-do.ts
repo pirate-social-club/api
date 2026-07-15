@@ -136,10 +136,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
       }
       if (schemaVersion < 2) {
-        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
-        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN next_attempt_at INTEGER")
-        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN last_error TEXT")
-        this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (2, ?1)", Date.now())
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN next_attempt_at INTEGER")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN last_error TEXT")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (2, ?1)", Date.now())
+        })
       }
     })
   }
@@ -184,8 +186,9 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       return
     }
     const now = Date.now()
-    if (row.next_attempt_at != null && row.next_attempt_at > now) {
-      await this.ensureAlarm(row.next_attempt_at)
+    const runnableAt = this.runnableAt(row, now)
+    if (runnableAt > now) {
+      await this.ensureAlarm(runnableAt)
       return
     }
     try {
@@ -359,8 +362,17 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       await this.ctx.storage.deleteAlarm()
       return
     }
-    const at = next.next_attempt_at == null ? Date.now() : Math.max(Date.now(), next.next_attempt_at)
+    const at = this.runnableAt(next, Date.now())
     await this.ctx.storage.setAlarm(at)
+  }
+
+  /** A live signing claim is work in progress, not immediately runnable retry work. */
+  private runnableAt(row: EffectRow, now: number): number {
+    const retryAt = row.next_attempt_at ?? now
+    const claimExpiresAt = row.claim_token && row.claim_expires_at != null && row.claim_expires_at > now
+      ? row.claim_expires_at
+      : now
+    return Math.max(now, retryAt, claimExpiresAt)
   }
 
   /** Claim the row for signing (atomic, with expiry), sign off-lock, then CAS to prepared. */
