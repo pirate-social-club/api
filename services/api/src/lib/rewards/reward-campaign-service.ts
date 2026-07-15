@@ -10,7 +10,7 @@ import type {
 
 import type { Env } from "../../env"
 import { executeFirst } from "../db-helpers"
-import { badRequestError, conflictError, eligibilityFailed, notFoundError, rateLimited, structuredSurfaceDisabled } from "../errors"
+import { badRequestError, codedConflictError, conflictError, eligibilityFailed, notFoundError, rateLimited, structuredSurfaceDisabled } from "../errors"
 import { classifyBookingPaymentReceipt, type BookingPaymentVerification } from "../communities/commerce/funding-proof-service"
 import { hasUniqueConstraintName } from "../auth/auth-db-query-helpers"
 import { makeId, nowIso } from "../helpers"
@@ -19,6 +19,26 @@ import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
+
+/**
+ * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
+ * "start over" apart from "stop, and never resubmit"; a generic `conflict` code cannot.
+ *
+ * Terminal (never retry the transfer):
+ *   FUNDING_TRANSACTION_ALREADY_CONSUMED — the hash funded something else
+ *   FUNDING_TRANSACTION_MISMATCH         — this quote is bound to a different hash
+ *   FUNDING_QUOTE_EXPIRED                — the transfer was MINED after the quote lapsed
+ * Recoverable (re-quote and start a new transfer):
+ *   FUNDING_QUOTE_ALREADY_CLAIMED        — the quote is spent or refunded
+ *
+ * A pending verification is NOT an error: confirm returns the funding resource with
+ * status `confirming`, and re-calling confirm with the same hash is idempotent, so a client
+ * polls by retrying rather than by interpreting a failure.
+ */
+export const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consumed"
+export const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
+export const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
+export const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
 
 export type RewardCampaignTarget = {
   communityId: string
@@ -600,6 +620,48 @@ function normalizeTxHash(value: string): string {
   return txHash
 }
 
+/**
+ * Marks a claimed funding effect failed and rolls the campaign back out of
+ * `funding_confirming`, mirroring the rejected-verification path. Used when a transfer
+ * verifies but was mined too late to honour: the money is real, so the effect must record
+ * why it was refused rather than silently vanish.
+ */
+async function failFundingEffect(
+  input: { client: Client; campaignId: string; fundingId: string },
+  reason: string,
+  now: string,
+  rowLocks: boolean,
+  txHash: string,
+): Promise<void> {
+  await withTransaction(input.client, "write", async (tx) => {
+    const effect = await selectFunding(tx, input.fundingId, rowLocks)
+    if (!effect) return
+    // Only fail the effect we actually claimed; never clobber a concurrently-settled one.
+    if (requiredString(effect, "status") !== "confirming") return
+    if (stringOrNull(rowValue(effect, "tx_hash")) !== txHash) return
+    await tx.execute({
+      sql: `UPDATE reward_campaign_funding_effects SET status = 'failed', failure_reason = ?2, failed_at = ?3, updated_at = ?3 WHERE reward_campaign_funding_effect_id = ?1`,
+      args: [input.fundingId, reason, now],
+    })
+    await tx.execute({
+      sql: `
+        UPDATE reward_campaigns
+        SET status = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM reward_campaign_funding_effects
+                WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+              ) THEN 'funding_quoted'
+              WHEN funded_cents > 0 THEN 'funding_quoted'
+              ELSE 'draft'
+            END,
+            updated_at = ?2
+        WHERE reward_campaign_id = ?1
+      `,
+      args: [input.campaignId, now],
+    })
+  })
+}
+
 export async function confirmRewardCampaignFunding(input: {
   env: Env
   client: Client
@@ -633,18 +695,37 @@ export async function confirmRewardCampaignFunding(input: {
     const status = requiredString(effect, "status")
     const existingTx = stringOrNull(rowValue(effect, "tx_hash"))
     if (status === "confirmed") {
-      if (existingTx !== txHash) throw conflictError("Funding quote was confirmed with a different transaction")
+      if (existingTx !== txHash) {
+        throw codedConflictError(
+          FUNDING_TRANSACTION_MISMATCH,
+          "Funding quote was confirmed with a different transaction",
+        )
+      }
       return effect
     }
     if (status === "failed") {
-      if (existingTx !== txHash) throw conflictError("Failed funding quote already claimed a different transaction")
+      if (existingTx !== txHash) {
+        throw codedConflictError(
+          FUNDING_TRANSACTION_MISMATCH,
+          "Failed funding quote already claimed a different transaction",
+        )
+      }
       return effect
     }
-    if (status === "refunded") throw conflictError("Funding quote was already refunded")
-    if (existingTx && existingTx !== txHash) throw conflictError("Funding quote already claimed a different transaction")
-    if (Date.parse(requiredString(effect, "expires_at")) <= Date.parse(now) && status === "quoted") {
-      throw conflictError("Funding quote expired before a transaction was submitted")
+    if (status === "refunded") {
+      throw codedConflictError(FUNDING_QUOTE_ALREADY_CLAIMED, "Funding quote was already refunded")
     }
+    if (existingTx && existingTx !== txHash) {
+      throw codedConflictError(
+        FUNDING_TRANSACTION_MISMATCH,
+        "Funding quote already claimed a different transaction",
+      )
+    }
+    // Expiry is NOT judged here. A wallet can broadcast a valid transfer, have its confirm
+    // request lost, and only retry after the quote lapsed — rejecting on wall-clock alone
+    // would strand real USDC that reached the treasury in time. The claim proceeds and the
+    // decision is made after verification against the block the transfer was MINED in, which
+    // is the only honest evidence of when the money actually moved.
     const priorUse = queryResultRow(await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_funding_effect_id
@@ -655,7 +736,7 @@ export async function confirmRewardCampaignFunding(input: {
       args: [integer(rowValue(effect, "chain_id")), txHash],
     }))
     if (priorUse && requiredString(priorUse, "reward_campaign_funding_effect_id") !== input.fundingId) {
-      throw conflictError("Funding transaction has already been consumed")
+      throw codedConflictError(FUNDING_TRANSACTION_ALREADY_CONSUMED, "Funding transaction has already been consumed")
     }
     try {
       await tx.execute({
@@ -671,7 +752,7 @@ export async function confirmRewardCampaignFunding(input: {
         hasUniqueConstraintName(error, "reward_campaign_funding_effects_tx_unique")
         || (error instanceof Error && error.message.includes("reward_campaign_funding_effects.chain_id, reward_campaign_funding_effects.tx_hash"))
       ) {
-        throw conflictError("Funding transaction has already been consumed")
+        throw codedConflictError(FUNDING_TRANSACTION_ALREADY_CONSUMED, "Funding transaction has already been consumed")
       }
       throw error
     }
@@ -709,12 +790,44 @@ export async function confirmRewardCampaignFunding(input: {
     return fundingResource(pending)
   }
 
+  // The transfer verified. Whether to honour it depends on WHEN it was mined, not on when the
+  // confirmation happened to arrive.
+  //
+  // While the quote is still live, a mined transfer is timely by construction (its block is in
+  // the past), so nothing needs checking. Once the quote has lapsed we honour it only on positive
+  // evidence that it was mined before expiry — which rescues the money-stranding case (wallet
+  // broadcasts, the confirm request is lost, the quote lapses, and the client resumes with the
+  // same hash) without letting a genuinely late transfer resurrect stale terms.
+  //
+  // Absent that evidence we fail closed: an unprovable transfer against a lapsed quote is
+  // refused rather than optimistically accepted.
+  if (verification.kind === "verified" && Date.parse(now) > Date.parse(requiredString(claimed, "expires_at"))) {
+    const expiresAtMs = Date.parse(requiredString(claimed, "expires_at"))
+    const minedAtMs = typeof verification.blockTimestamp === "number"
+      ? verification.blockTimestamp * 1000
+      : null
+    if (minedAtMs === null || minedAtMs > expiresAtMs) {
+      await failFundingEffect(input, "funding_confirmed_after_quote_expiry", now, rowLocks, txHash)
+      throw codedConflictError(
+        FUNDING_QUOTE_EXPIRED,
+        "The funding transfer was not proven to have been sent before this quote expired, so it was not applied to the campaign.",
+        {
+          mined_at: minedAtMs === null ? null : new Date(minedAtMs).toISOString(),
+          expires_at: requiredString(claimed, "expires_at"),
+        },
+      )
+    }
+  }
+
   return await withTransaction(input.client, "write", async (tx) => {
     const effect = await selectFunding(tx, input.fundingId, rowLocks)
     if (!effect) throw notFoundError("Reward campaign funding quote not found")
     if (requiredString(effect, "status") === "confirmed") return fundingResource(effect)
     if (stringOrNull(rowValue(effect, "tx_hash")) !== txHash) {
-      throw conflictError("Funding quote transaction changed during confirmation")
+      throw codedConflictError(
+        FUNDING_TRANSACTION_MISMATCH,
+        "Funding quote transaction changed during confirmation",
+      )
     }
     if (verification.kind === "rejected") {
       await tx.execute({

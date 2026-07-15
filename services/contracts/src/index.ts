@@ -2720,6 +2720,19 @@ export type RewardCampaignIncidentRecoveryResponse = {
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
+export type RewardCampaignCapabilities = {
+  enabled: boolean;
+  min_budget_cents: number;
+  max_budget_cents: number;
+  max_reward_cents: number;
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  default_duration_seconds: number;
+  eligible_activities: Array<RewardCampaignEligibleActivity>;
+  chain_id: number;
+  token_address: string;
+};
+
 export type PublicRewardOffer = {
   eligible_activity: RewardCampaignEligibleActivity;
   daily_reward_cents: number;
@@ -4253,6 +4266,7 @@ export const apiRoutes = {
   rewardCampaigns: "/reward_campaigns",
   rewardSongPolicies: (communityId: string, postId: string) => `/reward_song_policies/${communityId}/${postId}`,
   rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
+  rewardCampaignCapabilities: "/reward_campaign_capabilities",
   publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
   publicRewardCampaigns: "/public/reward_campaigns",
   operatorRewardCampaignIncidentRecovery: (campaignId: string, incidentId: string) => `/operator/reward_campaigns/${campaignId}/incidents/${incidentId}/recover`,

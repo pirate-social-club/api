@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono"
 import type { Env } from "../env"
 import { authenticateOperatorCredential, requireOperatorScope, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE } from "../lib/operator-credential-auth"
+import { getRewardCampaignCapabilities } from "../lib/rewards/reward-campaign-capabilities"
 import { recoverRewardCampaignIncident } from "../lib/rewards/reward-campaign-recovery"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { badRequestError } from "../lib/errors"
@@ -42,6 +43,8 @@ type RewardOperatorRouteServices = typeof operatorRouteDefaults
 
 rewards.use("/me/rewards", authenticate)
 rewards.use("/me/rewards/*", authenticate)
+// Distinct path prefix from /reward_campaigns, so it needs its own guard.
+rewards.use("/reward_campaign_capabilities", authenticate)
 rewards.use("/reward_campaigns", authenticate)
 rewards.use("/reward_campaigns/*", authenticate)
 rewards.use("/reward_song_policies/*", authenticate)
@@ -147,6 +150,13 @@ rewards.get("/me/rewards/cashouts/:cashoutId", async (c) => {
   return c.json(result, 200, {
     "cache-control": "no-store",
   })
+})
+
+rewards.get("/reward_campaign_capabilities", (c) => {
+  // Never throws: when the surface is dark or misconfigured this reports
+  // enabled=false so the client hides the entry point instead of offering an
+  // action the API would refuse.
+  return c.json(getRewardCampaignCapabilities(c.env), 200, { "cache-control": "no-store" })
 })
 
 rewards.post("/reward_campaigns", async (c) => {
