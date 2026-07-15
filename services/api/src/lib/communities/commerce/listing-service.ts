@@ -15,6 +15,9 @@ import type {
 } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
 import type { Client } from "../../sql-client"
+import { executeFirst } from "../../db-helpers"
+import { stringOrNull } from "./row-types"
+import { assertSongRightsInvariant } from "../../posts/song-rights-invariant"
 import {
   getAssetRow,
   getListingRowByAssetId,
@@ -66,6 +69,44 @@ type ListingVinylReleaseConfig = {
 type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 type ListingExecutor = Pick<Client, "execute">
 type ListingAssetKind = NonNullable<Awaited<ReturnType<typeof getAssetRow>>>["asset_kind"]
+
+function parseUpstreamAssetRefs(value: string | null): string[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : []
+  } catch {
+    return []
+  }
+}
+
+export async function assertSongAssetRightsReadyForListing(input: {
+  client: ListingExecutor
+  communityId: string
+  asset: NonNullable<Awaited<ReturnType<typeof getAssetRow>>>
+}): Promise<void> {
+  if (input.asset.asset_kind !== "song_audio") return
+
+  const sourcePost = await executeFirst(input.client, {
+    sql: `
+      SELECT song_mode, rights_basis, upstream_asset_refs_json
+      FROM posts
+      WHERE community_id = ?1 AND post_id = ?2 AND post_type = 'song'
+      LIMIT 1
+    `,
+    args: [input.communityId, input.asset.source_post_id],
+  })
+  if (!sourcePost) {
+    throw badRequestError("Song asset source post is unavailable for rights validation")
+  }
+  assertSongRightsInvariant({
+    songMode: stringOrNull(sourcePost, "song_mode"),
+    rightsBasis: stringOrNull(sourcePost, "rights_basis"),
+    upstreamAssetRefs: parseUpstreamAssetRefs(stringOrNull(sourcePost, "upstream_asset_refs_json")),
+  })
+}
 
 function resolveListingVinylReleaseConfig(input: {
   assetKind?: ListingAssetKind | "live_room" | null
@@ -307,6 +348,11 @@ export async function prepareCommunityListingWrite(input: {
       throw notFoundError("Asset not found")
     }
     assetKind = asset.asset_kind
+    await assertSongAssetRightsReadyForListing({
+      client: input.client,
+      communityId: input.communityId,
+      asset,
+    })
     if (asset.access_mode !== "locked") {
       assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     }
@@ -511,6 +557,11 @@ export async function updateCommunityListing(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertSongAssetRightsReadyForListing({
+        client: db.client,
+        communityId: input.communityId,
+        asset,
+      })
       await assertAssetNotRightsHeld({
         client: db.client,
         communityId: input.communityId,

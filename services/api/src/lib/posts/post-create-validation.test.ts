@@ -237,3 +237,31 @@ describe("assertPostCreateRequest listing_draft", () => {
     } as CreatePostRequest, COMMUNITY_ID)).not.toThrow()
   })
 })
+
+describe("assertPostCreateRequest song rights invariant", () => {
+  test("rejects a declared remix with original rights even when analysis has not matched audio", () => {
+    const request = songRequest()
+    request.song_mode = "remix"
+    request.rights_basis = "original"
+
+    expect(() => assertPostCreateRequest(request, COMMUNITY_ID)).toThrow(/rights_basis must be derivative/)
+  })
+
+  test("requires an upstream reference for declared remixes and derivative songs", () => {
+    for (const request of [
+      { ...songRequest(), song_mode: "remix", rights_basis: "derivative" },
+      { ...songRequest(), song_mode: "original", rights_basis: "derivative" },
+    ] as CreatePostRequest[]) {
+      expect(() => assertPostCreateRequest(request, COMMUNITY_ID)).toThrow(/upstream_asset_refs/)
+    }
+  })
+
+  test("accepts a remix declared as derivative with upstream evidence", () => {
+    const request = songRequest()
+    request.song_mode = "remix"
+    request.rights_basis = "derivative"
+    request.upstream_asset_refs = ["story:asset:ast_parent"]
+
+    expect(() => assertPostCreateRequest(request, COMMUNITY_ID)).not.toThrow()
+  })
+})

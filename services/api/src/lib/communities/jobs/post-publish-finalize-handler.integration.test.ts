@@ -408,6 +408,19 @@ describe("runPostPublishFinalize integration", () => {
     })
   })
 
+  test("fails a persisted declared remix that does not carry derivative rights", async () => {
+    state.post = basePost({
+      song_mode: "remix",
+      rights_basis: "original",
+      upstream_asset_refs: [],
+    })
+
+    await expectFinalizeFailure({
+      code: "song_rights_reference_required",
+      retryable: false,
+    })
+  })
+
   test.each([
     ["blocked bundle analysis", "blocked", "song_analysis_blocked"],
     ["review-required bundle analysis", "review_required", "song_analysis_review_required"],

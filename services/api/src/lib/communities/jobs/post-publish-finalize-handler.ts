@@ -7,6 +7,7 @@ import { createCommunityListingInTransaction } from "../commerce/listing-service
 import { getListingRowByAssetId } from "../commerce/shared"
 import { createSongAssetForPost } from "../commerce/service"
 import { mergeAnalysisState } from "../../posts/post-analysis"
+import { songRightsInvariantFailure } from "../../posts/song-rights-invariant"
 import { getPostById } from "../../posts/community-post-query-store"
 import {
   assignPostAssetIdIfMissing,
@@ -601,6 +602,24 @@ export async function runPostPublishFinalize(
         postId: post.post_id,
         failureCode: "internal_error",
         failureMessage: "Async finalize is only enabled for bundle-backed song posts",
+        retryable: false,
+        now: nowIso(),
+      })
+    }
+
+    const rightsInvariantFailure = songRightsInvariantFailure({
+      songMode: post.song_mode,
+      rightsBasis: post.rights_basis,
+      upstreamAssetRefs: post.upstream_asset_refs,
+    })
+    if (rightsInvariantFailure) {
+      return await markPostPublishFinalizeFailed({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        communityId: input.job.community_id,
+        postId: post.post_id,
+        failureCode: "song_rights_reference_required",
+        failureMessage: rightsInvariantFailure,
         retryable: false,
         now: nowIso(),
       })
