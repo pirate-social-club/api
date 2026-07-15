@@ -1,6 +1,6 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import { executeFirst } from "../db-helpers"
-import { badRequestError, providerUnavailable } from "../errors"
+import { badRequestError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { logPipelineInfo, type PipelineLogFields } from "../observability/pipeline-log"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -409,17 +409,6 @@ export async function revokeCommunityTelegramBot(input: {
     webhook_status: null,
     connected_at: null,
   }
-}
-
-export async function decryptActiveCommunityTelegramBot(input: {
-  env: Env
-  communityId: string
-}): Promise<TelegramCommunityBotCredential> {
-  const credential = await decryptActiveCommunityTelegramBotOrNull(input)
-  if (!credential) {
-    throw providerUnavailable("Telegram bot token is required before connecting Telegram")
-  }
-  return credential
 }
 
 export async function getActiveCommunityTelegramBotUsername(input: {

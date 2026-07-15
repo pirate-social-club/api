@@ -12,7 +12,7 @@ import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../v
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 
-export const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
+const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 
 export type RewardQualificationCandidate = {
   eventId: string
