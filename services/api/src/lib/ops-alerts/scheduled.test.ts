@@ -1,8 +1,36 @@
 import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
-import { captureScheduledWarning } from "./scheduled"
+import { captureScheduledError, captureScheduledWarning } from "./scheduled"
 
-describe("captureScheduledWarning", () => {
+describe("scheduled alert capture", () => {
+  test("delivers a recurring scheduled error once per dedupe bucket", async () => {
+    const sent: Array<{ text?: string }> = []
+    const kv = new Map<string, string>()
+    const env = {
+      ENVIRONMENT: "development",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_DEDUPE: {
+        get: async (key: string) => kv.get(key) ?? null,
+        put: async (key: string, value: string) => { kv.set(key, value) },
+      },
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string }) => {
+          sent.push(message)
+          return { messageId: "msg_scheduled_error" }
+        },
+      },
+    } as unknown as Env
+
+    const error = new Error("CONTROL_PLANE_DATABASE_URL is not configured")
+    await captureScheduledError(env, error, "reward_payout_reconciliation")
+    await captureScheduledError(env, error, "reward_payout_reconciliation")
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.text).toContain("Scheduled task failed: reward_payout_reconciliation")
+    expect([...kv.keys()][0]).toContain("scheduled_error:reward_payout_reconciliation")
+  })
+
   test("honors an explicit structured warning count", async () => {
     const sent: Array<{ text?: string }> = []
     const env = {

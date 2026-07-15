@@ -687,7 +687,6 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
   try {
     const summary = await reconcileSubmittedRewardPayouts({
       env,
-      client: getControlPlaneClient(env),
       limit: 50,
       confirmPollMs: [],
     })
