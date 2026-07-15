@@ -352,7 +352,7 @@ describe("rewards routes", () => {
     expect(publicOffer.headers.get("cache-control")).toBe("public, max-age=0")
     expect(publicOffer.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=15, stale-while-revalidate=15")
     const songOffer = await app.request(
-      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      "http://pirate.test/public/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song",
       {},
       ctx.env,
     )
