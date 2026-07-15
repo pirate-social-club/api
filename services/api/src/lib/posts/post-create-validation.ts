@@ -1,5 +1,6 @@
 import { badRequestError } from "../errors"
 import { normalizeLinkUrl } from "./link-enrichment/url-normalization"
+import { assertSongRightsInvariant } from "./song-rights-invariant"
 import type { CreatePostRequest } from "../../types"
 
 type StoryLicensePreset = NonNullable<CreatePostRequest["license_preset"]>
@@ -367,6 +368,11 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     if (body.access_mode && body.access_mode !== "public" && body.access_mode !== "locked") {
       throw badRequestError("song access_mode must be public or locked")
     }
+    assertSongRightsInvariant({
+      songMode: body.song_mode,
+      rightsBasis: body.rights_basis,
+      upstreamAssetRefs: body.upstream_asset_refs,
+    })
     validateAssetLicense({
       body,
       contentLabel: body.song_mode === "remix" || body.rights_basis === "derivative"
