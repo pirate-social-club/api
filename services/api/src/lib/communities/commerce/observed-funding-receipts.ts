@@ -116,11 +116,33 @@ export async function observeFundingReceipt(input: {
   const receipt = result.rows[0] ? decode(result.rows[0]) : null
   if (!receipt) throw conflictError("Observed funding receipt could not be persisted")
   if (
-    receipt.blockNumber !== immutable.blockNumber || receipt.blockHash !== immutable.blockHash
-    || receipt.senderAddress !== immutable.senderAddress || receipt.recipientAddress !== immutable.recipientAddress
+    receipt.senderAddress !== immutable.senderAddress || receipt.recipientAddress !== immutable.recipientAddress
     || receipt.amountAtomic !== immutable.amountAtomic
   ) {
     throw conflictError("Observed funding receipt identity reused with different event data")
+  }
+  if (receipt.blockNumber !== immutable.blockNumber || receipt.blockHash !== immutable.blockHash) {
+    const reIncluded = await input.client.execute({
+      sql: `
+        UPDATE observed_funding_receipts
+        SET block_number = ?2, block_hash = ?3, observed_source = ?4,
+            finality_status = 'observed', canonical_at = NULL,
+            match_status = CASE WHEN match_status = 'ignored' THEN 'unmatched' ELSE match_status END,
+            updated_at = ?5
+        WHERE observed_funding_receipt_id = ?1
+          AND finality_status = 'orphaned'
+          AND block_number = ?6 AND block_hash = ?7
+        RETURNING ${COLUMNS}
+      `,
+      args: [
+        receipt.id, immutable.blockNumber, immutable.blockHash, input.source,
+        input.observedAt, receipt.blockNumber, receipt.blockHash,
+      ],
+    })
+    if (!reIncluded.rows[0]) {
+      throw conflictError("Observed funding receipt block changed before it was orphaned")
+    }
+    return decode(reIncluded.rows[0])
   }
   return receipt
 }
