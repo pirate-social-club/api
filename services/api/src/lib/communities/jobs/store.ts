@@ -180,11 +180,9 @@ export async function resetStaleRunningCommunityJobs(input: {
           updated_at = ?3
       WHERE status = 'running'
         AND (
-          (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
-          OR (lease_expires_at IS NULL AND (
-            (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?2)
-            OR COALESCE(last_checkpoint_at, updated_at) <= ?1
-          ))
+          (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?2)
+          OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
+          OR (lease_expires_at IS NULL AND COALESCE(last_checkpoint_at, updated_at) <= ?1)
         )
         AND (?4 IS NULL OR community_id = ?4)
     `,
@@ -215,11 +213,9 @@ export async function resetStaleRunningCommunityJobById(input: {
         AND community_id = ?2
         AND status = 'running'
         AND (
-          (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
-          OR (lease_expires_at IS NULL AND (
-            (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?3)
-            OR COALESCE(last_checkpoint_at, updated_at) <= ?4
-          ))
+          (attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?3)
+          OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)
+          OR (lease_expires_at IS NULL AND COALESCE(last_checkpoint_at, updated_at) <= ?4)
         )
     `,
     args: [input.jobId, input.communityId, input.now, input.staleCheckpointBefore],

@@ -23,7 +23,8 @@
     "1124_community_job_checkpoints.sql",
     "1127_asset_story_metadata_refs.sql",
     "1128_community_job_attempt_leases.sql",
-    "1129_story_registration_effects.sql"
+    "1129_story_registration_effects.sql",
+    "1130_story_registration_effect_request_identity.sql"
   ],
   "features": {
     "rewards": {

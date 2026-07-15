@@ -152,6 +152,33 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect(Number(row.next_attempt_at)).toBeGreaterThan(Date.now())
   })
 
+  it("reconciles an ambiguous broadcast timeout without signing a replacement", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 9,
+      latest: 9,
+      liveness: { "0xhash_9": "pending" },
+      broadcastError: "provider timeout after send",
+    })
+    await stub.settle(req())
+    await runDurableObjectAlarm(stub)
+    expect((await stub.lookup(req())).state).toBe("prepared")
+
+    await injectChain(stub, {
+      pending: 9,
+      latest: 9,
+      liveness: { "0xhash_9": "pending" },
+      broadcastError: "already known",
+    })
+    await stub.reconcile(req())
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row.state).toBe("broadcast")
+    expect(row.nonce).toBe(9)
+    expect(row.tx_hash).toBe("0xhash_9")
+  })
+
   it("deterministic wallet+chain routing: a fresh stub for the same name reuses the persisted nonce state (NOT an eviction test)", async () => {
     // Note: this proves getByName routing determinism + DO SQLite persistence across stubs. It does
     // NOT force an isolate eviction (vitest-pool-workers does not expose that); the persistence
@@ -233,6 +260,25 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     await runDurableObjectAlarm(stub) // expired claim → re-claim + sign + broadcast
     expect((await stub.lookup(req())).state).toBe("broadcast")
     expect((await effects(stub))[0].tx_hash).toBe("0xhash_1")
+  })
+
+  it("waits for a live signing claim instead of hot-looping the alarm", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 1, latest: 1, liveness: {} })
+    await stub.settle(req())
+    const claimExpiresAt = Date.now() + 60_000
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE effects SET nonce=1, claim_token='active-signer', claim_expires_at=?1 WHERE state='reserving'",
+        claimExpiresAt,
+      )
+    })
+
+    await runDurableObjectAlarm(stub)
+
+    const alarmAt = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())
+    expect(alarmAt).toBe(claimExpiresAt)
+    expect((await stub.lookup(req())).state).toBe("reserving")
   })
 
   it("immutable-data mismatch is rejected through every RPC", async () => {

@@ -4,6 +4,7 @@ import {
   markCommunityJobSucceeded,
   recordCommunityJobCheckpoint,
   resetStaleRunningCommunityJobById,
+  resetStaleRunningCommunityJobs,
 } from "./store"
 
 type Statement = { sql: string; args?: unknown[] }
@@ -66,6 +67,36 @@ describe("resetStaleRunningCommunityJobById", () => {
       "2026-07-13T14:10:00.000Z",
       "2026-07-13T14:08:00.000Z",
     ])
+  })
+
+  test("checks the absolute deadline even while the lease is live", async () => {
+    const { executor, statements } = makeExecutor({ rowsAffected: 1 })
+    await resetStaleRunningCommunityJobById({
+      client: executor,
+      jobId: "cjb_deadline",
+      communityId: "cmt_1",
+      now: "2026-07-15T10:31:00.000Z",
+      staleCheckpointBefore: "2026-07-15T10:29:00.000Z",
+    })
+
+    expect(statements[0]?.sql).toContain("(attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?3)")
+    expect(statements[0]?.sql).toContain("OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)")
+  })
+})
+
+describe("resetStaleRunningCommunityJobs", () => {
+  test("checks the durable deadline independently of lease presence", async () => {
+    const { executor, statements } = makeExecutor({ rowsAffected: 1 })
+    await resetStaleRunningCommunityJobs({
+      client: executor,
+      communityId: "cmt_1",
+      now: "2026-07-15T10:31:00.000Z",
+      deadlineBefore: "2026-07-15T10:31:00.000Z",
+      staleCheckpointBefore: "2026-07-15T10:29:00.000Z",
+    })
+
+    expect(statements[0]?.sql).toContain("(attempt_deadline_at IS NOT NULL AND attempt_deadline_at <= ?2)")
+    expect(statements[0]?.sql).toContain("OR (lease_expires_at IS NOT NULL AND lease_expires_at <= ?3)")
   })
 })
 

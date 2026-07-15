@@ -5,6 +5,7 @@ import {
   getCommunityJobById,
   markCommunityJobRunning,
   recycleCommunityJobForRetry,
+  resetStaleRunningCommunityJobById,
 } from "../src/lib/communities/jobs/store"
 
 async function createJobStoreClient() {
@@ -192,5 +193,39 @@ describe("community job store", () => {
     })
     expect(claim?.status).toBe("running")
     expect(claim?.attempt_count).toBe(1)
+  })
+
+  test("a live lease cannot extend an attempt past its durable deadline", async () => {
+    const client = await createJobStoreClient()
+    const job = await enqueueCommunityJob({
+      client,
+      communityId: "cmt_test",
+      jobType: "post_publish_finalize",
+      subjectType: "post",
+      subjectId: "pst_deadline",
+      createdAt: "2026-06-05T12:00:00.000Z",
+    })
+    await markCommunityJobRunning({
+      client,
+      jobId: job.job_id,
+      now: "2026-06-05T12:00:01.000Z",
+      attemptDeadlineAt: "2026-06-05T12:30:00.000Z",
+      attemptId: "cja_deadline",
+      leaseExpiresAt: "2026-06-05T13:00:00.000Z",
+    })
+
+    expect(await resetStaleRunningCommunityJobById({
+      client,
+      jobId: job.job_id,
+      communityId: "cmt_test",
+      now: "2026-06-05T12:30:01.000Z",
+      staleCheckpointBefore: "2026-06-05T12:28:01.000Z",
+    })).toBe(true)
+
+    const stored = await getCommunityJobById({ client, jobId: job.job_id })
+    expect(stored?.status).toBe("failed")
+    expect(stored?.error_code).toBe("stale_running_timeout")
+    expect(stored?.attempt_id).toBeNull()
+    expect(stored?.lease_expires_at).toBeNull()
   })
 })

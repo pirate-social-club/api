@@ -26,11 +26,16 @@ beforeEach(async () => {
   client = createClient({ url: ":memory:" })
   await client.execute("CREATE TABLE communities (community_id TEXT PRIMARY KEY)")
   await client.execute({ sql: "INSERT INTO communities (community_id) VALUES (?1)", args: [COMMUNITY_ID] })
-  const migration = await readFile(
-    new URL("../../../test-fixtures/db/community-template/migrations/1129_story_registration_effects.sql", import.meta.url),
-    "utf8",
-  )
-  await client.executeMultiple(migration)
+  for (const migrationName of [
+    "1129_story_registration_effects.sql",
+    "1130_story_registration_effect_request_identity.sql",
+  ]) {
+    const migration = await readFile(
+      new URL(`../../../test-fixtures/db/community-template/migrations/${migrationName}`, import.meta.url),
+      "utf8",
+    )
+    await client.executeMultiple(migration)
+  }
 })
 
 describe("Story registration effect journal", () => {
