@@ -203,6 +203,7 @@ export function buildTestEnv(overrides: Partial<Env> = {}): Env {
     PIRATE_APP_JWT_ISSUER: "pirate-api",
     PIRATE_APP_JWT_AUDIENCE: "pirate-app",
     PIRATE_APP_JWT_TTL_SECONDS: "3600",
+    STORY_COMPOSITE_READ_CONDITION_ADDRESS: "0xc0ffee0000000000000000000000000000000000",
     ...overrides,
   }
 }
