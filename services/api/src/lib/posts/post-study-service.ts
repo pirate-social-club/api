@@ -472,18 +472,20 @@ async function resolveStudyExerciseAvailability(input: {
   unitsPersisted: boolean
 }): Promise<StudyExerciseAvailability> {
   const includeTranslation = !isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)
-  const includeSayItBack = await resolveHasActiveElevenLabsCredential({
-    communityId: input.post.community_id,
-    env: input.env,
-    hasActiveElevenLabsCredential: input.hasActiveElevenLabsCredential,
-  })
-  const pack = input.unitsPersisted
-    ? await getLatestPack({
+  const [includeSayItBack, pack] = await Promise.all([
+    resolveHasActiveElevenLabsCredential({
+      communityId: input.post.community_id,
+      env: input.env,
+      hasActiveElevenLabsCredential: input.hasActiveElevenLabsCredential,
+    }),
+    input.unitsPersisted
+      ? getLatestPack({
       client: input.client,
       postId: input.post.post_id,
       targetLanguage: input.targetLanguage,
-    })
-    : null
+        })
+      : Promise.resolve(null),
+  ])
   if (includeTranslation && pack?.status === "unavailable") {
     return {
       access: "unavailable",
