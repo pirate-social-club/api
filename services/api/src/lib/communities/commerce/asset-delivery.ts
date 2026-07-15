@@ -52,7 +52,11 @@ import type {
   Post,
   SongArtifactUpload,
 } from "../../../types"
-import type { CommunityJobCheckpoint } from "../jobs/store"
+import {
+  recordLockedDeliveryProgress,
+  withLockedDeliveryProgressHeartbeat,
+  type LockedDeliveryProgressReporter,
+} from "./locked-delivery-progress"
 
 export type LockedDeliverySecret = {
   algorithm: "AES-GCM"
@@ -95,57 +99,6 @@ export type PreparedLockedDeliveryCoordinates = {
   lockedDeliveryRef: string
   lockedDeliveryStorageRef: string
   lockedDeliveryMetadataJson: string
-}
-
-type LockedDeliveryProgressReporter = (
-  checkpoint: CommunityJobCheckpoint,
-  details?: Record<string, unknown> | null,
-) => Promise<void>
-
-function resolveLockedDeliveryHeartbeatIntervalMs(env: Pick<Env, "COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS">): number {
-  const raw = String(env.COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS || "").trim()
-  const parsed = raw ? Number(raw) : 30_000
-  return Number.isInteger(parsed) && parsed >= 5_000 && parsed <= 120_000 ? parsed : 30_000
-}
-
-async function recordLockedDeliveryProgress(
-  progress: LockedDeliveryProgressReporter | null | undefined,
-  checkpoint: CommunityJobCheckpoint,
-  details?: Record<string, unknown> | null,
-): Promise<void> {
-  await progress?.(checkpoint, details ?? null)
-}
-
-async function withLockedDeliveryHeartbeat<T>(input: {
-  env: Env
-  progress?: LockedDeliveryProgressReporter | null
-  checkpoint: CommunityJobCheckpoint
-  heartbeatCheckpoint?: CommunityJobCheckpoint
-  details?: Record<string, unknown> | null
-  operation: () => Promise<T>
-}): Promise<T> {
-  await recordLockedDeliveryProgress(input.progress, input.checkpoint, input.details ?? null)
-  const intervalMs = resolveLockedDeliveryHeartbeatIntervalMs(input.env)
-  let timer: ReturnType<typeof setInterval> | null = null
-  if (input.progress) {
-    timer = setInterval(() => {
-      void recordLockedDeliveryProgress(
-        input.progress,
-        input.heartbeatCheckpoint ?? input.checkpoint,
-        input.details ?? null,
-      ).catch((error) => {
-        console.warn("[community-job] locked delivery heartbeat failed", {
-          checkpoint: input.heartbeatCheckpoint ?? input.checkpoint,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
-    }, intervalMs)
-  }
-  try {
-    return await input.operation()
-  } finally {
-    if (timer) clearInterval(timer)
-  }
 }
 
 let testLockedAssetDeliveryPreparer: ((input: {
@@ -598,7 +551,7 @@ export async function prepareLockedAssetDelivery(input: {
       const writeConditionData = encodeWriteConditionOperatorData(writerConfig.value.address)
       let cdrUpload: Awaited<ReturnType<typeof uploadCdrEncryptedDataKey>>
       try {
-        cdrUpload = await withLockedDeliveryHeartbeat({
+        cdrUpload = await withLockedDeliveryProgressHeartbeat({
           env: input.env,
           progress: input.onProgress,
           checkpoint: "locked_delivery_cdr_submitted",
@@ -636,7 +589,7 @@ export async function prepareLockedAssetDelivery(input: {
     }
     let storyPublish: Awaited<ReturnType<typeof publishLockedAssetVersionToStory>>
     try {
-      storyPublish = await withLockedDeliveryHeartbeat({
+      storyPublish = await withLockedDeliveryProgressHeartbeat({
         env: input.env,
         progress: input.onProgress,
         checkpoint: "story_publish_submitted",
