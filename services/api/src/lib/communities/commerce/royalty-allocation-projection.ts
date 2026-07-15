@@ -2,6 +2,7 @@ import { makeId, nowIso } from "../../helpers"
 import { getControlPlaneClient } from "../../runtime-deps"
 import type { Client } from "../../sql-client"
 import type { Env } from "../../../types"
+import { logPipelineInfo } from "../../observability/pipeline-log"
 import { numberOrNull, requiredString, stringOrNull } from "./row-types"
 
 export type StoryRoyaltyAllocationProjectionRow = {
@@ -196,4 +197,49 @@ export async function syncStoryRoyaltyAllocationProjectionForAsset(input: {
     args: [nowIso(), input.communityId, input.assetId],
   })
   return { projectedRows: rows.length }
+}
+
+export async function syncStoryRoyaltyAllocationProjectionSafely(input: {
+  env: Env
+  client: Pick<Client, "execute">
+  communityId: string
+  postId: string
+  assetId: string
+  sourceUpdatedAt?: string | null
+  required?: boolean
+}): Promise<void> {
+  const maxAttempts = input.required ? 3 : 1
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await syncStoryRoyaltyAllocationProjectionForAsset(input)
+      if (input.required && result.projectedRows === 0) {
+        throw new Error("royalty_allocation_projection_rows_missing")
+      }
+      if (result.projectedRows > 0) {
+        logPipelineInfo("[commerce] Story royalty allocation projection synced", {
+          community_id: input.communityId,
+          post_id: input.postId,
+          asset_id: input.assetId,
+          projected_rows: result.projectedRows,
+          attempt,
+        })
+      }
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 250))
+      }
+    }
+  }
+  logPipelineInfo("[commerce] Story royalty allocation projection sync failed", {
+    level: "warn",
+    community_id: input.communityId,
+    post_id: input.postId,
+    asset_id: input.assetId,
+    attempts: maxAttempts,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  })
+  if (input.required) throw lastError
 }

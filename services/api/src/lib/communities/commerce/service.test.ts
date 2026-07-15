@@ -33,11 +33,14 @@ mock.module("../../story/story-royalty-registration-service", () => ({
   maybeRegisterStoryRoyaltyForAsset,
 }))
 
-const syncStoryRoyaltyAllocationProjectionForAsset = mock(async () => ({ projectedRows: 1 }))
+const syncStoryRoyaltyAllocationProjectionForAsset = mock(async (_input?: unknown) => ({ projectedRows: 1 }))
 const upsertStoryRegisteredAssetProjection = mock(async () => {})
 
 mock.module("./royalty-allocation-projection", () => ({
   syncStoryRoyaltyAllocationProjectionForAsset,
+  syncStoryRoyaltyAllocationProjectionSafely: async (input: unknown) => {
+    await syncStoryRoyaltyAllocationProjectionForAsset(input)
+  },
 }))
 
 mock.module("./derivative-source-projection", () => ({
