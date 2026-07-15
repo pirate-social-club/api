@@ -38,6 +38,12 @@
       "allowed_sender_addresses": ["alerts@pirate.sc"]
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "OPS_ALERT_DEDUPE",
+      "id": "7cb7dbe8e5cc48d394e3e19b3d51150f"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
