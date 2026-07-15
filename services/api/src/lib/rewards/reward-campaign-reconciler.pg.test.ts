@@ -28,6 +28,10 @@ const INVARIANTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0136_control_plane_reward_campaign_enable_invariants.sql",
   import.meta.url,
 )
+const SONG_PERIOD_CLAIMS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0142_control_plane_reward_song_period_claims.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -199,6 +203,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         PRIMARY KEY (user_id, activity_date)
       );
     `)
+    await db.unsafe(await readFile(SONG_PERIOD_CLAIMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
@@ -272,6 +277,39 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         'pst_reward_pg', 'sab_reward_pg', 'usr_reward_pg', 'active', 'either',
         40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-reward-pg',
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+      )
+    `, [NOW])
+    await db.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES
+      (
+        'rcp_sequential_study_pg', 'usr_reward_pg', 'create-sequential-study-pg', 'cmt_reward_pg',
+        'pst_sequential_pg', 'sab_sequential_pg', 'usr_reward_pg', 'ended', 'study',
+        40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-sequential-study-pg',
+        '2026-07-10T00:00:00.000Z', '2026-07-10T11:59:59.999Z', $1
+      ),
+      (
+        'rcp_sequential_karaoke_pg', 'usr_reward_pg', 'create-sequential-karaoke-pg', 'cmt_reward_pg',
+        'pst_sequential_pg', 'sab_sequential_pg', 'usr_reward_pg', 'active', 'karaoke',
+        40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-sequential-karaoke-pg',
+        '2026-07-10T12:00:00.000Z', '2026-07-10T23:59:59.999Z', $1
+      ),
+      (
+        'rcp_cross_race_study_pg', 'usr_reward_pg', 'create-cross-race-study-pg', 'cmt_reward_pg',
+        'pst_cross_race_pg', 'sab_cross_race_pg', 'usr_reward_pg', 'ended', 'study',
+        40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-cross-race-study-pg',
+        '2026-07-10T00:00:00.000Z', '2026-07-10T11:59:59.999Z', $1
+      ),
+      (
+        'rcp_cross_race_karaoke_pg', 'usr_reward_pg', 'create-cross-race-karaoke-pg', 'cmt_reward_pg',
+        'pst_cross_race_pg', 'sab_cross_race_pg', 'usr_reward_pg', 'active', 'karaoke',
+        40, 40, 100, 100, 0, 0, 0, 0, 1, 'terms-cross-race-karaoke-pg',
+        '2026-07-10T12:00:00.000Z', '2026-07-10T23:59:59.999Z', $1
       )
     `, [NOW])
     await db.unsafe(`
@@ -378,6 +416,19 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     }
   }
 
+  async function removeCampaignTestPost(postId: string): Promise<void> {
+    const db = connect(TEST_DB, 1)
+    await db.unsafe("DELETE FROM reward_song_period_claims WHERE post_id = $1", [postId])
+    await db.unsafe("DELETE FROM reward_events WHERE post_id = $1", [postId])
+    await db.unsafe(`
+      DELETE FROM reward_campaign_reservations r
+      USING reward_campaigns c
+      WHERE c.reward_campaign_id = r.reward_campaign_id AND c.post_id = $1
+    `, [postId])
+    await db.unsafe("DELETE FROM reward_campaigns WHERE post_id = $1", [postId])
+    await db.end()
+  }
+
   test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
     await withProductionPostgresClient(async (client) => {
         const candidate = {
@@ -410,6 +461,118 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(events).toEqual([{ amount_cents: 40 }])
     expect(campaigns).toEqual([{ funded_cents: 100, reserved_cents: 0, credited_cents: 40 }])
+  })
+
+  test("a later campaign cannot pay the other activity for the same human, song, and UTC day", async () => {
+    const results = await withProductionPostgresClient(async (client) => {
+      const study = await creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: "rqe_sequential_study_pg",
+          userId: "usr_reward_pg",
+          communityId: "cmt_reward_pg",
+          postId: "pst_sequential_pg",
+          artifactBundleId: "sab_sequential_pg",
+          activity: "study",
+          qualifiedAt: "2026-07-10T10:00:00.000Z",
+          periodKey: "2026-07-10",
+          policyVersion: "study-completed-set-v1",
+        },
+        now: "2026-07-10T13:00:00.000Z",
+      })
+      const karaoke = await creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: "rqe_sequential_karaoke_pg",
+          userId: "usr_reward_pg",
+          communityId: "cmt_reward_pg",
+          postId: "pst_sequential_pg",
+          artifactBundleId: "sab_sequential_pg",
+          activity: "karaoke",
+          qualifiedAt: "2026-07-10T13:00:00.000Z",
+          periodKey: "2026-07-10",
+          policyVersion: "karaoke-rank-eligible-v1",
+        },
+        now: "2026-07-10T13:00:00.000Z",
+      })
+      return [study, karaoke]
+    })
+    expect(results.map((result) => result.result)).toEqual(["credited", "duplicate"])
+
+    const verify = connect(TEST_DB, 1)
+    const claims = await verify.unsafe(`
+      SELECT song_artifact_bundle_id, reward_kind
+      FROM reward_song_period_claims
+      WHERE community_id = 'cmt_reward_pg' AND post_id = 'pst_sequential_pg'
+    `) as Array<{ song_artifact_bundle_id: string; reward_kind: string }>
+    const reservations = await verify.unsafe(`
+      SELECT reward_campaign_id, qualification_basis
+      FROM reward_campaign_reservations
+      WHERE reward_campaign_id IN ('rcp_sequential_study_pg', 'rcp_sequential_karaoke_pg')
+    `) as Array<{ reward_campaign_id: string; qualification_basis: string }>
+    const laterCampaign = await verify.unsafe(`
+      SELECT reserved_cents, credited_cents
+      FROM reward_campaigns
+      WHERE reward_campaign_id = 'rcp_sequential_karaoke_pg'
+    `) as Array<{ reserved_cents: number; credited_cents: number }>
+    await verify.end()
+    expect(claims).toEqual([{ song_artifact_bundle_id: "sab_sequential_pg", reward_kind: "campaign_practice_day" }])
+    expect(reservations).toEqual([{ reward_campaign_id: "rcp_sequential_study_pg", qualification_basis: "study" }])
+    expect(laterCampaign).toEqual([{ reserved_cents: 0, credited_cents: 0 }])
+    await removeCampaignTestPost("pst_sequential_pg")
+  })
+
+  test("song-scoped uniqueness resolves qualifications racing across campaign row locks", async () => {
+    const results = await withProductionPostgresClient(async (client) => Promise.all([
+      creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: "rqe_cross_race_study_pg",
+          userId: "usr_reward_pg",
+          communityId: "cmt_reward_pg",
+          postId: "pst_cross_race_pg",
+          artifactBundleId: "sab_cross_race_pg",
+          activity: "study",
+          qualifiedAt: "2026-07-10T10:00:00.000Z",
+          periodKey: "2026-07-10",
+          policyVersion: "study-completed-set-v1",
+        },
+        now: "2026-07-10T13:00:00.000Z",
+      }),
+      creditRewardCampaignQualification({
+        env: PG_ENV,
+        client,
+        candidate: {
+          eventId: "rqe_cross_race_karaoke_pg",
+          userId: "usr_reward_pg",
+          communityId: "cmt_reward_pg",
+          postId: "pst_cross_race_pg",
+          artifactBundleId: "sab_cross_race_pg",
+          activity: "karaoke",
+          qualifiedAt: "2026-07-10T13:00:00.000Z",
+          periodKey: "2026-07-10",
+          policyVersion: "karaoke-rank-eligible-v1",
+        },
+        now: "2026-07-10T13:00:00.000Z",
+      }),
+    ]))
+    expect(results.map((result) => result.result).sort()).toEqual(["credited", "duplicate"])
+
+    const verify = connect(TEST_DB, 1)
+    const counts = await verify.unsafe(`
+      SELECT
+        (SELECT COUNT(*)::int FROM reward_song_period_claims WHERE post_id = 'pst_cross_race_pg') AS claims,
+        (SELECT COUNT(*)::int FROM reward_campaign_reservations r
+          JOIN reward_campaigns c ON c.reward_campaign_id = r.reward_campaign_id
+          WHERE c.post_id = 'pst_cross_race_pg') AS reservations,
+        (SELECT COUNT(*)::int FROM reward_events WHERE post_id = 'pst_cross_race_pg') AS events
+    `) as Array<{ claims: number; reservations: number; events: number }>
+    await verify.end()
+    expect(counts).toEqual([{ claims: 1, reservations: 1, events: 1 }])
+    await removeCampaignTestPost("pst_cross_race_pg")
   })
 
   test("different identities racing for the final budget admit one full credit", async () => {
