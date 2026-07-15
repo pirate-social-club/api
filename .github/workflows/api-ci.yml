@@ -406,6 +406,12 @@ jobs:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
         run: bun run check:community-schema-snapshot
 
+      - name: Check control-plane migration fixture freshness
+        working-directory: services/api
+        env:
+          PIRATE_CORE_REPO: ${{ github.workspace }}/core
+        run: bun run check:control-plane-fixtures
+
       - name: Install ZKPassport verifier container dependencies
         working-directory: services/zkpassport-verifier-container
         run: bun install --frozen-lockfile
