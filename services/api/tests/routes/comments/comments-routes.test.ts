@@ -38,6 +38,50 @@ afterEach(async () => {
 })
 
 describe("comments routes", () => {
+  test("allows a comment when join eligibility reports already_joined", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "comments-membership-consistency-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "Membership Consistency Club")
+    const member = await exchangeJwt(ctx.env, "comments-membership-consistency-member")
+    await addCommunityMember(ctx.communityDbRoot, community.communityId, member.userId)
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Eligibility and writes agree",
+        body: "A joined member can comment through the write client.",
+        idempotency_key: "comments-membership-consistency-post",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const post = await json(createdPost) as { id: string }
+
+    const eligibility = await app.request(
+      `http://pirate.test/communities/${community.communityId}/join-eligibility`,
+      { headers: { authorization: `Bearer ${member.accessToken}` } },
+      ctx.env,
+    )
+    expect(eligibility.status).toBe(200)
+    expect(await json(eligibility)).toMatchObject({ status: "already_joined" })
+
+    const comment = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${post.id}/comments`,
+      { body: "Eligibility and comment authorization agree." },
+      ctx.env,
+      member.accessToken,
+    )
+    expect(comment.status).toBe(201)
+    expect(await json(comment)).toMatchObject({
+      body: "Eligibility and comment authorization agree.",
+      depth: 0,
+    })
+  })
+
   test("anonymous comment notifications use the visible pseudonym", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
