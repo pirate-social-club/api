@@ -28,7 +28,6 @@ type RuntimeAgoraBlock = {
   uid: number
 }
 
-type ReplayAccessMode = "free" | "included_with_ticket" | "paid"
 
 const DEFAULT_STAGING_API_BASE_URL = "https://api-staging.pirate.sc"
 function readArg(name: string): string | null {
@@ -46,52 +45,34 @@ function hasFlag(name: string): boolean {
 
 function usage(): void {
   console.log(`Usage:
-  bun run scripts/live-room-paid-staging-smoke.ts [--settle-purchase]
+  bun run scripts/live-room-paid-staging-smoke.ts
 
-Default mode creates a staging paid live room, verifies purchase_required access, host-attaches,
-and creates a checkout quote without sending funds.
+Creates a staging paid live room, verifies purchase_required access, host-attaches, and asserts
+that paid ticket checkout fails closed (403) — recipient payout execution for non-asset targets is
+not implemented, so the API must reject the quote rather than issue an unpayable checkout. Sending
+funds, settling, and paid/replay purchase are intentionally not exercised because that flow is
+disabled; replay publish/access is covered by the community-live-room-routes route tests.
 
 Flags:
-  --settle-purchase      Send Base Sepolia USDC, settle the quote, and verify viewer_attach.
   --recording-enabled    Create the room with recording enabled and verify recording draft processing after host attach.
-  --replay-access-mode <free|included_with_ticket|paid>
-                         End the recorded room, wait for Filebase ingest, publish the replay, and verify replay access.
   --skip-verification    Skip self verification for newly created smoke users.
   --keep-room-open       Do not end/cancel the smoke live room in cleanup.
   --api-base-url <url>   Override PIRATE_SMOKE_API_BASE_URL.
   --price-cents <n>      Override PIRATE_SMOKE_PRICE_CENTS, default 199.
-  --replay-price-cents <n>
-                         Override paid replay price, default PIRATE_SMOKE_REPLAY_PRICE_CENTS or --price-cents.
-  --recording-hold-ms <n>
-                         When publishing a replay, wait this long after host attach before ending; default 20000.
   --publish-browser-media
-                         Launch agent-browser with fake mic/camera media into the Agora channel during the recording hold.
+                         Launch agent-browser with fake mic/camera media into the Agora channel during the smoke.
   --skip-browser-media-cleanup
                          Leave the browser session open after the smoke for debugging.
   --community-id <id>    Reuse an existing provisioned community instead of creating a new one.
                          Can also be set with PIRATE_SMOKE_COMMUNITY_ID.
   --require-existing-community
                          Fail before creating smoke users or communities unless --community-id/PIRATE_SMOKE_COMMUNITY_ID is set.
-  --skip-remote-config-preflight
-                         Skip the staging Worker secret-name preflight for replay recording runs.
   --host-subject <sub>   Stable upstream auth subject for the host. Can also be set with PIRATE_SMOKE_HOST_SUBJECT.
   --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
 Required env for staging:
   AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET
   AGORA_APP_ID and AGORA_APP_CERTIFICATE configured in the API environment
-
-Required env for --settle-purchase:
-  PIRATE_CHECKOUT_RPC_URL
-  PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS
-  PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY or PIRATE_SMOKE_BUYER_PRIVATE_KEY
-
-Required staging Worker secrets for --recording-enabled --replay-access-mode:
-  AGORA_CLOUD_RECORDING_CUSTOMER_ID
-  AGORA_CLOUD_RECORDING_CUSTOMER_SECRET
-  AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY
-  AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY
-  STORY_COMPOSITE_READ_CONDITION_ADDRESS
 `)
 }
 
@@ -118,15 +99,6 @@ function readPositiveInteger(value: string, label: string): number {
     throw new Error(`${label} must be a positive integer`)
   }
   return parsed
-}
-
-function readReplayAccessMode(): ReplayAccessMode | null {
-  const value = readArg("--replay-access-mode")
-  if (!value) return null
-  if (value === "free" || value === "included_with_ticket" || value === "paid") {
-    return value
-  }
-  throw new Error("--replay-access-mode must be free, included_with_ticket, or paid")
 }
 
 function isStagingApiUrl(apiBaseUrl: string): boolean {
@@ -187,63 +159,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-const REQUIRED_STAGING_REPLAY_WORKER_SECRETS = [
-  "AGORA_CLOUD_RECORDING_CUSTOMER_ID",
-  "AGORA_CLOUD_RECORDING_CUSTOMER_SECRET",
-  "AGORA_CLOUD_RECORDING_STORAGE_ACCESS_KEY",
-  "AGORA_CLOUD_RECORDING_STORAGE_SECRET_KEY",
-  "STORY_COMPOSITE_READ_CONDITION_ADDRESS",
-] as const
-
-function assertStagingReplayWorkerSecretsPresent(input: {
-  apiBaseUrl: string
-  replayAccessMode: ReplayAccessMode | null
-}): void {
-  if (!input.replayAccessMode || !isStagingApiUrl(input.apiBaseUrl) || hasFlag("--skip-remote-config-preflight")) {
-    return
-  }
-
-  const result = spawnSync("./node_modules/.bin/wrangler", [
-    "secret",
-    "list",
-    "--env",
-    "staging",
-    "--format",
-    "json",
-  ], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  })
-  const stdout = result.stdout.trim()
-  const stderr = result.stderr.trim()
-  if (result.status !== 0) {
-    throw new Error(
-      `Unable to preflight staging Worker secrets with wrangler secret list. `
-      + `Authenticate Wrangler or pass --skip-remote-config-preflight to bypass this check.`
-      + (stderr ? `\n${stderr}` : "")
-      + (stdout ? `\n${stdout}` : ""),
-    )
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(stdout || "[]")
-  } catch {
-    throw new Error("wrangler secret list returned non-JSON output")
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error("wrangler secret list returned an unexpected payload")
-  }
-  const names = new Set(parsed.map((item) => String((item as { name?: unknown }).name ?? "").trim()).filter(Boolean))
-  const missing = REQUIRED_STAGING_REPLAY_WORKER_SECRETS.filter((name) => !names.has(name))
-  if (missing.length > 0) {
-    throw new Error(
-      "Staging Worker is missing required replay recording secrets:\n"
-      + missing.map((name) => `- ${name}`).join("\n")
-      + "\nSet them in Infisical staging /services/api, sync to the Worker, then rerun the smoke.",
-    )
-  }
-}
 
 async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
   const text = await response.text()
@@ -754,17 +669,6 @@ async function assertRecordingDraftProcessing(input: {
   })
 }
 
-async function holdRecordingWindowIfNeeded(input: {
-  replayAccessMode: ReplayAccessMode | null
-}): Promise<void> {
-  if (!input.replayAccessMode) return
-  const holdMs = readPositiveInteger(readArg("--recording-hold-ms") || "20000", "recording hold ms")
-  console.log("[paid-live-smoke] recording hold", {
-    hold_ms: holdMs,
-  })
-  await sleep(holdMs)
-}
-
 async function createPurchaseQuote(input: {
   apiBaseUrl: string
   buyer: SmokeSession
@@ -869,24 +773,11 @@ async function main(): Promise<void> {
     readArg("--price-cents") || readEnv(env, "PIRATE_SMOKE_PRICE_CENTS", "199"),
     "price cents",
   )
-  const settle = hasFlag("--settle-purchase")
   const recordingEnabled = hasFlag("--recording-enabled")
-  const replayAccessMode = readReplayAccessMode()
   const requireExistingCommunity = hasFlag("--require-existing-community")
-  const replayPriceCents = readPositiveInteger(
-    readArg("--replay-price-cents") || readEnv(env, "PIRATE_SMOKE_REPLAY_PRICE_CENTS", String(priceCents)),
-    "replay price cents",
-  )
-  if (replayAccessMode && !recordingEnabled) {
-    throw new Error("--replay-access-mode requires --recording-enabled")
-  }
   if (requireExistingCommunity && !existingCommunityId) {
     throw new Error("--require-existing-community requires --community-id or PIRATE_SMOKE_COMMUNITY_ID")
   }
-  assertStagingReplayWorkerSecretsPresent({
-    apiBaseUrl,
-    replayAccessMode,
-  })
   const skipVerification = hasFlag("--skip-verification")
   let host: SmokeSession | null = null
   let communityId = ""
@@ -898,11 +789,8 @@ async function main(): Promise<void> {
     console.log("[paid-live-smoke] start", {
       api_base_url: apiBaseUrl,
       price_cents: priceCents,
-      replay_access_mode: replayAccessMode,
-      replay_price_cents: replayAccessMode === "paid" ? replayPriceCents : null,
       recording_enabled: recordingEnabled,
       run_id: runId,
-      settle_purchase: settle,
       using_existing_community: Boolean(existingCommunityId),
     })
 
@@ -923,9 +811,6 @@ async function main(): Promise<void> {
     const buyerPrivateKey = readEnv(env, "PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY")
       || readEnv(env, "PIRATE_SMOKE_BUYER_PRIVATE_KEY")
       || null
-    if (settle && !buyerPrivateKey) {
-      throw new Error("PIRATE_CHECKOUT_SMOKE_BUYER_PRIVATE_KEY or PIRATE_SMOKE_BUYER_PRIVATE_KEY is required for --settle-purchase")
-    }
     const buyer = await createSession({
       apiBaseUrl,
       env,
@@ -984,8 +869,6 @@ async function main(): Promise<void> {
         roomId,
       })
     }
-    await holdRecordingWindowIfNeeded({ replayAccessMode })
-
     const quote = await createPurchaseQuote({
       apiBaseUrl,
       buyer,
@@ -996,18 +879,10 @@ async function main(): Promise<void> {
     })
     assert(quote.failedClosed, "expected paid ticket checkout to fail closed")
 
-    // Paid checkout is failed closed, so the settle + entitlement and paid-replay-purchase paths
-    // cannot run; the canary's success condition is the verified 403 above. Replay publishing is
-    // covered by the community-live-room-routes route tests.
-    if (settle || replayAccessMode) {
-      console.log("[paid-live-smoke] note: settle / replay-purchase verification is unavailable while paid checkout is failed closed")
-    }
-
-    console.log("[paid-live-smoke] paid live-room Base Sepolia smoke passed", {
+    console.log("[paid-live-smoke] paid live-room checkout failed closed as expected", {
       anchor_post: published.postId,
       community: communityId,
       listing: published.listingId,
-      replay_access_mode: replayAccessMode,
       room: roomId,
     })
   } finally {
