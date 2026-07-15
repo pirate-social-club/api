@@ -227,12 +227,15 @@ export async function creditRewardCampaignQualification(input: {
     const existing = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_reservation_id
-        FROM reward_campaign_reservations
-        WHERE reward_campaign_id = ?1 AND reward_identity_id = ?2
-          AND reward_period_key = ?3 AND reward_kind = 'campaign_practice_day'
+        FROM reward_song_period_claims
+        WHERE community_id = ?1 AND post_id = ?2 AND reward_identity_id = ?3
+          AND reward_period_key = ?4 AND reward_kind = 'campaign_practice_day'
         LIMIT 1
       `,
-      args: [campaignId, identity.id, input.candidate.periodKey],
+      args: [
+        input.candidate.communityId, input.candidate.postId,
+        identity.id, input.candidate.periodKey,
+      ],
     })
     if (existing) return { result: "duplicate", amountCents: 0 }
     const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
@@ -258,6 +261,26 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "cap", amountCents: 0 }
     }
     const reservationId = makeId("rcr")
+    const claim = await tx.execute({
+      sql: `
+        INSERT INTO reward_song_period_claims (
+          reward_campaign_reservation_id, community_id, post_id,
+          song_artifact_bundle_id, reward_identity_id, reward_period_key,
+          reward_kind, claimed_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, ?6, 'campaign_practice_day', ?7
+        )
+        ON CONFLICT (
+          community_id, post_id, reward_identity_id, reward_period_key, reward_kind
+        ) DO NOTHING
+        RETURNING reward_campaign_reservation_id
+      `,
+      args: [
+        reservationId, input.candidate.communityId, input.candidate.postId,
+        input.candidate.artifactBundleId, identity.id, input.candidate.periodKey, creditNow,
+      ],
+    })
+    if (claim.rows.length === 0) return { result: "duplicate", amountCents: 0 }
     const rewardEventId = makeId("rew")
     await tx.execute({
       sql: `
