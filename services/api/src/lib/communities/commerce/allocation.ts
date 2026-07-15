@@ -1,7 +1,8 @@
-import { badRequestError } from "../../errors"
+import { badRequestError, eligibilityFailed } from "../../errors"
 import type {
   PurchaseAllocationLeg,
   PurchaseAllocationLegRow,
+  PurchaseSettlementMode,
   QuoteAllocationSnapshot,
 } from "./row-types"
 import { parseJsonValue } from "./row-types"
@@ -101,6 +102,40 @@ export function assertExecutableQuoteAllocationSnapshot(
 
   if (payableLegCount < 1 || totalShareBps !== TOTAL_SHARE_BPS) {
     throw badRequestError("Purchase quote allocation snapshot is invalid")
+  }
+
+  return snapshot
+}
+
+/**
+ * Fail closed when a quote would create a `story_payout` leg that settlement cannot actually pay.
+ *
+ * Settlement (settlement-service.ts) marks every `story_payout` leg `confirmed` using the buyer's
+ * funding transaction as its settlement_ref. That is only legitimate under
+ * `royalty_native_story_payment`, where an on-chain Story vault distribution executes the payout.
+ * Under `delivery_only_story_settlement` — the mode for live-room tickets and paid replays — there
+ * is no payout execution, so a payable `story_payout` leg would be recorded as settled while its
+ * recipient (host/performer) is never paid.
+ *
+ * Until non-asset payout execution exists, refuse to create such a quote rather than issue a
+ * checkout that looks successful while funds stay in platform custody. Free targets ($0 legs) and
+ * asset purchases (royalty-native mode) are unaffected.
+ */
+export function assertSettlementModeCanExecuteAllocations(
+  snapshot: QuoteAllocationSnapshot[],
+  settlementMode: PurchaseSettlementMode,
+): QuoteAllocationSnapshot[] {
+  if (settlementMode === "royalty_native_story_payment") {
+    return snapshot
+  }
+
+  const unbackedStoryPayout = snapshot.some((allocation) => (
+    allocation.settlement_strategy === "story_payout" && allocation.amount_usd > 0
+  ))
+  if (unbackedStoryPayout) {
+    throw eligibilityFailed(
+      "Paid live-room tickets and paid replays are not available yet: recipient payout execution is not implemented",
+    )
   }
 
   return snapshot

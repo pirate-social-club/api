@@ -49,6 +49,7 @@ import {
 } from "./quote-helpers"
 import {
   assertExecutableQuoteAllocationSnapshot,
+  assertSettlementModeCanExecuteAllocations,
   resolveQuoteAllocationSnapshot,
 } from "./allocation"
 import {
@@ -422,11 +423,14 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         listingPolicy,
       })
     }
-    const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
-      replayAllocationSnapshot ?? resolveQuoteAllocationSnapshot({
-        finalPriceUsd: resolvedPrice.finalPriceUsd,
-        listingPolicy,
-      }),
+    const allocationSnapshot = assertSettlementModeCanExecuteAllocations(
+      assertExecutableQuoteAllocationSnapshot(
+        replayAllocationSnapshot ?? resolveQuoteAllocationSnapshot({
+          finalPriceUsd: resolvedPrice.finalPriceUsd,
+          listingPolicy,
+        }),
+      ),
+      settlementMode,
     )
     const settlementAmount = {
       amountAtomic: resolveAllocationSettlementAmountAtomic({
