@@ -9,6 +9,7 @@ import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import type { CommunityJobHandlerInput } from "../communities/jobs/handler-types"
 import { parseJobPayload } from "../communities/jobs/payload"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
@@ -28,6 +29,7 @@ import {
   type StudyAttemptRow,
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
+import { classifyStudyGenerationError } from "./post-study-generation-helpers"
 import { canGenerateStudyTranslations } from "./post-study-generation-provider"
 import { canReadNonPublishedPost, isPubliclyReadablePost, requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
@@ -43,11 +45,14 @@ import {
 } from "./post-study-unit-service"
 import {
   createReadyStudyPack,
+  completeStudyGenerationRun,
   enqueueStudyGenerationIfNeeded,
   getLatestPack,
   hasCompleteReadyStudyLocalizations,
   isSameLanguageStudyPair,
+  markStudyGenerationRunRunning,
   normalizeStudyTargetLanguage,
+  recordStudyGenerationRunFailure,
   type StudyPack,
   type StudyUnavailableReason,
 } from "./post-study-localization-service"
@@ -480,13 +485,13 @@ async function resolveStudyExerciseAvailability(input: {
     }),
     input.unitsPersisted
       ? getLatestPack({
-      client: input.client,
-      postId: input.post.post_id,
-      targetLanguage: input.targetLanguage,
+        client: input.client,
+        postId: input.post.post_id,
+        targetLanguage: input.targetLanguage,
         })
       : Promise.resolve(null),
   ])
-  if (includeTranslation && pack?.status === "unavailable") {
+  if (includeTranslation && !includeSayItBack && pack?.status === "unavailable") {
     return {
       access: "unavailable",
       canonicalExerciseRows: [],
@@ -998,33 +1003,90 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
     if (!post || post.community_id !== input.job.community_id || post.post_type !== "song") {
       return "skipped:missing_song"
     }
+    await markStudyGenerationRunRunning({
+      client: db.client,
+      jobId: input.job.job_id,
+      postId,
+      targetLanguage,
+      attemptCount: input.job.attempt_count,
+    })
     if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.job.community_id })) {
+      await completeStudyGenerationRun({
+        client: db.client,
+        postId,
+        targetLanguage,
+        status: "unavailable",
+        errorCode: "study_disabled",
+      })
       return "skipped:study_disabled"
     }
     // A queued job for a same-language pair (e.g. enqueued before this guard existed)
     // must not generate degenerate same-language translation MCQs.
     if (isSameLanguageStudyPair(post.source_language, targetLanguage)) {
+      await completeStudyGenerationRun({
+        client: db.client,
+        postId,
+        targetLanguage,
+        status: "unavailable",
+        errorCode: "same_language",
+      })
       return "skipped:same_language"
     }
     const units = await ensureStudyUnits(db.client, post)
-    if (units.length === 0) return "skipped:no_lyrics"
+    if (units.length === 0) {
+      await completeStudyGenerationRun({
+        client: db.client,
+        postId,
+        targetLanguage,
+        status: "unavailable",
+        errorCode: "no_lyrics",
+      })
+      return "skipped:no_lyrics"
+    }
     if (await hasCompleteReadyStudyLocalizations({
       client: db.client,
       postId,
       targetLanguage,
     })) {
+      await completeStudyGenerationRun({ client: db.client, postId, targetLanguage, status: "ready" })
       return "ready:already_generated"
     }
     if (!canGenerateStudyTranslations(input.env)) {
+      await completeStudyGenerationRun({
+        client: db.client,
+        postId,
+        targetLanguage,
+        status: "unavailable",
+        errorCode: "openrouter_unconfigured",
+      })
       return "skipped:openrouter_unconfigured"
     }
-    const pack = await createReadyStudyPack({
-      client: db.client,
-      env: input.env,
-      post,
-      targetLanguage,
-    })
-    return pack?.job_result_ref ?? (pack?.status === "ready" ? `ready:${targetLanguage}` : "skipped:generation_unavailable")
+    try {
+      const pack = await createReadyStudyPack({
+        client: db.client,
+        env: input.env,
+        post,
+        targetLanguage,
+      })
+      const status = pack?.status === "ready" ? "ready" : "unavailable"
+      await completeStudyGenerationRun({
+        client: db.client,
+        postId,
+        targetLanguage,
+        status,
+        errorCode: status === "unavailable" ? "generation_failed" : null,
+      })
+      return pack?.job_result_ref ?? (status === "ready" ? `ready:${targetLanguage}` : "skipped:generation_unavailable")
+    } catch (error) {
+      await recordStudyGenerationRunFailure({
+        client: db.client,
+        errorCode: classifyStudyGenerationError(error),
+        postId,
+        targetLanguage,
+        terminal: input.job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS,
+      })
+      throw error
+    }
   } finally {
     await db.close()
   }
