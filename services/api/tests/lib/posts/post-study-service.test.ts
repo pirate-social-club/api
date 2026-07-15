@@ -268,6 +268,21 @@ async function applyStudyMigration(): Promise<void> {
       }
     }
   }
+
+  const generationRunTables = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'song_study_generation_run'",
+  )
+  if (generationRunTables.rows.length <= 0) {
+    const path = fileURLToPath(
+      new URL("../../../test-fixtures/db/community-template/migrations/1131_song_study_generation_runs.sql", import.meta.url),
+    )
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
 }
 
 async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {

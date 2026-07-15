@@ -43,17 +43,6 @@ export function deriveStorageRefHash(storageRef: string): `0x${string}` {
   return keccak256(toUtf8Bytes(storageRef.trim())) as `0x${string}`
 }
 
-export function encodeTokenGateConditionData(input: {
-  entitlementTokenAddress: string
-  tokenId: bigint
-  minBalance?: bigint
-}): `0x${string}` {
-  return abiCoder.encode(
-    ["address", "uint256", "uint256"],
-    [input.entitlementTokenAddress, input.tokenId, input.minBalance ?? 1n],
-  ) as `0x${string}`
-}
-
 export function encodeCompositeReadConditionData(input: {
   entitlementTokenAddress: string
   tokenId: bigint
