@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { errorResponse, internalError } from "../../src/lib/errors"
 
 describe("errorResponse", () => {
-  test("marks an unexpected internal error retryable", () => {
+  test("sanitizes and marks an unexpected internal error retryable", () => {
     expect(errorResponse(new Error("database connection reset"))).toEqual({
       body: {
         code: "internal_error",
-        message: "database connection reset",
+        message: "Internal server error",
         retryable: true,
       },
       status: 500,
