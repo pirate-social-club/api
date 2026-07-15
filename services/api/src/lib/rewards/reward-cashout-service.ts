@@ -29,7 +29,6 @@ import type { RewardCashoutResponse, RewardPayoutStatus, UpstreamIdentity } from
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000]
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 const MAX_RECONCILE_ATTEMPTS = 3
-const MAX_PREPARATION_ATTEMPTS = 3
 const DEFAULT_PAYOUT_RECONCILE_LIMIT = 50
 const IDEMPOTENCY_KEY_RE = /^[a-zA-Z0-9:_-]{8,160}$/
 
@@ -523,19 +522,6 @@ async function advanceSubmittedPayout(input: {
       client: input.client,
       effect,
       reason: settled.state,
-      nowUtc: input.nowUtc,
-    })
-  }
-  if (settled.state === "failed_preparation" && effect.attemptCount >= MAX_PREPARATION_ATTEMPTS) {
-    console.error("[rewards] payout preparation failed permanently", {
-      reward_payout_effect_id: effect.rewardPayoutEffectId,
-      user_id: effect.userId,
-      attempt_count: effect.attemptCount,
-    })
-    return await markPayoutFailed({
-      client: input.client,
-      effect,
-      reason: "failed_preparation",
       nowUtc: input.nowUtc,
     })
   }

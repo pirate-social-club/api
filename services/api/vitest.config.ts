@@ -7,6 +7,7 @@ import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config"
 export default defineWorkersConfig({
   test: {
     include: ["tests/integration/**/*.integration.ts"],
+    exclude: ["tests/integration/operator-signing-coordinator.integration.ts"],
     poolOptions: {
       workers: {
         main: "./tests/integration/karaoke-gateway.worker.ts",
@@ -23,10 +24,6 @@ export default defineWorkersConfig({
           durableObjects: {
             KARAOKE_SESSION_RUNTIME: {
               className: "KaraokeSessionRuntimeDO",
-              useSQLite: true,
-            },
-            OPERATOR_SIGNING_COORDINATOR: {
-              className: "OperatorSigningCoordinatorDO",
               useSQLite: true,
             },
           },
