@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { enqueueCommunityJob } from "../communities/jobs/store"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError, rateLimited } from "../errors"
 import { makeId, nowIso } from "../helpers"
@@ -27,6 +28,12 @@ import {
 
 // v5: regenerate translations from the punctuation-canonicalized source lines.
 const STUDY_LOCALIZATION_GENERATION_VERSION = 5
+
+type StudyGenerationRunStatus = "queued" | "running" | "ready" | "unavailable"
+
+type StudyGenerationRun = {
+  status: StudyGenerationRunStatus
+}
 
 const DEFAULT_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT = 3
 const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
@@ -160,6 +167,27 @@ export async function getLatestPack(input: {
   }) as Record<string, unknown> | null
   const unitCount = Number(unitSummary?.unit_count ?? 0)
   if (unitCount <= 0) return null
+  const generationRun = await getStudyGenerationRun(input)
+  if (generationRun?.status === "queued" || generationRun?.status === "running") {
+    return {
+      generated_at: null,
+      source_language: readString(unitSummary?.source_language),
+      status: "processing",
+      study_pack_version: STUDY_LOCALIZATION_GENERATION_VERSION,
+      target_language: input.targetLanguage,
+      unavailable_reason: null,
+    }
+  }
+  if (generationRun?.status === "unavailable") {
+    return {
+      generated_at: null,
+      source_language: readString(unitSummary?.source_language),
+      status: "unavailable",
+      study_pack_version: STUDY_LOCALIZATION_GENERATION_VERSION,
+      target_language: input.targetLanguage,
+      unavailable_reason: "generation_failed",
+    }
+  }
   const localizationSummary = await executeFirst(input.client, {
     sql: `
       SELECT COUNT(*) AS localization_count,
@@ -193,6 +221,202 @@ export async function getLatestPack(input: {
     target_language: input.targetLanguage,
     unavailable_reason: null,
   }
+}
+
+async function getStudyGenerationRun(input: {
+  client: DbExecutor
+  postId: string
+  targetLanguage: string
+}): Promise<StudyGenerationRun | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT CASE
+               WHEN r.status IN ('queued', 'running')
+                AND j.status = 'failed'
+                AND j.attempt_count >= ?4
+               THEN 'unavailable'
+               ELSE r.status
+             END AS status
+      FROM song_study_generation_run r
+      LEFT JOIN community_jobs j ON j.job_id = r.job_id
+      WHERE r.post_id = ?1
+        AND r.target_language = ?2
+        AND r.generation_version = ?3
+      LIMIT 1
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, COMMUNITY_JOB_MAX_ATTEMPTS],
+  }) as Record<string, unknown> | null
+  const status = readString(row?.status)
+  if (status !== "queued" && status !== "running" && status !== "ready" && status !== "unavailable") {
+    return null
+  }
+  return { status }
+}
+
+async function convergeStudyGenerationRun(input: {
+  client: Client
+  postId: string
+  targetLanguage: string
+}): Promise<void> {
+  const now = nowIso()
+  const result = await input.client.execute({
+    sql: `
+      UPDATE song_study_generation_run
+      SET status = 'unavailable',
+          error_code = COALESCE(
+            (SELECT error_code FROM community_jobs WHERE job_id = song_study_generation_run.job_id),
+            'generation_failed'
+          ),
+          completed_at = ?4,
+          updated_at = ?4
+      WHERE post_id = ?1
+        AND target_language = ?2
+        AND generation_version = ?3
+        AND status IN ('queued', 'running')
+        AND EXISTS (
+          SELECT 1
+          FROM community_jobs
+          WHERE job_id = song_study_generation_run.job_id
+            AND status = 'failed'
+            AND attempt_count >= ?5
+        )
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now, COMMUNITY_JOB_MAX_ATTEMPTS],
+  })
+  if ((result.rowsAffected ?? 0) > 0) {
+    await input.client.execute({
+      sql: `
+        UPDATE song_study_unit_localization
+        SET status = 'unavailable',
+            updated_at = ?3
+        WHERE target_language = ?2
+          AND status = 'processing'
+          AND unit_id IN (SELECT id FROM song_study_unit WHERE post_id = ?1)
+      `,
+      args: [input.postId, input.targetLanguage, now],
+    })
+  }
+}
+
+async function ensureQueuedStudyGenerationRun(input: {
+  client: Client
+  postId: string
+  targetLanguage: string
+}): Promise<void> {
+  const now = nowIso()
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_study_generation_run (
+        id, post_id, target_language, generation_version, status,
+        attempt_count, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, 'queued', 0, ?5, ?5)
+      ON CONFLICT(post_id, target_language, generation_version) DO NOTHING
+    `,
+    args: [makeId("sgr"), input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, now],
+  })
+}
+
+export async function markStudyGenerationRunRunning(input: {
+  client: Client
+  jobId: string
+  postId: string
+  targetLanguage: string
+  attemptCount: number
+}): Promise<void> {
+  const now = nowIso()
+  await ensureQueuedStudyGenerationRun(input)
+  await input.client.execute({
+    sql: `
+      UPDATE song_study_generation_run
+      SET status = 'running',
+          job_id = CASE
+            WHEN EXISTS (SELECT 1 FROM community_jobs WHERE job_id = ?4) THEN ?4
+            ELSE job_id
+          END,
+          attempt_count = ?5,
+          error_code = NULL,
+          completed_at = NULL,
+          updated_at = ?6
+      WHERE post_id = ?1
+        AND target_language = ?2
+        AND generation_version = ?3
+        AND status IN ('queued', 'running')
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, input.jobId, input.attemptCount, now],
+  })
+}
+
+export async function completeStudyGenerationRun(input: {
+  client: Client
+  postId: string
+  targetLanguage: string
+  status: Extract<StudyGenerationRunStatus, "ready" | "unavailable">
+  errorCode?: string | null
+}): Promise<void> {
+  const now = nowIso()
+  await ensureQueuedStudyGenerationRun(input)
+  await input.client.execute({
+    sql: `
+      UPDATE song_study_generation_run
+      SET status = ?4,
+          error_code = ?5,
+          completed_at = ?6,
+          updated_at = ?6
+      WHERE post_id = ?1
+        AND target_language = ?2
+        AND generation_version = ?3
+    `,
+    args: [
+      input.postId,
+      input.targetLanguage,
+      STUDY_LOCALIZATION_GENERATION_VERSION,
+      input.status,
+      input.errorCode ?? null,
+      now,
+    ],
+  })
+  if (input.status === "unavailable") {
+    await input.client.execute({
+      sql: `
+        UPDATE song_study_unit_localization
+        SET status = 'unavailable',
+            updated_at = ?3
+        WHERE target_language = ?2
+          AND status = 'processing'
+          AND unit_id IN (SELECT id FROM song_study_unit WHERE post_id = ?1)
+      `,
+      args: [input.postId, input.targetLanguage, now],
+    })
+  }
+}
+
+export async function recordStudyGenerationRunFailure(input: {
+  client: Client
+  errorCode: string
+  postId: string
+  targetLanguage: string
+  terminal: boolean
+}): Promise<void> {
+  if (input.terminal) {
+    await completeStudyGenerationRun({ ...input, status: "unavailable" })
+    return
+  }
+  const now = nowIso()
+  await input.client.execute({
+    sql: `
+      UPDATE song_study_generation_run
+      SET status = 'queued',
+          error_code = ?4,
+          completed_at = NULL,
+          updated_at = ?5
+      WHERE post_id = ?1
+        AND target_language = ?2
+        AND generation_version = ?3
+        AND status = 'running'
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, input.errorCode, now],
+  })
 }
 
 export async function hasCompleteReadyStudyLocalizations(input: {
@@ -374,6 +598,19 @@ export async function createReadyStudyPack(input: {
     await input.client.batch(localizationStatements, "write")
   }
 
+  const readySummary = await executeFirst(input.client, {
+    sql: `
+      SELECT COUNT(*) AS ready_count
+      FROM song_study_unit_localization
+      WHERE target_language = ?1
+        AND status = 'ready'
+        AND localization_version >= ?2
+        AND unit_id IN (${units.map(() => "?").join(", ")})
+    `,
+    args: [input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, ...units.map((unit) => unit.id)],
+  }) as Record<string, unknown> | null
+  const hasReadyLocalization = Number(readySummary?.ready_count ?? 0) > 0
+
   return {
     generated_at: now,
     job_result_ref: compactGenerationResultRef({
@@ -387,10 +624,10 @@ export async function createReadyStudyPack(input: {
       unavailableLineCount,
     }),
     source_language: input.post.source_language,
-    status: "ready",
+    status: hasReadyLocalization ? "ready" : "unavailable",
     study_pack_version: Math.max(STUDY_UNIT_GENERATION_VERSION, STUDY_LOCALIZATION_GENERATION_VERSION),
     target_language: input.targetLanguage,
-    unavailable_reason: null,
+    unavailable_reason: hasReadyLocalization ? null : "generation_failed",
   }
 }
 
@@ -437,12 +674,23 @@ export async function enqueueStudyGenerationIfNeeded(input: {
   if (!canGenerateStudyTranslations(input.env)) return
   if (input.units.length === 0) return
   if (isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)) return
+  await convergeStudyGenerationRun({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
   const pack = await getLatestPack({
     client: input.client,
     postId: input.postId,
     targetLanguage: input.targetLanguage,
   })
-  if (pack?.status === "ready") return
+  if (pack?.status === "ready" || pack?.status === "unavailable") return
+  const existingRun = await getStudyGenerationRun({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
+  if (existingRun?.status === "running") return
   if (await hasCompleteReadyStudyLocalizations({
     client: input.client,
     postId: input.postId,
@@ -456,12 +704,17 @@ export async function enqueueStudyGenerationIfNeeded(input: {
     postId: input.postId,
     targetLanguage: input.targetLanguage,
   })
+  await ensureQueuedStudyGenerationRun({
+    client: input.client,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+  })
   await markStudyLocalizationsProcessing({
     client: input.client,
     targetLanguage: input.targetLanguage,
     units: input.units,
   })
-  await enqueueCommunityJob({
+  const job = await enqueueCommunityJob({
     client: input.client,
     communityId: input.communityId,
     jobType: "song_study_generate",
@@ -472,5 +725,17 @@ export async function enqueueStudyGenerationIfNeeded(input: {
       target_language: input.targetLanguage,
     }),
     createdAt: nowIso(),
+  })
+  await input.client.execute({
+    sql: `
+      UPDATE song_study_generation_run
+      SET job_id = ?4,
+          updated_at = ?5
+      WHERE post_id = ?1
+        AND target_language = ?2
+        AND generation_version = ?3
+        AND status = 'queued'
+    `,
+    args: [input.postId, input.targetLanguage, STUDY_LOCALIZATION_GENERATION_VERSION, job.job_id, nowIso()],
   })
 }

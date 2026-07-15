@@ -145,23 +145,38 @@ async function runStudyGenerationJob(input: {
   postId?: string
   targetLanguage?: string
 }): Promise<string | null> {
+  const postId = input.postId ?? POST_ID
+  const targetLanguage = input.targetLanguage ?? "es"
+  const storedJob = await client!.execute({
+    sql: `
+      SELECT job_id, attempt_count
+      FROM community_jobs
+      WHERE job_type = 'song_study_generate'
+        AND subject_id = ?1
+      ORDER BY created_at DESC, job_id DESC
+      LIMIT 1
+    `,
+    args: [`${postId}:${targetLanguage}`],
+  })
+  const jobId = typeof storedJob.rows[0]?.job_id === "string" ? storedJob.rows[0].job_id : "cjb_study_test"
+  const attemptCount = Number(storedJob.rows[0]?.attempt_count ?? 0)
   return runCommunityJob({
     env: input.env,
     communityRepository: repo as never,
     job: {
-      job_id: "cjb_study_test",
+      job_id: jobId,
       community_id: COMMUNITY_ID,
       job_type: "song_study_generate",
       subject_type: "post_study",
-      subject_id: `${input.postId ?? POST_ID}:${input.targetLanguage ?? "es"}`,
+      subject_id: `${postId}:${targetLanguage}`,
       status: "queued",
       payload_json: JSON.stringify({
-        post_id: input.postId ?? POST_ID,
-        target_language: input.targetLanguage ?? "es",
+        post_id: postId,
+        target_language: targetLanguage,
       }),
       result_ref: null,
       error_code: null,
-      attempt_count: 0,
+      attempt_count: attemptCount,
       available_at: null,
       last_checkpoint: null,
       last_checkpoint_at: null,
@@ -866,6 +881,16 @@ describe("post study service", () => {
     expect(payload.unavailable_reason).toBeUndefined()
     const processingRows = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_localization WHERE status = 'processing'")
     expect(Number(processingRows.rows[0]?.count ?? 0)).toBe(2)
+    const queuedRun = await client!.execute(`
+      SELECT status, job_id, attempt_count
+      FROM song_study_generation_run
+      WHERE post_id = ?1 AND target_language = 'es'
+    `, [POST_ID])
+    expect(queuedRun.rows).toEqual([{
+      attempt_count: 0,
+      job_id: expect.stringMatching(/^cjb_/),
+      status: "queued",
+    }])
   })
 
   test("returns unavailable without lazy generation when study is disabled", async () => {
@@ -2929,6 +2954,13 @@ describe("post study service", () => {
     }))
 
     expect(jobResult).toBe("ready:es")
+    const readyRun = await client!.execute(`
+      SELECT status, completed_at
+      FROM song_study_generation_run
+      WHERE post_id = ?1 AND target_language = 'es'
+    `, [POST_ID])
+    expect(readyRun.rows[0]?.status).toBe("ready")
+    expect(typeof readyRun.rows[0]?.completed_at).toBe("string")
 
     const payload = await getPostStudyPayload({
       actor: learnerActor,
@@ -3335,6 +3367,58 @@ describe("post study service", () => {
       ORDER BY status
     `)
     expect(statusRows.rows).toEqual([{ status: "unavailable", count: 2 }])
+    const jobRows = await client!.execute("SELECT COUNT(*) AS count FROM community_jobs WHERE job_type = 'song_study_generate'")
+    expect(Number(jobRows.rows[0]?.count ?? 0)).toBe(1)
+    const runRows = await client!.execute("SELECT status, error_code FROM song_study_generation_run")
+    expect(runRows.rows).toEqual([{ error_code: "generation_failed", status: "unavailable" }])
+  })
+
+  test("converges an exhausted generation job instead of leaving study processing forever", async () => {
+    await seedMultilineSongPost()
+    const generationEnv = env({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    })
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    await exec(`
+      UPDATE community_jobs
+      SET status = 'failed',
+          attempt_count = 8,
+          error_code = 'worker_terminated',
+          available_at = NULL
+      WHERE job_type = 'song_study_generate'
+    `)
+
+    await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: generationEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    const runRows = await client!.execute(`
+      SELECT status, error_code, completed_at
+      FROM song_study_generation_run
+    `)
+    expect(runRows.rows[0]?.status).toBe("unavailable")
+    expect(runRows.rows[0]?.error_code).toBe("worker_terminated")
+    expect(typeof runRows.rows[0]?.completed_at).toBe("string")
+    const localizationRows = await client!.execute(`
+      SELECT status, COUNT(*) AS count
+      FROM song_study_unit_localization
+      GROUP BY status
+    `)
+    expect(localizationRows.rows).toEqual([{ count: 2, status: "unavailable" }])
     const jobRows = await client!.execute("SELECT COUNT(*) AS count FROM community_jobs WHERE job_type = 'song_study_generate'")
     expect(Number(jobRows.rows[0]?.count ?? 0)).toBe(1)
   })
