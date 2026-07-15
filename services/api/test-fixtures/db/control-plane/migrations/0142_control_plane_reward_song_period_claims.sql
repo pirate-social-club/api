@@ -31,7 +31,7 @@ INSERT INTO reward_song_period_claims (
 SELECT
     r.reward_campaign_reservation_id, c.community_id, c.post_id,
     c.song_artifact_bundle_id, r.reward_identity_id, r.reward_period_key::DATE,
-    r.reward_kind, r.created_at
+    r.reward_kind, r.created_at::TIMESTAMPTZ
 FROM reward_campaign_reservations r
 JOIN reward_campaigns c ON c.reward_campaign_id = r.reward_campaign_id
 WHERE r.status IN ('reserved', 'credited');
