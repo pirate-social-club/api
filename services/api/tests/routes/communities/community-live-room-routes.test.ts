@@ -11,7 +11,6 @@ import {
   requestJson,
 } from "./community-routes-test-helpers"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
-import { badRequestError } from "../../../src/lib/errors"
 import { setStoryCdrUploaderForTests } from "../../../src/lib/story/story-cdr"
 import { setStoryRuntimeFundingAssertionForTests } from "../../../src/lib/story/story-runtime-funding"
 import { setStoryAccessProofSignerForTests } from "../../../src/lib/story/story-access-proof-service"
@@ -229,35 +228,6 @@ async function createTestCommunity(input: {
   expect(response.status).toBe(202)
   const body = await json(response) as { community: { id: string } }
   return body.community.id.replace(/^com_/, "")
-}
-
-async function insertTestWalletAttachment(input: {
-  client: Awaited<ReturnType<typeof createRouteTestContext>>["client"]
-  userId: string
-  walletAttachmentId: string
-  walletAddress?: string
-}): Promise<void> {
-  const now = new Date().toISOString()
-  const address = input.walletAddress ?? "0x7000000000000000000000000000000000000007"
-  await input.client.execute({
-    sql: `
-      INSERT INTO wallet_attachments (
-        wallet_attachment_id, user_id, chain_namespace, wallet_address_normalized, wallet_address_display,
-        source_provider, source_subject, attachment_kind, is_primary, status, attached_at, detached_at, created_at, updated_at
-      ) VALUES (
-        ?1, ?2, 'eip155', ?3, ?4,
-        'test', ?5, 'external', 0, 'active', ?6, NULL, ?6, ?6
-      )
-    `,
-    args: [
-      input.walletAttachmentId,
-      input.userId,
-      address.toLowerCase(),
-      address,
-      `test|${input.userId}|${input.walletAttachmentId}`,
-      now,
-    ],
-  })
 }
 
 function readySoloRoomBody() {
@@ -2742,7 +2712,7 @@ describe("community live-room routes", () => {
     })
   })
 
-  test("paid recording replay publishes as included-with-ticket locked delivery", async () => {
+  test("recording replay publishes as locked delivery; paid ticket checkout is failed closed", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     const compositeReadConditionAddress = "0x9999999999999999999999999999999999999999"
@@ -2915,26 +2885,11 @@ describe("community live-room routes", () => {
         ctx.env,
         buyer.accessToken,
       )
-      expect(quoteCreate.status).toBe(201)
-      const quoteBody = await json(quoteCreate) as { id: string }
-      await insertTestWalletAttachment({
-        client: ctx.client,
-        userId: buyer.userId,
-        walletAttachmentId: "wal_live_room_included_replay_buyer",
-        walletAddress: "0x7100000000000000000000000000000000000007",
-      })
-      const purchaseSettle = await requestJson(
-        `http://pirate.test/communities/${communityId}/purchase-settlements`,
-        {
-          quote: quoteBody.id,
-          settlement_wallet_attachment: "wal_live_room_included_replay_buyer",
-          funding_tx_ref: "0xfunding-included-replay",
-          settlement_tx_ref: "tx-included-replay",
-        },
-        ctx.env,
-        buyer.accessToken,
-      )
-      expect(purchaseSettle.status).toBe(201)
+      // Paid ticket checkout is failed closed; the replay still publishes below (owner-driven),
+      // but the buyer never gains a purchase entitlement.
+      expect(quoteCreate.status).toBe(403)
+      expect(JSON.stringify(await json(quoteCreate))).toContain("recipient payout is not configured")
+      expect(await countPurchaseQuotes({ communityDbRoot: ctx.communityDbRoot, communityId })).toBe(0)
 
       const attach = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
@@ -3059,6 +3014,8 @@ describe("community live-room routes", () => {
       expect(hostReplayAccessBody.story_cdr_access.access_proof.mode).toBeUndefined()
       expect(hostReplayAccessBody.story_cdr_access.access_proof.signature).toMatch(/^0x[a-fA-F0-9]+$/)
 
+      // The buyer never completed a purchase (checkout is failed closed), so replay access is
+      // denied and the locked content is not served.
       const replayAccess = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
         {
@@ -3067,29 +3024,8 @@ describe("community live-room routes", () => {
         ctx.env,
       )
       expect(replayAccess.status).toBe(200)
-      const replayAccessBody = await json(replayAccess) as {
-        access_granted: boolean
-        decision_reason: string
-        delivery_kind: string
-        delivery_ref: string
-        story_cdr_access: {
-          access_aux_data_hex: string
-          access_proof: Record<string, unknown>
-          access_scope: string
-          ciphertext_ref: string
-          mime_type: string
-          vault_uuid: number
-        }
-      }
-      expect(replayAccessBody.access_granted).toBe(true)
-      expect(replayAccessBody.decision_reason).toBe("purchase_entitlement")
-      expect(replayAccessBody.delivery_kind).toBe("story_cdr_ref")
-      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
-      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).not.toBe("0x")
-      expect(replayAccessBody.story_cdr_access.access_scope).toBe("asset.share")
-      expect(replayAccessBody.story_cdr_access.ciphertext_ref).toBe(replayAccessBody.delivery_ref)
-      expect(replayAccessBody.story_cdr_access.mime_type).toBe("video/mp4")
-      expect(replayAccessBody.story_cdr_access.vault_uuid).toBe(9090)
+      const replayAccessBody = await json(replayAccess) as { access_granted: boolean }
+      expect(replayAccessBody.access_granted).toBe(false)
 
       const replayContent = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/content`,
@@ -3098,9 +3034,7 @@ describe("community live-room routes", () => {
         },
         ctx.env,
       )
-      expect(replayContent.status).toBe(200)
-      expect(replayContent.headers.get("content-type")).toContain("application/octet-stream")
-      expect((await replayContent.arrayBuffer()).byteLength).toBeGreaterThan(0)
+      expect(replayContent.status).not.toBe(200)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -3619,80 +3553,21 @@ describe("community live-room routes", () => {
         ctx.env,
         buyer.accessToken,
       )
-      expect(quoteCreate.status).toBe(201)
-      const quoteBody = await json(quoteCreate) as {
-        id: string
-        replay_asset: string
-        allocation_snapshot: Array<{ recipient_type: string; recipient_ref: string | null; share_bps: number }>
-      }
-      expect(quoteBody.replay_asset).toBe(replayAssetId)
-      expect(quoteBody.allocation_snapshot).toEqual([
-        expect.objectContaining({
-          recipient_type: "performer",
-          recipient_ref: owner.userId,
-          share_bps: 10000,
-        }),
-      ])
+      // A separately paid replay produces a performer story_payout allocation, which settlement
+      // cannot execute, so checkout is failed closed at quote creation and no quote row is written.
+      expect(quoteCreate.status).toBe(403)
+      expect(JSON.stringify(await json(quoteCreate))).toContain("recipient payout is not configured")
+      expect(await countPurchaseQuotes({ communityDbRoot: ctx.communityDbRoot, communityId })).toBe(0)
 
-      await insertTestWalletAttachment({
-        client: ctx.client,
-        userId: buyer.userId,
-        walletAttachmentId: "wal_live_room_paid_replay_buyer",
-        walletAddress: "0x7200000000000000000000000000000000000007",
-      })
-      const purchaseSettle = await requestJson(
-        `http://pirate.test/communities/${communityId}/purchase-settlements`,
-        {
-          quote: quoteBody.id,
-          settlement_wallet_attachment: "wal_live_room_paid_replay_buyer",
-          funding_tx_ref: "0xfunding-paid-replay",
-          settlement_tx_ref: "",
-        },
-        ctx.env,
-        buyer.accessToken,
-      )
-      expect(purchaseSettle.status).toBe(201)
-      expect(await json(purchaseSettle)).toMatchObject({
-        replay_asset: replayAssetId,
-        entitlement_kind: "replay_access",
-        entitlement_target_ref: replayAssetId,
-      })
-
-      const replayAccess = await app.request(
-        `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/access`,
-        {
-          headers: { authorization: `Bearer ${buyer.accessToken}` },
-        },
-        ctx.env,
-      )
-      expect(replayAccess.status).toBe(200)
-      const replayAccessBody = await json(replayAccess) as {
-        access_granted: boolean
-        decision_reason: string
-        story_cdr_access: {
-          access_aux_data_hex: string
-          access_scope: string
-          vault_uuid: number
-        }
-      }
-      expect(replayAccessBody.access_granted).toBe(true)
-      expect(replayAccessBody.decision_reason).toBe("purchase_entitlement")
-      expect(replayAccessBody.story_cdr_access.access_scope).toBe("asset.share")
-      expect(replayAccessBody.story_cdr_access.access_aux_data_hex).toMatch(/^0x[a-fA-F0-9]+$/)
-      expect(replayAccessBody.story_cdr_access.vault_uuid).toBe(9191)
-
-      const replayContent = await app.request(
+      // With no purchase, the buyer still cannot access the locked replay content.
+      const replayContentDenied = await app.request(
         `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/replay/content`,
         {
           headers: { authorization: `Bearer ${buyer.accessToken}` },
         },
         ctx.env,
       )
-      expect(replayContent.status).toBe(200)
-      expect(replayContent.headers.get("content-type")).toContain("application/octet-stream")
-      const replayContentBytes = new Uint8Array(await replayContent.arrayBuffer())
-      expect(Array.from(replayContentBytes)).toEqual(Array.from(lockedReplayObject.body))
-      expect(new TextDecoder().decode(replayContentBytes)).not.toBe("separately paid captured replay")
+      expect(replayContentDenied.status).not.toBe(200)
     } finally {
       globalThis.fetch = originalFetch
     }
