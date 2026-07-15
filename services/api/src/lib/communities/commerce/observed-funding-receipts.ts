@@ -136,7 +136,11 @@ export async function setObservedFundingReceiptFinality(input: {
       UPDATE observed_funding_receipts
       SET finality_status = ?2,
           canonical_at = CASE WHEN ?2 = 'canonical' THEN COALESCE(canonical_at, ?3) ELSE canonical_at END,
-          match_status = CASE WHEN ?2 = 'orphaned' AND match_status = 'unmatched' THEN 'ignored' ELSE match_status END,
+          match_status = CASE
+            WHEN ?2 = 'orphaned' AND match_status = 'claimed' THEN 'refund_review'
+            WHEN ?2 = 'orphaned' AND match_status = 'unmatched' THEN 'ignored'
+            ELSE match_status
+          END,
           updated_at = ?3
       WHERE observed_funding_receipt_id = ?1
         AND NOT (finality_status = 'orphaned' AND ?2 = 'canonical')
@@ -165,7 +169,10 @@ export async function claimObservedFundingReceipt(input: {
         AND finality_status = 'canonical'
         AND (
           match_status = 'unmatched'
-          OR (match_status = 'claimed' AND consumer_rail = ?2 AND consumer_id = ?3)
+          OR (
+            match_status = 'claimed' AND consumer_rail = ?2 AND consumer_id = ?3
+            AND quote_id IS NOT DISTINCT FROM ?4
+          )
         )
       RETURNING ${COLUMNS}
     `,

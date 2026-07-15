@@ -104,4 +104,26 @@ describe("observed funding receipts", () => {
       now: "2026-07-15T17:02:00.000Z",
     })).rejects.toThrow("Observed funding receipt is not claimable")
   })
+
+  test("routes an orphaned claimed receipt to refund review", async () => {
+    const client = clientReturning({
+      rows: [row({
+        finality_status: "orphaned",
+        match_status: "refund_review",
+        consumer_rail: "community_purchase",
+        consumer_id: "quo_1",
+        quote_id: "quo_1",
+      })],
+    })
+
+    await expect(setObservedFundingReceiptFinality({
+      client,
+      receiptId: "ofr_receipt",
+      status: "orphaned",
+      now: "2026-07-15T17:03:00.000Z",
+    })).resolves.toMatchObject({
+      finalityStatus: "orphaned",
+      matchStatus: "refund_review",
+    })
+  })
 })
