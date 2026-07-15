@@ -341,6 +341,21 @@ async function readAtomicPublishRowCounts(input: {
   }
 }
 
+async function countPurchaseQuotes(input: {
+  communityDbRoot: string
+  communityId: string
+}): Promise<number> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({ sql: "SELECT COUNT(*) AS count FROM purchase_quotes", args: [] })
+    return Number(result.rows[0]?.count ?? 0)
+  } finally {
+    client.close()
+  }
+}
+
 async function countLiveRoomViewerSessions(input: {
   communityDbRoot: string
   communityId: string
@@ -847,7 +862,7 @@ describe("community live-room routes", () => {
     expect(afterFailure).toEqual(beforeFailure)
   })
 
-  test("paid live-room listing propagates live-room ticket entitlement", async () => {
+  test("paid live-room ticket checkout is failed closed until payout routing exists", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -953,6 +968,8 @@ describe("community live-room routes", () => {
     expect(donationQuoteCreate.status).toBe(403)
     expect(JSON.stringify(await json(donationQuoteCreate))).toContain("Live-room ticket donations are not supported")
 
+    // Remove the donation partner so the next quote clears the donation guard and reaches the
+    // story-payout guard under test.
     const communityDbAfterDonationCheck = createClient({
       url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
     })
@@ -978,70 +995,6 @@ describe("community live-room routes", () => {
       communityDbAfterDonationCheck.close()
     }
 
-    const legacyDonationQuoteCreate = await requestJson(
-      `http://pirate.test/communities/${communityId}/purchase-quotes`,
-      {
-        listing: listingBody.id,
-        ...routedCheckoutQuoteFields,
-      },
-      ctx.env,
-      owner.accessToken,
-    )
-    expect(legacyDonationQuoteCreate.status).toBe(201)
-    const legacyDonationQuoteBody = await json(legacyDonationQuoteCreate) as { id: string }
-    const legacyDonationQuoteId = legacyDonationQuoteBody.id.replace(/^pq_/, "")
-    const communityDbForLegacyDonationQuote = createClient({
-      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
-    })
-    try {
-      await communityDbForLegacyDonationQuote.execute({
-        sql: `
-          UPDATE purchase_quotes
-          SET allocation_snapshot_json = ?3
-          WHERE community_id = ?1
-            AND quote_id = ?2
-        `,
-        args: [
-          communityId,
-          legacyDonationQuoteId,
-          JSON.stringify([
-            {
-              recipient_type: "charity",
-              recipient_ref: "don_live_room_charity",
-              waterfall_position: 60,
-              share_bps: 1000,
-              amount_usd: 1.2,
-              settlement_strategy: "provider_payout",
-            },
-            {
-              recipient_type: "creator",
-              recipient_ref: owner.userId,
-              waterfall_position: 70,
-              share_bps: 9000,
-              amount_usd: 10.8,
-              settlement_strategy: "story_payout",
-            },
-          ]),
-        ],
-      })
-    } finally {
-      communityDbForLegacyDonationQuote.close()
-    }
-
-    const legacyDonationSettlement = await requestJson(
-      `http://pirate.test/communities/${communityId}/purchase-settlements`,
-      {
-        quote: legacyDonationQuoteBody.id,
-        settlement_wallet_attachment: "wal_legacy_live_room_donation",
-        funding_tx_ref: "0xfunding-legacy-live-room-donation",
-        settlement_tx_ref: "tx-legacy-live-room-donation",
-      },
-      ctx.env,
-      owner.accessToken,
-    )
-    expect(legacyDonationSettlement.status).toBe(400)
-    expect(JSON.stringify(await json(legacyDonationSettlement))).toContain("Non-asset purchase donations are not supported")
-
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
@@ -1051,19 +1004,13 @@ describe("community live-room routes", () => {
       ctx.env,
       owner.accessToken,
     )
-    expect(quoteCreate.status).toBe(201)
-    const quoteBody = await json(quoteCreate) as {
-      id: string
-      asset: string | null
-      live_room: string | null
-      final_price_cents: number
-      settlement_mode: string
-    }
-    expect(quoteBody.asset).toBeNull()
-    expect(quoteBody.live_room).toBe(room.id)
-    expect(quoteBody.final_price_cents).toBe(1200)
-    expect(quoteBody.settlement_mode).toBe("delivery_only_story_settlement")
+    // Paid live-room ticket checkout is failed closed until recipient payout execution exists:
+    // settlement would otherwise mark the host's story_payout leg confirmed without paying them.
+    expect(quoteCreate.status).toBe(403)
+    expect(JSON.stringify(await json(quoteCreate))).toContain("recipient payout is not configured")
+    expect(await countPurchaseQuotes({ communityDbRoot: ctx.communityDbRoot, communityId })).toBe(0)
 
+    // Access remains purchase-gated, and viewer attach is still payment-required.
     const accessBeforePurchase = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/access`,
       {
@@ -1079,99 +1026,15 @@ describe("community live-room routes", () => {
     expect(accessBeforePurchaseBody.access.decision_reason).toBe("purchase_required")
     expect(accessBeforePurchaseBody.access.listing).toBe(listingBody.id)
 
-    const publicAccessBeforePurchase = await app.request(
-      `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/access`,
-      {},
-      ctx.env,
-    )
-    expect(publicAccessBeforePurchase.status).toBe(200)
-    const publicAccessBeforePurchaseBody = await json(publicAccessBeforePurchase) as {
-      access: { allowed: boolean; decision_reason: string | null; listing: string | null }
-    }
-    expect(publicAccessBeforePurchaseBody.access.allowed).toBe(false)
-    expect(publicAccessBeforePurchaseBody.access.decision_reason).toBe("purchase_required")
-    expect(publicAccessBeforePurchaseBody.access.listing).toBe(listingBody.id)
-
     const publicViewerAttachBeforePurchase = await app.request(
       `http://pirate.test/public-communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       { method: "POST" },
       ctx.env,
     )
     expect(publicViewerAttachBeforePurchase.status).toBe(402)
-
-    await insertTestWalletAttachment({
-      client: ctx.client,
-      userId: owner.userId,
-      walletAttachmentId: "wal_live_room_ticket",
-    })
-
-    const viewerAttachBeforePurchase = await app.request(
-      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${owner.accessToken}` },
-      },
-      ctx.env,
-    )
-    expect(viewerAttachBeforePurchase.status).toBe(402)
-
-    const purchaseSettle = await requestJson(
-      `http://pirate.test/communities/${communityId}/purchase-settlements`,
-      {
-        quote: quoteBody.id,
-        settlement_wallet_attachment: "wal_live_room_ticket",
-        funding_tx_ref: "0xfunding-live-room-ticket",
-        settlement_tx_ref: "tx-live-room-ticket",
-      },
-      ctx.env,
-      owner.accessToken,
-    )
-    expect(purchaseSettle.status).toBe(201)
-    const purchaseBody = await json(purchaseSettle) as {
-      asset: string | null
-      live_room: string | null
-      entitlement_kind: string
-      entitlement_target_ref: string
-      purchase_entitlement: string
-      settlement_tx_ref: string
-    }
-    expect(purchaseBody.asset).toBeNull()
-    expect(purchaseBody.live_room).toBe(room.id)
-    expect(purchaseBody.entitlement_kind).toBe("live_room_access")
-    expect(purchaseBody.entitlement_target_ref).toBe(room.id)
-    expect(purchaseBody.settlement_tx_ref).toBe("tx-live-room-ticket")
-
-    const hostAttach = await app.request(
-      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/host_attach`,
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${owner.accessToken}` },
-      },
-      ctx.env,
-    )
-    expect(hostAttach.status).toBe(200)
-
-    const viewerAttachAfterPurchase = await app.request(
-      `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${owner.accessToken}` },
-      },
-      ctx.env,
-    )
-    expect(viewerAttachAfterPurchase.status).toBe(200)
-    const viewerAttachAfterPurchaseBody = await json(viewerAttachAfterPurchase) as {
-      access: { allowed: boolean; purchase_entitlement: string | null }
-      runtime: { seat: string }
-      agora: { configured: boolean }
-    }
-    expect(viewerAttachAfterPurchaseBody.access.allowed).toBe(true)
-    expect(viewerAttachAfterPurchaseBody.access.purchase_entitlement).toBe(purchaseBody.purchase_entitlement)
-    expect(viewerAttachAfterPurchaseBody.runtime.seat).toBe("viewer")
-    expect(viewerAttachAfterPurchaseBody.agora.configured).toBe(false)
   })
 
-  test("paid live-room ticket rejects settlement when funding proof fails", async () => {
+  test("paid live-room ticket checkout fails closed before funding verification", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1214,46 +1077,12 @@ describe("community live-room routes", () => {
       ctx.env,
       owner.accessToken,
     )
-    expect(quoteCreate.status).toBe(201)
-    const quoteBody = await json(quoteCreate) as { id: string }
+    // Checkout fails closed at quote creation, so funding is never verified and no quote row exists.
+    expect(quoteCreate.status).toBe(403)
+    expect(JSON.stringify(await json(quoteCreate))).toContain("recipient payout is not configured")
+    expect(await countPurchaseQuotes({ communityDbRoot: ctx.communityDbRoot, communityId })).toBe(0)
 
-    // Override the funding verifier to reject — simulates an unverified/fake funding tx.
-    setCommunityCommerceBuyerFundingVerifierForTests(async () => {
-      throw badRequestError("Funding transaction did not deliver enough USDC to the checkout operator")
-    })
-
-    await insertTestWalletAttachment({
-      client: ctx.client,
-      userId: owner.userId,
-      walletAttachmentId: "wal_live_room_ticket_reject",
-    })
-
-    const rejectedSettlement = await requestJson(
-      `http://pirate.test/communities/${communityId}/purchase-settlements`,
-      {
-        quote: quoteBody.id,
-        settlement_wallet_attachment: "wal_live_room_ticket_reject",
-        funding_tx_ref: "0xfake-funding",
-        settlement_tx_ref: "tx-fake-settlement",
-      },
-      ctx.env,
-      owner.accessToken,
-    )
-    expect(rejectedSettlement.status).toBe(400)
-    const rejectBody = await json(rejectedSettlement) as { code: string; message: string }
-    expect(rejectBody.message).toContain("Funding transaction did not deliver enough USDC")
-
-    // Restore the default verifier for subsequent tests.
-    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
-      txRef: input.fundingTxRef,
-      fromAddress: input.buyerAddress,
-      toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
-      tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
-      chainRef: "eip155:84532",
-    }))
-
-    // Verify no entitlement was granted — the viewer still can't attach.
+    // No entitlement was granted — the viewer still can't attach.
     const viewerAttachAfterRejection = await app.request(
       `http://pirate.test/communities/${communityId}/live-rooms/${room.id}/viewer_attach`,
       {

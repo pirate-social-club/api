@@ -185,6 +185,12 @@ async function finalizeLocalPurchaseSettlement(input: {
   purchaseId: string
   settlementChain: CommunityPurchaseSettlement["settlement_chain"]
   settlementTxRef: string
+  // The on-chain transaction that actually executed the Story payout, or null when none did.
+  // A story_payout allocation leg confirms only when this is present — evidence local to the
+  // finalizer, so a leg cannot be recorded settled by trusting how the caller resolved
+  // settlementTxRef. Populated only on the royalty-native asset path where the Story payment
+  // effect is confirmed.
+  storyPayoutSettlementRef: string | null
   allocationSnapshot: QuoteAllocationSnapshot[]
   charityPayouts: Map<string, ResolvedCharityPayout>
   donationPartnerId: string | null
@@ -295,16 +301,17 @@ async function finalizeLocalPurchaseSettlement(input: {
 
     for (const allocation of input.allocationSnapshot) {
       const charityPayout = input.charityPayouts.get(getAllocationExecutionKey(allocation)) ?? null
-      // A story_payout leg only settles a recipient under royalty-native mode, where the caller has
-      // already confirmed the on-chain story_royalty_payment effect and adopted its transaction as
-      // settlementTxRef. Under delivery-only mode no payout executes, so such a leg must NOT be
-      // recorded confirmed from the buyer funding tx — it stays pending. Defense in depth behind the
-      // quote-time guard, for any delivery-only quote issued before that guard existed.
+      // A story_payout leg confirms only when an on-chain Story payout actually executed, evidenced
+      // by a settlement ref the caller supplies ONLY on the royalty-native asset path (after the
+      // story_royalty_payment effect is confirmed). This is checked locally rather than trusting how
+      // the caller resolved settlementTxRef, so a delivery-only leg cannot be recorded settled from
+      // the buyer funding tx — it stays pending. Defense in depth behind the quote-time guard.
       const storyPayoutExecuted = allocation.settlement_strategy === "story_payout"
         && input.quote.settlement_mode === "royalty_native_story_payment"
+        && Boolean(input.storyPayoutSettlementRef)
       const allocationStatus = storyPayoutExecuted || charityPayout ? "confirmed" : "pending"
       const allocationSettlementRef = storyPayoutExecuted
-        ? settlementTxRef
+        ? input.storyPayoutSettlementRef
         : charityPayout?.settlementRef ?? null
       const allocationSubmittedAt = allocationStatus === "confirmed" ? input.createdAt : null
       const allocationConfirmedAt = allocationStatus === "confirmed" ? input.createdAt : null
@@ -631,6 +638,9 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       purchaseId: input.attempt.purchase_id,
       settlementChain,
       settlementTxRef,
+      // Assets reach here only after the confirmed story_royalty_payment effect (line ~587), where
+      // settlementTxRef was replaced with that effect's ref. Non-assets never executed a payout.
+      storyPayoutSettlementRef: quote.asset_id ? settlementTxRef : null,
       allocationSnapshot,
       charityPayouts,
       donationPartnerId,
@@ -757,7 +767,9 @@ async function settleCommunityPurchaseForBuyer(input: {
     const createdAt = nowIso()
     // Re-validate the persisted snapshot against its settlement mode before reserving the attempt or
     // verifying buyer funding, so a delivery-only quote issued before the quote-time guard cannot be
-    // settled (and the buyer is never asked to pay for something we cannot pay out).
+    // settled into a false payout record. A legacy quote may already have been paid by an alternative
+    // client, so this is a backstop, not a guarantee the buyer was never charged — the clean
+    // deployment action is to expire/delete any active unsafe quotes before rollout.
     const allocationSnapshot = assertSettlementModeCanExecuteAllocations(
       assertExecutableQuoteAllocationSnapshot(
         parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
@@ -1060,6 +1072,9 @@ async function settleCommunityPurchaseForBuyer(input: {
         purchaseId,
         settlementChain,
         settlementTxRef: canonicalSettlementTxRef ?? "",
+        // For assets, canonicalSettlementTxRef was replaced with the executed Story settlement hash
+        // (story branch, line ~908/923). Non-assets never executed a payout.
+        storyPayoutSettlementRef: quote.asset_id ? (canonicalSettlementTxRef ?? null) : null,
         allocationSnapshot,
         charityPayouts,
         donationPartnerId,
