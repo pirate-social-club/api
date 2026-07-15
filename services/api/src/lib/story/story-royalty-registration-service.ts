@@ -655,7 +655,7 @@ function resolveStoryRoyaltyMaxLicenseTokens(
   return BigInt(raw)
 }
 
-function resolveStoryRoyaltyPolicyAddress(
+export function resolveStoryRoyaltyPolicyAddress(
   env: Pick<Env, "STORY_ROYALTY_POLICY_LAP_ADDRESS" | "STORY_CHAIN_ID">,
 ): `0x${string}` {
   const override = String(env.STORY_ROYALTY_POLICY_LAP_ADDRESS || "").trim()

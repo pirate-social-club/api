@@ -97,6 +97,18 @@ export async function attestStoryRegistrationNotBroadcast(input: {
   reason: string
   now: string
 }): Promise<StoryRegistrationEffect> {
+  await transitionStoryRegistrationNotBroadcast(input)
+  return await loadEffect(input.client, effectKey(input.communityId, input.assetId))
+}
+
+export async function transitionStoryRegistrationNotBroadcast(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+  expectedOperationId: string
+  reason: string
+  now: string
+}): Promise<void> {
   const reason = input.reason.trim().replace(/\s+/g, " ").slice(0, 180)
   if (reason.length < 10) throw new Error("story_registration_resolution_reason_required")
   const updated = await input.client.execute({
@@ -115,7 +127,63 @@ export async function attestStoryRegistrationNotBroadcast(input: {
   if ((updated.rowsAffected ?? 0) === 0) {
     throw new Error("story_registration_resolution_conflict")
   }
-  return await loadEffect(input.client, effectKey(input.communityId, input.assetId))
+}
+
+export async function transitionReconciledStoryRegistrationToConfirmed(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+  expectedOperationId: string
+  providerTxRef: string
+  result: unknown
+  now: string
+}): Promise<void> {
+  const updated = await input.client.execute({
+    sql: `
+      UPDATE story_registration_effects
+      SET status = 'confirmed', result_json = ?3, provider_tx_ref = ?4,
+          error_code = NULL, confirmed_at = ?5, updated_at = ?5
+      WHERE effect_key = ?1 AND operation_id = ?2
+        AND status = 'reconciliation_required'
+        AND (provider_tx_ref IS NULL OR LOWER(provider_tx_ref) = LOWER(?4))
+    `,
+    args: [
+      effectKey(input.communityId, input.assetId), input.expectedOperationId,
+      JSON.stringify(input.result), input.providerTxRef, input.now,
+    ],
+  })
+  if ((updated.rowsAffected ?? 0) === 0) {
+    throw new Error("story_registration_resolution_conflict")
+  }
+}
+
+export async function transitionRevertedStoryRegistrationToRetryable(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+  expectedOperationId: string
+  providerTxRef: string
+  reason: string
+  now: string
+}): Promise<void> {
+  const reason = input.reason.trim().replace(/\s+/g, " ").slice(0, 180)
+  if (reason.length < 10) throw new Error("story_registration_resolution_reason_required")
+  const updated = await input.client.execute({
+    sql: `
+      UPDATE story_registration_effects
+      SET status = 'failed_prebroadcast', error_code = ?4, updated_at = ?5
+      WHERE effect_key = ?1 AND operation_id = ?2
+        AND status = 'reconciliation_required'
+        AND LOWER(provider_tx_ref) = LOWER(?3)
+    `,
+    args: [
+      effectKey(input.communityId, input.assetId), input.expectedOperationId,
+      input.providerTxRef, `ops_verified_reverted:${reason}`, input.now,
+    ],
+  })
+  if ((updated.rowsAffected ?? 0) === 0) {
+    throw new Error("story_registration_resolution_conflict")
+  }
 }
 
 export async function reserveStoryRegistrationEffect<T>(input: {
@@ -158,7 +226,7 @@ export async function reserveStoryRegistrationEffect<T>(input: {
     const claimed = await input.client.execute({
       sql: `
         UPDATE story_registration_effects
-        SET status = 'executing', operation_id = ?2, error_code = NULL,
+        SET status = 'executing', operation_id = ?2, provider_tx_ref = NULL, error_code = NULL,
             attempt_count = attempt_count + 1, updated_at = ?3
         WHERE effect_key = ?1 AND status = 'failed_prebroadcast' AND operation_id = ?4
       `,

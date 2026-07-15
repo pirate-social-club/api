@@ -476,6 +476,34 @@ describe("debug pipeline routes", () => {
         error_code: "ops_confirmed_no_broadcast:checked signer history and provider traces",
       },
     })
+
+    const audits = await ctx.client.execute({
+      sql: `
+        SELECT action, metadata_json
+        FROM audit_log
+        WHERE target_type = 'asset' AND target_id = 'ast_debug_story'
+        ORDER BY created_at, audit_event_id
+      `,
+    })
+    expect(audits.rows.map((row) => ({
+      action: row.action,
+      metadata: JSON.parse(String(row.metadata_json)),
+    })).sort((left, right) => String(left.action).localeCompare(String(right.action)))).toEqual([
+      {
+        action: "story.registration_effect.resolution_applied",
+        metadata: expect.objectContaining({
+          operation_id: "sro_debug_story",
+          resolution: "failed_prebroadcast",
+        }),
+      },
+      {
+        action: "story.registration_effect.resolution_requested",
+        metadata: expect.objectContaining({
+          operation_id: "sro_debug_story",
+          requested_resolution: "failed_prebroadcast",
+        }),
+      },
+    ])
   })
 
   test("no-broadcast action rejects effects that already have a transaction reference", async () => {
