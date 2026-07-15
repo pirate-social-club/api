@@ -132,7 +132,7 @@ export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectCon
     return { txRef: begun.row.settlement_ref }
   }
 
-  // 2) Wallet-scoped coordinator: serial nonce + sign + broadcast.
+  // 2) Wallet-scoped coordinator: durably enqueue; its alarm owns nonce + sign + broadcast.
   let s = await coordinator(ctx.env).settle(req)
   // 3) Resolve transitional states (prepared = broadcast may have transiently failed) via BOUNDED reconcile.
   for (let i = 0; (s.state === "prepared" || s.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
@@ -185,9 +185,8 @@ async function ledgerConfirm(ctx: BookingOperatorEffectContext, effect: BookingO
 async function pollConfirm(ctx: BookingOperatorEffectContext, req: OperatorSettleRequest, txHash: string): Promise<OperatorSettleResult> {
   // Explicit per-call policy wins; the test global is only a fallback; otherwise the full default.
   const plan = ctx.confirmPollMs ?? confirmPollPlanForTests ?? DEFAULT_CONFIRM_POLL_MS
-  // confirm() returns the chain state (pending → state stays 'broadcast'); only genuine errors
-  // (missing record / hash mismatch / immutable mismatch / RPC failure) throw — those are NOT
-  // retryable and propagate so the operation fails loudly rather than masquerading as "pending".
+  // confirm() requests alarm-owned convergence and returns the current durable state. Only contract
+  // errors (missing record / hash mismatch / immutable mismatch) throw; chain I/O never occurs here.
   let r = await coordinator(ctx.env).confirm(req, txHash)
   for (let i = 0; r.state === "broadcast" && i < plan.length; i++) {
     await sleep(plan[i])

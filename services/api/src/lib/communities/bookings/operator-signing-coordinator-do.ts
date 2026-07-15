@@ -4,6 +4,9 @@ import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
 
 const SIGNING_CLAIM_TTL_MS = 60_000
+const BROADCAST_RECONCILE_DELAY_MS = 15_000
+const RETRY_BASE_DELAY_MS = 5_000
+const RETRY_MAX_DELAY_MS = 5 * 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export type OperatorKind = "booking" | "rewards"
@@ -109,12 +112,16 @@ interface EffectRow {
   version: number
   claim_token: string | null
   claim_expires_at: number | null
+  attempt_count: number
+  next_attempt_at: number | null
+  last_error: string | null
 }
 
 export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     ctx.blockConcurrencyWhile(async () => {
+      this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS _sql_schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)")
       this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS nonce_state (id INTEGER PRIMARY KEY CHECK (id = 1), next_nonce INTEGER NOT NULL)")
       this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS effects (
         idempotency_key TEXT PRIMARY KEY,
@@ -124,6 +131,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         version INTEGER NOT NULL, claim_token TEXT, claim_expires_at INTEGER,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       )`)
+      const schemaVersion = this.ctx.storage.sql.exec<{ version: number }>("SELECT COALESCE(MAX(id), 0) AS version FROM _sql_schema_migrations").one().version
+      if (schemaVersion < 1) {
+        this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
+      }
+      if (schemaVersion < 2) {
+        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN next_attempt_at INTEGER")
+        this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN last_error TEXT")
+        this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (2, ?1)", Date.now())
+      }
     })
   }
 
@@ -134,12 +151,8 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
     let row = this.read(key)
     if (row) this.assertImmutable(row, req, recipient)
-    if (!row) {
-      const chainPending = await chain().pendingNonce(this.env, requestOperatorKind(req)) // RPC OUTSIDE the atomic reservation
-      row = this.reserveOrGet(key, req, recipient, chainPending)
-    }
-    if (row.state === "reserving" || row.state === "failed_preparation") row = await this.signClaimedRow(row, req, recipient)
-    if (row.state === "prepared") row = await this.broadcastRow(row)
+    if (!row) row = this.enqueueOrGet(key, req, recipient)
+    if (!this.isTerminal(row)) await this.ensureAlarm(row.next_attempt_at ?? Date.now())
     return this.result(row)
   }
 
@@ -149,13 +162,9 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row) throw conflictError("Operator settlement effect not found")
     this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
     if (row.tx_hash !== txHash) throw conflictError("Operator settlement confirmation hash mismatch")
-    if (row.state === "confirmed" || row.state === "failed_onchain" || row.state === "replaced") return this.result(row)
-    const liveness = await chain().txLiveness(this.env, txHash, requestOperatorKind(req))
-    if (liveness === "success") return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
-    if (liveness === "failed") return this.result(this.cas(key, row.version, { state: "failed_onchain" }) ?? this.read(key)!)
-    // pending/absent: not confirmable yet — return the current chain state (no exception); the
-    // caller keeps polling, or a later reconcile() resolves it. Pending is NOT an error.
-    return this.result(row)
+    const current = this.isTerminal(row) ? row : this.expedite(row)
+    if (!this.isTerminal(current)) await this.ensureAlarm(Date.now())
+    return this.result(current)
   }
 
   async reconcile(req: OperatorSettleRequest): Promise<OperatorSettleResult> {
@@ -163,23 +172,34 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const row = this.read(key)
     if (!row) throw conflictError("Operator settlement effect not found")
     this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
-    if (row.state === "confirmed" || row.state === "replaced" || row.state === "failed_onchain") return this.result(row)
-    if (row.state === "reserving" || row.state === "failed_preparation") {
-      const signed = await this.signClaimedRow(row, req, normalizeRecipient(req.recipientAddress))
-      return this.result(signed.state === "prepared" ? await this.broadcastRow(signed) : signed)
+    const current = this.isTerminal(row) ? row : this.expedite(row)
+    if (!this.isTerminal(current)) await this.ensureAlarm(Date.now())
+    return this.result(current)
+  }
+
+  async alarm(): Promise<void> {
+    const row = this.nextActive()
+    if (!row) {
+      await this.ctx.storage.deleteAlarm()
+      return
     }
-    if (row.state === "prepared") return this.result(await this.broadcastRow(row))
-    // broadcast / reconciliation_required
-    if (!row.tx_hash || row.nonce == null || !row.signed_tx) throw new Error("broadcast effect missing tx fields")
-    const liveness = await chain().txLiveness(this.env, row.tx_hash, requestOperatorKind(req))
-    if (liveness === "success") return this.result(this.cas(key, row.version, { state: "confirmed" }) ?? this.read(key)!)
-    if (liveness === "failed") return this.result(this.cas(key, row.version, { state: "failed_onchain" }) ?? this.read(key)!)
-    if (liveness === "pending") return this.result(row.state === "reconciliation_required" ? (this.cas(key, row.version, { state: "broadcast" }) ?? this.read(key)!) : row)
-    // absent: a different tx consumed our nonce (replaced) vs dropped-from-mempool (rebroadcast).
-    const latest = await chain().latestNonce(this.env, requestOperatorKind(req))
-    if (latest > row.nonce) return this.result(this.cas(key, row.version, { state: "replaced" }) ?? this.read(key)!)
-    await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: requestOperatorKind(req) })
-    return this.result(this.cas(key, row.version, { state: "broadcast" }) ?? this.read(key)!)
+    const now = Date.now()
+    if (row.next_attempt_at != null && row.next_attempt_at > now) {
+      await this.ensureAlarm(row.next_attempt_at)
+      return
+    }
+    try {
+      await this.advance(row)
+    } catch (error) {
+      const current = this.read(row.idempotency_key)
+      if (current && !this.isTerminal(current)) this.recordRetry(current, error)
+      console.error(JSON.stringify({
+        message: "operator chain executor alarm failed",
+        effect: row.idempotency_key,
+        error: errMsg(error),
+      }))
+    }
+    await this.scheduleNext()
   }
 
   lookup(req: OperatorSettleRequest): OperatorSettleResult | null {
@@ -191,22 +211,156 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
   // --- internals -------------------------------------------------------------------------------
 
-  /** Atomic: recheck-or-insert the effect AND bump next_nonce, so only the inserting caller allocates. */
-  private reserveOrGet(key: string, req: OperatorSettleRequest, recipient: string, chainPending: number): EffectRow {
+  /** Atomic durable inbox insert. RPC callers never allocate a nonce or perform external I/O. */
+  private enqueueOrGet(key: string, req: OperatorSettleRequest, recipient: string): EffectRow {
     const fields = canonicalFields(req)
     return this.ctx.storage.transactionSync(() => {
       const existing = this.read(key)
       if (existing) return existing
-      this.ctx.storage.sql.exec("INSERT INTO nonce_state (id, next_nonce) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET next_nonce = MAX(next_nonce, ?1)", chainPending)
-      const nonce = Number(this.ctx.storage.sql.exec<{ n: number }>("UPDATE nonce_state SET next_nonce = next_nonce + 1 WHERE id = 1 RETURNING (next_nonce - 1) AS n").toArray()[0].n)
       const now = Date.now()
       this.ctx.storage.sql.exec(
-        `INSERT INTO effects (idempotency_key, community_id, booking_id, effect_kind, amount_cents, recipient_address, signed_tx, tx_hash, nonce, state, version, claim_token, claim_expires_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, 'reserving', 1, NULL, NULL, ?8, ?8)`,
-        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents, recipient, nonce, now,
+        `INSERT INTO effects (
+           idempotency_key, community_id, booking_id, effect_kind, amount_cents, recipient_address,
+           signed_tx, tx_hash, nonce, state, version, claim_token, claim_expires_at,
+           created_at, updated_at, attempt_count, next_attempt_at, last_error
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, 'reserving', 1, NULL, NULL, ?7, ?7, 0, NULL, NULL)`,
+        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents, recipient, now,
       )
       return this.read(key)!
     })
+  }
+
+  /** The alarm owns nonce allocation. The chain pending nonce is sampled before the atomic reservation. */
+  private async reserveNonce(row: EffectRow): Promise<EffectRow> {
+    if (row.nonce != null) return row
+    const operatorKind = this.operatorKind(row)
+    const chainPending = await chain().pendingNonce(this.env, operatorKind)
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.read(row.idempotency_key)
+      if (!current || current.nonce != null || (current.state !== "reserving" && current.state !== "failed_preparation")) return current ?? row
+      this.ctx.storage.sql.exec(
+        "INSERT INTO nonce_state (id, next_nonce) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET next_nonce = MAX(next_nonce, ?1)",
+        chainPending,
+      )
+      const nonce = Number(this.ctx.storage.sql.exec<{ n: number }>(
+        "UPDATE nonce_state SET next_nonce = next_nonce + 1 WHERE id = 1 RETURNING (next_nonce - 1) AS n",
+      ).one().n)
+      return this.cas(current.idempotency_key, current.version, { nonce, state: "reserving", next_attempt_at: null, last_error: null }) ?? this.read(current.idempotency_key)!
+    })
+  }
+
+  private async advance(input: EffectRow): Promise<EffectRow> {
+    let row = input
+    if (row.state === "reserving" || row.state === "failed_preparation") {
+      row = await this.reserveNonce(row)
+      if (row.nonce == null) return row
+      row = await this.signClaimedRow(row, this.requestFromRow(row), row.recipient_address)
+    }
+    if (row.state === "prepared") return await this.broadcastRow(row)
+    if (row.state === "broadcast" || row.state === "reconciliation_required") return await this.reconcileRow(row)
+    return row
+  }
+
+  private async reconcileRow(row: EffectRow): Promise<EffectRow> {
+    if (!row.tx_hash || row.nonce == null || !row.signed_tx) throw new Error("broadcast effect missing tx fields")
+    const operatorKind = this.operatorKind(row)
+    const liveness = await chain().txLiveness(this.env, row.tx_hash, operatorKind)
+    if (liveness === "success") return this.cas(row.idempotency_key, row.version, { state: "confirmed", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
+    if (liveness === "failed") return this.cas(row.idempotency_key, row.version, { state: "failed_onchain", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
+    if (liveness === "pending") {
+      return this.cas(row.idempotency_key, row.version, {
+        state: "broadcast",
+        next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+        last_error: null,
+      }) ?? this.read(row.idempotency_key)!
+    }
+    // Absent: a different transaction consumed our nonce (replaced), or the exact signed
+    // transaction dropped from the mempool and is safe to rebroadcast.
+    const latest = await chain().latestNonce(this.env, operatorKind)
+    if (latest > row.nonce) return this.cas(row.idempotency_key, row.version, { state: "replaced", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
+    await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind })
+    return this.cas(row.idempotency_key, row.version, {
+      state: "broadcast",
+      next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+      last_error: null,
+    }) ?? this.read(row.idempotency_key)!
+  }
+
+  private requestFromRow(row: EffectRow): OperatorSettleRequest {
+    if (row.effect_kind === "reward_cashout") {
+      const parsed = JSON.parse(row.idempotency_key) as unknown
+      if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== "reward_payout" || typeof parsed[1] !== "string") {
+        throw new Error("reward payout effect has invalid durable idempotency key")
+      }
+      return {
+        operatorKind: "rewards",
+        userId: row.community_id,
+        payoutEffectId: row.booking_id,
+        idempotencyKey: parsed[1],
+        effectKind: "reward_cashout",
+        amountCents: row.amount_cents,
+        recipientAddress: row.recipient_address,
+      }
+    }
+    return {
+      operatorKind: "booking",
+      communityId: row.community_id,
+      bookingId: row.booking_id,
+      effectKind: row.effect_kind as "booking_payout" | "booking_refund",
+      amountCents: row.amount_cents,
+      recipientAddress: row.recipient_address,
+    }
+  }
+
+  private operatorKind(row: EffectRow): OperatorKind {
+    return row.effect_kind === "reward_cashout" ? "rewards" : "booking"
+  }
+
+  private nextActive(): EffectRow | null {
+    const raw = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      `SELECT * FROM effects
+       WHERE state NOT IN ('confirmed', 'replaced', 'failed_onchain')
+       ORDER BY created_at ASC, idempotency_key ASC
+       LIMIT 1`,
+    ).toArray()[0]
+    return raw ? this.decode(raw) : null
+  }
+
+  private isTerminal(row: EffectRow): boolean {
+    return row.state === "confirmed" || row.state === "replaced" || row.state === "failed_onchain"
+  }
+
+  private retryDelay(attemptCount: number): number {
+    return Math.min(RETRY_BASE_DELAY_MS * (2 ** Math.min(attemptCount, 6)), RETRY_MAX_DELAY_MS)
+  }
+
+  /** Explicit convergence requests may wake a delayed operation; ordinary settle polling may not. */
+  private expedite(row: EffectRow): EffectRow {
+    return this.cas(row.idempotency_key, row.version, { next_attempt_at: Date.now() }) ?? this.read(row.idempotency_key)!
+  }
+
+  private recordRetry(row: EffectRow, error: unknown): EffectRow {
+    const attemptCount = row.attempt_count + 1
+    return this.cas(row.idempotency_key, row.version, {
+      attempt_count: attemptCount,
+      next_attempt_at: Date.now() + this.retryDelay(attemptCount),
+      last_error: errMsg(error).slice(0, 1_000),
+    }) ?? this.read(row.idempotency_key)!
+  }
+
+  private async ensureAlarm(at: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm()
+    if (current == null || current > at) await this.ctx.storage.setAlarm(at)
+  }
+
+  private async scheduleNext(): Promise<void> {
+    const next = this.nextActive()
+    if (!next) {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
+    const at = next.next_attempt_at == null ? Date.now() : Math.max(Date.now(), next.next_attempt_at)
+    await this.ctx.storage.setAlarm(at)
   }
 
   /** Claim the row for signing (atomic, with expiry), sign off-lock, then CAS to prepared. */
@@ -228,7 +382,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       const gas = await chain().gasParams(this.env, operatorKind)
       const signed = await chain().signVerifiedTransfer(this.env, { to: recipient, amountCents: req.amountCents, nonce: claimedRow.nonce!, gas, operatorKind })
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
-      const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, { signed_tx: signed.signedTx, tx_hash: signed.txHash, state: "prepared", claim_token: null, claim_expires_at: null })
+      const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, {
+        signed_tx: signed.signedTx,
+        tx_hash: signed.txHash,
+        state: "prepared",
+        claim_token: null,
+        claim_expires_at: null,
+        next_attempt_at: null,
+        last_error: null,
+      })
       return updated ?? this.read(row.idempotency_key)!
     } catch (error) {
       this.casClaimed(row.idempotency_key, claimedRow.version, token, { state: "failed_preparation", claim_token: null, claim_expires_at: null })
@@ -241,14 +403,21 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const fromVersion = row.version
     try {
       await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: row.effect_kind === "reward_cashout" ? "rewards" : "booking" })
-      return this.cas(row.idempotency_key, fromVersion, { state: "broadcast" }) ?? this.read(row.idempotency_key)!
+      return this.cas(row.idempotency_key, fromVersion, {
+        state: "broadcast",
+        next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+        last_error: null,
+      }) ?? this.read(row.idempotency_key)!
     } catch (error) {
       const msg = errMsg(error).toLowerCase()
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
-      if (!nonceConsumed) return this.read(row.idempotency_key)! // transient: stays 'prepared'
+      if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
       const liveness = await chain().txLiveness(this.env, row.tx_hash, row.effect_kind === "reward_cashout" ? "rewards" : "booking")
       const next: OperatorSettleState = liveness === "success" || liveness === "pending" ? "broadcast" : (liveness === "failed" ? "failed_onchain" : "reconciliation_required")
-      return this.cas(row.idempotency_key, fromVersion, { state: next }) ?? this.read(row.idempotency_key)!
+      return this.cas(row.idempotency_key, fromVersion, {
+        state: next,
+        next_attempt_at: next === "failed_onchain" ? null : Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+      }) ?? this.read(row.idempotency_key)!
     }
   }
 
@@ -275,36 +444,44 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   /** Expected-state CAS on version; returns the new row or null if the row changed concurrently. */
-  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "state" | "claim_token" | "claim_expires_at">>): EffectRow | null {
+  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     return this.casInternal(key, fromVersion, null, fields)
   }
-  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "state" | "claim_token" | "claim_expires_at">>): EffectRow | null {
+  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     return this.casInternal(key, fromVersion, claimToken, fields)
   }
-  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "state" | "claim_token" | "claim_expires_at">>): EffectRow | null {
+  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     const cur = this.read(key)
     if (!cur) return null
     const next: EffectRow = { ...cur, ...fields }
     const matched = this.ctx.storage.sql.exec(
-      `UPDATE effects SET signed_tx = ?2, tx_hash = ?3, state = ?4, claim_token = ?5, claim_expires_at = ?6, version = version + 1, updated_at = ?7
-       WHERE idempotency_key = ?1 AND version = ?8${claimToken == null ? "" : " AND claim_token = ?9"}
+      `UPDATE effects SET
+         signed_tx = ?2, tx_hash = ?3, nonce = ?4, state = ?5, claim_token = ?6,
+         claim_expires_at = ?7, attempt_count = ?8, next_attempt_at = ?9, last_error = ?10,
+         version = version + 1, updated_at = ?11
+       WHERE idempotency_key = ?1 AND version = ?12${claimToken == null ? "" : " AND claim_token = ?13"}
        RETURNING idempotency_key`,
       ...(claimToken == null
-        ? [key, next.signed_tx, next.tx_hash, next.state, next.claim_token, next.claim_expires_at, Date.now(), fromVersion]
-        : [key, next.signed_tx, next.tx_hash, next.state, next.claim_token, next.claim_expires_at, Date.now(), fromVersion, claimToken]),
+        ? [key, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion]
+        : [key, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion, claimToken]),
     ).toArray()
     return matched.length === 1 ? this.read(key) : null
   }
 
   private read(key: string): EffectRow | null {
     const r = this.ctx.storage.sql.exec<Record<string, string | number | null>>("SELECT * FROM effects WHERE idempotency_key = ?1", key).toArray()[0]
-    if (!r) return null
+    return r ? this.decode(r) : null
+  }
+
+  private decode(r: Record<string, string | number | null>): EffectRow {
     return {
       idempotency_key: String(r.idempotency_key), community_id: String(r.community_id), booking_id: String(r.booking_id),
       effect_kind: String(r.effect_kind), amount_cents: Number(r.amount_cents), recipient_address: String(r.recipient_address),
       signed_tx: r.signed_tx == null ? null : String(r.signed_tx), tx_hash: r.tx_hash == null ? null : String(r.tx_hash),
       nonce: r.nonce == null ? null : Number(r.nonce), state: String(r.state) as OperatorSettleState, version: Number(r.version),
       claim_token: r.claim_token == null ? null : String(r.claim_token), claim_expires_at: r.claim_expires_at == null ? null : Number(r.claim_expires_at),
+      attempt_count: Number(r.attempt_count ?? 0), next_attempt_at: r.next_attempt_at == null ? null : Number(r.next_attempt_at),
+      last_error: r.last_error == null ? null : String(r.last_error),
     }
   }
 

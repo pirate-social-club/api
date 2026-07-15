@@ -1,6 +1,6 @@
 # Chain effect executor direction
 
-Status: accepted direction; implementation pending signer inventory reconciliation.
+Status: accepted direction; booking/reward nonce domains piloted, broader signer inventory reconciliation pending.
 
 ## Decision
 
@@ -18,15 +18,19 @@ Callers submit an immutable operation and receive an operation identifier. They 
 
 ## Existing implementation boundary
 
-`OperatorSigningCoordinatorDO` currently coordinates booking and reward transfers and already provides useful primitives:
+`OperatorSigningCoordinatorDO` now pilots this model for booking and reward transfers and provides:
 
 - deterministic routing by operator address and chain;
 - immutable idempotency fields;
 - durable nonce allocation;
 - precomputed signed transaction hashes;
 - compare-and-swap transitions and transaction-liveness reconciliation.
+- a durable SQLite inbox with schema migrations and bounded retry metadata;
+- alarm-owned nonce allocation, signing, broadcast, and receipt reconciliation.
 
-It is migration source material, not the final executor contract. Its request methods still perform nonce RPC, signing, broadcast, and liveness I/O inline. Its signing claim lease prevents stale writers from overwriting state, but it is not a durable inbox with a single alarm-owned drain loop.
+Its request methods only validate, persist, read, and schedule work; external signer and chain I/O is owned by the alarm. Ordinary repeated `settle` calls preserve alarm backoff, while explicit `confirm`/`reconcile` calls request immediate convergence. The signing claim and version CAS remain defense in depth against event interleaving.
+
+This is still a pilot rather than the final universal executor contract. Existing purpose-prefixed object names are preserved to avoid orphaning durable state. Runtime configuration currently rejects a shared booking/reward signer address, so each accepted purpose shard is also one nonce domain. Any future relaxation of that guard requires a wallet-only object-name migration first.
 
 The in-flight community-job fencing and Story-registration effect work remains required. It protects at-least-once callers, migration windows, accidental bypass paths, and business-level uniqueness that the executor does not replace.
 
@@ -41,8 +45,8 @@ This inventory records code paths, not intended future policy. Addresses are res
 | Story CDR writer | Direct key validated against `STORY_CDR_WRITER_PKP_ADDRESS` | CDR allocation and write; locked asset and replay delivery | Treat allocate and write as separate effects in the same nonce domain. |
 | Story entitlement class configurer | Direct key with expected-address validation | entitlement class configuration during Story publish | Inventory whether it shares an address with another Story family before assigning an executor. |
 | Story contract owner/runtime funder | Direct keys | authorization, grants, and signer funding | Keep operational owner actions separate from product workflows, but shard by actual address if automated. |
-| Booking settlement | Direct key | Base USDC booking payout and refund | Migrate existing coordinator calls to inbox submission and alarm convergence. |
-| Reward settlement | Direct key | Base USDC reward cashout | Confirm whether its configured address differs from booking before retaining purpose-level separation. |
+| Booking settlement | Direct key | Base USDC booking payout and refund | Pilot migrated to inbox submission and alarm convergence. Preserve signer-domain guard during rollout. |
+| Reward settlement | Direct key | Base USDC reward cashout | Pilot migrated to inbox submission and alarm convergence; runtime requires an address distinct from booking. |
 | Checkout/charity operators | Direct keys | checkout funding and Endaoment payout flows | Complete method-level inventory before executor implementation. |
 
 Off-chain signatures such as short-lived access proofs do not consume an EVM nonce and are outside the transaction drain, even if they use a related signer family.
@@ -82,7 +86,7 @@ Buyer funding should move toward a global observed-receipt ledger. A future paym
 1. Reconcile signer-family documentation with deployed signer backends and addresses.
 2. Complete method-level inventory for every automated signer.
 3. Preserve current job fencing and business idempotency constraints.
-4. Pilot one resolved `(chain_id, signer_address)` domain.
-5. Prove concurrent submissions allocate unique ordered nonces.
+4. Pilot one resolved `(chain_id, signer_address)` domain. **Done for booking/reward domains.**
+5. Prove concurrent submissions allocate unique ordered nonces. **Covered by isolated workerd tests for the pilot.**
 6. Prove alarm retry, eviction, broadcast-timeout, nonce-replacement, revert, and post-broadcast crash recovery.
 7. Cut callers over only after direct signing outside the executor is rejected or alertable.

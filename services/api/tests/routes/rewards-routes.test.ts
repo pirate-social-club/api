@@ -1462,7 +1462,7 @@ describe("rewards routes", () => {
     expect(Number(countRows.rows[0]?.count ?? 0)).toBe(1)
   })
 
-  test("failed preparation payouts eventually fail and release reserved balance", async () => {
+  test("failed preparation remains submitted while the durable executor owns retry", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
@@ -1513,14 +1513,14 @@ describe("rewards routes", () => {
       limit: 10,
       confirmPollMs: [],
     })
-    expect(secondRetry.pending).toBe(0)
-    expect(secondRetry.failed).toBe(1)
+    expect(secondRetry.pending).toBe(1)
+    expect(secondRetry.failed).toBe(0)
 
     const rows = await ctx.client.execute({
       sql: "SELECT status, failure_reason, attempt_count FROM reward_payout_effects WHERE user_id = ?1 AND idempotency_key = ?2",
       args: [session.userId, "reward-cashout-prep-fails"],
     })
-    expect(rows.rows).toEqual([{ status: "failed", failure_reason: "failed_preparation", attempt_count: 3 }])
+    expect(rows.rows).toEqual([{ status: "submitted", failure_reason: null, attempt_count: 3 }])
 
     const summary = await app.request(
       "http://pirate.test/me/rewards",
@@ -1528,6 +1528,6 @@ describe("rewards routes", () => {
       ctx.env,
     )
     const summaryBody = await json(summary) as { balance_cents: number }
-    expect(summaryBody.balance_cents).toBe(150)
+    expect(summaryBody.balance_cents).toBe(50)
   })
 })
