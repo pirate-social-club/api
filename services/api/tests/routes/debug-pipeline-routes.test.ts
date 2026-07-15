@@ -169,6 +169,45 @@ async function seedRunningCommunityJob(input: {
   }
 }
 
+async function seedAmbiguousStoryEffect(input: {
+  communityDbRoot: string
+  communityId: string
+  assetId: string
+  operationId: string
+  providerTxRef?: string | null
+}): Promise<void> {
+  const client = createClient({ url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId) })
+  try {
+    await client.execute({
+      sql: `
+        INSERT INTO story_registration_effects (
+          story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
+          registration_kind, chain_id, signer_address, creator_wallet_address,
+          primary_content_hash, call_data_hash, status, provider_tx_ref, error_code,
+          created_at, updated_at
+        ) VALUES (
+          'sre_debug', ?1, ?2, ?3, ?4,
+          'original', 1315, '0x9999999999999999999999999999999999999999',
+          '0x1111111111111111111111111111111111111111', ?5, ?6,
+          'reconciliation_required', ?7, 'story_registration_outcome_unknown', ?8, ?8
+        )
+      `,
+      args: [
+        input.communityId,
+        input.assetId,
+        `story_registration:${input.communityId}:${input.assetId}`,
+        input.operationId,
+        `0x${"22".repeat(32)}`,
+        `0x${"44".repeat(32)}`,
+        input.providerTxRef ?? null,
+        "2026-07-15T10:00:00.000Z",
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 afterEach(async () => {
   await cleanup?.()
   cleanup = null
@@ -385,5 +424,87 @@ describe("debug pipeline routes", () => {
     } finally {
       communityClient.close()
     }
+  })
+
+  test("admin can inspect and attest a no-broadcast Story incident without shard SQL", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "debug-story-effect-author")
+    const community = await createCommunity(ctx.env, session.accessToken)
+    await seedAmbiguousStoryEffect({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_debug_story",
+      operationId: "sro_debug_story",
+    })
+
+    const inspect = await app.request(
+      `http://pirate.test/admin/debug/story-registration-effect?community_id=com_${community.communityId}&asset_id=asset_ast_debug_story`,
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    )
+    expect(inspect.status).toBe(200)
+    expect(await json(inspect)).toMatchObject({
+      community_id: community.communityId,
+      asset_id: "ast_debug_story",
+      effect: {
+        operation_id: "sro_debug_story",
+        status: "reconciliation_required",
+        provider_tx_ref: null,
+      },
+    })
+
+    const resolve = await app.request(
+      "http://pirate.test/admin/debug/story-registration-effect/confirm-no-broadcast",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        body: JSON.stringify({
+          community_id: `com_${community.communityId}`,
+          asset_id: "asset_ast_debug_story",
+          operation_id: "sro_debug_story",
+          reason: "checked signer history and provider traces",
+        }),
+      },
+      ctx.env,
+    )
+    expect(resolve.status).toBe(200)
+    expect(await json(resolve)).toMatchObject({
+      ok: true,
+      effect: {
+        status: "failed_prebroadcast",
+        error_code: "ops_confirmed_no_broadcast:checked signer history and provider traces",
+      },
+    })
+  })
+
+  test("no-broadcast action rejects effects that already have a transaction reference", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "debug-story-effect-tx-author")
+    const community = await createCommunity(ctx.env, session.accessToken)
+    await seedAmbiguousStoryEffect({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_debug_story_tx",
+      operationId: "sro_debug_story_tx",
+      providerTxRef: `0x${"66".repeat(32)}`,
+    })
+
+    const response = await app.request(
+      "http://pirate.test/admin/debug/story-registration-effect/confirm-no-broadcast",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        body: JSON.stringify({
+          community_id: `com_${community.communityId}`,
+          asset_id: "asset_ast_debug_story_tx",
+          operation_id: "sro_debug_story_tx",
+          reason: "transaction reference exists and must be reconciled",
+        }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(409)
   })
 })

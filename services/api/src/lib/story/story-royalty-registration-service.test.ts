@@ -3,7 +3,9 @@ import { describe, expect, test } from "bun:test"
 import {
   capStoryRoyaltyRpcFeeResponseForTests,
   capStoryRoyaltyWriteContractRequestForTests,
+  classifyStoryRegistrationFailure,
   maybeRegisterStoryRoyaltyForAsset,
+  withStoryRegistrationRetry,
 } from "./story-royalty-registration-service"
 import type { DirectTxGasPolicy } from "../evm-direct-tx"
 
@@ -148,6 +150,74 @@ describe("capStoryRoyaltyRpcFeeResponseForTests — passthrough guards", () => {
     const body = (await response.json()) as any
     expect(BigInt(body[0].result)).toBe(GAS_POLICY.maxFeePerGasCapWei)
     expect(body[1].result).toBe("0xabcdef")
+  })
+})
+
+function wrappedStoryError(input: {
+  stageName?: string
+  message: string
+  method?: string
+  transactionHash?: string
+}): Error {
+  const transport = new Error(input.message) as Error & {
+    metaMessages?: string[]
+    transactionHash?: string
+  }
+  transport.name = "RpcRequestError"
+  transport.metaMessages = input.method
+    ? [`Request body: {"method":"${input.method}","params":[]}`]
+    : []
+  transport.transactionHash = input.transactionHash
+  const stage = new Error("Story SDK call failed", { cause: transport })
+  if (input.stageName) stage.name = input.stageName
+  return stage
+}
+
+describe("Story registration failure classification", () => {
+  test("retries transient simulation transport failures", async () => {
+    const failure = wrappedStoryError({
+      stageName: "CallExecutionError",
+      message: "HTTP request failed. Status: 503",
+      method: "eth_call",
+    })
+    expect(classifyStoryRegistrationFailure(failure)).toBe("retryable_prebroadcast")
+
+    let attempts = 0
+    const sleeps: number[] = []
+    await expect(withStoryRegistrationRetry(async () => {
+      attempts += 1
+      if (attempts < 3) throw failure
+      return "registered"
+    }, { sleep: async (ms) => { sleeps.push(ms) } })).resolves.toBe("registered")
+    expect(attempts).toBe(3)
+    expect(sleeps).toEqual([400, 800])
+  })
+
+  test("marks deterministic simulation failures as terminal pre-broadcast", () => {
+    const failure = wrappedStoryError({
+      stageName: "CallExecutionError",
+      message: "execution reverted: SPGNFT__MintingDenied",
+      method: "eth_call",
+    })
+    expect(classifyStoryRegistrationFailure(failure)).toBe("terminal_prebroadcast")
+  })
+
+  test("keeps generic and send-stage transport failures ambiguous", () => {
+    expect(classifyStoryRegistrationFailure(new Error("RPC Request failed"))).toBe("ambiguous")
+    expect(classifyStoryRegistrationFailure(wrappedStoryError({
+      message: "HTTP request failed. Status: 503",
+      method: "eth_sendRawTransaction",
+    }))).toBe("ambiguous")
+  })
+
+  test("a transaction hash overrides pre-broadcast-looking wrapper text", () => {
+    const failure = wrappedStoryError({
+      stageName: "CallExecutionError",
+      message: "RPC Request failed",
+      method: "eth_call",
+      transactionHash: `0x${"ab".repeat(32)}`,
+    })
+    expect(classifyStoryRegistrationFailure(failure)).toBe("ambiguous")
   })
 })
 
