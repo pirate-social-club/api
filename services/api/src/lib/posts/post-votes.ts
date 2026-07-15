@@ -5,7 +5,8 @@ import type {
   CommunityReadRepository,
 } from "../communities/db-community-repository"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
-import { badRequestError, notFoundError } from "../errors"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env } from "../../env"
 import type { UserRepository } from "../auth/repositories"
@@ -13,7 +14,6 @@ import { publicPostId } from "../public-ids"
 import type { AltchaProofInput } from "../verification/altcha-provider"
 import { getPostById } from "./community-post-query-store"
 import { upsertPostVote } from "./community-post-vote-store"
-import { requireMemberAccess } from "./post-access"
 import { syncPostProjectionMetrics } from "./post-projection-sync"
 
 type PostVoteCommunityRepository =
@@ -42,7 +42,16 @@ export async function castPostVote(input: {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
     if (!input.bypassVoterAccessChecks) {
-      await requireMemberAccess(db.client, projection.community_id, input.userId)
+      const membership = await getCommunityMembershipState(
+        db.client,
+        projection.community_id,
+        input.userId,
+      )
+      if (!canAccessCommunity(membership)) {
+        throw eligibilityFailed("Join this community to vote", {
+          reason: "membership_required",
+        })
+      }
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,

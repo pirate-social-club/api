@@ -1077,6 +1077,19 @@ membership_mode: "request",
     const postBody = await json(createdPost) as { id: string }
 
     const unverifiedMember = await exchangeJwt(ctx.env, "community-unverified-voter")
+    const deniedVote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1 },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(deniedVote.status).toBe(403)
+    expect(await json(deniedVote)).toMatchObject({
+      code: "eligibility_failed",
+      message: "Join this community to vote",
+      details: { reason: "membership_required" },
+    })
+
     await addCommunityMember(ctx.communityDbRoot, communityCreateBody.community.id.replace(/^com_/, ""), unverifiedMember.userId)
     const upvoteAltcha = await solveTestAltchaPayload({
       env: ctx.env,
