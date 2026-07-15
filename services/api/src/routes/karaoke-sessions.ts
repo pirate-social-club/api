@@ -1,14 +1,14 @@
 import { Hono } from "hono"
 import type { Context } from "hono"
-import type { Env } from "../env"
 import { isAllowedKaraokeWebSocketOrigin } from "../lib/http/allowed-origins"
 import {
   finalizeKaraokeAttempt,
   parseFinalizeKaraokeAttemptPayload,
 } from "../lib/karaoke/karaoke-attempt-finalize-service"
 import { verifyKaraokeGatewayToken } from "../lib/karaoke/gateway-token"
+import { requestIdForContext, type RequestCorrelationEnv } from "../lib/request-correlation"
 
-const karaokeSessions = new Hono<{ Bindings: Env }>()
+const karaokeSessions = new Hono<RequestCorrelationEnv>()
 
 function responseHeaders(requestId: string): HeadersInit {
   return {
@@ -24,12 +24,12 @@ function errorResponse(requestId: string, status: number, code: string, message:
   })
 }
 
-function requireFinalizeSecret(c: Context<{ Bindings: Env }>): Response | null {
+function requireFinalizeSecret(c: Context<RequestCorrelationEnv>, requestId: string): Response | null {
   const expected = c.env.KARAOKE_GATEWAY_SIGNING_KEY?.trim()
   const provided = c.req.header("x-karaoke-finalize-secret")?.trim()
   if (!expected || expected.length < 32 || !provided || provided !== expected) {
     return errorResponse(
-      c.req.header("x-request-id")?.trim() || crypto.randomUUID(),
+      requestId,
       401,
       "karaoke_finalize_unauthorized",
       "Karaoke finalization is unauthorized",
@@ -39,8 +39,8 @@ function requireFinalizeSecret(c: Context<{ Bindings: Env }>): Response | null {
 }
 
 karaokeSessions.post("/:sessionId/finalize", async (c) => {
-  const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
-  const unauthorized = requireFinalizeSecret(c)
+  const requestId = requestIdForContext(c)
+  const unauthorized = requireFinalizeSecret(c, requestId)
   if (unauthorized) return unauthorized
   const payload = parseFinalizeKaraokeAttemptPayload(await c.req.json().catch(() => null))
   if (payload.sessionId !== c.req.param("sessionId")) {
@@ -57,7 +57,7 @@ karaokeSessions.post("/:sessionId/finalize", async (c) => {
 })
 
 karaokeSessions.get("/:sessionId/websocket", async (c) => {
-  const requestId = c.req.header("x-request-id")?.trim() || crypto.randomUUID()
+  const requestId = requestIdForContext(c)
   const sessionId = c.req.param("sessionId")
   const namespace = c.env.KARAOKE_SESSION_RUNTIME
   if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {

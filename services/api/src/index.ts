@@ -77,6 +77,11 @@ import { realChain as operatorRealChain } from "./lib/communities/bookings/opera
 import type { Env } from "./env"
 import publicReadApp from "./routes/public-read-app"
 import { apiErrorHandler } from "./routes/api-error-handler"
+import {
+  REQUEST_ID_HEADER,
+  requestCorrelationMiddleware,
+  type RequestCorrelationEnv,
+} from "./lib/request-correlation"
 
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
@@ -89,7 +94,7 @@ declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
 declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
 
-const app = new Hono<{ Bindings: Env }>()
+const app = new Hono<RequestCorrelationEnv>()
 
 type PublicReadEntrypoint = {
   fetch(request: Request): Promise<Response>
@@ -112,6 +117,8 @@ const COMPILED_BUILD_VERSION_METADATA: BuildVersionMetadata = {
   git_sha: typeof __PIRATE_BUILD_GIT_SHA__ === "string" ? __PIRATE_BUILD_GIT_SHA__ : null,
   build_timestamp: typeof __PIRATE_BUILD_TIMESTAMP__ === "string" ? __PIRATE_BUILD_TIMESTAMP__ : null,
 }
+
+app.use("*", requestCorrelationMiddleware)
 
 export function buildVersionMetadata(
   env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
@@ -189,6 +196,7 @@ app.use(
       origin: configuredCorsOrigin,
       allowMethods: CORS_ALLOW_METHODS,
       allowHeaders: CORS_ALLOW_HEADERS,
+      exposeHeaders: [REQUEST_ID_HEADER],
     })(c, next)
   },
 )
@@ -365,9 +373,26 @@ function appendVaryHeader(headers: Headers, field: string): void {
   }
 }
 
+function appendCommaSeparatedHeader(headers: Headers, name: string, value: string): void {
+  const existing = (headers.get(name) ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (!existing.some((item) => item.toLowerCase() === value.toLowerCase())) {
+    headers.set(name, [...existing, value].join(", "))
+  }
+}
+
 function applyCorsHeaders(request: Request, response: Response, env: Env): Response {
   if (response.headers.has("Access-Control-Allow-Origin")) {
-    return response
+    if ((response.headers.get("Access-Control-Expose-Headers") ?? "")
+      .split(",")
+      .some((value) => value.trim().toLowerCase() === REQUEST_ID_HEADER)) {
+      return response
+    }
+    const next = new Response(response.body, response)
+    appendCommaSeparatedHeader(next.headers, "Access-Control-Expose-Headers", REQUEST_ID_HEADER)
+    return next
   }
 
   const origin = request.headers.get("Origin")
@@ -382,6 +407,7 @@ function applyCorsHeaders(request: Request, response: Response, env: Env): Respo
 
   const next = new Response(response.body, response)
   next.headers.set("Access-Control-Allow-Origin", allowedOrigin)
+  appendCommaSeparatedHeader(next.headers, "Access-Control-Expose-Headers", REQUEST_ID_HEADER)
   appendVaryHeader(next.headers, "Origin")
   return next
 }

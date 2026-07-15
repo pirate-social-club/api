@@ -55,9 +55,9 @@ describe("karaoke WebSocket gateway", () => {
       `https://api.example/session-1/websocket?token=${encodeURIComponent(capability)}`,
       {
         headers: {
+          "cf-ray": "request-1",
           origin: "https://web.example",
           upgrade: "websocket",
-          "x-request-id": "request-1",
         },
       },
       env,

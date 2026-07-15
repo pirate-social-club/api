@@ -4,10 +4,11 @@ import publicComments from "./public-comments"
 import publicCommunities from "./public-communities"
 import publicPosts from "./public-posts"
 import publicRewards from "./public-rewards"
-import type { Env } from "../env"
 import { apiErrorHandler } from "./api-error-handler"
+import { requestCorrelationMiddleware, type RequestCorrelationEnv } from "../lib/request-correlation"
 
-const publicReadApp = new Hono<{ Bindings: Env }>()
+const publicReadApp = new Hono<RequestCorrelationEnv>()
+publicReadApp.use("*", requestCorrelationMiddleware)
 publicReadApp.route("/feed", feed)
 publicReadApp.route("/public-comments", publicComments)
 publicReadApp.route("/public-communities", publicCommunities)

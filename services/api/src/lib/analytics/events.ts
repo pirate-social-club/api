@@ -62,6 +62,7 @@ export type AnalyticsEventName =
   | "asset_accessed"
   | "donation_selected"
   | "gate_check_failed"
+  | "api_write_failed"
   | "report_submitted"
   | "moderation_case_opened"
   | "moderation_action_taken"
