@@ -8,6 +8,7 @@ import {
   markCommunityJobRunning,
   markCommunityJobSucceeded,
   recordCommunityJobCheckpoint,
+  renewCommunityJobLease,
   resetStaleRunningCommunityJobById,
   resetStaleRunningCommunityJobs,
   type CommunityJobCheckpoint,
@@ -51,6 +52,13 @@ export class CommunityJobAttemptTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`community_job_attempt_timeout:${timeoutMs}`)
     this.name = "CommunityJobAttemptTimeoutError"
+  }
+}
+
+export class CommunityJobLeaseLostError extends Error {
+  constructor(jobId: string) {
+    super(`community_job_lease_lost:${jobId}`)
+    this.name = "CommunityJobLeaseLostError"
   }
 }
 
@@ -147,14 +155,64 @@ function createCommunityJobCheckpointRecorder(input: {
   job: CommunityJobRow
 }): (checkpoint: CommunityJobCheckpoint, details?: Record<string, unknown> | null) => Promise<void> {
   return async (checkpoint, details = null) => {
-    await recordCommunityJobCheckpoint({
+    if (!input.job.attempt_id) throw new CommunityJobLeaseLostError(input.job.job_id)
+    const recorded = await recordCommunityJobCheckpoint({
       client: input.client,
       jobId: input.job.job_id,
       communityId: input.job.community_id,
+      attemptId: input.job.attempt_id,
       checkpoint,
       now: nowIso(),
       detailsJson: details ? JSON.stringify(details) : null,
     })
+    if (!recorded) throw new CommunityJobLeaseLostError(input.job.job_id)
+  }
+}
+
+function startCommunityJobLeaseHeartbeat(input: {
+  client: Parameters<typeof renewCommunityJobLease>[0]["client"]
+  job: CommunityJobRow
+  leaseDurationMs: number
+}): { stop: () => Promise<void>; leaseLost: () => boolean } {
+  const attemptId = input.job.attempt_id
+  if (!attemptId) throw new CommunityJobLeaseLostError(input.job.job_id)
+  const intervalMs = Math.max(10_000, Math.min(30_000, Math.floor(input.leaseDurationMs / 3)))
+  let stopped = false
+  let lost = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: Promise<void> = Promise.resolve()
+
+  const schedule = () => {
+    if (stopped || lost) return
+    timer = setTimeout(() => {
+      const heartbeatAt = nowIso()
+      pending = renewCommunityJobLease({
+        client: input.client,
+        jobId: input.job.job_id,
+        communityId: input.job.community_id,
+        attemptId,
+        now: heartbeatAt,
+        leaseExpiresAt: new Date(Date.parse(heartbeatAt) + input.leaseDurationMs).toISOString(),
+      }).then((renewed) => {
+        lost = !renewed
+      }).catch((error) => {
+        logPipelineError("[community-job] lease heartbeat failed", {
+          job_id: input.job.job_id,
+          community_id: input.job.community_id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }).finally(schedule)
+    }, intervalMs)
+  }
+  schedule()
+
+  return {
+    leaseLost: () => lost,
+    stop: async () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      await pending
+    },
   }
 }
 
@@ -214,6 +272,8 @@ export async function processCommunityJobById(input: {
     }
 
     const startedAt = nowIso()
+    const attemptId = `cja_${crypto.randomUUID()}`
+    const leaseDurationMs = resolveCommunityJobStaleCheckpointTimeoutMs(input.env)
     const running = await markCommunityJobRunning({
       client: db.client,
       jobId: input.jobId,
@@ -221,14 +281,16 @@ export async function processCommunityJobById(input: {
       attemptDeadlineAt: new Date(
         Date.parse(startedAt) + resolveCommunityJobDurableAttemptDeadlineMs(input.env),
       ).toISOString(),
+      attemptId,
+      leaseExpiresAt: new Date(Date.parse(startedAt) + leaseDurationMs).toISOString(),
     })
     if (!running) {
       return null
     }
 
+    const heartbeat = startCommunityJobLeaseHeartbeat({ client: db.client, job: running, leaseDurationMs })
     try {
-      const resultRef = await withCommunityJobAttemptTimeout(
-        runCommunityJob({
+      const operation = runCommunityJob({
           job: running,
           env: input.env,
           communityRepository: input.communityRepository,
@@ -236,9 +298,31 @@ export async function processCommunityJobById(input: {
             client: db.client,
             job: running,
           }),
-        }),
-        resolveCommunityJobAttemptTimeoutMs(input.env),
-      )
+        })
+      // Story registration is not cooperatively cancellable. Racing it against a
+      // timer abandons a live mint and lets a retry overlap it. Its durable lease
+      // and effect journal are the timeout/recovery boundary instead.
+      const resultRef = running.job_type === "post_publish_finalize"
+        ? await operation
+        : await withCommunityJobAttemptTimeout(operation, resolveCommunityJobAttemptTimeoutMs(input.env))
+      if (heartbeat.leaseLost()) throw new CommunityJobLeaseLostError(running.job_id)
+
+      const succeeded = await markCommunityJobSucceeded({
+        client: db.client,
+        jobId: running.job_id,
+        attemptId,
+        resultRef,
+        now: nowIso(),
+      })
+      if (!succeeded) {
+        logPipelineInfo("[community-job] obsolete attempt completion ignored", {
+          job_id: running.job_id,
+          job_type: running.job_type,
+          community_id: running.community_id,
+          attempt_count: running.attempt_count,
+        })
+        return null
+      }
 
       logPipelineInfo("[community-job] completed", {
         job_id: running.job_id,
@@ -259,13 +343,17 @@ export async function processCommunityJobById(input: {
         })
       }
 
-      return await markCommunityJobSucceeded({
-        client: db.client,
-        jobId: running.job_id,
-        resultRef,
-        now: nowIso(),
-      })
+      return succeeded
     } catch (error) {
+      if (error instanceof CommunityJobLeaseLostError) {
+        logPipelineInfo("[community-job] obsolete attempt stopped after lease loss", {
+          job_id: running.job_id,
+          job_type: running.job_type,
+          community_id: running.community_id,
+          attempt_count: running.attempt_count,
+        })
+        return null
+      }
       const failedAt = nowIso()
       return await recordCommunityJobFailure({
         client: db.client,
@@ -274,6 +362,8 @@ export async function processCommunityJobById(input: {
         error,
         failedAt,
       })
+    } finally {
+      await heartbeat.stop()
     }
   } finally {
     db.close()

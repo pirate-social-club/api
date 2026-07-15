@@ -39,6 +39,7 @@ export async function recordCommunityJobFailure(input: {
   return await markCommunityJobFailed({
     client: input.client,
     jobId: input.job.job_id,
+    attemptId: input.job.attempt_id ?? "missing_attempt_id",
     errorCode: message || "community_job_failed",
     availableAt: input.job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS
       ? null

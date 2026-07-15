@@ -28,6 +28,11 @@ import {
   buildStoryRoyaltyMetadataPayloads,
   type StoryRoyaltyMetadataAccessMode,
 } from "./story-royalty-metadata"
+import {
+  confirmStoryRegistrationEffect,
+  failStoryRegistrationEffect,
+  reserveStoryRegistrationEffect,
+} from "./story-registration-effect-store"
 
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
@@ -496,6 +501,20 @@ function storyErrorChainHasBroadcastTx(error: unknown): boolean {
   return false
 }
 
+function storyErrorChainTransactionHash(error: unknown): string | null {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    const value = current as { transactionHash?: unknown; cause?: unknown }
+    if (typeof value.transactionHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.transactionHash)) {
+      return value.transactionHash
+    }
+    current = value.cause
+  }
+  return null
+}
+
 // Retry ONLY pre-broadcast transport/simulate failures (the observed
 // `mintAndRegisterIpAndAttachPILTerms reverted ... RPC Request failed` is a viem
 // RpcRequestError from the pre-write eth_call, so no tx was sent). Never retry
@@ -809,7 +828,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   }
 
   const rightsBasis = normalizeStoryRoyaltyRightsBasis(input.rightsBasis)
-  if (!rightsBasis) {
+  if (!rightsBasis || rightsBasis === "none") {
     return null
   }
 
@@ -910,8 +929,22 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     }
   }
 
-  if (rightsBasis === "derivative") {
-    const derivativeResponse = await withStoryRegistrationRetry(() =>
+  const reserved = await reserveStoryRegistrationEffect<StoryRoyaltyRegistrationResult>({
+    client: input.client,
+    communityId: input.communityId,
+    assetId: input.assetId,
+    registrationKind: rightsBasis,
+    creatorWalletAddress: input.creatorWalletAddress,
+    primaryContentHash: input.primaryContentHash,
+    now: nowIso(),
+  })
+  if (reserved.kind === "confirmed") return reserved.result
+
+  let providerTxRef: string | null = null
+  try {
+    let result: StoryRoyaltyRegistrationResult
+    if (rightsBasis === "derivative") {
+      const derivativeResponse = await withStoryRegistrationRetry(() =>
       storyClient.ipAsset.registerDerivativeIpAsset({
         nft: {
           type: "mint",
@@ -931,77 +964,96 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
           nftMetadataHash: metadata.nftMetadataHash,
         },
       }),
-    )
-    const derivativeIpId = derivativeResponse.ipId!
-    const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
-
-    return {
-      storyIpId: derivativeIpId,
-      storyIpNftContract: spgNftContract,
-      storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-      storyIpMetadataUri: metadata.ipMetadataUri,
-      storyIpMetadataHash: metadata.ipMetadataHash,
-      storyNftMetadataUri: metadata.nftMetadataUri,
-      storyNftMetadataHash: metadata.nftMetadataHash,
-      ipRoyaltyVault,
-      storyLicenseTermsId: null,
-      storyLicenseTemplate: null,
-      storyRoyaltyPolicy: royaltyPolicy,
-      storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
-      storyRevenueToken: WIP_TOKEN_ADDRESS,
-      storyRoyaltyRegistrationStatus: "registered",
-      storyDerivativeRegisteredAt: nowIso(),
-      royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
+      )
+      const derivativeIpId = derivativeResponse.ipId!
+      providerTxRef = String(derivativeResponse.txHash || "").trim() || null
+      const ipRoyaltyVault = String(derivativeResponse.ipRoyaltyVault || "").trim() || await resolveVault(derivativeIpId)
+      result = {
+        storyIpId: derivativeIpId,
+        storyIpNftContract: spgNftContract,
+        storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
+        storyIpMetadataUri: metadata.ipMetadataUri,
+        storyIpMetadataHash: metadata.ipMetadataHash,
+        storyNftMetadataUri: metadata.nftMetadataUri,
+        storyNftMetadataHash: metadata.nftMetadataHash,
+        ipRoyaltyVault,
+        storyLicenseTermsId: null,
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: royaltyPolicy,
+        storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
+        storyRevenueToken: WIP_TOKEN_ADDRESS,
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: nowIso(),
+        royaltyDistributionTxHash: String(derivativeResponse.distributeRoyaltyTokensTxHash || derivativeResponse.txHash || "").trim() || null,
+      }
+    } else {
+      const licenseTerms = resolvePilTermsForLicense({
+        licensePreset: requireOriginalLicensePreset(input.licensePreset),
+        commercialRevSharePct: input.commercialRevSharePct,
+        defaultMintingFee,
+        currency: WIP_TOKEN_ADDRESS,
+        royaltyPolicy,
+      })
+      const originalResponse = await withStoryRegistrationRetry(() =>
+        storyClient.ipAsset.registerIpAsset({
+          nft: {
+            type: "mint",
+            spgNftContract,
+            recipient: input.creatorWalletAddress as `0x${string}`,
+            allowDuplicates: true,
+          },
+          licenseTermsData: [{ terms: licenseTerms, maxLicenseTokens }],
+          royaltyShares,
+          ipMetadata: {
+            ipMetadataURI: metadata.ipMetadataUri,
+            ipMetadataHash: metadata.ipMetadataHash,
+            nftMetadataURI: metadata.nftMetadataUri,
+            nftMetadataHash: metadata.nftMetadataHash,
+          },
+        }),
+      )
+      providerTxRef = String(originalResponse.txHash || "").trim() || null
+      result = {
+        storyIpId: originalResponse.ipId!,
+        storyIpNftContract: spgNftContract,
+        storyIpNftTokenId: originalResponse.tokenId!.toString(),
+        storyIpMetadataUri: metadata.ipMetadataUri,
+        storyIpMetadataHash: metadata.ipMetadataHash,
+        storyNftMetadataUri: metadata.nftMetadataUri,
+        storyNftMetadataHash: metadata.nftMetadataHash,
+        ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
+        storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
+        storyLicenseTemplate: null,
+        storyRoyaltyPolicy: royaltyPolicy,
+        storyDerivativeParentIpIds: null,
+        storyRevenueToken: WIP_TOKEN_ADDRESS,
+        storyRoyaltyRegistrationStatus: "registered",
+        storyDerivativeRegisteredAt: null,
+        royaltyDistributionTxHash: String(originalResponse.distributeRoyaltyTokensTxHash || originalResponse.txHash || "").trim() || null,
+      }
     }
-  }
-
-  const licenseTerms = resolvePilTermsForLicense({
-    licensePreset: requireOriginalLicensePreset(input.licensePreset),
-    commercialRevSharePct: input.commercialRevSharePct,
-    defaultMintingFee,
-    currency: WIP_TOKEN_ADDRESS,
-    royaltyPolicy,
-  })
-  const originalResponse = await withStoryRegistrationRetry(() =>
-    storyClient.ipAsset.registerIpAsset({
-      nft: {
-        type: "mint",
-        spgNftContract,
-        recipient: input.creatorWalletAddress as `0x${string}`,
-        allowDuplicates: true,
-      },
-      licenseTermsData: [
-        {
-          terms: licenseTerms,
-          maxLicenseTokens,
-        },
-      ],
-      royaltyShares,
-      ipMetadata: {
-        ipMetadataURI: metadata.ipMetadataUri,
-        ipMetadataHash: metadata.ipMetadataHash,
-        nftMetadataURI: metadata.nftMetadataUri,
-        nftMetadataHash: metadata.nftMetadataHash,
-      },
-    }),
-  )
-
-  return {
-    storyIpId: originalResponse.ipId!,
-    storyIpNftContract: spgNftContract,
-    storyIpNftTokenId: originalResponse.tokenId!.toString(),
-    storyIpMetadataUri: metadata.ipMetadataUri,
-    storyIpMetadataHash: metadata.ipMetadataHash,
-    storyNftMetadataUri: metadata.nftMetadataUri,
-    storyNftMetadataHash: metadata.nftMetadataHash,
-    ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
-    storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
-    storyLicenseTemplate: null,
-    storyRoyaltyPolicy: royaltyPolicy,
-    storyDerivativeParentIpIds: null,
-    storyRevenueToken: WIP_TOKEN_ADDRESS,
-    storyRoyaltyRegistrationStatus: "registered",
-    storyDerivativeRegisteredAt: null,
-    royaltyDistributionTxHash: String(originalResponse.distributeRoyaltyTokensTxHash || originalResponse.txHash || "").trim() || null,
+    await confirmStoryRegistrationEffect({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.assetId,
+      operationId: reserved.operationId,
+      result,
+      providerTxRef,
+      now: nowIso(),
+    })
+    return result
+  } catch (error) {
+    const broadcastTxRef = storyErrorChainTransactionHash(error) ?? providerTxRef
+    await failStoryRegistrationEffect({
+      client: input.client,
+      communityId: input.communityId,
+      assetId: input.assetId,
+      operationId: reserved.operationId,
+      reconciliationRequired: Boolean(broadcastTxRef) || storyErrorChainHasBroadcastTx(error),
+      providerTxRef: broadcastTxRef,
+      errorCode: broadcastTxRef ? "story_registration_post_broadcast_error" : "story_registration_prebroadcast_error",
+      now: nowIso(),
+    })
+    throw error
   }
 }

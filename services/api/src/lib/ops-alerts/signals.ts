@@ -5,6 +5,7 @@ import type {
   RetriedLockedDeliveryJobSample,
   StaleLockedDeliveryAssetSample,
   StuckRoyaltyProjectionSample,
+  StoryRegistrationReconciliationSample,
 } from "./types"
 import { OPS_ACTIONABLE_FAILURE_CODES } from "./types"
 
@@ -132,6 +133,34 @@ export async function collectCommunityPublishAlertSignals(input: {
       updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
     }))
 
+  const storyRegistrationReconciliationResult = await input.client.execute({
+    sql: `
+      SELECT COUNT(*) AS count
+      FROM story_registration_effects
+      WHERE status = 'reconciliation_required'
+         OR (status = 'executing' AND updated_at <= ?1)
+    `,
+    args: [input.since],
+  })
+  const storyRegistrationReconciliationSamplesResult = await input.client.execute({
+    sql: `
+      SELECT asset_id, status, provider_tx_ref, updated_at
+      FROM story_registration_effects
+      WHERE status = 'reconciliation_required'
+         OR (status = 'executing' AND updated_at <= ?1)
+      ORDER BY updated_at ASC
+      LIMIT ${SAMPLE_LIMIT}
+    `,
+    args: [input.since],
+  })
+  const story_registration_reconciliation_samples: StoryRegistrationReconciliationSample[] =
+    storyRegistrationReconciliationSamplesResult.rows.map((row) => ({
+      asset_id: String(row.asset_id ?? ""),
+      status: String(row.status ?? ""),
+      provider_tx_ref: typeof row.provider_tx_ref === "string" ? row.provider_tx_ref : null,
+      updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
+    }))
+
   return {
     community_id: input.communityId,
     failure_codes,
@@ -142,5 +171,7 @@ export async function collectCommunityPublishAlertSignals(input: {
     stale_locked_delivery_asset_samples,
     retried_locked_delivery_jobs: Number(retriedLockedDeliveryJobsResult.rows[0]?.count ?? 0),
     retried_locked_delivery_job_samples,
+    story_registration_reconciliation_required: Number(storyRegistrationReconciliationResult.rows[0]?.count ?? 0),
+    story_registration_reconciliation_samples,
   }
 }

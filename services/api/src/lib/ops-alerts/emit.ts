@@ -23,6 +23,9 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
   let retriedLockedDeliveryJobs = 0
   const retriedLockedDeliveryCommunities = new Set<string>()
   const retriedLockedDeliverySamples: Array<Record<string, unknown>> = []
+  let storyRegistrationReconciliationRequired = 0
+  const storyRegistrationReconciliationCommunities = new Set<string>()
+  const storyRegistrationReconciliationSamples: Array<Record<string, unknown>> = []
 
   for (const signal of signals) {
     for (const { code, count } of signal.failure_codes) {
@@ -58,6 +61,14 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       for (const sample of signal.retried_locked_delivery_job_samples) {
         if (retriedLockedDeliverySamples.length >= 10) break
         retriedLockedDeliverySamples.push({ community_id: signal.community_id, ...sample })
+      }
+    }
+    if (signal.story_registration_reconciliation_required > 0) {
+      storyRegistrationReconciliationRequired += signal.story_registration_reconciliation_required
+      storyRegistrationReconciliationCommunities.add(signal.community_id)
+      for (const sample of signal.story_registration_reconciliation_samples) {
+        if (storyRegistrationReconciliationSamples.length >= 10) break
+        storyRegistrationReconciliationSamples.push({ community_id: signal.community_id, ...sample })
       }
     }
   }
@@ -110,6 +121,16 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       count: retriedLockedDeliveryJobs,
       community_ids: [...retriedLockedDeliveryCommunities].sort(),
       details: { samples: retriedLockedDeliverySamples },
+    })
+  }
+  if (storyRegistrationReconciliationRequired > 0) {
+    alerts.push({
+      key: "story_registration_reconciliation_required",
+      severity: "high",
+      title: "Story registration effects require transaction reconciliation",
+      count: storyRegistrationReconciliationRequired,
+      community_ids: [...storyRegistrationReconciliationCommunities].sort(),
+      details: { samples: storyRegistrationReconciliationSamples },
     })
   }
   return alerts
