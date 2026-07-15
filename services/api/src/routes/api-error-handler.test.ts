@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Hono } from "hono"
-import type { Env } from "../env"
 import { notFoundError } from "../lib/errors"
+import { requestCorrelationMiddleware, type RequestCorrelationEnv } from "../lib/request-correlation"
 import { apiErrorHandler } from "./api-error-handler"
 
-function appThrowing(error: Error): Hono<{ Bindings: Env }> {
-  const app = new Hono<{ Bindings: Env }>()
+function appThrowing(error: Error): Hono<RequestCorrelationEnv> {
+  const app = new Hono<RequestCorrelationEnv>()
+  app.use("*", requestCorrelationMiddleware)
   app.get("/boom", () => {
     throw error
   })

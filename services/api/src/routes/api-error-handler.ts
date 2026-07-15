@@ -1,13 +1,9 @@
 import type { Context } from "hono"
-import type { Env } from "../env"
 import { HttpError, errorResponse } from "../lib/errors"
 import { logPipelineError } from "../lib/observability/pipeline-log"
+import { requestIdForContext } from "../lib/request-correlation"
 
-export function requestIdForContext(c: Context<{ Bindings: Env }>): string {
-  return c.req.header("cf-ray") ?? crypto.randomUUID()
-}
-
-export function apiErrorHandler(error: Error, c: Context<{ Bindings: Env }>): Response {
+export function apiErrorHandler(error: Error, c: Context): Response {
   const requestId = requestIdForContext(c)
   if (!(error instanceof HttpError) || error.status >= 500) {
     console.error("[api-worker]", `request_id=${requestId}`, error)
