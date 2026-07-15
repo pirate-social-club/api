@@ -218,7 +218,7 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
   return postStatus === "processing"
 }
 
-export async function convergePublishedPostProjection(input: {
+async function convergePublishedPostProjection(input: {
   client: Parameters<typeof markPostPublishRequestStatus>[0]["client"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
   post: Post
