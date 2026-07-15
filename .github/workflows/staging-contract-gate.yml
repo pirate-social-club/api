@@ -1,0 +1,156 @@
+name: staging-contract-gate
+
+on:
+  workflow_call:
+    inputs:
+      api_sha:
+        description: API commit that must be live on staging
+        required: true
+        type: string
+      core_ref:
+        description: Core ref used by the deployed API
+        required: true
+        type: string
+      web_ref:
+        description: Web ref containing the browser contracts
+        required: true
+        type: string
+    secrets:
+      AUTH_UPSTREAM_JWT_SHARED_SECRET:
+        required: false
+  workflow_dispatch:
+    inputs:
+      api_sha:
+        description: API commit that must be live on staging (defaults to this commit)
+        required: false
+        type: string
+      core_ref:
+        description: Core ref used by the deployed API
+        default: main
+        required: true
+        type: string
+      web_ref:
+        description: Web ref containing the browser contracts
+        default: main
+        required: true
+        type: string
+
+concurrency:
+  group: staging-contract-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  required-contracts:
+    name: Required staging API contracts
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    env:
+      API_SHA: ${{ inputs.api_sha || github.sha }}
+      AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
+      AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
+      AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      E2E_API_BASE_URL: https://api-staging.pirate.sc
+      E2E_BASE_URL: https://staging.pirate.sc
+      E2E_LIVE_STAGING: "true"
+      E2E_REQUIRED_RELEASE_GATE: "true"
+    steps:
+      - name: Check out browser contracts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/web
+          ref: ${{ inputs.web_ref || 'main' }}
+          path: web
+
+      - name: Check out deployed API
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/api
+          ref: ${{ env.API_SHA }}
+          path: api
+
+      - name: Check out compatible Core
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/core
+          ref: ${{ inputs.core_ref || 'main' }}
+          path: core
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      - name: Install browser-contract dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+
+      - name: Require the requested API commit on staging
+        working-directory: web
+        run: scripts/check-deployments.sh --scope staging --expected-api-sha "$API_SHA" --retry-for 120
+
+      - name: Fetch staging auth secret when the caller did not provide it
+        if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == ''
+        working-directory: core
+        env:
+          INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
+          INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
+          INFISICAL_ENV: staging
+          INFISICAL_SECRET_PATH: /services/api
+          SECRET_NAMES: AUTH_UPSTREAM_JWT_SHARED_SECRET
+        run: scripts/ci/fetch-infisical-secrets.sh
+
+      - name: Verify required contract inventory
+        working-directory: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          titles=(
+            "follows a real staging community and persists after reload"
+            "uploads a public video through direct multipart in a real browser"
+            "creates and quotes a global booking hold on staging"
+            "creates a real post and comment with a real staging session"
+          )
+          for title in "${titles[@]}"; do
+            count=$(bunx playwright test e2e/live-staging.live.spec.ts --project=live-staging --list --grep "$title" 2>&1 | grep -F -c "$title")
+            test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
+          done
+
+      - name: Verify global booking contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates and quotes a global booking hold on staging"
+
+      - name: Verify community follow contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "follows a real staging community and persists after reload"
+
+      - name: Verify direct multipart upload contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "uploads a public video through direct multipart in a real browser"
+
+      - name: Verify post and comment contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates a real post and comment with a real staging session"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: staging-contract-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+          retention-days: 14
