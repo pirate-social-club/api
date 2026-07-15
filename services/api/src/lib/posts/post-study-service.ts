@@ -496,7 +496,7 @@ async function resolveStudyExerciseAvailability(input: {
     }
   }
 
-  const canonicalExerciseRows = input.unitsPersisted
+  const canonicalExerciseResult = input.unitsPersisted
     ? await listExercises({
       client: input.client,
       dueReviewServing: false,
@@ -506,11 +506,12 @@ async function resolveStudyExerciseAvailability(input: {
       postId: input.post.post_id,
       targetLanguage: input.targetLanguage,
     })
-    : []
+    : { rows: [], totalCount: 0 }
+  const canonicalExerciseRows = canonicalExerciseResult.rows
   const virtualSayItBackCount = !input.unitsPersisted && includeSayItBack
     ? input.units.length
     : 0
-  const exerciseCount = canonicalExerciseRows.length + virtualSayItBackCount
+  const exerciseCount = canonicalExerciseResult.totalCount + virtualSayItBackCount
   if (exerciseCount > 0) {
     return {
       access: "ready",
@@ -673,9 +674,12 @@ async function listExercises(input: {
   postId: string
   targetLanguage: string
   userId?: string | null
-}): Promise<StudyExerciseRow[]> {
+  limit?: number
+}): Promise<{ rows: StudyExerciseRow[]; totalCount: number }> {
   const result = await input.client.execute({
     sql: `
+      SELECT exercises.*, COUNT(*) OVER () AS total_count
+      FROM (
       SELECT ('stu:' || u.id || ':say_it_back:' || COALESCE(u.source_language, 'source')) AS id,
              u.line_id, u.line_index, 'say_it_back' AS exercise_type, u.prompt_text,
              NULL AS question, u.reference_text, NULL AS translation_text,
@@ -727,7 +731,9 @@ async function listExercises(input: {
           OR s.user_id IS NULL
           OR (?6 = 1 AND s.due_at <= ?7)
         )
+      ) exercises
       ORDER BY due_rank ASC, line_index ASC, sort_order ASC, id ASC
+      LIMIT ?8
     `,
     args: [
       input.postId,
@@ -737,9 +743,11 @@ async function listExercises(input: {
       input.userId ?? null,
       input.dueReviewServing ? 1 : 0,
       input.now,
+      input.limit ?? -1,
     ],
   })
-  return result.rows.map((row) => ({
+  return {
+    rows: result.rows.map((row) => ({
     correct_option_id: readString(row.correct_option_id),
     exercise_type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
     id: readString(row.id) ?? "",
@@ -753,7 +761,9 @@ async function listExercises(input: {
     review_language: readString(row.review_language) ?? input.targetLanguage,
     study_pack_version: Number(row.study_pack_version ?? 1),
     translation_text: readString(row.translation_text),
-  }))
+    })),
+    totalCount: Number(result.rows[0]?.total_count ?? 0),
+  }
 }
 
 
@@ -905,7 +915,7 @@ export async function getPostStudyPayload(input: {
     const now = nowIso()
     const reServeDueReviews = dueReviewServingEnabled(input.env)
     const canonicalExerciseRows = availability.canonicalExerciseRows
-    const eligibleExerciseRows = await listExercises({
+    const eligibleExerciseResult = await listExercises({
       client: db.client,
       dueReviewServing: reServeDueReviews,
       includeSayItBack,
@@ -914,9 +924,9 @@ export async function getPostStudyPayload(input: {
       postId: input.postId,
       targetLanguage,
       userId: input.actor.userId,
+      limit: STUDY_SESSION_EXERCISE_LIMIT,
     })
-    const exerciseRows = eligibleExerciseRows.slice(0, STUDY_SESSION_EXERCISE_LIMIT)
-    const exercises = exerciseRows.map((row) => toExercise(row, input.actor.userId))
+    const exercises = eligibleExerciseResult.rows.map((row) => toExercise(row, input.actor.userId))
     const nextDueAt = exercises.length === 0 && canonicalExerciseRows.length > 0
       ? await getNextDueAt({
         client: db.client,
@@ -930,7 +940,7 @@ export async function getPostStudyPayload(input: {
       : null
     const nextDueAtSeconds = toUnixSeconds(nextDueAt)
     const session: SongStudySessionSummary = {
-      due_count: eligibleExerciseRows.length,
+      due_count: eligibleExerciseResult.totalCount,
       served_count: exercises.length,
       total_units: canonicalExerciseRows.length,
       ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),
@@ -1197,7 +1207,8 @@ async function resolveStudyStreakTargetCount(input: {
     postId: input.postId,
     targetLanguage: input.targetLanguage,
     userId: input.userId,
-  })).length
+    limit: 1,
+  })).totalCount
   const dueReviewCountMs = elapsedMs(exerciseCountStartedAt)
   // If async generation has only produced a smaller ready set, that smaller pack
   // is the bar for this pilot day. study_target_count is frozen on the first
