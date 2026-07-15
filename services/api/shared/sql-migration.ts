@@ -335,6 +335,15 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   sqliteCompat = sqliteCompat.replace(/\bNOW\(\)/gi, "CURRENT_TIMESTAMP")
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
   sqliteCompat = sqliteCompat.replace(/::(?:jsonb|text)\b/gi, "")
+  // PostgreSQL's `~` operator is unavailable in the SQLite test mirror. Preserve the
+  // fixed-length lowercase 0x-hex checks used by funding-observation migrations.
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^0x\[0-9a-f\]\{(\d+)\}\$'/g,
+    (_match, column: string, hexLength: string) => {
+      const expectedLength = Number(hexLength) + 2
+      return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 2) = '0x' AND substr(${column}, 3) NOT GLOB '*[^0-9a-f]*'`
+    },
+  )
 
   return [sqliteCompat]
 }
