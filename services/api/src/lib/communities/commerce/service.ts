@@ -52,12 +52,14 @@ import {
   type LockedDeliveryProgressReporter,
 } from "./locked-delivery-progress"
 import { upsertStoryRegisteredAssetProjection } from "./derivative-source-projection"
-import { syncStoryRoyaltyAllocationProjectionForAsset } from "./royalty-allocation-projection"
+import { syncStoryRoyaltyAllocationProjectionSafely } from "./royalty-allocation-projection"
 import {
   applyReusableOriginalRegistrationFields,
   applyRoyaltyRegistrationFields,
   emptyStoryRegistrationFieldState,
   hasCompleteStoryRoyaltyRegistration,
+  isCatalogProjectableStoryRegisteredAsset,
+  isRoyaltyProjectableStoryRegisteredAsset,
   shouldAttemptStoryRoyaltyRegistration,
   storyRegistrationFieldStateFromAsset,
 } from "./story-registration-state"
@@ -68,55 +70,6 @@ import type {
   SongArtifactBundle,
   SongArtifactUpload,
 } from "../../../types"
-
-function isStoryRoyaltyAssetKind(assetKind: Asset["asset_kind"]): assetKind is "song_audio" | "video_file" {
-  return assetKind === "song_audio" || assetKind === "video_file"
-}
-
-async function syncStoryRoyaltyAllocationProjectionSafely(input: {
-  env: Env
-  client: Pick<Client, "execute">
-  communityId: string
-  postId: string
-  assetId: string
-  sourceUpdatedAt?: string | null
-  required?: boolean
-}): Promise<void> {
-  const maxAttempts = input.required ? 3 : 1
-  let lastError: unknown = null
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const result = await syncStoryRoyaltyAllocationProjectionForAsset(input)
-      if (input.required && result.projectedRows === 0) {
-        throw new Error("royalty_allocation_projection_rows_missing")
-      }
-      if (result.projectedRows > 0) {
-        logPipelineInfo("[commerce] Story royalty allocation projection synced", {
-          community_id: input.communityId,
-          post_id: input.postId,
-          asset_id: input.assetId,
-          projected_rows: result.projectedRows,
-          attempt,
-        })
-      }
-      return
-    } catch (error) {
-      lastError = error
-      if (attempt < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 250))
-      }
-    }
-  }
-  logPipelineInfo("[commerce] Story royalty allocation projection sync failed", {
-    level: "warn",
-    community_id: input.communityId,
-    post_id: input.postId,
-    asset_id: input.assetId,
-    attempts: maxAttempts,
-    error: lastError instanceof Error ? lastError.message : String(lastError),
-  })
-  if (input.required) throw lastError
-}
 
 async function retryExistingStoryRoyaltyRegistration(input: {
   env: Env
@@ -402,51 +355,6 @@ async function markRecoverableLockedDeliveryReady(input: {
   })
   const repaired = await getAssetRow(input.client, input.communityId, input.asset.asset_id)
   return serializeAsset(repaired ?? input.asset)
-}
-
-type StoryRegisteredProjectionCandidate = {
-  assetKind: Asset["asset_kind"]
-  publicationStatus: Asset["publication_status"]
-  storyStatus: Asset["story_status"]
-  storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed"
-  storyIpId: string | null
-  storyLicenseTermsId: string | null
-  ipRoyaltyVault: string | null
-  royaltyAllocationStatus: AssetRow["royalty_allocation_status"]
-}
-
-function isRegisteredStoryAsset(input: StoryRegisteredProjectionCandidate): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
-  storyIpId: string
-} {
-  return isStoryRoyaltyAssetKind(input.assetKind)
-    && input.publicationStatus === "story_published"
-    && input.storyStatus === "published"
-    && input.storyRoyaltyRegistrationStatus === "registered"
-    && Boolean(input.storyIpId?.trim())
-}
-
-export function isCatalogProjectableStoryRegisteredAsset(
-  input: StoryRegisteredProjectionCandidate,
-): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
-  storyIpId: string
-  storyLicenseTermsId: string
-} {
-  return isRegisteredStoryAsset(input)
-    && Boolean(input.storyLicenseTermsId?.trim())
-}
-
-export function isRoyaltyProjectableStoryRegisteredAsset(
-  input: StoryRegisteredProjectionCandidate,
-): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
-  storyIpId: string
-  ipRoyaltyVault: string
-} {
-  return isRegisteredStoryAsset(input)
-    && Boolean(input.ipRoyaltyVault?.trim())
-    && input.royaltyAllocationStatus !== "none"
 }
 
 export async function createAssetForPost(input: {
@@ -1509,6 +1417,10 @@ export async function prepareRequestedLockedAssetDelivery(input: {
 }
 
 export * from "./derivative-source-service"
+export {
+  isCatalogProjectableStoryRegisteredAsset,
+  isRoyaltyProjectableStoryRegisteredAsset,
+} from "./story-registration-state"
 export {
   fetchCommunityAssetContent,
   fetchPublicCommunityAssetContent,

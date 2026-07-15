@@ -22,6 +22,51 @@ export function hasCompleteStoryRoyaltyRegistration(asset: AssetRow): boolean {
     && Boolean(asset.story_license_terms_id?.trim())
 }
 
+type StoryRegisteredProjectionCandidate = {
+  assetKind: Asset["asset_kind"]
+  publicationStatus: Asset["publication_status"]
+  storyStatus: Asset["story_status"]
+  storyRoyaltyRegistrationStatus: "none" | "pending" | "registered" | "failed"
+  storyIpId: string | null
+  storyLicenseTermsId: string | null
+  ipRoyaltyVault: string | null
+  royaltyAllocationStatus: AssetRow["royalty_allocation_status"]
+}
+
+function isRegisteredStoryAsset(input: StoryRegisteredProjectionCandidate): input is StoryRegisteredProjectionCandidate & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+} {
+  return (input.assetKind === "song_audio" || input.assetKind === "video_file")
+    && input.publicationStatus === "story_published"
+    && input.storyStatus === "published"
+    && input.storyRoyaltyRegistrationStatus === "registered"
+    && Boolean(input.storyIpId?.trim())
+}
+
+export function isCatalogProjectableStoryRegisteredAsset(
+  input: StoryRegisteredProjectionCandidate,
+): input is StoryRegisteredProjectionCandidate & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+  storyLicenseTermsId: string
+} {
+  return isRegisteredStoryAsset(input)
+    && Boolean(input.storyLicenseTermsId?.trim())
+}
+
+export function isRoyaltyProjectableStoryRegisteredAsset(
+  input: StoryRegisteredProjectionCandidate,
+): input is StoryRegisteredProjectionCandidate & {
+  assetKind: "song_audio" | "video_file"
+  storyIpId: string
+  ipRoyaltyVault: string
+} {
+  return isRegisteredStoryAsset(input)
+    && Boolean(input.ipRoyaltyVault?.trim())
+    && input.royaltyAllocationStatus !== "none"
+}
+
 export type StoryRegistrationFieldState = {
   storyIpId: string | null
   storyIpNftContract: string | null
