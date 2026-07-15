@@ -7,6 +7,7 @@ import {
   getPublicActiveRewardCampaignForSong,
 } from "../lib/rewards/reward-campaign-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
 import { setPublicReadCacheHeaders } from "./cache-headers"
 
 const publicRewards = new Hono<{ Bindings: Env }>()
@@ -50,8 +51,8 @@ publicRewards.get("/public/reward_campaigns", async (c) => {
   const result = await getPublicActiveRewardCampaignForSong({
     env: c.env,
     client: getControlPlaneClient(c.env),
-    communityId: c.req.query("community_id") ?? "",
-    postId: c.req.query("post_id") ?? "",
+    communityId: decodePublicCommunityId(c.req.query("community_id") ?? ""),
+    postId: decodePublicPostId(c.req.query("post_id") ?? ""),
   })
   setOfferCacheHeaders(c)
   return c.json(result, 200)
