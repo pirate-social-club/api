@@ -5,10 +5,10 @@ import type {
 import type { Comment, Post } from "../../types"
 
 export type ModerationSignalSeverity = "low" | "medium" | "high"
-export type ModerationCaseStatus = "open" | "resolved"
-export type ModerationQueueScope = "community" | "platform"
+type ModerationCaseStatus = "open" | "resolved"
+type ModerationQueueScope = "community" | "platform"
 export type ModerationCaseOpenedBy = "platform_analysis" | "user_report" | "mixed"
-export type UserReportReasonCode =
+type UserReportReasonCode =
   | "spam"
   | "harassment"
   | "hate"
@@ -16,7 +16,7 @@ export type UserReportReasonCode =
   | "graphic_content"
   | "misleading"
   | "other"
-export type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate"
+type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate"
 
 export type CreateUserReportRequest = ApiCreateUserReportRequest
 export type CreateModerationActionRequest = ApiCreateModerationActionRequest

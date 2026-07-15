@@ -2,7 +2,7 @@ import type { Post } from "../../types"
 
 export type RightsReviewCaseStatus = "open" | "under_review" | "resolved" | "blocked"
 export type RightsReviewSubjectType = "asset" | "post" | "live_room" | "replay_asset"
-export type RightsReviewTriggerSource =
+type RightsReviewTriggerSource =
   | "acrcloud_match"
   | "declared_reference_mismatch"
   | "manual_report"
@@ -10,7 +10,7 @@ export type RightsReviewTriggerSource =
 export type RightsReviewResolution = "clear" | "clear_with_upstream_refs" | "block" | "needs_more_evidence"
 export type RightsReviewActionType = "start_review" | RightsReviewResolution
 export type RightsHoldType = "reference_required" | "review_hold" | "blocked"
-export type RightsHoldStatus = "active" | "released"
+type RightsHoldStatus = "active" | "released"
 
 export type MediaAnalysisResult = {
   media_analysis_result_id: string

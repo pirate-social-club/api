@@ -20,7 +20,7 @@ const PUBLIC_PIRATE_NAME_QUOTE_TTL_SECONDS = 15 * 60
 const PUBLIC_PIRATE_NAME_QUOTE_PREFIX = "pnq"
 const PUBLIC_PIRATE_NAME_REGISTRATION_PREFIX = "pnr"
 
-export type PublicPirateNamePaymentInstructions = {
+type PublicPirateNamePaymentInstructions = {
   chain: {
     chain_namespace: "eip155"
     chain_id: number
