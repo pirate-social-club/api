@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
       - "services/api/**"
       - "services/cli/**"
@@ -19,6 +20,7 @@ on:
       - main
     paths:
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
       - "services/api/**"
       - "services/cli/**"
@@ -649,4 +651,3 @@ jobs:
       - name: Show iron-proxy egress summary
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
         if: always()
-
