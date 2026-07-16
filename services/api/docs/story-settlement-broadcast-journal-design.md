@@ -173,7 +173,8 @@ The coordinator derives all identifiers. Callers cannot choose a colliding plan 
 - native value;
 - calldata bytes;
 - settlement token and amount where applicable;
-- child and parent IP IDs where applicable;
+- receiver, payer, child, and parent IP IDs where applicable; `payerIpId` is explicit even when it
+  is the zero address, so zero/non-zero payer calls cannot alias;
 - entitlement token, buyer address, and purchase reference where applicable.
 
 The hash is computed independently by the request layer and coordinator. A mismatch rejects the
@@ -190,16 +191,26 @@ no adapter may claim durability while retaining a hidden broadcast. See
 
 The initial plan kinds are:
 
-- `wip_wrap`: wrap a fixed native amount into WIP;
-- `wip_approve`: approve the exact required spender/allowance policy;
+- `wip_wrap`: unconditionally wrap the plan's full royalty amount into WIP;
+- `wip_approve`: unconditionally approve the exact plan amount to the Royalty Module;
 - `story_royalty_payment`: pay WIP on behalf of the purchase;
 - `story_parent_vault_transfer`: one step per normalized parent IP ID;
 - `story_entitlement_mint`: mint the purchase entitlement.
 
-Planning occurs inside the wallet-scoped coordinator so WIP balance and allowance reads are ordered
-with other plans for the same signer. The resulting wrap amount and approval call become immutable
-before signing. An external top-up may make a planned wrap unnecessary economically, but executing
-the already persisted wrap remains safe; changing or dropping a prepared step does not.
+V1 does not use a chain balance/allowance snapshot to omit prerequisites. Such a snapshot is stale
+as soon as another admitted plan has not yet consumed its committed WIP or allowance; pipelined plan
+N could otherwise omit calls that plan N-1 later makes necessary, converting routine concurrency
+into a terminal on-chain revert. Every plan therefore persists `wrap(amount)` and
+`approve(royaltyModule, amount)` before its payment. Wallet-scoped nonce order makes the sequence
+deterministic across plans without a committed-spend ledger. An external top-up or existing WIP may
+make the wrap economically unnecessary, but changing or dropping an admitted call is prohibited.
+
+This policy trades two predictable transactions per purchase for simpler safety. Admission must
+reserve enough native IP for every admitted wrap plus capped gas; existing WIP is not counted as a
+substitute. A plan that wraps and then terminates before payment can leave surplus WIP, which is an
+alerted reconciliation/treasury condition and never permission for a later plan to mutate its calls.
+Any future balance-aware optimization requires a separately reviewed coordinator committed-spend
+ledger and a new planning-policy version.
 
 Parent IDs are normalized, deduplicated, and sorted before step keys and ordinals are derived. The
 entitlement step depends on the royalty payment and every parent transfer. Local delivery depends on
@@ -482,11 +493,12 @@ identity, nonce, or transaction hash.
    `transferToVault` broadcasts even when `encodedTxDataOnly` is requested. No transaction was
    signed or broadcast during the spike. Fix 2 proceeds only with explicit local builders; adopting
    an upstream unsigned-plan API would require a new equivalence gate.
-2. Inventory and pin the Aeneid addresses and exact ABIs for WIP deposit, exact allowance approval,
-   royalty payment, LAP `transferToVault`, and entitlement mint. Build each transaction locally
-   without a wallet. Compare all non-prerequisite calldata against protocol ABIs and the safe SDK
-   encoder surface, then prove the high-level SDK can be removed from the broadcast boundary without
-   changing royalty or LAP behavior.
+2. **Builder gate — complete in API PR #504.** Aeneid/mainnet addresses and exact ABIs are pinned for
+   WIP deposit, exact allowance approval, royalty payment, LAP `transferToVault`, and entitlement
+   mint. Pure builders take no wallet, signer, provider, nonce, fee, or private key. Royalty calldata
+   matches the safe SDK encoder through a read-only-only transport; the remaining selectors are
+   pinned locally because SDK `transferToVault` cannot be invoked safely. V1 planning is
+   unconditional full-amount wrap plus exact full-amount approval per plan, as specified above.
 3. **Gate B — reverted policy.** Keep `reverted` terminal in v1. Any new generation is manual,
    explicitly authorized, and has a new effect and plan identity outside the reconciler.
 4. **Gate C — chain policy.** Approve finality depths and safe-tag-with-depth-fallback behavior for
