@@ -6,19 +6,15 @@ import { readWranglerVars } from "../scripts/_lib/dev-vars"
 const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
 
 describe("staging reward money-loop configuration", () => {
-  test("arms campaigns, reads, and accrual while keeping payouts and legacy accrual dark", () => {
+  test("arms the complete campaign money loop while keeping legacy accrual dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "staging")
 
-    for (const flag of [
-      "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED",
-      "REWARDS_PAYOUTS_ENABLED",
-    ]) {
-      expect(vars[flag]).toBe("false")
-    }
+    expect(vars.REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED).toBe("false")
     expect(vars).toMatchObject({
       REWARDS_READS_ENABLED: "true",
       REWARDS_CAMPAIGNS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_IDENTITY_PROVIDER: "very",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
