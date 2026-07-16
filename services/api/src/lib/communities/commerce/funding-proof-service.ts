@@ -407,6 +407,43 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
   })
 }
 
+/**
+ * Claims the exact verified Transfer log in the global control-plane registry.
+ * Production verification always returns an observation identity. Test verifiers
+ * may omit it for legacy fixtures; focused registry tests provide it explicitly.
+ */
+export async function claimVerifiedBuyerFundingReceipt(input: {
+  client: Client
+  receipt: BuyerFundingReceipt
+  fallbackSenderAddress: string
+  consumerRail: string
+  consumerId: string
+  quoteId: string
+  now: string
+}): Promise<void> {
+  const observation = input.receipt.observation
+  if (!observation) {
+    if (testBuyerFundingVerifier) return
+    throw badRequestError("Funding receipt observation identity is missing")
+  }
+  await claimCanonicalFundingReceipt({
+    client: input.client,
+    chainId: observation.chainId,
+    tokenAddress: input.receipt.tokenAddress,
+    txHash: input.receipt.txRef,
+    logIndex: observation.logIndex,
+    blockNumber: observation.blockNumber,
+    blockHash: observation.blockHash,
+    senderAddress: input.receipt.fromAddress ?? input.fallbackSenderAddress,
+    recipientAddress: input.receipt.toAddress,
+    amountAtomic: input.receipt.amountAtomic,
+    consumerRail: input.consumerRail,
+    consumerId: input.consumerId,
+    quoteId: input.quoteId,
+    now: input.now,
+  })
+}
+
 export async function confirmBuyerFundingForSettlement(input: {
   env: Env
   client: Client
@@ -459,31 +496,15 @@ export async function confirmBuyerFundingForSettlement(input: {
       buyerAddress: input.buyerAddress,
       fundingTxRef: txRef,
     })
-    // Test verifiers intentionally avoid control-plane I/O. Production receipts
-    // always include the exact matched log identity so the same transfer cannot
-    // be claimed by purchases in different community shards.
-    if (!testBuyerFundingVerifier) {
-      const observation = receipt.observation
-      if (!observation) {
-        throw badRequestError("Funding receipt observation identity is missing")
-      }
-      await claimCanonicalFundingReceipt({
-        client: getControlPlaneClient(input.env),
-        chainId: observation.chainId,
-        tokenAddress: receipt.tokenAddress,
-        txHash: receipt.txRef,
-        logIndex: observation.logIndex,
-        blockNumber: observation.blockNumber,
-        blockHash: observation.blockHash,
-        senderAddress: receipt.fromAddress ?? input.buyerAddress,
-        recipientAddress: receipt.toAddress,
-        amountAtomic: receipt.amountAtomic,
-        consumerRail: "community_purchase",
-        consumerId: `${input.communityId}:${input.purchaseId}`,
-        quoteId: input.quote.quote_id,
-        now: input.now,
-      })
-    }
+    await claimVerifiedBuyerFundingReceipt({
+      client: getControlPlaneClient(input.env),
+      receipt,
+      fallbackSenderAddress: input.buyerAddress,
+      consumerRail: "community_purchase",
+      consumerId: `${input.communityId}:${input.purchaseId}`,
+      quoteId: input.quote.quote_id,
+      now: input.now,
+    })
     await confirmPurchaseSettlementEffect({
       client: input.client,
       idempotencyKey,

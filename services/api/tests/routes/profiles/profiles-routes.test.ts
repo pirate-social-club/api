@@ -51,7 +51,7 @@ async function verifyAndImportReddit(input: {
   expect(imported.status).toBe(202)
 }
 
-function setSuccessfulPaidHandleFundingVerifier(env: Env): void {
+function setSuccessfulPaidHandleFundingVerifier(env: Env, withObservation = false): void {
   setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
     txRef: input.fundingTxRef,
     fromAddress: input.buyerAddress,
@@ -59,6 +59,14 @@ function setSuccessfulPaidHandleFundingVerifier(env: Env): void {
     tokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
     amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
     chainRef: "eip155:84532",
+    ...(withObservation ? {
+      observation: {
+        chainId: 84532,
+        logIndex: 7,
+        blockNumber: 12_345,
+        blockHash: `0x${"ab".repeat(32)}`,
+      },
+    } : {}),
   }))
 }
 
@@ -626,6 +634,70 @@ describe("profile routes", () => {
     const secondClaim = await json(secondClaimResponse) as { label: string; issuance_source: string }
     expect(secondClaim).toEqual(firstClaim)
     expect(verifierCalls).toBe(1)
+  })
+
+  test("paid global handles cannot replay a claimed funding log across quotes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwtWithWallet(ctx.env, "profile-paid-global-handle-registry-replay-user")
+    const fundingTxRef = `0x${"cd".repeat(32)}`
+    setSuccessfulPaidHandleFundingVerifier(ctx.env, true)
+
+    const firstQuoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "captain",
+    }, ctx.env, session.accessToken)
+    expect(firstQuoteResponse.status).toBe(200)
+    const firstQuote = await json(firstQuoteResponse) as { quote: string }
+
+    const firstClaimResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: firstQuote.quote,
+      settlement_wallet_attachment: session.primaryWalletAttachment,
+      funding_tx_ref: fundingTxRef,
+    }, ctx.env, session.accessToken)
+    expect(firstClaimResponse.status).toBe(200)
+
+    const secondQuoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: "sailor",
+    }, ctx.env, session.accessToken)
+    expect(secondQuoteResponse.status).toBe(200)
+    const secondQuote = await json(secondQuoteResponse) as { quote: string }
+
+    const replayResponse = await requestJson("http://pirate.test/profiles/me/global-handle/claim", "POST", {
+      quote: secondQuote.quote,
+      settlement_wallet_attachment: session.primaryWalletAttachment,
+      funding_tx_ref: fundingTxRef,
+    }, ctx.env, session.accessToken)
+    expect(replayResponse.status).toBe(409)
+    const replay = await json(replayResponse) as { code: string; message: string }
+    expect(replay.code).toBe("conflict")
+    expect(replay.message).toBe("Observed funding receipt is not claimable")
+
+    const receipt = await ctx.client.execute({
+      sql: `
+        SELECT match_status, consumer_rail, consumer_id, quote_id
+        FROM observed_funding_receipts
+        WHERE tx_hash = ?1 AND log_index = 7
+      `,
+      args: [fundingTxRef],
+    })
+    expect(receipt.rows).toHaveLength(1)
+    expect(receipt.rows[0]).toMatchObject({
+      match_status: "claimed",
+      consumer_rail: "global_handle",
+      consumer_id: firstQuote.quote.replace(/^ghq_/, ""),
+      quote_id: firstQuote.quote.replace(/^ghq_/, ""),
+    })
+
+    const secondQuoteRow = await ctx.client.execute({
+      sql: `
+        SELECT status, funding_tx_ref
+        FROM global_handle_paid_quotes
+        WHERE global_handle_paid_quote_id = ?1
+      `,
+      args: [secondQuote.quote.replace(/^ghq_/, "")],
+    })
+    expect(secondQuoteRow.rows[0]).toMatchObject({ status: "quoted", funding_tx_ref: null })
   })
 
   test("paid global handle claim returns conflict when another user claims the quoted label first", async () => {

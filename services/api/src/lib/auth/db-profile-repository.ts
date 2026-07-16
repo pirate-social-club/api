@@ -47,7 +47,10 @@ import {
   resolvePirateCheckoutSourceChainName,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../communities/commerce/checkout-config"
-import { verifyPirateCheckoutUsdcFunding } from "../communities/commerce/funding-proof-service"
+import {
+  claimVerifiedBuyerFundingReceipt,
+  verifyPirateCheckoutUsdcFunding,
+} from "../communities/commerce/funding-proof-service"
 
 export type UpdateProfileInput = {
   display_name?: string | null
@@ -794,12 +797,22 @@ export class DatabaseProfileRepository {
       throw badRequestError("funding_tx_ref is required for paid handle claims")
     }
     const priceCents = Number(rowValue(quote, "price_cents"))
-    await verifyPirateCheckoutUsdcFunding({
+    const buyerWalletAddress = String(rowValue(wallet, "wallet_address_display"))
+    const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
       env: this.env,
       quoteId,
       amountUsd: priceCents / 100,
-      buyerAddress: String(rowValue(wallet, "wallet_address_display")),
+      buyerAddress: buyerWalletAddress,
       fundingTxRef: body.funding_tx_ref,
+    })
+    await claimVerifiedBuyerFundingReceipt({
+      client: this.client,
+      receipt: fundingReceipt,
+      fallbackSenderAddress: buyerWalletAddress,
+      consumerRail: "global_handle",
+      consumerId: quoteId,
+      quoteId,
+      now: quotedAt,
     })
 
     const tx = await this.client.transaction("write")

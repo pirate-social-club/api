@@ -209,7 +209,7 @@ describe("observed funding receipts", () => {
     expect(client.execute).toHaveBeenCalledTimes(3)
   })
 
-  test("rejects a transfer already claimed by a purchase in another community", async () => {
+  test("rejects a transfer already claimed by another community and rail", async () => {
     const claimedElsewhere = row({
       finality_status: "canonical",
       match_status: "claimed",
@@ -226,9 +226,9 @@ describe("observed funding receipts", () => {
     await expect(claimCanonicalFundingReceipt({
       client,
       ...EVENT,
-      consumerRail: "community_purchase",
-      consumerId: "cmt_1:pur_1",
-      quoteId: "quo_1",
+      consumerRail: "global_handle",
+      consumerId: "ghq_1",
+      quoteId: "ghq_1",
       now: "2026-07-15T17:02:00.000Z",
     })).rejects.toThrow("Observed funding receipt is not claimable")
   })

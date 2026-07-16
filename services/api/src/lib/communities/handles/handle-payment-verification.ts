@@ -1,11 +1,17 @@
 import type { CommunityHandleClaimRequest, Env } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
 import { badRequestError, eligibilityFailed } from "../../errors"
-import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
+import { nowIso } from "../../helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
+import {
+  claimVerifiedBuyerFundingReceipt,
+  verifyPirateCheckoutUsdcFunding,
+} from "../commerce/funding-proof-service"
 
 export async function verifyPaymentForPaidHandleClaim(input: {
   env: Env
   body: CommunityHandleClaimRequest
+  communityId: string
   quoteId: string
   priceCents: number
   userWalletAttachments: Awaited<ReturnType<UserRepository["getWalletAttachmentsByUserId"]>>
@@ -27,11 +33,20 @@ export async function verifyPaymentForPaidHandleClaim(input: {
   if (!input.body.funding_tx_ref?.trim()) {
     throw badRequestError("funding_tx_ref is required for paid handle claims")
   }
-  await verifyPirateCheckoutUsdcFunding({
+  const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
     env: input.env,
     quoteId: input.quoteId,
     amountUsd: input.priceCents / 100,
     buyerAddress: wallet.wallet_address,
     fundingTxRef: input.body.funding_tx_ref,
+  })
+  await claimVerifiedBuyerFundingReceipt({
+    client: getControlPlaneClient(input.env),
+    receipt: fundingReceipt,
+    fallbackSenderAddress: wallet.wallet_address,
+    consumerRail: "community_handle",
+    consumerId: `${input.communityId}:${input.quoteId}`,
+    quoteId: input.quoteId,
+    now: nowIso(),
   })
 }

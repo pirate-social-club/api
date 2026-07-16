@@ -94,6 +94,7 @@ export async function claimCommunityHandle(input: {
     await verifyPaymentForPaidHandleClaim({
       env: input.env,
       body: input.body,
+      communityId: input.communityId,
       quoteId,
       priceCents,
       userWalletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
