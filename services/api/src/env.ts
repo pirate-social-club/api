@@ -272,6 +272,12 @@ export type Env = {
   // settlement code or any operational script that can broadcast transactions.
   STORY_COORDINATOR_SIGNER_PRIVATE_KEY?: string
   STORY_COORDINATOR_SIGNER_ADDRESS?: string
+  STORY_COORDINATOR_MAX_FEE_PER_GAS_WEI?: string
+  STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
+  STORY_COORDINATOR_GAS_LIMIT_MAX?: string
+  STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS?: string
+  STORY_COORDINATOR_FINALITY_CONFIRMATIONS?: string
+  STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK?: string
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string

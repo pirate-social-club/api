@@ -1,5 +1,5 @@
 import { Interface, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
-import type { TransactionResponse } from "ethers"
+import type { FeeData, TransactionRequest, TransactionResponse } from "ethers"
 import type { ConfigResult } from "./config-result"
 
 const DEFAULT_MAX_FEE_PER_GAS_WEI = 5_000_000_000n
@@ -136,8 +136,15 @@ export function resolveDirectTxGasPolicy(params: {
   }
 }
 
-async function resolveDirectTxFeeOverrides(params: {
-  provider: JsonRpcProvider
+export async function resolveDirectTxFeeOverrides(params: {
+  provider: {
+    estimateGas(transaction: TransactionRequest): Promise<bigint>
+    getFeeData(): Promise<FeeData | {
+      gasPrice: bigint | null
+      maxFeePerGas: bigint | null
+      maxPriorityFeePerGas: bigint | null
+    }>
+  }
   from: string
   to: string
   data: string
