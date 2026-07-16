@@ -44,6 +44,24 @@ describe("community handle safety controls", () => {
     expect((await getNamespacePolicy(executor, "cmt_1"))?.claims_enabled).toBe(false)
   })
 
+  test("policy lookup addresses a requested namespace and defaults deterministically to primary", async () => {
+    let sql = ""
+    let args: unknown[] | undefined
+    const executor = {
+      execute: async (statement: { sql: string; args?: unknown[] }) => {
+        sql = statement.sql
+        args = statement.args
+        return { rows: [] }
+      },
+    } as unknown as DbExecutor
+
+    await getNamespacePolicy(executor, "cmt_1", { namespaceVerificationId: "nv_mirror" })
+
+    expect(args).toEqual(["cmt_1", null, "nv_mirror"])
+    expect(sql).toContain("nb.namespace_verification_id = ?3")
+    expect(sql).toContain("CASE nb.namespace_role WHEN 'primary' THEN 0 ELSE 1 END")
+  })
+
   test("policy writes reject spaces_subspace issuance", () => {
     expect(() => assertWritableHandleIssuanceMode("spaces_subspace")).toThrow(
       "Protocol-issued community names are temporarily unavailable",

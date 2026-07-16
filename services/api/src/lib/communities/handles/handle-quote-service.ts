@@ -32,6 +32,7 @@ export async function quoteCommunityHandle(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   body: CommunityHandleQuoteRequest
   userRepository: UserRepository
   communityRepository: HandleCommunityRepository
@@ -43,7 +44,9 @@ export async function quoteCommunityHandle(input: {
   const desired = normalizeCommunityHandleLabel(input.body.desired_label)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
+    const policy = await getNamespacePolicy(db.client, input.communityId, {
+      namespaceVerificationId: input.namespaceVerificationId,
+    })
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }

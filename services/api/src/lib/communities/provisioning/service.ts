@@ -10,7 +10,10 @@ import type {
   CommunityProvisioningRepository,
   CommunityReadRepository,
 } from "../db-community-repository"
-import type { CommunityProvisioningMode } from "../community-repository-types"
+import type {
+  CommunityNamespaceRole,
+  CommunityProvisioningMode,
+} from "../community-repository-types"
 import { eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { withTransaction } from "../../transactions"
@@ -124,12 +127,16 @@ async function upsertLocalNamespaceAttachment(input: {
   repo: CommunityDatabaseBindingRepository
   communityId: string
   namespaceVerificationId: string
+  namespaceRole: CommunityNamespaceRole
   namespaceLabel: string
   now: string
 }): Promise<void> {
   const db = await openCommunityWriteClient(input.env, input.repo, input.communityId)
-  const namespaceId = `ns_${input.communityId}`
-  const namespaceHandlePolicyId = `nhp_${input.communityId}`
+  const namespaceKey = input.namespaceRole === "primary"
+    ? input.communityId
+    : input.namespaceVerificationId
+  const namespaceId = `ns_${namespaceKey}`
+  const namespaceHandlePolicyId = `nhp_${namespaceKey}`
 
   try {
     await withTransaction(db.client, "write", async (tx) => {
@@ -137,14 +144,15 @@ async function upsertLocalNamespaceAttachment(input: {
         sql: `
           INSERT INTO namespace_bindings (
             namespace_id, community_id, namespace_verification_id, display_label, normalized_label,
-            resolver_label, route_family, status, created_at, updated_at
+            resolver_label, route_family, status, created_at, updated_at, namespace_role
           ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6
+            ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6, ?7
           )
           ON CONFLICT(namespace_id) DO UPDATE SET
             namespace_verification_id = excluded.namespace_verification_id,
             display_label = excluded.display_label,
             normalized_label = excluded.normalized_label,
+            namespace_role = excluded.namespace_role,
             status = excluded.status,
             updated_at = excluded.updated_at
         `,
@@ -155,6 +163,7 @@ async function upsertLocalNamespaceAttachment(input: {
           input.namespaceLabel,
           input.namespaceLabel.toLowerCase(),
           input.now,
+          input.namespaceRole,
         ],
       })
 
@@ -164,7 +173,7 @@ async function upsertLocalNamespaceAttachment(input: {
             namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
             membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
           ) VALUES (
-            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, 1, ?4, ?5, ?5
+            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, ?4, ?5, ?6, ?6
           )
           ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
             namespace_id = excluded.namespace_id,
@@ -176,6 +185,7 @@ async function upsertLocalNamespaceAttachment(input: {
           namespaceHandlePolicyId,
           input.communityId,
           namespaceId,
+          input.namespaceRole === "primary" ? 1 : 0,
           JSON.stringify({
             flat_price_cents: 500,
             premium_price_cents: 2500,
@@ -525,6 +535,7 @@ export async function attachNamespaceToCommunity(input: {
   userId: string
   communityId: string
   namespaceVerificationId: string
+  namespaceRole?: CommunityNamespaceRole
   verificationRepository: VerificationRepository
   communityRepository: CommunityProvisioningServiceRepository
 }): Promise<Community> {
@@ -544,10 +555,14 @@ export async function attachNamespaceToCommunity(input: {
   }
 
   const createdAt = nowIso()
+  const namespaceRole = input.namespaceRole ?? "primary"
+  if (namespaceRole === "mirror" && !community.namespace_verification_id) {
+    throw eligibilityFailed("Community must have a primary namespace before attaching mirrors")
+  }
   let effectiveNamespaceVerification = namespaceVerification
   let attachedCommunity = community
 
-  if (community.namespace_verification_id === input.namespaceVerificationId) {
+  if (namespaceRole === "primary" && community.namespace_verification_id === input.namespaceVerificationId) {
     if (community.pending_namespace_verification_session_id) {
       await input.communityRepository.setPendingNamespaceVerificationSession({
         communityId: input.communityId,
@@ -560,7 +575,7 @@ export async function attachNamespaceToCommunity(input: {
         updated_at: createdAt,
       }
     }
-  } else if (community.namespace_verification_id) {
+  } else if (namespaceRole === "primary" && community.namespace_verification_id) {
     const existingNamespaceVerification = await input.verificationRepository.getNamespaceVerification(
       community.namespace_verification_id,
       input.userId,
@@ -584,8 +599,10 @@ export async function attachNamespaceToCommunity(input: {
   } else {
     const routeSlug = namespaceRouteSlug(namespaceVerification)
     attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
+        communityNamespaceBindingId: makeId("cnb"),
         communityId: input.communityId,
         namespaceVerificationId: input.namespaceVerificationId,
+        namespaceRole,
         routeSlug,
         updatedAt: createdAt,
       })
@@ -595,7 +612,10 @@ export async function attachNamespaceToCommunity(input: {
     env: input.env,
     repo: input.communityRepository,
     communityId: input.communityId,
-    namespaceVerificationId: attachedCommunity.namespace_verification_id ?? input.namespaceVerificationId,
+    namespaceVerificationId: namespaceRole === "mirror"
+      ? input.namespaceVerificationId
+      : attachedCommunity.namespace_verification_id ?? input.namespaceVerificationId,
+    namespaceRole,
     namespaceLabel: namespaceRouteSlug(effectiveNamespaceVerification),
     now: createdAt,
   })

@@ -86,6 +86,28 @@ export async function createCommunityProvisioningRequest(
       ],
     })
 
+    if (input.namespaceVerificationId) {
+      await tx.execute({
+        sql: `
+          INSERT INTO community_namespace_bindings (
+            community_namespace_binding_id,
+            community_id,
+            namespace_verification_id,
+            namespace_role,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (?1, ?2, ?3, 'primary', 'active', ?4, ?4)
+        `,
+        args: [
+          `cnb_${input.communityId}`,
+          input.communityId,
+          input.namespaceVerificationId,
+          input.createdAt,
+        ],
+      })
+    }
+
     await tx.execute({
       sql: `
         INSERT INTO jobs (

@@ -74,7 +74,7 @@ export async function getCommunityRowByRouteSlug(
   executor: DbExecutor,
   routeSlug: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstCommunityRow(
+  const primaryRow = await firstCommunityRow(
     executor,
     (columns) => `
       SELECT ${columns}
@@ -84,8 +84,29 @@ export async function getCommunityRowByRouteSlug(
     `,
     [routeSlug],
   )
+  if (primaryRow) {
+    return toCommunityRow(primaryRow)
+  }
 
-  return row ? toCommunityRow(row) : null
+  const mirrorRow = await firstRow(executor, {
+    sql: `
+      SELECT ${communityRowColumns("c")}
+      FROM communities c
+      JOIN community_namespace_bindings cnb
+        ON cnb.community_id = c.community_id
+       AND cnb.status = 'active'
+      JOIN namespace_verifications nv
+        ON nv.namespace_verification_id = cnb.namespace_verification_id
+      WHERE CASE
+              WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
+              ELSE nv.normalized_root_label
+            END = ?1
+      LIMIT 1
+    `,
+    args: [routeSlug],
+  })
+
+  return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
 
 export async function getCommunityRowByIdentifierCandidates(
@@ -98,7 +119,7 @@ export async function getCommunityRowByIdentifierCandidates(
   }
 
   const placeholders = normalizedCandidates.map((_, index) => `?${index + 1}`).join(", ")
-  const result = await executor.execute({
+  const primaryResult = await executor.execute({
     sql: `
       SELECT ${COMMUNITY_ROW_COLUMNS}
       FROM communities
@@ -107,17 +128,45 @@ export async function getCommunityRowByIdentifierCandidates(
     `,
     args: normalizedCandidates,
   })
-  const rows = result.rows.map((row) => toCommunityRow(row))
+  const primaryRows = primaryResult.rows.map((row) => toCommunityRow(row))
 
   for (const candidate of normalizedCandidates) {
-    const byId = rows.find((row) => row.community_id === candidate)
+    const byId = primaryRows.find((row) => row.community_id === candidate)
     if (byId) {
       return byId
     }
 
-    const byRouteSlug = rows.find((row) => row.route_slug === candidate)
+    const byRouteSlug = primaryRows.find((row) => row.route_slug === candidate)
     if (byRouteSlug) {
       return byRouteSlug
+    }
+  }
+
+  const mirrorResult = await executor.execute({
+    sql: `
+      SELECT ${communityRowColumns("c")},
+        CASE
+          WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
+          ELSE nv.normalized_root_label
+        END AS matched_namespace_route
+      FROM communities c
+      JOIN community_namespace_bindings cnb
+        ON cnb.community_id = c.community_id
+       AND cnb.status = 'active'
+      JOIN namespace_verifications nv
+        ON nv.namespace_verification_id = cnb.namespace_verification_id
+      WHERE CASE
+              WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
+              ELSE nv.normalized_root_label
+            END IN (${placeholders})
+    `,
+    args: normalizedCandidates,
+  })
+
+  for (const candidate of normalizedCandidates) {
+    const namespaceMatch = mirrorResult.rows.find((row) => row.matched_namespace_route === candidate)
+    if (namespaceMatch) {
+      return toCommunityRow(namespaceMatch)
     }
   }
 
@@ -128,7 +177,7 @@ export async function getCommunityRowByNamespaceVerificationId(
   executor: DbExecutor,
   namespaceVerificationId: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstCommunityRow(
+  const primaryRow = await firstCommunityRow(
     executor,
     (columns) => `
       SELECT ${columns}
@@ -138,8 +187,24 @@ export async function getCommunityRowByNamespaceVerificationId(
     `,
     [namespaceVerificationId],
   )
+  if (primaryRow) {
+    return toCommunityRow(primaryRow)
+  }
 
-  return row ? toCommunityRow(row) : null
+  const mirrorRow = await firstRow(executor, {
+    sql: `
+      SELECT ${communityRowColumns("c")}
+      FROM communities c
+      JOIN community_namespace_bindings cnb
+        ON cnb.community_id = c.community_id
+       AND cnb.status = 'active'
+      WHERE cnb.namespace_verification_id = ?1
+      LIMIT 1
+    `,
+    args: [namespaceVerificationId],
+  })
+
+  return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
 
 export async function listCreatedCommunityRowsByCreatorUserId(

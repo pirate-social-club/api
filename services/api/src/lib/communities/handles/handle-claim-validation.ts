@@ -111,7 +111,9 @@ export async function assertClaimQuoteStillClaimable(input: {
     throw eligibilityFailed("Handle quote has expired")
   }
 
-  const policy = await getNamespacePolicy(input.executor, input.communityId)
+  const policy = await getNamespacePolicy(input.executor, input.communityId, {
+    namespaceId: requiredString(input.quote, "namespace_id"),
+  })
   if (!policy || policy.namespace_id !== requiredString(input.quote, "namespace_id")) {
     throw eligibilityFailed("Community names are not available for this community")
   }

@@ -16,6 +16,7 @@ import type {
   JobRow,
 } from "../auth/auth-db-rows"
 import type {
+  CommunityNamespaceAttachmentRow,
   CommunityRepository,
   InitialCommunityDatabaseBinding,
 } from "./community-repository-types"
@@ -28,6 +29,7 @@ export type {
   CommunityJobReadRepository,
   CommunityMembershipProjectionRepository,
   CommunityMutationRepository,
+  CommunityNamespaceReadRepository,
   CommunityPostProjectionRepository,
   CommunityProvisioningRepository,
   CommunityReadRepository,
@@ -50,6 +52,7 @@ import {
   getPrimaryCommunityDatabaseBinding,
   getJobById,
   getLatestCommunityProvisioningJob,
+  listCommunityNamespaceAttachments,
 } from "./community-read-repository"
 import {
   upsertD1CommunityRoutingRow as upsertD1CommunityRoutingRowRaw,
@@ -139,6 +142,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
 
   async getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null> {
     return getCommunityByNamespaceVerificationId(this.client, namespaceVerificationId)
+  }
+
+  async listCommunityNamespaceAttachments(communityId: string): Promise<CommunityNamespaceAttachmentRow[]> {
+    return listCommunityNamespaceAttachments(this.client, communityId)
   }
 
   async listActiveCommunities(input?: {
@@ -354,8 +361,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   }
 
   async attachNamespaceToCommunity(input: {
+    communityNamespaceBindingId: string
     communityId: string
     namespaceVerificationId: string
+    namespaceRole: "primary" | "mirror"
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow> {

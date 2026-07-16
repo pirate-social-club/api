@@ -26,6 +26,7 @@ export async function getMyCommunityHandle(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleMeResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -34,7 +35,9 @@ export async function getMyCommunityHandle(input: {
   }
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
+    const policy = await getNamespacePolicy(db.client, input.communityId, {
+      namespaceVerificationId: input.namespaceVerificationId,
+    })
     if (!policy) {
       return { handle: null }
     }
@@ -49,6 +52,7 @@ export async function getCommunityHandleStatus(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleStatusResponse> {
   const community = await input.communityRepository.getCommunityById(input.communityId)
@@ -57,7 +61,9 @@ export async function getCommunityHandleStatus(input: {
   }
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
+    const policy = await getNamespacePolicy(db.client, input.communityId, {
+      namespaceVerificationId: input.namespaceVerificationId,
+    })
     if (!policy) {
       return {
         available: false,
@@ -107,6 +113,7 @@ export async function getCommunityHandlePolicy(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandlePolicy> {
   await requireCommunityOwner({
@@ -116,7 +123,9 @@ export async function getCommunityHandlePolicy(input: {
   })
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
+    const policy = await getNamespacePolicy(db.client, input.communityId, {
+      namespaceVerificationId: input.namespaceVerificationId,
+    })
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }
@@ -130,6 +139,7 @@ export async function listCommunityHandles(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   status?: string | null
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandleListResponse> {
@@ -140,7 +150,9 @@ export async function listCommunityHandles(input: {
   })
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    const policy = await getNamespacePolicy(db.client, input.communityId)
+    const policy = await getNamespacePolicy(db.client, input.communityId, {
+      namespaceVerificationId: input.namespaceVerificationId,
+    })
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }

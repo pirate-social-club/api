@@ -99,6 +99,7 @@ describe("public namespace routes", () => {
     }
     expect(body).toEqual({
       root_label: "xn--pokmon-dva",
+      namespace_role: "primary",
       namespace_verification: "nv_namespace_public_test",
       community: {
         id: "com_cmt_public_namespace_test",
@@ -122,6 +123,7 @@ describe("public namespace routes", () => {
     expect(body.namespaces).toEqual([
       {
         root_label: "xn--pokmon-dva",
+        namespace_role: "primary",
         namespace_verification: "nv_namespace_public_test",
         community: {
           id: "com_cmt_public_namespace_test",
@@ -130,6 +132,66 @@ describe("public namespace routes", () => {
         },
       },
     ])
+  })
+
+  test("resolves an independently verified HNS mirror to the primary community", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "pokemon" })
+    const now = "2026-05-02T00:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id, namespace_verification_id, user_id, family,
+          submitted_root_label, normalized_root_label, status, expires_at, created_at, updated_at
+        ) VALUES (
+          'nvs_public_mirror_test', 'namespace_public_mirror_test', 'usr_public_namespace_test', 'hns',
+          'charizard', 'charizard', 'verified', '2999-01-01T00:00:00.000Z', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO namespace_verifications (
+          namespace_verification_id, source_namespace_verification_session_id, user_id, family,
+          normalized_root_label, status, root_exists, root_control_verified,
+          expiry_horizon_sufficient, routing_enabled, pirate_dns_authority_verified,
+          club_attach_allowed, pirate_web_routing_allowed, pirate_subdomain_issuance_allowed,
+          accepted_at, expires_at, created_at, updated_at
+        ) VALUES (
+          'namespace_public_mirror_test', 'nvs_public_mirror_test', 'usr_public_namespace_test', 'hns',
+          'charizard', 'verified', 1, 1, 1, 1, 1, 1, 1, 1,
+          ?1, '2999-01-01T00:00:00.000Z', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO community_namespace_bindings (
+          community_namespace_binding_id, community_id, namespace_verification_id,
+          namespace_role, status, created_at, updated_at
+        ) VALUES (
+          'cnb_public_mirror_test', 'cmt_public_namespace_test',
+          'namespace_public_mirror_test', 'mirror', 'active', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+
+    const response = await app.request("http://pirate.test/public-namespaces/charizard", {}, ctx.env)
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      namespace_role: string
+      community: { id: string; route_slug: string }
+    }
+    expect(body.namespace_role).toBe("mirror")
+    expect(body.community).toEqual({
+      id: "com_cmt_public_namespace_test",
+      display_name: "Imported Root",
+      route_slug: "charizard",
+    })
   })
 
   test("does not resolve roots that are not delegated to Pirate DNS for web routing", async () => {

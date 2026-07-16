@@ -37,6 +37,19 @@ export interface CommunityJobReadRepository {
 }
 
 export type CommunityProvisioningMode = "local_dev" | "d1_native"
+export type CommunityNamespaceRole = "primary" | "mirror"
+
+export type CommunityNamespaceAttachmentRow = {
+  namespaceVerificationId: string
+  namespaceRole: CommunityNamespaceRole
+  family: "hns" | "spaces"
+  normalizedRootLabel: string
+  verificationStatus: "verified" | "stale" | "expired" | "disputed"
+}
+
+export interface CommunityNamespaceReadRepository {
+  listCommunityNamespaceAttachments(communityId: string): Promise<CommunityNamespaceAttachmentRow[]>
+}
 
 export type InitialCommunityDatabaseBinding = {
   organizationSlug: string
@@ -233,8 +246,10 @@ export interface CommunityMutationRepository {
     updatedAt: string
   }): Promise<void>
   attachNamespaceToCommunity(input: {
+    communityNamespaceBindingId: string
     communityId: string
     namespaceVerificationId: string
+    namespaceRole: CommunityNamespaceRole
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow>
@@ -254,6 +269,7 @@ export interface CommunityMutationRepository {
 export interface CommunityRepository
   extends CommunityRepositoryLifecycle,
     CommunityReadRepository,
+    CommunityNamespaceReadRepository,
     CommunityDatabaseBindingRepository,
     CommunityJobReadRepository,
     CommunityPostProjectionRepository,

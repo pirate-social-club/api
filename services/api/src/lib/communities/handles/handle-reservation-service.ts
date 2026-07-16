@@ -24,6 +24,7 @@ export async function reserveCommunityHandle(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   body: CommunityHandleReserveRequest
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandle> {
@@ -38,6 +39,7 @@ export async function reserveCommunityHandle(input: {
     return serializeHandle(await reserveCommunityHandleOnClient(db.client, {
       communityId: input.communityId,
       userId: input.userId,
+      namespaceVerificationId: input.namespaceVerificationId,
       desired,
     }))
   } finally {
@@ -54,9 +56,16 @@ export async function reserveCommunityHandle(input: {
  */
 export async function reserveCommunityHandleOnClient(
   client: Client,
-  input: { communityId: string; userId: string; desired: { labelNormalized: string; labelDisplay: string } },
+  input: {
+    communityId: string
+    userId: string
+    namespaceVerificationId?: string | null
+    desired: { labelNormalized: string; labelDisplay: string }
+  },
 ): Promise<QueryResultRow> {
-  const policy = await getNamespacePolicy(client, input.communityId)
+  const policy = await getNamespacePolicy(client, input.communityId, {
+    namespaceVerificationId: input.namespaceVerificationId,
+  })
   if (!policy) {
     throw eligibilityFailed("Community names are not available for this community")
   }

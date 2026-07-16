@@ -28,6 +28,7 @@ import {
 import {
   decodePublicNamespaceVerificationId,
   decodePublicNamespaceVerificationSessionId,
+  publicId,
 } from "../lib/public-ids"
 
 export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv>): void {
@@ -104,6 +105,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     const { verificationRepository } = getCommunityCreationRouteContext(c)
     const body = await requireJsonBody<{
       namespace_verification?: string | null
+      namespace_role?: "primary" | "mirror" | null
     }>(c, "Invalid namespace attach payload")
     const publicNamespaceVerificationId = body?.namespace_verification?.trim()
     const namespaceVerificationId = publicNamespaceVerificationId
@@ -112,16 +114,39 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     if (!namespaceVerificationId) {
       throw badRequestError("namespace_verification is required")
     }
+    const namespaceRole = body?.namespace_role ?? "primary"
+    if (namespaceRole !== "primary" && namespaceRole !== "mirror") {
+      throw badRequestError("namespace_role must be primary or mirror")
+    }
 
     const result = await attachNamespaceToCommunity({
       env: c.env,
       userId: actor.userId,
       communityId,
       namespaceVerificationId,
+      namespaceRole,
       verificationRepository,
       communityRepository,
     })
     return c.json(serializeCommunity(result), 200)
+  })
+
+  communities.get("/:communityId/namespaces", async (c) => {
+    const { communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const rows = await communityRepository.listCommunityNamespaceAttachments(communityId)
+    return c.json({
+      namespaces: rows.map((row) => ({
+        namespace_verification: publicId(
+          decodePublicNamespaceVerificationId(row.namespaceVerificationId),
+          "nv",
+        ),
+        namespace_role: row.namespaceRole,
+        family: row.family,
+        root_label: row.normalizedRootLabel,
+        route_slug: row.family === "spaces" ? `@${row.normalizedRootLabel}` : row.normalizedRootLabel,
+        verification_status: row.verificationStatus,
+      })),
+    }, 200)
   })
 
   communities.post("/:communityId/pending-namespace-session", async (c) => {

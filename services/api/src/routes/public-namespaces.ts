@@ -28,6 +28,7 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
 
   return {
     root_label: rootLabel,
+    namespace_role: row.namespace_role === "mirror" ? "mirror" : "primary",
     namespace_verification: typeof row.namespace_verification_id === "string"
       ? row.namespace_verification_id.startsWith("nv_")
         ? row.namespace_verification_id
@@ -36,7 +37,7 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
     community: {
       id: publicCommunityId(communityId),
       display_name: typeof row.display_name === "string" ? row.display_name : null,
-      route_slug: typeof row.route_slug === "string" && row.route_slug.trim()
+      route_slug: row.namespace_role !== "mirror" && typeof row.route_slug === "string" && row.route_slug.trim()
         ? row.route_slug
         : rootLabel,
     },
@@ -48,12 +49,24 @@ function publicNamespaceSelectSql(whereClause: string): string {
     SELECT
       nv.normalized_root_label,
       nv.namespace_verification_id,
+      COALESCE(cnb.namespace_role, 'primary') AS namespace_role,
       c.community_id,
       c.display_name,
       c.route_slug
     FROM namespace_verifications AS nv
     JOIN communities AS c
       ON c.namespace_verification_id = nv.namespace_verification_id
+      OR EXISTS (
+        SELECT 1
+        FROM community_namespace_bindings attached
+        WHERE attached.community_id = c.community_id
+          AND attached.namespace_verification_id = nv.namespace_verification_id
+          AND attached.status = 'active'
+      )
+    LEFT JOIN community_namespace_bindings AS cnb
+      ON cnb.community_id = c.community_id
+     AND cnb.namespace_verification_id = nv.namespace_verification_id
+     AND cnb.status = 'active'
     WHERE nv.family = 'hns'
       AND nv.status = 'verified'
       AND nv.pirate_dns_authority_verified = 1
