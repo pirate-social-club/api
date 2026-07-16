@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, getAddress } from "ethers"
+import { Contract, FetchRequest, JsonRpcProvider, getAddress } from "ethers"
 import { globalSingleton } from "../db-helpers"
 import type { Env } from "../../env"
 import type { WalletAttachmentSummary } from "../../types"
@@ -8,6 +8,7 @@ const ERC721_COLLECTION_ABI = [
   "function supportsInterface(bytes4 interfaceId) view returns (bool)",
 ] as const
 const ERC721_INTERFACE_ID = "0x80ac58cd"
+const ETHEREUM_RPC_TIMEOUT_MS = 8_000
 
 let erc721OwnershipCheckerForTests: ((input: {
   contractAddress: string
@@ -35,15 +36,17 @@ export function hasEthereumRpcConfig(env: Env): boolean {
   return String(env.ETHEREUM_RPC_URL || "").trim().length > 0
 }
 
-function getEthereumProvider(env: Env): JsonRpcProvider | null {
+export function getEthereumProvider(env: Env): JsonRpcProvider | null {
   const rpcUrl = String(env.ETHEREUM_RPC_URL || "").trim()
   if (!rpcUrl) {
     return null
   }
 
-  return globalSingleton("ethereumRpcProvider", rpcUrl, () => (
-    new JsonRpcProvider(rpcUrl, 1, { staticNetwork: true })
-  ))
+  return globalSingleton("ethereumRpcProvider", rpcUrl, () => {
+    const request = new FetchRequest(rpcUrl)
+    request.timeout = ETHEREUM_RPC_TIMEOUT_MS
+    return new JsonRpcProvider(request, 1, { staticNetwork: true })
+  })
 }
 
 export function normalizeEthereumAddress(value: unknown): string | null {

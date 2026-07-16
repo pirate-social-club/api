@@ -4,6 +4,7 @@ import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateEvaluat
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRule } from "./token-gate-evaluation"
 import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope, type VerifiedAltchaProof } from "../../verification/altcha-provider"
+import { evaluateAttachedWalletAssetBalance } from "../community-asset-balance"
 
 type AtomEvaluation = {
   outcome: GateEvaluationOutcome
@@ -262,6 +263,12 @@ async function evaluateAtom(input: {
         atom: input.atom,
         walletAttachments: input.walletAttachments,
       })
+    case "asset_balance":
+      return evaluateAssetBalanceAtom({
+        env: input.env,
+        atom: input.atom,
+        walletAttachments: input.walletAttachments,
+      })
   }
 }
 
@@ -444,6 +451,44 @@ async function evaluateTokenAtom(input: {
         contract_address: input.atom.contract_address,
         min_quantity: input.atom.min_quantity,
       },
+  }
+}
+
+async function evaluateAssetBalanceAtom(input: {
+  env: Env
+  atom: Extract<GateAtom, { type: "asset_balance" }>
+  walletAttachments: WalletAttachmentSummary[]
+}): Promise<AtomEvaluation> {
+  const result = await evaluateAttachedWalletAssetBalance({
+    env: input.env,
+    assetId: input.atom.asset_id,
+    minAmountAtomic: input.atom.min_amount_atomic,
+    walletAttachments: input.walletAttachments,
+  })
+  const current = result.currentAmountAtomic
+  const shortfall = current == null ? null : (BigInt(input.atom.min_amount_atomic) - BigInt(current)).toString()
+  return {
+    outcome: result.passed ? "passed" : result.unavailable ? "provider_unavailable" : "action_required",
+    passed: result.passed,
+    trace: {
+      kind: "gate",
+      gate_type: "asset_balance",
+      provider: "wallet",
+      passed: result.passed,
+      reason: result.passed ? undefined : result.unavailable ? "asset_balance_unavailable" : "asset_balance_required",
+      asset_id: input.atom.asset_id,
+      required_amount_atomic: input.atom.min_amount_atomic,
+      current_amount_atomic: current,
+    },
+    requiredAction: result.passed || result.unavailable || current == null || shortfall == null ? null : {
+      kind: "action",
+      provider: "wallet",
+      capability: "asset_balance",
+      asset_id: input.atom.asset_id,
+      required_amount_atomic: input.atom.min_amount_atomic,
+      current_amount_atomic: current,
+      shortfall_amount_atomic: shortfall,
+    },
   }
 }
 

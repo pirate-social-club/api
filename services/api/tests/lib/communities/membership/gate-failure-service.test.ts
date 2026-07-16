@@ -192,6 +192,34 @@ describe("throwUnsatisfiedMembershipGate", () => {
     expect(result.details.failure_reason).toBe("erc721_holding_required")
   })
 
+  test("uses asset-specific remediation for balance gates", () => {
+    const result = catchGateFailure({
+      evaluation: {
+        satisfied: false,
+        outcome: "action_required",
+        trace: { kind: "gate", gate_type: "asset_balance", provider: "wallet", passed: false, reason: "asset_balance_required" },
+        requiredActionSet: {
+          kind: "set",
+          mode: "all",
+          items: [{
+            kind: "action",
+            provider: "wallet",
+            capability: "asset_balance",
+            asset_id: "eip155:1/slip44:60",
+            required_amount_atomic: "10",
+            current_amount_atomic: "7",
+            shortfall_amount_atomic: "3",
+          }],
+        },
+      },
+      gateSummaries: [{ gate_type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }],
+      walletScoreStatus: null,
+      altchaScope: "post_create",
+    })
+
+    expect(result.message).toBe("Connect a wallet holding the required asset to post in this community")
+  })
+
   test("renders missing RPC configuration as a provider outage", () => {
     const evaluation = {
       satisfied: false,

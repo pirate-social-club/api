@@ -9,6 +9,7 @@ import {
   normalizeInventoryText,
 } from "../community-token-inventory-gates"
 import type { DocumentProofProvider, GateAtom, GateExpression, GatePolicy } from "./gate-types"
+import { isAtomicBalanceThreshold, resolveAssetBalanceDescriptor } from "./asset-balance-registry"
 
 const MAX_GATE_POLICY_DEPTH = 4
 const MAX_GATE_POLICY_ATOMS = 20
@@ -153,6 +154,20 @@ function validateGateAtom(input: unknown): GateAtom {
         chain_namespace: "eip155:1",
         contract_address: contractAddress,
         ...(atom.min_count != null ? { min_count: atom.min_count as number } : {}),
+      }
+    }
+    case "asset_balance": {
+      const asset = resolveAssetBalanceDescriptor(atom.asset_id)
+      if (!asset) {
+        throw eligibilityFailed("asset_balance gate requires a supported canonical asset_id")
+      }
+      if (!isAtomicBalanceThreshold(atom.min_amount_atomic)) {
+        throw eligibilityFailed("asset_balance gate min_amount_atomic must be a positive atomic integer string")
+      }
+      return {
+        type: "asset_balance",
+        asset_id: asset.assetId,
+        min_amount_atomic: atom.min_amount_atomic,
       }
     }
     case "erc721_inventory_match": {

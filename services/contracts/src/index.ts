@@ -1460,7 +1460,7 @@ export type GateExpression = {
 };
 
 export type GateAtom = {
-  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   provider?: "self" | "zkpassport" | "very" | "passport" | "courtyard" | "altcha" | null;
   accepted_providers?: Array<"self" | "zkpassport"> | null;
   minimum_age?: number;
@@ -1470,6 +1470,8 @@ export type GateAtom = {
   contract_address?: string;
   min_count?: number;
   min_quantity?: number;
+  asset_id?: string;
+  min_amount_atomic?: string;
   match?: Record<string, unknown>;
 };
 
@@ -2443,7 +2445,7 @@ export type LocalizedPostEmbedTranslation = {
 };
 
 export type MembershipGateSummary = {
-  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   accepted_providers?: Array<"self" | "zkpassport" | "very" | "passport"> | null;
   required_value?: string | null;
   required_values?: Array<string> | null;
@@ -2456,6 +2458,8 @@ export type MembershipGateSummary = {
   min_quantity?: number | null;
   asset_filter_label?: string | null;
   asset_category?: string | null;
+  asset_id?: string | null;
+  min_amount_atomic?: string | null;
 };
 
 export type MembershipGateExpressionSummary = (MembershipGateExpressionGate | MembershipGateExpressionGroup);
@@ -3589,7 +3593,7 @@ type GateRule = {
   community: string;
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -3600,7 +3604,7 @@ type GateRule = {
 type GateRuleInput = {
   scope: "membership" | "viewer" | "posting";
   gate_family: "token_holding" | "identity_proof";
-  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  gate_type: "unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   proof_requirements?: Array<ProofRequirement> | null;
   chain_namespace?: string | null;
   gate_config?: (Record<string, unknown>) | null;
@@ -3616,6 +3620,9 @@ type GateTraceNode = {
   required_score?: number | null;
   actual_score?: number | null;
   required_age?: number | null;
+  asset_id?: string | null;
+  required_amount_atomic?: string | null;
+  current_amount_atomic?: string | null;
   children?: Array<Record<string, unknown>>;
 };
 
@@ -3949,7 +3956,7 @@ type RequiredActionNode = {
   items?: Array<Record<string, unknown>>;
   provider?: "self" | "zkpassport" | "very" | "passport" | "wallet" | "altcha";
   accepted_providers?: Array<"self" | "zkpassport"> | null;
-  capability?: "minimum_age" | "nationality" | "gender" | "unique_human" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match";
+  capability?: "minimum_age" | "nationality" | "gender" | "unique_human" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   scope?: string;
   required_age?: number;
   allowed_countries?: Array<string>;
@@ -3959,6 +3966,10 @@ type RequiredActionNode = {
   chain_namespace?: string;
   contract_address?: string;
   min_quantity?: number;
+  asset_id?: string;
+  required_amount_atomic?: string;
+  current_amount_atomic?: string;
+  shortfall_amount_atomic?: string;
 };
 
 type RequiredActionSet = {

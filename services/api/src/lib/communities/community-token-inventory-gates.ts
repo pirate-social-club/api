@@ -139,7 +139,7 @@ export function normalizeInventoryText(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-function listAttachedEvmWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+export function listAttachedEvmWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
