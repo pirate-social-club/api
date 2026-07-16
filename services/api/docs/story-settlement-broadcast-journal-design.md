@@ -181,10 +181,12 @@ plan before nonce allocation. A repeated plan request must match every immutable
 
 ## Explicit transaction plan
 
-The high-level `payRoyaltyOnBehalf` SDK path must be replaced or extended so it returns unsigned
-transactions without broadcasting. If the SDK cannot do that, use verified contract addresses and
-ABIs to construct the calls directly. No adapter may claim durability while retaining a hidden
-broadcast.
+Gate A established that Story SDK 1.4.4 cannot return the complete unsigned transaction set:
+`payRoyaltyOnBehalf` omits conditional wrap/approval work and `transferToVault` ignores
+`encodedTxDataOnly` and broadcasts. The v1 path is therefore verified, pinned contract addresses
+and ABIs with pure local builders. The high-level SDK must not remain on the broadcast boundary, and
+no adapter may claim durability while retaining a hidden broadcast. See
+`docs/spikes/story-settlement-encoded-calldata.md` and API PR #497.
 
 The initial plan kinds are:
 
@@ -391,11 +393,11 @@ Migration deployment is fail-closed: schema and DO support land before the featu
 plan. A schema preflight must verify every target community template/version before enabling the
 flag.
 
-Until coordinator integration ships, production retains the legacy stuck-`submitted` risk. Land a
-read-only diagnostic before the coordinator PRs: list stale effects with bounded identifiers,
-transaction reference where present, receipt/transaction evidence, and signer nonce evidence. It
-must never mutate effects or rebroadcast. Its classifier should be reused by the later legacy
-disposition runbook.
+Until coordinator integration ships, production retains the legacy stuck-`submitted` risk. The
+read-only Story diagnostic landed in API PR #499; its buyer-funding extension and per-classification
+legacy-disposition runbook are tracked in API PR #502. These tools list bounded identifiers,
+transaction references, chain-specific receipt/transaction evidence, and signer nonce evidence.
+They never mutate effects or rebroadcast.
 
 ## Rollback
 
@@ -475,14 +477,16 @@ identity, nonce, or transaction hash.
 
 ## Decision gates before implementation
 
-1. **Gate A — unsigned-call feasibility spike.** On Aeneid, use the existing
-   `spike-story-royalty-distribution.spike.json` fixtures to compare local calldata with the Story
-   SDK's non-broadcast `txOptions.encodedTxDataOnly` output for WIP wrap, approval, royalty payment,
-   parent transfer, and entitlement mint. The spike must prove that every conditional or hidden SDK
-   subtransaction is exposed. Any hidden wrap/approval or incomplete encoded output fails the gate;
-   no broadcast is permitted during the spike.
-2. Prove the high-level SDK can be removed from the broadcast boundary without changing royalty or
-   LAP behavior.
+1. **Gate A — decided: SDK shortcut rejected.** Static inspection of pinned Story SDK 1.4.4 proved
+   that `payRoyaltyOnBehalf` returns before conditional WIP wrap/approval planning and
+   `transferToVault` broadcasts even when `encodedTxDataOnly` is requested. No transaction was
+   signed or broadcast during the spike. Fix 2 proceeds only with explicit local builders; adopting
+   an upstream unsigned-plan API would require a new equivalence gate.
+2. Inventory and pin the Aeneid addresses and exact ABIs for WIP deposit, exact allowance approval,
+   royalty payment, LAP `transferToVault`, and entitlement mint. Build each transaction locally
+   without a wallet. Compare all non-prerequisite calldata against protocol ABIs and the safe SDK
+   encoder surface, then prove the high-level SDK can be removed from the broadcast boundary without
+   changing royalty or LAP behavior.
 3. **Gate B — reverted policy.** Keep `reverted` terminal in v1. Any new generation is manual,
    explicitly authorized, and has a new effect and plan identity outside the reconciler.
 4. **Gate C — chain policy.** Approve finality depths and safe-tag-with-depth-fallback behavior for
