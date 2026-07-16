@@ -3435,10 +3435,14 @@ describe("song artifact locked routes", () => {
       })
       expect(failedSummary).toMatchObject({
         checked: 1,
-        finalized: 0,
-        failed: 1,
+        // The quote was already consumed by the successful settlement above.
+        // A synthetic post-consumption effect mutation cannot roll back the
+        // entitlement; reconciliation converges the attempt to finalized.
+        finalized: 1,
+        failed: 0,
         stillPending: 0,
         errors: 0,
+        stalledCommunityIds: [],
       })
     } finally {
       failedCommunityRepository.close?.()
