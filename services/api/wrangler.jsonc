@@ -30,6 +30,11 @@
       "name": "REWARD_OFFER_RATE_LIMITER",
       "namespace_id": "1002",
       "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      "name": "COMMENT_CREATE_RATE_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 20, "period": 60 }
     }
   ],
   "send_email": [
@@ -147,6 +152,11 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "COMMENT_CREATE_RATE_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -298,6 +308,11 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "COMMENT_CREATE_RATE_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -477,6 +492,11 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
+        },
+        {
+          "name": "COMMENT_CREATE_RATE_LIMITER",
+          "namespace_id": "1003",
+          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {

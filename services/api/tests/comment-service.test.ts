@@ -27,6 +27,125 @@ afterEach(async () => {
 })
 
 describe("comment-service", () => {
+  test("allows authenticated non-members on public threads without changing membership", async () => {
+    const rootDir = await createCommentServiceRoot("pirate-comment-service-public-nonmember-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_public_nonmember"
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const users = buildUserRepository({
+      usr_owner: buildVerifiedUser("usr_owner"),
+      usr_outsider: buildVerifiedUser("usr_outsider"),
+    })
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+
+    const comment = await createComment({
+      env,
+      userId: "usr_outsider",
+      communityId,
+      threadRootPostId: postId,
+      body: { body: "Public conversation" },
+      userRepository: users,
+      communityRepository: repo,
+    })
+
+    expect(comment.body).toBe("Public conversation")
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const memberships = await db.client.execute({
+        sql: "SELECT status FROM community_memberships WHERE community_id = ?1 AND user_id = ?2",
+        args: [communityId, "usr_outsider"],
+      })
+      expect(memberships.rows).toHaveLength(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  test("rejects banned users on public threads before visibility authorization", async () => {
+    const rootDir = await createCommentServiceRoot("pirate-comment-service-banned-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_banned_public"
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const users = buildUserRepository({
+      usr_owner: buildVerifiedUser("usr_owner"),
+      usr_banned: buildVerifiedUser("usr_banned"),
+    })
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const now = new Date().toISOString()
+      await db.client.execute({
+        sql: `
+          INSERT INTO community_memberships (
+            membership_id, community_id, user_id, status, joined_at, left_at, banned_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, 'banned', NULL, NULL, ?4, ?4, ?4)
+        `,
+        args: ["mbr_banned", communityId, "usr_banned", now],
+      })
+    } finally {
+      db.close()
+    }
+
+    await expect(createComment({
+      env,
+      userId: "usr_banned",
+      communityId,
+      threadRootPostId: postId,
+      body: { body: "Should not publish" },
+      userRepository: users,
+      communityRepository: repo,
+    })).rejects.toMatchObject({ code: "banned", status: 403 })
+  })
+
+  test("requires membership on members-only threads with a structured error", async () => {
+    const rootDir = await createCommentServiceRoot("pirate-comment-service-members-only-")
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_members_only"
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const users = buildUserRepository({
+      usr_owner: buildVerifiedUser("usr_owner"),
+      usr_outsider: buildVerifiedUser("usr_outsider"),
+    })
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner"],
+    })
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      await db.client.execute({
+        sql: "UPDATE posts SET visibility = 'members_only' WHERE post_id = ?1",
+        args: [postId],
+      })
+    } finally {
+      db.close()
+    }
+
+    await expect(createComment({
+      env,
+      userId: "usr_outsider",
+      communityId,
+      threadRootPostId: postId,
+      body: { body: "Should require joining" },
+      userRepository: users,
+      communityRepository: repo,
+    })).rejects.toMatchObject({ code: "membership_required", status: 403 })
+  })
+
   test("creates top-level comments and replies atomically with closure rows, counters, and jobs", async () => {
     const rootDir = await createCommentServiceRoot("pirate-comment-service-")
 

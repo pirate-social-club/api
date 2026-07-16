@@ -22,7 +22,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../communities/db-community-repository"
-import { badRequestError, commentMediaRejected, eligibilityFailed, internalError, notFoundError } from "../errors"
+import { badRequestError, banned, commentMediaRejected, commentsLocked, eligibilityFailed, gateUnsatisfied, HttpError, internalError, membershipRequired, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { authorizeAgentWrite } from "../agents/agent-write-authorization"
@@ -251,18 +251,40 @@ export async function createComment(input: {
   try {
     let membership: CommunityMembershipRow | null = null
     if (!input.bypassAuthorAccessChecks) {
-      membership = await requireMemberAccess(db.client, input.communityId, input.userId)
-      await enforceCommunityActionGate({
-        env: input.env,
-        client: db.client,
-        userId: input.userId,
-        userRepository: input.userRepository,
-        communityId: input.communityId,
-        altchaScope: "comment_create",
-        altchaProof: input.altchaProof,
-        verifiedAltchaProof,
-      })
+      membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+      if (membership.membership_status === "banned") {
+        throw banned("You are banned from this community")
+      }
     }
+
+    const threadRootPost = await getPostById(db.client, input.threadRootPostId)
+    if (!threadRootPost || threadRootPost.community_id !== input.communityId || threadRootPost.status !== "published") {
+      throw notFoundError("Post not found")
+    }
+
+    if (!input.bypassAuthorAccessChecks) {
+      if (threadRootPost.visibility === "members_only" && (!membership || !canAccessCommunity(membership))) {
+        throw membershipRequired("Join this community to comment on this members-only thread")
+      }
+      try {
+        await enforceCommunityActionGate({
+          env: input.env,
+          client: db.client,
+          userId: input.userId,
+          userRepository: input.userRepository,
+          communityId: input.communityId,
+          altchaScope: "comment_create",
+          altchaProof: input.altchaProof,
+          verifiedAltchaProof,
+        })
+      } catch (error) {
+        if (error instanceof HttpError && error.code === "gate_failed") {
+          throw gateUnsatisfied(error.message, error.details)
+        }
+        throw error
+      }
+    }
+
     const canBypassLocks = input.bypassAuthorAccessChecks === true
       || (membership != null && hasCommunityRole(membership, ANY_COMMUNITY_ROLE))
 
@@ -279,12 +301,8 @@ export async function createComment(input: {
       return existing
     }
 
-    const threadRootPost = await getPostById(db.client, input.threadRootPostId)
-    if (!threadRootPost || threadRootPost.community_id !== input.communityId || threadRootPost.status !== "published") {
-      throw notFoundError("Post not found")
-    }
     if (!input.parentCommentId && threadRootPost.comments_locked && !canBypassLocks) {
-      throw eligibilityFailed("Comments are locked for this post")
+      throw commentsLocked("Comments are locked for this post")
     }
 
     const policy = await getCommunityCommentPolicy(db.client, input.communityId)
@@ -318,7 +336,7 @@ export async function createComment(input: {
       throw eligibilityFailed("Replies are not allowed on removed or deleted comments")
     }
     if (parentComment && parentComment.replies_locked && !canBypassLocks) {
-      throw eligibilityFailed("Replies are locked for this comment")
+      throw commentsLocked("Replies are locked for this comment")
     }
 
     const agentWriteAuthorization = await authorizeAgentWrite({

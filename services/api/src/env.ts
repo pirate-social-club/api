@@ -250,6 +250,7 @@ export type Env = {
   // Cloudflare native rate limiter (configured under `ratelimits` in wrangler).
   LINK_PREVIEW_RATE_LIMITER?: RateLimiterBinding
   REWARD_OFFER_RATE_LIMITER?: RateLimiterBinding
+  COMMENT_CREATE_RATE_LIMITER?: RateLimiterBinding
   KARAOKE_GATEWAY_SIGNING_KEY?: string
   ELEVENLABS_STT_MODEL?: string
   ELEVENLABS_STT_WEBSOCKET_URL?: string

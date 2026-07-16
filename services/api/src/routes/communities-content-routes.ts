@@ -420,6 +420,14 @@ export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEn
 
   communities.post("/:communityId/posts/:postId/comments", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
+    if (actor.authType !== "admin") {
+      await enforceRateLimit(
+        c.env.COMMENT_CREATE_RATE_LIMITER,
+        `comment-create:${actor.userId}`,
+        "Comment rate limit exceeded",
+        { scope: "comment_create" },
+      )
+    }
     const postId = decodePublicPostId(c.req.param("postId"))
     const body = await requireJsonBody<CreateCommentRequest>(c, "Invalid comment create payload")
     if (actor.authType !== "admin") {
