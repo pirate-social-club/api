@@ -2970,12 +2970,12 @@ describe("song artifact locked routes", () => {
       })
       expect(failedVaultTransferSummary).toMatchObject({
         checked: 1,
-        finalized: 1,
+        finalized: 0,
         failed: 0,
-        stillPending: 0,
+        stillPending: 1,
         errors: 0,
       })
-      expect(parentRoyaltyVaultTransferCalls).toHaveLength(2)
+      expect(parentRoyaltyVaultTransferCalls).toHaveLength(1)
     } finally {
       failedCommunityRepository.close?.()
     }

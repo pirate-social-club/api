@@ -490,99 +490,6 @@ function settlementFailureDisposition(error: unknown): {
   }
 }
 
-async function retryFailedPrebroadcastParentVaultTransfers(input: {
-  env: Env
-  client: Client
-  communityId: string
-  quote: PurchaseQuoteRow
-  purchaseId: string
-  asset: AssetRow
-  effects: PurchaseSettlementEffectRow[]
-  now: string
-}): Promise<PurchaseSettlementEffectRow[]> {
-  let retried = false
-  const storyPayoutAmount = resolveAllocationSettlementAmountAtomic({
-    allocations: assertExecutableQuoteAllocationSnapshot(
-      parseQuoteAllocationSnapshot(input.quote.allocation_snapshot_json),
-    ),
-    settlementStrategy: "story_payout",
-  })
-  for (const parentIpId of getStoryDerivativeParentIpIds(input.asset)) {
-    const effectKey = `${input.asset.asset_id}:${parentIpId}`
-    const failedEffect = input.effects.find((effect) =>
-      effect.effect_kind === "story_parent_royalty_vault_transfer"
-      && effect.effect_key === effectKey
-      && effect.status === "failed"
-      && effect.failure_disposition === "failed_prebroadcast"
-    )
-    if (!failedEffect) continue
-    retried = true
-
-    const effect = await beginPurchaseSettlementEffectAttempt({
-      client: input.client,
-      communityId: input.communityId,
-      quoteId: input.quote.quote_id,
-      purchaseId: input.purchaseId,
-      effectKind: "story_parent_royalty_vault_transfer",
-      effectKey,
-      idempotencyKey: failedEffect.idempotency_key,
-      now: input.now,
-    })
-    if (effect.status === "confirmed") continue
-    try {
-      const transfer = await transferStoryRoyaltyToParentVault({
-        env: input.env,
-        childIpId: input.asset.story_ip_id ?? "",
-        parentIpId,
-        royaltyPolicy: input.asset.story_royalty_policy,
-      })
-      await confirmPurchaseSettlementEffect({
-        client: input.client,
-        idempotencyKey: failedEffect.idempotency_key,
-        settlementRef: transfer.transferTxHash,
-        providerReceiptRef: transfer.transferTxHash,
-        metadataJson: JSON.stringify({
-          amount_wip_wei: storyPayoutAmount.toString(),
-          asset: input.asset.asset_id,
-          child_story_ip_id: input.asset.story_ip_id,
-          parent_story_ip_id: parentIpId,
-          story_royalty_policy: input.asset.story_royalty_policy,
-          title: input.asset.display_title,
-        }),
-        now: input.now,
-      })
-    } catch (error) {
-      const failure = settlementFailureDisposition(error)
-      await failPurchaseSettlementEffect({
-        client: input.client,
-        idempotencyKey: failedEffect.idempotency_key,
-        failureReason: error instanceof Error ? error.message : String(error),
-        disposition: failure.disposition,
-        broadcastTxRef: failure.broadcastTxRef,
-        now: input.now,
-      })
-    }
-  }
-  if (retried) {
-    await input.client.execute({
-      sql: `
-        UPDATE purchase_settlement_attempts
-        SET updated_at = ?3
-        WHERE community_id = ?1
-          AND quote_id = ?2
-          AND status = 'attempting'
-      `,
-      args: [input.communityId, input.quote.quote_id, input.now],
-    })
-  }
-  return listPurchaseSettlementEffectsByQuote({
-    client: input.client,
-    communityId: input.communityId,
-    quoteId: input.quote.quote_id,
-    purchaseId: input.purchaseId,
-  })
-}
-
 async function getExistingPurchaseSettlement(input: {
   client: DbExecutor
   communityId: string
@@ -734,16 +641,7 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
         quoteId: quote.quote_id,
         purchaseId: input.attempt.purchase_id,
       })
-    } else effects = await retryFailedPrebroadcastParentVaultTransfers({
-      env: input.env,
-      client: input.client,
-      communityId: input.communityId,
-      quote,
-      purchaseId: input.attempt.purchase_id,
-      asset,
-      effects,
-      now: input.now,
-    })
+    }
     if (effects.some((effect) => effect.status === "submitted" || effect.status === "failed")) {
       return "pending"
     }
@@ -1078,75 +976,20 @@ async function settleCommunityPurchaseForBuyer(input: {
           royaltyEarningEvents: [],
         }
       }
-      const storyPaymentIdempotencyKey = `${quote.quote_id}:story_royalty:${asset.story_ip_id}:${storyPayoutAmount.toString()}`
-      const storyPaymentMetadata = JSON.stringify({
-        amount_wip_wei: storyPayoutAmount.toString(),
-        buyer_wallet_address: assetBuyerWalletAddress,
-        asset: asset.asset_id,
-        story_ip_id: asset.story_ip_id,
-        creator_user_id: asset.creator_user_id,
-        title: asset.display_title,
-      })
-      const storyPaymentEffect = await beginPurchaseSettlementEffectAttempt({
-        client: db.client,
-        communityId: input.communityId,
-        quoteId: quote.quote_id,
-        purchaseId,
-        effectKind: "story_royalty_payment",
-        effectKey: asset.asset_id,
-        idempotencyKey: storyPaymentIdempotencyKey,
-        now: createdAt,
-      })
-      let entitlementHandledByRoyaltyExecutor = false
-      let entitlementTxHash: string | null = null
-      let royaltyTxHash: string | null = null
-      if (storyPaymentEffect.status === "confirmed") {
-        const settlementRef = storyPaymentEffect.settlement_ref?.trim()
-        if (!settlementRef) {
-          throw badRequestError("Story royalty settlement reference is missing")
+      if (coordinated.kind === "confirmed") {
+        const coordinatedEffects = await listPurchaseSettlementEffectsByQuote({
+          client: db.client,
+          communityId: input.communityId,
+          quoteId: quote.quote_id,
+          purchaseId,
+        })
+        const storyRoyaltyEffect = getConfirmedEffect(coordinatedEffects, "story_royalty_payment")
+        const settlementRef = storyRoyaltyEffect?.settlement_ref?.trim()
+        if (!storyRoyaltyEffect || !settlementRef) {
+          throw badRequestError("Confirmed Story coordinator plan is missing its royalty settlement reference")
         }
         canonicalSettlementTxRef = settlementRef
-        royaltyTxHash = storyPaymentEffect.provider_receipt_ref?.trim() || settlementRef
-      } else {
-        try {
-          const storySettlement = await payStoryRoyaltyOnBehalfForPurchase({
-            env: input.env,
-            purchaseRef,
-            buyerAddress: assetBuyerWalletAddress,
-            receiverIpId: asset.story_ip_id,
-            payerIpId: null,
-            entitlementTokenId: asset.access_mode === "locked"
-              ? BigInt(asset.story_entitlement_token_id!)
-              : null,
-            amount: storyPayoutAmount,
-          })
-          canonicalSettlementTxRef = storySettlement.settlementTxHash
-          royaltyTxHash = storySettlement.royaltyTxHash
-          entitlementHandledByRoyaltyExecutor = storySettlement.entitlementHandled
-          entitlementTxHash = storySettlement.entitlementTxHash
-          await confirmPurchaseSettlementEffect({
-            client: db.client,
-            idempotencyKey: storyPaymentIdempotencyKey,
-            settlementRef: storySettlement.settlementTxHash,
-            providerReceiptRef: storySettlement.royaltyTxHash,
-            taxReceiptRef: null,
-            metadataJson: storyPaymentMetadata,
-            now: createdAt,
-          })
-        } catch (error) {
-          const failure = settlementFailureDisposition(error)
-          await failPurchaseSettlementEffect({
-            client: db.client,
-            idempotencyKey: storyPaymentIdempotencyKey,
-            failureReason: error instanceof Error ? error.message : String(error),
-            disposition: failure.disposition,
-            broadcastTxRef: failure.broadcastTxRef,
-            now: createdAt,
-          })
-          throw error
-        }
-      }
-      if (royaltyTxHash) {
+        const royaltyTxHash = storyRoyaltyEffect.provider_receipt_ref?.trim() || settlementRef
         royaltyEarningEvents.push({
           recipientUserId: asset.creator_user_id,
           communityId: input.communityId,
@@ -1158,54 +1001,191 @@ async function settleCommunityPurchaseForBuyer(input: {
           purchaseId,
           title: asset.display_title,
         })
-      }
-      const parentIpIds = parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
-        .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
-      if (parentIpIds.length > 0) {
-        for (const parentIpId of parentIpIds) {
-          const normalizedParentIpId = parentIpId.trim()
-          const transferEffectKey = `${asset.asset_id}:${normalizedParentIpId}`
-          const transferIdempotencyKey = `${quote.quote_id}:story_parent_royalty_vault:${asset.story_ip_id}:${normalizedParentIpId}:${storyPayoutAmount.toString()}`
-          const transferMetadata = JSON.stringify({
-            amount_wip_wei: storyPayoutAmount.toString(),
-            asset: asset.asset_id,
-            child_story_ip_id: asset.story_ip_id,
-            parent_story_ip_id: normalizedParentIpId,
-            story_royalty_policy: asset.story_royalty_policy,
+        for (const parentIpId of getStoryDerivativeParentIpIds(asset)) {
+          if (!hasConfirmedParentRoyaltyVaultTransfer({
+            effects: coordinatedEffects,
+            asset,
+            parentIpId,
+          })) {
+            throw badRequestError("Confirmed Story coordinator plan is missing a parent royalty transfer")
+          }
+        }
+        if (asset.access_mode === "locked" && !getConfirmedEffect(coordinatedEffects, "story_entitlement_mint")) {
+          throw badRequestError("Confirmed Story coordinator plan is missing its entitlement mint")
+        }
+      } else {
+        const storyPaymentIdempotencyKey = `${quote.quote_id}:story_royalty:${asset.story_ip_id}:${storyPayoutAmount.toString()}`
+        const storyPaymentMetadata = JSON.stringify({
+          amount_wip_wei: storyPayoutAmount.toString(),
+          buyer_wallet_address: assetBuyerWalletAddress,
+          asset: asset.asset_id,
+          story_ip_id: asset.story_ip_id,
+          creator_user_id: asset.creator_user_id,
+          title: asset.display_title,
+        })
+        const storyPaymentEffect = await beginPurchaseSettlementEffectAttempt({
+          client: db.client,
+          communityId: input.communityId,
+          quoteId: quote.quote_id,
+          purchaseId,
+          effectKind: "story_royalty_payment",
+          effectKey: asset.asset_id,
+          idempotencyKey: storyPaymentIdempotencyKey,
+          now: createdAt,
+        })
+        let entitlementHandledByRoyaltyExecutor = false
+        let entitlementTxHash: string | null = null
+        let royaltyTxHash: string | null = null
+        if (storyPaymentEffect.status === "confirmed") {
+          const settlementRef = storyPaymentEffect.settlement_ref?.trim()
+          if (!settlementRef) {
+            throw badRequestError("Story royalty settlement reference is missing")
+          }
+          canonicalSettlementTxRef = settlementRef
+          royaltyTxHash = storyPaymentEffect.provider_receipt_ref?.trim() || settlementRef
+        } else {
+          try {
+            const storySettlement = await payStoryRoyaltyOnBehalfForPurchase({
+              env: input.env,
+              purchaseRef,
+              buyerAddress: assetBuyerWalletAddress,
+              receiverIpId: asset.story_ip_id,
+              payerIpId: null,
+              entitlementTokenId: asset.access_mode === "locked"
+                ? BigInt(asset.story_entitlement_token_id!)
+                : null,
+              amount: storyPayoutAmount,
+            })
+            canonicalSettlementTxRef = storySettlement.settlementTxHash
+            royaltyTxHash = storySettlement.royaltyTxHash
+            entitlementHandledByRoyaltyExecutor = storySettlement.entitlementHandled
+            entitlementTxHash = storySettlement.entitlementTxHash
+            await confirmPurchaseSettlementEffect({
+              client: db.client,
+              idempotencyKey: storyPaymentIdempotencyKey,
+              settlementRef: storySettlement.settlementTxHash,
+              providerReceiptRef: storySettlement.royaltyTxHash,
+              taxReceiptRef: null,
+              metadataJson: storyPaymentMetadata,
+              now: createdAt,
+            })
+          } catch (error) {
+            const failure = settlementFailureDisposition(error)
+            await failPurchaseSettlementEffect({
+              client: db.client,
+              idempotencyKey: storyPaymentIdempotencyKey,
+              failureReason: error instanceof Error ? error.message : String(error),
+              disposition: failure.disposition,
+              broadcastTxRef: failure.broadcastTxRef,
+              now: createdAt,
+            })
+            throw error
+          }
+        }
+        if (royaltyTxHash) {
+          royaltyEarningEvents.push({
+            recipientUserId: asset.creator_user_id,
+            communityId: input.communityId,
+            assetId: asset.asset_id,
+            storyIpId: asset.story_ip_id,
+            amountWipWei: storyPayoutAmount.toString(),
+            buyerWalletAddress: assetBuyerWalletAddress,
+            txHash: royaltyTxHash,
+            purchaseId,
             title: asset.display_title,
           })
-          const transferEffect = await beginPurchaseSettlementEffectAttempt({
+        }
+        const parentIpIds = parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
+          .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
+        if (parentIpIds.length > 0) {
+          for (const parentIpId of parentIpIds) {
+            const normalizedParentIpId = parentIpId.trim()
+            const transferEffectKey = `${asset.asset_id}:${normalizedParentIpId}`
+            const transferIdempotencyKey = `${quote.quote_id}:story_parent_royalty_vault:${asset.story_ip_id}:${normalizedParentIpId}:${storyPayoutAmount.toString()}`
+            const transferMetadata = JSON.stringify({
+              amount_wip_wei: storyPayoutAmount.toString(),
+              asset: asset.asset_id,
+              child_story_ip_id: asset.story_ip_id,
+              parent_story_ip_id: normalizedParentIpId,
+              story_royalty_policy: asset.story_royalty_policy,
+              title: asset.display_title,
+            })
+            const transferEffect = await beginPurchaseSettlementEffectAttempt({
+              client: db.client,
+              communityId: input.communityId,
+              quoteId: quote.quote_id,
+              purchaseId,
+              effectKind: "story_parent_royalty_vault_transfer",
+              effectKey: transferEffectKey,
+              idempotencyKey: transferIdempotencyKey,
+              now: createdAt,
+            })
+            if (transferEffect.status !== "confirmed") {
+              try {
+                const transfer = await transferStoryRoyaltyToParentVault({
+                  env: input.env,
+                  childIpId: asset.story_ip_id,
+                  parentIpId: normalizedParentIpId,
+                  royaltyPolicy: asset.story_royalty_policy,
+                })
+                await confirmPurchaseSettlementEffect({
+                  client: db.client,
+                  idempotencyKey: transferIdempotencyKey,
+                  settlementRef: transfer.transferTxHash,
+                  providerReceiptRef: transfer.transferTxHash,
+                  taxReceiptRef: null,
+                  metadataJson: transferMetadata,
+                  now: createdAt,
+                })
+              } catch (error) {
+                const failure = settlementFailureDisposition(error)
+                await failPurchaseSettlementEffect({
+                  client: db.client,
+                  idempotencyKey: transferIdempotencyKey,
+                  failureReason: error instanceof Error ? error.message : String(error),
+                  disposition: failure.disposition,
+                  broadcastTxRef: failure.broadcastTxRef,
+                  now: createdAt,
+                })
+                throw error
+              }
+            }
+          }
+        }
+        if (asset.access_mode === "locked") {
+          const entitlementEffectKey = `${asset.asset_id}:${asset.story_entitlement_token_id}:${assetBuyerWalletAddress.toLowerCase()}`
+          const entitlementIdempotencyKey = `${quote.quote_id}:story_entitlement:${entitlementEffectKey}`
+          const entitlementEffect = await beginPurchaseSettlementEffectAttempt({
             client: db.client,
             communityId: input.communityId,
             quoteId: quote.quote_id,
             purchaseId,
-            effectKind: "story_parent_royalty_vault_transfer",
-            effectKey: transferEffectKey,
-            idempotencyKey: transferIdempotencyKey,
+            effectKind: "story_entitlement_mint",
+            effectKey: entitlementEffectKey,
+            idempotencyKey: entitlementIdempotencyKey,
             now: createdAt,
           })
-          if (transferEffect.status !== "confirmed") {
+          if (entitlementEffect.status !== "confirmed") {
             try {
-              const transfer = await transferStoryRoyaltyToParentVault({
-                env: input.env,
-                childIpId: asset.story_ip_id,
-                parentIpId: normalizedParentIpId,
-                royaltyPolicy: asset.story_royalty_policy,
-              })
+              const confirmedEntitlementTxHash = entitlementHandledByRoyaltyExecutor
+                ? entitlementTxHash ?? canonicalSettlementTxRef
+                : await mintStoryRoyaltyPurchaseEntitlement({
+                  env: input.env,
+                  purchaseRef,
+                  buyerAddress: assetBuyerWalletAddress,
+                  entitlementTokenId: BigInt(asset.story_entitlement_token_id!),
+                })
               await confirmPurchaseSettlementEffect({
                 client: db.client,
-                idempotencyKey: transferIdempotencyKey,
-                settlementRef: transfer.transferTxHash,
-                providerReceiptRef: transfer.transferTxHash,
-                taxReceiptRef: null,
-                metadataJson: transferMetadata,
+                idempotencyKey: entitlementIdempotencyKey,
+                settlementRef: confirmedEntitlementTxHash,
                 now: createdAt,
               })
             } catch (error) {
               const failure = settlementFailureDisposition(error)
               await failPurchaseSettlementEffect({
                 client: db.client,
-                idempotencyKey: transferIdempotencyKey,
+                idempotencyKey: entitlementIdempotencyKey,
                 failureReason: error instanceof Error ? error.message : String(error),
                 disposition: failure.disposition,
                 broadcastTxRef: failure.broadcastTxRef,
@@ -1213,49 +1193,6 @@ async function settleCommunityPurchaseForBuyer(input: {
               })
               throw error
             }
-          }
-        }
-      }
-      if (asset.access_mode === "locked") {
-        const entitlementEffectKey = `${asset.asset_id}:${asset.story_entitlement_token_id}:${assetBuyerWalletAddress.toLowerCase()}`
-        const entitlementIdempotencyKey = `${quote.quote_id}:story_entitlement:${entitlementEffectKey}`
-        const entitlementEffect = await beginPurchaseSettlementEffectAttempt({
-          client: db.client,
-          communityId: input.communityId,
-          quoteId: quote.quote_id,
-          purchaseId,
-          effectKind: "story_entitlement_mint",
-          effectKey: entitlementEffectKey,
-          idempotencyKey: entitlementIdempotencyKey,
-          now: createdAt,
-        })
-        if (entitlementEffect.status !== "confirmed") {
-          try {
-            const confirmedEntitlementTxHash = entitlementHandledByRoyaltyExecutor
-              ? entitlementTxHash ?? canonicalSettlementTxRef
-              : await mintStoryRoyaltyPurchaseEntitlement({
-                env: input.env,
-                purchaseRef,
-                buyerAddress: assetBuyerWalletAddress,
-                entitlementTokenId: BigInt(asset.story_entitlement_token_id!),
-              })
-            await confirmPurchaseSettlementEffect({
-              client: db.client,
-              idempotencyKey: entitlementIdempotencyKey,
-              settlementRef: confirmedEntitlementTxHash,
-              now: createdAt,
-            })
-          } catch (error) {
-            const failure = settlementFailureDisposition(error)
-            await failPurchaseSettlementEffect({
-              client: db.client,
-              idempotencyKey: entitlementIdempotencyKey,
-              failureReason: error instanceof Error ? error.message : String(error),
-              disposition: failure.disposition,
-              broadcastTxRef: failure.broadcastTxRef,
-              now: createdAt,
-            })
-            throw error
           }
         }
       }
