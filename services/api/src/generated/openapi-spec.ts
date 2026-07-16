@@ -8366,6 +8366,7 @@ const spec = {
               "auth_error",
               "payment_required",
               "verification_required",
+              "membership_required",
               "eligibility_failed",
               "gate_failed",
               "posting_trust_tier_too_low",

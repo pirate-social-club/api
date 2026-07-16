@@ -1085,7 +1085,7 @@ membership_mode: "request",
     )
     expect(deniedVote.status).toBe(403)
     expect(await json(deniedVote)).toMatchObject({
-      code: "eligibility_failed",
+      code: "membership_required",
       message: "Join this community to vote",
       details: { reason: "membership_required" },
     })

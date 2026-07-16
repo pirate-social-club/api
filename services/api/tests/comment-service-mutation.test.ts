@@ -79,6 +79,57 @@ describe("comment-service mutation", () => {
     }
   })
 
+  test("reports non-member comment votes with the canonical membership_required code", async () => {
+    const rootDir = await createCommentServiceRoot("pirate-comment-vote-nonmember-")
+
+    const databasePath = join(rootDir, "community.db")
+    const communityId = "cmt_comment_vote_nonmember"
+    const env: Env = { ENVIRONMENT: "test", LOCAL_COMMUNITY_DB_ROOT: rootDir }
+    const repo = buildCommunityRepository(databasePath, communityId)
+    const users = buildUserRepository({
+      usr_owner: buildVerifiedUser("usr_owner"),
+      usr_alice: buildVerifiedUser("usr_alice"),
+      usr_outsider: buildVerifiedUser("usr_outsider"),
+    })
+    const { postId } = await seedCommunityState({
+      env,
+      repo,
+      communityId,
+      memberUserIds: ["usr_owner", "usr_alice"],
+    })
+    const comment = await createComment({
+      env,
+      userId: "usr_alice",
+      communityId,
+      threadRootPostId: postId,
+      body: { body: "Members vote here" },
+      userRepository: users,
+      communityRepository: repo,
+    })
+
+    expect.assertions(5)
+    try {
+      await castCommentVote({
+        env,
+        userId: "usr_outsider",
+        commentId: comment.comment_id,
+        value: 1,
+        userRepository: users,
+        communityRepository: repo,
+      })
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpError)
+      const httpError = error as HttpError
+      expect(httpError.status).toBe(403)
+      expect(httpError.code).toBe("membership_required")
+      expect(httpError.message).toBe("Join this community to comment")
+      expect(httpError.details).toEqual({
+        reason: "membership_required",
+        community_id: communityId,
+      })
+    }
+  })
+
   test("soft deletes comments and preserves projection sync state", async () => {
     const rootDir = await createCommentServiceRoot("pirate-comment-delete-")
 
