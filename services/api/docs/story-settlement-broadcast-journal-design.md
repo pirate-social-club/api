@@ -279,6 +279,14 @@ part of the first version because it creates a second signed hash for one nonce.
 replacement must be a first-class, policy-bounded state machine that links every candidate hash and
 proves identical call/value semantics.
 
+This deliberately accepts wallet-wide head-of-line blocking when a prepared transaction is
+underpriced: later nonces cannot confirm before it. Before canary admission, v1 therefore requires
+a conservative but capped EIP-1559 fee policy versioned into the plan, a critical alert on maximum
+broadcast age, and an audited operator runbook for manual same-nonce replacement. The runbook must
+preserve target, value, calldata, and call identity; record every candidate hash; and freeze new
+admission while replacement evidence is reviewed. Manual replacement is incident response, not an
+automatic reconciler transition.
+
 ## Finality and reorg policy
 
 Use a Story-specific finality policy:
@@ -303,6 +311,7 @@ already admitted transaction.
 | Before plan insert | None | Retry request creates the same derived plan. |
 | After plan insert, before shard mirror | Coordinator plan | Retry retrieves it and repairs the mirror. |
 | After nonce reservation, before signing | Nonce + `reserving` | Expired signing lease retries signing the same call with the reserved nonce. |
+| Reserved nonce becomes permanently unsigned and its plan is cancelled or terminal | Nonce + no signed bytes | Admission freezes until the approved abandoned-nonce repair closes or safely reassigns the gap; later nonces must not continue indefinitely past an unresolved gap. |
 | After signing, before `prepared` CAS | No durable signed bytes | Lease expiry rebuilds and signs with the reserved nonce; the lost bytes were never durable and broadcast was prohibited. |
 | After `prepared` CAS, before broadcast | Signed bytes/hash/nonce | Alarm broadcasts the exact stored bytes. |
 | During/after broadcast response loss | Signed bytes/hash/nonce | Receipt/transaction/nonce reconciliation; never fresh-sign. |
@@ -352,11 +361,18 @@ alerts, API responses, or audit-event payloads.
   delivery and requires an operator decision; it cannot erase an on-chain payment.
 - Parent transfers and entitlement mint are separate steps, so partial progress is explicit and the
   buyer remains undelivered until all dependencies confirm.
+- Finality-gated serial steps make settlement asynchronous at product level. The web integration is
+  part of Fix 2: checkout must persist and render `settlement_pending`, poll with bounded backoff,
+  survive navigation/reload, and clearly distinguish processing from failed or delivered. Production
+  admission is blocked until that pending-purchase flow is verified against staging.
 
 ## Deployment sequence
 
 1. Land and deploy additive shard migrations and DO schema support. Existing readers must tolerate
-   null coordinator fields. Do not alter execution behavior.
+   null coordinator fields. Do not alter execution behavior. Declare the shard migration as an
+   unconditional API schema requirement using the established `community-schema-requirements.json`
+   mechanism, and roll/verify it across the fleet with `core/scripts/community/lib` before enabling
+   admission.
 2. Deploy the explicit Story transaction builder and validate call identities against the existing
    SDK in non-broadcast shadow tests. Prove every possible SDK subtransaction is represented.
 3. Deploy the coordinator with admission disabled. Test nonce allocation, signing, exact-byte
@@ -374,6 +390,12 @@ alerts, API responses, or audit-event payloads.
 Migration deployment is fail-closed: schema and DO support land before the feature flag can admit a
 plan. A schema preflight must verify every target community template/version before enabling the
 flag.
+
+Until coordinator integration ships, production retains the legacy stuck-`submitted` risk. Land a
+read-only diagnostic before the coordinator PRs: list stale effects with bounded identifiers,
+transaction reference where present, receipt/transaction evidence, and signer nonce evidence. It
+must never mutate effects or rebroadcast. Its classifier should be reused by the later legacy
+disposition runbook.
 
 ## Rollback
 
@@ -443,20 +465,42 @@ Expose bounded metrics and operator views for:
 - replacements, reverts, reorgs, and exact-byte rebroadcast counts;
 - shard mirror lag and locally unfinalized confirmed plans;
 - WIP/native insufficiency before signing.
+- maximum broadcast age and fee-policy version.
 
-Alert on nonce gaps, any `replaced` value-bearing step, finality contradiction, reconciliation age
-above policy, or confirmed plans whose local purchase remains absent. Operator actions must be
-audited and may classify evidence or freeze admission; they must not edit signed bytes, call
+Alert on nonce gaps, broadcast age above policy, any `replaced` value-bearing step, finality
+contradiction, reconciliation age above policy, or confirmed plans whose local purchase remains
+absent. Operator actions must be audited and may classify evidence, freeze admission, or execute the
+approved abandoned-nonce/manual-replacement runbook; they must not silently edit signed bytes, call
 identity, nonce, or transaction hash.
 
 ## Decision gates before implementation
 
-1. Confirm the exact Story contract addresses, ABIs, and unsigned-call construction for WIP wrap,
-   approval, royalty payment, parent transfer, and entitlement mint on every supported Story chain.
+1. **Gate A — unsigned-call feasibility spike.** On Aeneid, use the existing
+   `spike-story-royalty-distribution.spike.json` fixtures to compare local calldata with the Story
+   SDK's non-broadcast `txOptions.encodedTxDataOnly` output for WIP wrap, approval, royalty payment,
+   parent transfer, and entitlement mint. The spike must prove that every conditional or hidden SDK
+   subtransaction is exposed. Any hidden wrap/approval or incomplete encoded output fails the gate;
+   no broadcast is permitted during the spike.
 2. Prove the high-level SDK can be removed from the broadcast boundary without changing royalty or
    LAP behavior.
-3. Approve finality depths and safe-tag behavior for Aeneid and Story mainnet.
-4. Approve whether raw signed transactions remain only in DO storage or use envelope-encrypted
-   external storage; they must not be copied to community shards.
-5. Review the state machine and crash tests specifically for double-pay and nonce-gap risk.
-6. Land Fix 2 before authorizing the Fix 3 sweeper.
+3. **Gate B — reverted policy.** Keep `reverted` terminal in v1. Any new generation is manual,
+   explicitly authorized, and has a new effect and plan identity outside the reconciler.
+4. **Gate C — chain policy.** Approve finality depths and safe-tag-with-depth-fallback behavior for
+   Aeneid and Story mainnet, plus the conservative capped gas policy, broadcast-age paging threshold,
+   and audited manual same-nonce replacement runbook.
+5. **Gate D — signed-byte storage.** V1 keeps raw signed transactions only in Durable Object storage;
+   they are never copied to community shards or external object storage. Loss of authoritative DO
+   state yields `reconciliation_required` from chain and nonce evidence, never fresh signing.
+6. **Gate E — exclusive signer.** Inventory every path and operational script that can use the
+   settlement signer, prohibit direct signing outside the wallet-scoped coordinator, and decide the
+   rotation plan before canary. Prefer a fresh coordinator-exclusive signer unless clean exclusive
+   ownership of the current signer is proven.
+7. Approve an abandoned-nonce repair before coordinator integration: either atomically reassign a
+   reserved-but-unsigned nonce to the next runnable step while preserving audit identity, or consume
+   it with a separately journaled zero-value self-transaction. Test cancellation, terminal
+   configuration failure, rights-hold freezes, coordinator restart, and concurrent admission so a
+   reserved unsigned nonce cannot wedge the wallet indefinitely.
+8. Scope and verify the web `settlement_pending` checkout/polling experience before production
+   admission.
+9. Review the state machine and crash tests specifically for double-pay and nonce-gap risk.
+10. Land Fix 2 before authorizing the Fix 3 sweeper.
