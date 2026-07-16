@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client as LibsqlClient } from "@libsql/client"
+import { isWriteAllowedStatement } from "@pirate/api-shared"
+import type { InStatement, QueryResult } from "../sql-client"
 import { emitKaraokeQualification, emitStudyQualificationIfComplete } from "./reward-qualification-outbox"
 
 describe("reward qualification outbox", () => {
@@ -71,5 +73,25 @@ describe("reward qualification outbox", () => {
       { sequence: 1, reward_period_key: "2026-07-10" },
       { sequence: 3, reward_period_key: "2026-07-11" },
     ])
+  })
+
+  test("emits Study and Karaoke using statements accepted by the shard write guard", async () => {
+    const guarded = {
+      async execute(statement: InStatement | string): Promise<QueryResult> {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (!isWriteAllowedStatement(sql)) throw new Error(`Statement rejected by shard write guard: ${sql}`)
+        return await client.execute(statement as Parameters<LibsqlClient["execute"]>[0]) as unknown as QueryResult
+      },
+    }
+    await client.execute("INSERT INTO song_study_attempt VALUES ('guard_a1', 'usr_guard', 'pst_reward', 'ex_1', '2026-07-10T23:55:00.000Z')")
+    expect(await emitStudyQualificationIfComplete({
+      client: guarded, communityId: "cmt_1", now: "2026-07-10T23:55:00.000Z",
+      postId: "pst_reward", targetCount: 1, userId: "usr_guard",
+    })).toBe(true)
+    expect(await emitKaraokeQualification({
+      attemptId: "att_guard", client: guarded, communityId: "cmt_1", finalScoreBps: 8100,
+      karaokeRevisionId: "kar_guard", now: "2026-07-10T23:59:59.000Z", postId: "pst_reward",
+      scoringVersion: 3, sessionId: "ses_guard", userId: "usr_guard",
+    })).toBe(true)
   })
 })
