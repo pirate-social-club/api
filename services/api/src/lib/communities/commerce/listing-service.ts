@@ -353,9 +353,7 @@ export async function prepareCommunityListingWrite(input: {
       communityId: input.communityId,
       asset,
     })
-    if (asset.access_mode !== "locked") {
-      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
-    }
+    assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     await assertAssetNotRightsHeld({
       client: input.client,
       communityId: input.communityId,
@@ -567,9 +565,7 @@ export async function updateCommunityListing(input: {
         communityId: input.communityId,
         asset,
       })
-      if (asset.access_mode !== "locked") {
-        assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
-      }
+      assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
     } else if ((input.body.status ?? listing.status) === "active") {
       await assertListingNotRightsHeld({
         client: db.client,
