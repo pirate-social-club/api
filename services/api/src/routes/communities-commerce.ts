@@ -358,6 +358,9 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
       communityRepository,
       userRepository,
     })
+    if (result.settlementPending) {
+      return c.json(result.settlementPending, 202)
+    }
     if (result.royaltyEarningEvents.length > 0) {
       try {
         await emitRoyaltyEarnedBatch({
@@ -369,7 +372,7 @@ export function registerCommunityCommerceRoutes(communities: Hono<AuthenticatedE
         console.warn("[settlement] royalty notification emission failed", error)
       }
     }
-    return c.json(result.settlement, 201)
+    return c.json(result.settlement!, 201)
   })
 
   communities.post("/:communityId/fail-purchase-settlement", async (c) => {

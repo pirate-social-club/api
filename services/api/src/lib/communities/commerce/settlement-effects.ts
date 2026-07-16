@@ -31,6 +31,12 @@ export type PurchaseSettlementEffectRow = {
   tax_receipt_ref: string | null
   metadata_json: string | null
   failure_reason: string | null
+  coordinator_plan_ref: string | null
+  coordinator_state: string | null
+  coordinator_version: number | null
+  reconciliation_reason: string | null
+  last_reconciled_at: string | null
+  finality_confirmed_at: string | null
   attempt_count: number
   submitted_at: string | null
   confirmed_at: string | null
@@ -56,6 +62,14 @@ function toSettlementEffectRow(row: unknown): PurchaseSettlementEffectRow {
     tax_receipt_ref: stringOrNull(rowValue(row, "tax_receipt_ref")),
     metadata_json: stringOrNull(rowValue(row, "metadata_json")),
     failure_reason: stringOrNull(rowValue(row, "failure_reason")),
+    coordinator_plan_ref: stringOrNull(rowValue(row, "coordinator_plan_ref")),
+    coordinator_state: stringOrNull(rowValue(row, "coordinator_state")),
+    coordinator_version: rowValue(row, "coordinator_version") == null
+      ? null
+      : requiredNumber(row, "coordinator_version"),
+    reconciliation_reason: stringOrNull(rowValue(row, "reconciliation_reason")),
+    last_reconciled_at: stringOrNull(rowValue(row, "last_reconciled_at")),
+    finality_confirmed_at: stringOrNull(rowValue(row, "finality_confirmed_at")),
     attempt_count: requiredNumber(row, "attempt_count"),
     submitted_at: stringOrNull(rowValue(row, "submitted_at")),
     confirmed_at: stringOrNull(rowValue(row, "confirmed_at")),
@@ -73,8 +87,9 @@ async function getPurchaseSettlementEffectByIdempotencyKey(input: {
     sql: `
       SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
              effect_key, idempotency_key, status, failure_disposition, broadcast_tx_ref, settlement_ref, provider_receipt_ref,
-             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-             failed_at, created_at, updated_at
+             tax_receipt_ref, metadata_json, failure_reason, coordinator_plan_ref, coordinator_state,
+             coordinator_version, reconciliation_reason, last_reconciled_at, finality_confirmed_at,
+             attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM purchase_settlement_effects
       WHERE idempotency_key = ?1
       LIMIT 1
@@ -96,8 +111,9 @@ export async function findConfirmedBuyerFundingEffectByTx(input: {
     sql: `
       SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
              effect_key, idempotency_key, status, failure_disposition, broadcast_tx_ref, settlement_ref, provider_receipt_ref,
-             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-             failed_at, created_at, updated_at
+             tax_receipt_ref, metadata_json, failure_reason, coordinator_plan_ref, coordinator_state,
+             coordinator_version, reconciliation_reason, last_reconciled_at, finality_confirmed_at,
+             attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM purchase_settlement_effects
       WHERE community_id = ?1
         AND effect_kind = 'buyer_funding_receipt'
@@ -120,8 +136,9 @@ export async function listPurchaseSettlementEffectsByQuote(input: {
     sql: `
       SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
              effect_key, idempotency_key, status, failure_disposition, broadcast_tx_ref, settlement_ref, provider_receipt_ref,
-             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-             failed_at, created_at, updated_at
+             tax_receipt_ref, metadata_json, failure_reason, coordinator_plan_ref, coordinator_state,
+             coordinator_version, reconciliation_reason, last_reconciled_at, finality_confirmed_at,
+             attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM purchase_settlement_effects
       WHERE community_id = ?1
         AND quote_id = ?2
@@ -142,8 +159,9 @@ export async function listPurchaseSettlementEffectsByPurchase(input: {
     sql: `
       SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
              effect_key, idempotency_key, status, failure_disposition, broadcast_tx_ref, settlement_ref, provider_receipt_ref,
-             tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-             failed_at, created_at, updated_at
+             tax_receipt_ref, metadata_json, failure_reason, coordinator_plan_ref, coordinator_state,
+             coordinator_version, reconciliation_reason, last_reconciled_at, finality_confirmed_at,
+             attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
       FROM purchase_settlement_effects
       WHERE community_id = ?1
         AND purchase_id = ?2
@@ -162,6 +180,7 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
   effectKind: PurchaseSettlementEffectKind
   effectKey: string
   idempotencyKey: string
+  coordinatorPlanRef?: string | null
   now: string
 }): Promise<PurchaseSettlementEffectRow> {
   const existing = await getPurchaseSettlementEffectByIdempotencyKey({
@@ -187,11 +206,14 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
             failure_reason = NULL,
             failed_at = NULL,
             submitted_at = ?2,
+            coordinator_plan_ref = COALESCE(coordinator_plan_ref, ?3),
+            coordinator_state = CASE WHEN COALESCE(coordinator_plan_ref, ?3) IS NULL THEN coordinator_state ELSE COALESCE(coordinator_state, 'pending') END,
+            coordinator_version = CASE WHEN COALESCE(coordinator_plan_ref, ?3) IS NULL THEN coordinator_version ELSE COALESCE(coordinator_version, 0) END,
             attempt_count = attempt_count + 1,
             updated_at = ?2
         WHERE purchase_settlement_effect_id = ?1
       `,
-      args: [existing.purchase_settlement_effect_id, input.now],
+      args: [existing.purchase_settlement_effect_id, input.now, input.coordinatorPlanRef ?? null],
     })
     const updated = await getPurchaseSettlementEffectByIdempotencyKey({
       client: input.client,
@@ -210,12 +232,13 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
         INSERT INTO purchase_settlement_effects (
           purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
           effect_key, idempotency_key, status, failure_disposition, broadcast_tx_ref, settlement_ref, provider_receipt_ref,
-          tax_receipt_ref, metadata_json, failure_reason, attempt_count, submitted_at, confirmed_at,
-          failed_at, created_at, updated_at
+          tax_receipt_ref, metadata_json, failure_reason, coordinator_plan_ref, coordinator_state,
+          coordinator_version, attempt_count, submitted_at, confirmed_at, failed_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5,
           ?6, ?7, 'submitted', NULL, NULL, NULL, NULL,
-          NULL, NULL, NULL, 1, ?8, NULL,
+          NULL, NULL, NULL, ?9, CASE WHEN ?9 IS NULL THEN NULL ELSE 'pending' END,
+          CASE WHEN ?9 IS NULL THEN NULL ELSE 0 END, 1, ?8, NULL,
           NULL, ?8, ?8
         )
       `,
@@ -228,6 +251,7 @@ export async function beginPurchaseSettlementEffectAttempt(input: {
         input.effectKey,
         input.idempotencyKey,
         input.now,
+        input.coordinatorPlanRef ?? null,
       ],
     })
   } catch (error) {

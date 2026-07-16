@@ -471,7 +471,8 @@ publicCommunities.post("/:communityId/purchase-settlements", async (c) => {
     body,
     communityRepository,
   })
-  return c.json(result.settlement, 201)
+  if (result.settlementPending) return c.json(result.settlementPending, 202)
+  return c.json(result.settlement!, 201)
 })
 
 publicCommunities.get("/:communityId/live-rooms/:liveRoomId/access", async (c) => {

@@ -27,6 +27,12 @@ async function createEffectClient(): Promise<Client> {
       tax_receipt_ref TEXT,
       metadata_json TEXT,
       failure_reason TEXT,
+      coordinator_plan_ref TEXT,
+      coordinator_state TEXT,
+      coordinator_version INTEGER,
+      reconciliation_reason TEXT,
+      last_reconciled_at TEXT,
+      finality_confirmed_at TEXT,
       attempt_count INTEGER NOT NULL DEFAULT 1,
       submitted_at TEXT,
       confirmed_at TEXT,
@@ -56,6 +62,28 @@ function begin(client: Client, idempotencyKey: string, now: string) {
 }
 
 describe("purchase settlement effect failure fencing", () => {
+  test("creates coordinator-owned effects with the plan fence in the insert", async () => {
+    const client = await createEffectClient()
+    const planRef = `0x${"12".repeat(32)}`
+    const created = await beginPurchaseSettlementEffectAttempt({
+      client,
+      communityId: "cmt_1",
+      quoteId: "quo_1",
+      purchaseId: "pur_1",
+      effectKind: "story_royalty_payment",
+      effectKey: "asset_1",
+      idempotencyKey: "coordinator-owned",
+      coordinatorPlanRef: planRef,
+      now: "2026-07-16T00:00:00.000Z",
+    })
+    expect(created).toMatchObject({
+      status: "submitted",
+      coordinator_plan_ref: planRef,
+      coordinator_state: "pending",
+      coordinator_version: 0,
+    })
+  })
+
   test("only an explicit pre-broadcast failure is reclaimable", async () => {
     const client = await createEffectClient()
     await begin(client, "safe-retry", "2026-07-16T00:00:00.000Z")

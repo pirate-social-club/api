@@ -2675,11 +2675,20 @@ const spec = {
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommunityPurchaseSettlement"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPurchaseSettlementPending"
                 }
               }
             }
@@ -11948,6 +11957,46 @@ const spec = {
           "settled_at": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "CommunityPurchaseSettlementPending": {
+        "type": "object",
+        "required": [
+          "object",
+          "community",
+          "quote",
+          "purchase",
+          "coordinator_plan_ref",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_purchase_settlement_pending"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "purchase": {
+            "type": "string"
+          },
+          "coordinator_plan_ref": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "settlement_pending"
+            ]
           }
         }
       },
