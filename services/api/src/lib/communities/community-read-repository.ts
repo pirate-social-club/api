@@ -14,6 +14,8 @@ import type {
   CommunityRow,
   JobRow,
 } from "../auth/auth-db-rows"
+import type { CommunityNamespaceAttachmentRow } from "./community-repository-types"
+import { requiredString } from "../sql-row"
 
 export async function getCommunityById(client: Client, communityId: string): Promise<CommunityRow | null> {
   return getCommunityRowById(client, communityId)
@@ -35,6 +37,34 @@ export async function getCommunityByNamespaceVerificationId(
   namespaceVerificationId: string,
 ): Promise<CommunityRow | null> {
   return getCommunityRowByNamespaceVerificationId(client, namespaceVerificationId)
+}
+
+export async function listCommunityNamespaceAttachments(
+  client: Client,
+  communityId: string,
+): Promise<CommunityNamespaceAttachmentRow[]> {
+  const result = await client.execute({
+    sql: `
+      SELECT cnb.namespace_verification_id, cnb.namespace_role,
+             nv.family, nv.normalized_root_label, nv.status AS verification_status
+      FROM community_namespace_bindings cnb
+      JOIN namespace_verifications nv
+        ON nv.namespace_verification_id = cnb.namespace_verification_id
+      WHERE cnb.community_id = ?1
+        AND cnb.status = 'active'
+      ORDER BY CASE cnb.namespace_role WHEN 'primary' THEN 0 ELSE 1 END,
+               cnb.created_at ASC,
+               cnb.namespace_verification_id ASC
+    `,
+    args: [communityId],
+  })
+  return result.rows.map((row) => ({
+    namespaceVerificationId: requiredString(row, "namespace_verification_id"),
+    namespaceRole: requiredString(row, "namespace_role") as CommunityNamespaceAttachmentRow["namespaceRole"],
+    family: requiredString(row, "family") as CommunityNamespaceAttachmentRow["family"],
+    normalizedRootLabel: requiredString(row, "normalized_root_label"),
+    verificationStatus: requiredString(row, "verification_status") as CommunityNamespaceAttachmentRow["verificationStatus"],
+  }))
 }
 
 export async function listActiveCommunities(

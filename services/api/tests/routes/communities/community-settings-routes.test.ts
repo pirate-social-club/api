@@ -514,6 +514,31 @@ membership_mode: "request",
       },
     ])
 
+    const attachedNamespaces = await app.request(
+      `http://pirate.test/communities/${communityId}/namespaces`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(attachedNamespaces.status).toBe(200)
+    expect((await json(attachedNamespaces) as { namespaces: unknown[] }).namespaces).toEqual([
+      {
+        namespace_verification: primaryVerification,
+        namespace_role: "primary",
+        family: "hns",
+        root_label: "pokemon",
+        route_slug: "pokemon",
+        verification_status: "verified",
+      },
+      {
+        namespace_verification: mirrorVerification,
+        namespace_role: "mirror",
+        family: "hns",
+        root_label: "charizard",
+        route_slug: "charizard",
+        verification_status: "verified",
+      },
+    ])
+
     const communityClient = createClient({
       url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
     })
