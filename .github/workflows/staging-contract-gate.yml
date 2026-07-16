@@ -125,8 +125,8 @@ jobs:
           done
           mobile_titles=(
             "joins before a PoW-gated vote, then requests an action-bound proof"
-            "joins from the comment CTA before exposing the mobile composer"
-            "keeps the composer visible but disabled while membership is unknown"
+            "comments on a public thread without joining first"
+            "keeps public-thread commenting available while membership is unknown"
           )
           for title in "${mobile_titles[@]}"; do
             count=$(bunx playwright test e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --list --grep "$title" 2>&1 | grep -F -c "$title")
@@ -161,8 +161,8 @@ jobs:
           set -euo pipefail
           titles=(
             "joins before a PoW-gated vote, then requests an action-bound proof"
-            "joins from the comment CTA before exposing the mobile composer"
-            "keeps the composer visible but disabled while membership is unknown"
+            "comments on a public thread without joining first"
+            "keeps public-thread commenting available while membership is unknown"
           )
           for title in "${titles[@]}"; do
             bun run test:e2e:required-gate -- e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --grep "$title"
