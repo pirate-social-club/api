@@ -232,13 +232,15 @@ export async function updateCommunityHandlePolicy(input: {
   env: Env
   userId: string
   communityId: string
+  namespaceVerificationId?: string | null
   body: UpdateCommunityHandlePolicyRequest
   communityRepository: HandleCommunityRepository
 }): Promise<CommunityHandlePolicy> {
   await requireCommunityOwner({ communityId: input.communityId, userId: input.userId, communityRepository: input.communityRepository })
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
-    const current = await getNamespacePolicy(db.client, input.communityId)
+    const selector = { namespaceVerificationId: input.namespaceVerificationId }
+    const current = await getNamespacePolicy(db.client, input.communityId, selector)
     if (!current) throw eligibilityFailed("Community names are not available for this community")
     const nextSettings = "settings" in input.body
       ? sanitizeSettings(input.body.settings ?? null)
@@ -277,7 +279,7 @@ export async function updateCommunityHandlePolicy(input: {
         updatedAt,
       ],
     })
-    const updated = await getNamespacePolicy(db.client, input.communityId)
+    const updated = await getNamespacePolicy(db.client, input.communityId, selector)
     if (!updated) throw internalError("Updated community handle policy row is missing")
     return serializeHandlePolicy(updated)
   } finally {

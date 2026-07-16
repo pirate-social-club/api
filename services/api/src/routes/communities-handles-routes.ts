@@ -29,6 +29,14 @@ import type {
 import { decodePublicNamespaceVerificationId } from "../lib/public-ids"
 import { badRequestError } from "../lib/errors"
 
+function namespaceVerificationSelector(value: string | undefined): string | null {
+  const publicId = value?.trim() || null
+  if (!publicId) return null
+  const decoded = decodePublicNamespaceVerificationId(publicId)
+  if (!decoded) throw badRequestError("Invalid namespace_verification")
+  return decoded
+}
+
 export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/handles/me", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
@@ -36,6 +44,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -47,6 +56,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -58,6 +68,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       communityRepository,
     })
     return c.json(result, 200)
@@ -69,6 +80,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       status: c.req.query("status"),
       communityRepository,
     })
@@ -82,6 +94,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       body,
       communityRepository,
     })
@@ -95,6 +108,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId: namespaceVerificationSelector(c.req.query("namespace_verification")),
       body,
       communityRepository,
     })
@@ -104,13 +118,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
   communities.post("/:communityId/handles/quote", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityHandleQuoteRequest>(c, "Invalid community handle quote payload")
-    const publicNamespaceVerification = body.namespace_verification?.trim() || null
-    const namespaceVerificationId = publicNamespaceVerification
-      ? decodePublicNamespaceVerificationId(publicNamespaceVerification)
-      : null
-    if (publicNamespaceVerification && !namespaceVerificationId) {
-      throw badRequestError("Invalid namespace_verification")
-    }
+    const namespaceVerificationId = namespaceVerificationSelector(body.namespace_verification ?? undefined)
     const result = await quoteCommunityHandle({
       env: c.env,
       userId: actor.userId,

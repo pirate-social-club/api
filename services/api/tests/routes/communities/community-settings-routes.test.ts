@@ -536,6 +536,39 @@ membership_mode: "request",
       communityClient.close()
     }
 
+    const mirrorSelector = `namespace_verification=${encodeURIComponent(mirrorVerification)}`
+    const mirrorPolicy = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy?${mirrorSelector}`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(mirrorPolicy.status).toBe(200)
+    expect((await json(mirrorPolicy) as { claims_enabled: boolean }).claims_enabled).toBe(false)
+
+    const reservedMirrorHandle = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/reserve?${mirrorSelector}`,
+      { desired_label: "ash" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(reservedMirrorHandle.status).toBe(200)
+
+    const mirrorHandles = await app.request(
+      `http://pirate.test/communities/${communityId}/handles?${mirrorSelector}`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(mirrorHandles.status).toBe(200)
+    expect((await json(mirrorHandles) as { handles: unknown[] }).handles).toHaveLength(1)
+
+    const primaryHandles = await app.request(
+      `http://pirate.test/communities/${communityId}/handles`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(primaryHandles.status).toBe(200)
+    expect((await json(primaryHandles) as { handles: unknown[] }).handles).toHaveLength(0)
+
     const byMirror = await app.request("http://pirate.test/communities/charizard", {
       headers: { authorization: `Bearer ${session.accessToken}` },
     }, ctx.env)
