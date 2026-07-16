@@ -6,6 +6,7 @@ import {
   isHexString,
   keccak256,
 } from "ethers"
+import { encodeFunctionData, parseAbi } from "viem"
 
 import type { TransactionRequest } from "ethers"
 import type { Env } from "../../env"
@@ -24,6 +25,9 @@ import type {
   StorySettlementChainPrimitives,
   StoryTransactionObservation,
 } from "./story-settlement-wallet-coordinator-do"
+import { resolveStorySettlementProtocolAddresses } from "./story-settlement-protocol-addresses"
+
+const ERC20_BALANCE_ABI = parseAbi(["function balanceOf(address owner) view returns (uint256)"])
 
 export interface StorySettlementProvider {
   broadcastTransaction(signedTransaction: string): Promise<unknown>
@@ -189,6 +193,20 @@ async function observation(
 }
 
 export const storySettlementRealChain: StorySettlementChainPrimitives = {
+  nativeBalance: async (env, domain) => {
+    const resolved = config(env, domain)
+    const chainProvider = provider(env)
+    await assertRpcChain(chainProvider, resolved.chainId)
+    return BigInt(String(await chainProvider.send("eth_getBalance", [resolved.signer.address, "latest"])))
+  },
+  wipBalance: async (env, domain) => {
+    const resolved = config(env, domain)
+    const chainProvider = provider(env)
+    await assertRpcChain(chainProvider, resolved.chainId)
+    const token = resolveStorySettlementProtocolAddresses(resolved.chainId).wipToken
+    const data = encodeFunctionData({ abi: ERC20_BALANCE_ABI, functionName: "balanceOf", args: [resolved.signer.address] })
+    return BigInt(String(await chainProvider.send("eth_call", [{ to: token, data }, "latest"])))
+  },
   pendingNonce: async (env, domain) => {
     const resolved = config(env, domain)
     const chainProvider = provider(env)
