@@ -173,7 +173,7 @@ async function upsertLocalNamespaceAttachment(input: {
             namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
             membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
           ) VALUES (
-            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, 1, ?4, ?5, ?5
+            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, ?4, ?5, ?6, ?6
           )
           ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
             namespace_id = excluded.namespace_id,
@@ -185,6 +185,7 @@ async function upsertLocalNamespaceAttachment(input: {
           namespaceHandlePolicyId,
           input.communityId,
           namespaceId,
+          input.namespaceRole === "primary" ? 1 : 0,
           JSON.stringify({
             flat_price_cents: 500,
             premium_price_cents: 2500,

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeAgeOver18Verification,
@@ -511,6 +513,28 @@ membership_mode: "request",
         namespace_verification_id: mirrorVerification.replace(/^nv_/, ""),
       },
     ])
+
+    const communityClient = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      const policies = await communityClient.execute({
+        sql: `
+          SELECT nb.namespace_role, nhp.claims_enabled
+          FROM namespace_bindings nb
+          JOIN namespace_handle_policies nhp ON nhp.namespace_id = nb.namespace_id
+          WHERE nb.community_id = ?1 AND nb.status = 'active'
+          ORDER BY nb.namespace_role DESC
+        `,
+        args: [communityId],
+      })
+      expect(policies.rows).toEqual([
+        { namespace_role: "primary", claims_enabled: 1 },
+        { namespace_role: "mirror", claims_enabled: 0 },
+      ])
+    } finally {
+      communityClient.close()
+    }
 
     const byMirror = await app.request("http://pirate.test/communities/charizard", {
       headers: { authorization: `Bearer ${session.accessToken}` },
