@@ -16,6 +16,7 @@ import {
 import { creditRewardCampaignQualification } from "./reward-campaign-reconciler"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./reward-campaign-monitor"
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
+import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
@@ -34,6 +35,10 @@ const SONG_PERIOD_CLAIMS_MIGRATION_URL = new URL(
 )
 const SCORE_TERMS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0144_control_plane_reward_campaign_score_terms.sql",
+  import.meta.url,
+)
+const PAYOUT_EFFECTS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0132_control_plane_reward_payout_effects.sql",
   import.meta.url,
 )
 const NOW = "2026-07-10T12:00:00.000Z"
@@ -211,6 +216,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(SONG_PERIOD_CLAIMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
@@ -1103,6 +1109,41 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       expect(new Date(String(state.rows[0]?.first_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:20:03.000Z")
       expect(new Date(String(state.rows[0]?.last_attempted_scan_at)).toISOString()).toBe("2026-07-10T13:20:03.000Z")
       expect(state.rows[0]?.last_successful_scan_at).toBeNull()
+    })
+  })
+
+  test("coordinator mirror accepts a nullable pre-signing transaction reference", async () => {
+    await withProductionPostgresClient(async (client) => {
+      await client.execute({
+        sql: `
+          INSERT INTO reward_payout_effects (
+            reward_payout_effect_id, user_id, amount_cents, recipient_address,
+            idempotency_key, status, submitted_at, created_at, updated_at
+          ) VALUES (?1, ?2, 100, ?3, ?4, 'submitted', ?5, ?5, ?5)
+        `,
+        args: [
+          "rpe_null_mirror_pg",
+          "usr_reward_pg",
+          "0xCc4049cEd4ff4C3CA25F7e32eDb8c69dEA4bB12f",
+          "reward-null-mirror-pg",
+          NOW,
+        ],
+      })
+      const updated = await client.execute({
+        sql: REWARD_PAYOUT_COORDINATOR_MIRROR_SQL,
+        args: [
+          "reward-null-mirror-pg",
+          '["reward_payout","reward-null-mirror-pg"]',
+          "reserving",
+          null,
+          null,
+          NOW,
+          "usr_reward_pg",
+        ],
+      })
+      expect(updated.rows[0]?.coordinator_state).toBe("reserving")
+      expect(updated.rows[0]?.settlement_ref).toBeNull()
+      expect(updated.rows[0]?.broadcast_nonce).toBeNull()
     })
   })
 
