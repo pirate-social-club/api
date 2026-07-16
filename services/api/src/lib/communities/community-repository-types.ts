@@ -37,6 +37,7 @@ export interface CommunityJobReadRepository {
 }
 
 export type CommunityProvisioningMode = "local_dev" | "d1_native"
+export type CommunityNamespaceRole = "primary" | "mirror"
 
 export type InitialCommunityDatabaseBinding = {
   organizationSlug: string
@@ -233,8 +234,10 @@ export interface CommunityMutationRepository {
     updatedAt: string
   }): Promise<void>
   attachNamespaceToCommunity(input: {
+    communityNamespaceBindingId: string
     communityId: string
     namespaceVerificationId: string
+    namespaceRole: CommunityNamespaceRole
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow>

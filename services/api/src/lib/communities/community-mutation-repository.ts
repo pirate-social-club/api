@@ -2,17 +2,19 @@ import type { Client } from "../sql-client"
 import { conflictError, internalError, notFoundError } from "../errors"
 import {
   getCommunityRowById,
-  getCommunityRowByNamespaceVerificationId,
 } from "../auth/auth-db-community-queries"
 import type { CommunityRow } from "../auth/auth-db-rows"
+import type { CommunityNamespaceRole } from "./community-repository-types"
 
 export type CommunityLifecycleStatus = CommunityRow["status"]
 
 export async function attachNamespaceToCommunity(
   client: Client,
   input: {
+    communityNamespaceBindingId: string
     communityId: string
     namespaceVerificationId: string
+    namespaceRole: CommunityNamespaceRole
     routeSlug: string
     updatedAt: string
   },
@@ -24,40 +26,71 @@ export async function attachNamespaceToCommunity(
     if (!existing) {
       throw internalError("Community not found for namespace attach")
     }
-    if (existing.namespace_verification_id) {
-      if (existing.namespace_verification_id === input.namespaceVerificationId) {
+    const activeBinding = await tx.execute({
+      sql: `
+        SELECT community_id, namespace_role
+        FROM community_namespace_bindings
+        WHERE namespace_verification_id = ?1
+          AND status = 'active'
+        LIMIT 1
+      `,
+      args: [input.namespaceVerificationId],
+    })
+    const bindingCommunityId = activeBinding.rows[0]?.community_id
+    const bindingRole = activeBinding.rows[0]?.namespace_role
+    if (bindingCommunityId) {
+      if (bindingCommunityId === input.communityId && bindingRole === input.namespaceRole) {
         await tx.rollback()
         return existing
       }
-      throw internalError("Community already has a different namespace attached")
+      throw internalError("Namespace is already attached with a different community or role")
     }
 
-    const result = await tx.execute({
+    if (input.namespaceRole === "primary" && existing.namespace_verification_id) {
+      throw internalError("Community already has a different primary namespace attached")
+    }
+    if (input.namespaceRole === "mirror" && !existing.namespace_verification_id) {
+      throw internalError("Community must have a primary namespace before attaching mirrors")
+    }
+
+    await tx.execute({
       sql: `
         UPDATE communities
-        SET namespace_verification_id = ?2,
-            route_slug = ?3,
+        SET namespace_verification_id = CASE WHEN ?2 = 'primary' THEN ?3 ELSE namespace_verification_id END,
+            route_slug = CASE WHEN ?2 = 'primary' THEN ?4 ELSE route_slug END,
             pending_namespace_verification_session_id = NULL,
-            updated_at = ?4
+            updated_at = ?5
         WHERE community_id = ?1
-          AND namespace_verification_id IS NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM communities
-            WHERE namespace_verification_id = ?2
-              AND community_id != ?1
-          )
       `,
-      args: [input.communityId, input.namespaceVerificationId, input.routeSlug, input.updatedAt],
+      args: [
+        input.communityId,
+        input.namespaceRole,
+        input.namespaceVerificationId,
+        input.routeSlug,
+        input.updatedAt,
+      ],
     })
 
-    if ((result.rowsAffected ?? 0) === 0) {
-      const conflict = await getCommunityRowByNamespaceVerificationId(tx, input.namespaceVerificationId)
-      if (conflict && conflict.community_id !== input.communityId) {
-        throw internalError("Namespace is already attached to another community")
-      }
-      throw internalError("Community namespace attach failed")
-    }
+    await tx.execute({
+      sql: `
+        INSERT INTO community_namespace_bindings (
+          community_namespace_binding_id,
+          community_id,
+          namespace_verification_id,
+          namespace_role,
+          status,
+          created_at,
+          updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
+      `,
+      args: [
+        input.communityNamespaceBindingId,
+        input.communityId,
+        input.namespaceVerificationId,
+        input.namespaceRole,
+        input.updatedAt,
+      ],
+    })
 
     const updated = await getCommunityRowById(tx, input.communityId)
     if (!updated) {

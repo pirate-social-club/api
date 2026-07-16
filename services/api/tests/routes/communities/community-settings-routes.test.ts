@@ -434,6 +434,90 @@ membership_mode: "request",
     expect(secondAttachBody.route_slug).toBe("samenamespaceroot")
   })
 
+  test("community owner can attach a verified mirror without replacing the primary route", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "community-mirror-namespace-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pokemon Mirrors Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const community = await json(communityCreate) as { community: { id: string } }
+    const communityId = community.community.id.replace(/^com_/, "")
+
+    const completeRoot = async (rootLabel: string): Promise<string> => {
+      const started = await requestJson("http://pirate.test/namespace-verification-sessions", {
+        family: "hns",
+        root_label: rootLabel,
+      }, ctx.env, session.accessToken)
+      const startedBody = await json(started) as { id: string }
+      const completed = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${startedBody.id}/complete`,
+        {},
+        ctx.env,
+        session.accessToken,
+      )
+      const completedBody = await json(completed) as { namespace_verification: string }
+      return completedBody.namespace_verification
+    }
+
+    const { primaryVerification, mirrorVerification } = await withHnsVerifierMock(ctx.env, async () => ({
+      primaryVerification: await completeRoot("pokemon"),
+      mirrorVerification: await completeRoot("charizard"),
+    }))
+
+    const primaryAttach = await requestJson(
+      `http://pirate.test/communities/${communityId}/namespace`,
+      { namespace_verification: primaryVerification, namespace_role: "primary" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(primaryAttach.status).toBe(200)
+
+    const mirrorAttach = await requestJson(
+      `http://pirate.test/communities/${communityId}/namespace`,
+      { namespace_verification: mirrorVerification, namespace_role: "mirror" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(mirrorAttach.status).toBe(200)
+    const mirrorAttachBody = await json(mirrorAttach) as {
+      namespace_verification: string
+      route_slug: string
+    }
+    expect(mirrorAttachBody.namespace_verification).toBe(primaryVerification)
+    expect(mirrorAttachBody.route_slug).toBe("pokemon")
+
+    const bindings = await ctx.client.execute({
+      sql: `
+        SELECT namespace_role, namespace_verification_id
+        FROM community_namespace_bindings
+        WHERE community_id = ?1 AND status = 'active'
+        ORDER BY namespace_role DESC
+      `,
+      args: [communityId],
+    })
+    expect(bindings.rows).toEqual([
+      {
+        namespace_role: "primary",
+        namespace_verification_id: primaryVerification.replace(/^nv_/, ""),
+      },
+      {
+        namespace_role: "mirror",
+        namespace_verification_id: mirrorVerification.replace(/^nv_/, ""),
+      },
+    ])
+
+    const byMirror = await app.request("http://pirate.test/communities/charizard", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    expect(byMirror.status).toBe(200)
+  }, 15_000)
+
   test("community owner can persist safety moderation settings", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

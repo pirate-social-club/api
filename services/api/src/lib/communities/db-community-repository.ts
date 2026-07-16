@@ -354,8 +354,10 @@ export class DatabaseCommunityRepository implements CommunityRepository {
   }
 
   async attachNamespaceToCommunity(input: {
+    communityNamespaceBindingId: string
     communityId: string
     namespaceVerificationId: string
+    namespaceRole: "primary" | "mirror"
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow> {

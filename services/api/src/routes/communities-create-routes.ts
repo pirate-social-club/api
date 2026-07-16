@@ -104,6 +104,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     const { verificationRepository } = getCommunityCreationRouteContext(c)
     const body = await requireJsonBody<{
       namespace_verification?: string | null
+      namespace_role?: "primary" | "mirror" | null
     }>(c, "Invalid namespace attach payload")
     const publicNamespaceVerificationId = body?.namespace_verification?.trim()
     const namespaceVerificationId = publicNamespaceVerificationId
@@ -112,12 +113,17 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
     if (!namespaceVerificationId) {
       throw badRequestError("namespace_verification is required")
     }
+    const namespaceRole = body?.namespace_role ?? "primary"
+    if (namespaceRole !== "primary" && namespaceRole !== "mirror") {
+      throw badRequestError("namespace_role must be primary or mirror")
+    }
 
     const result = await attachNamespaceToCommunity({
       env: c.env,
       userId: actor.userId,
       communityId,
       namespaceVerificationId,
+      namespaceRole,
       verificationRepository,
       communityRepository,
     })

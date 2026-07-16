@@ -26,6 +26,8 @@ import type {
   CommunityHandleRevokeRequest,
   UpdateCommunityHandlePolicyRequest,
 } from "../types"
+import { decodePublicNamespaceVerificationId } from "../lib/public-ids"
+import { badRequestError } from "../lib/errors"
 
 export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/handles/me", async (c) => {
@@ -102,10 +104,18 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
   communities.post("/:communityId/handles/quote", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CommunityHandleQuoteRequest>(c, "Invalid community handle quote payload")
+    const publicNamespaceVerification = body.namespace_verification?.trim() || null
+    const namespaceVerificationId = publicNamespaceVerification
+      ? decodePublicNamespaceVerificationId(publicNamespaceVerification)
+      : null
+    if (publicNamespaceVerification && !namespaceVerificationId) {
+      throw badRequestError("Invalid namespace_verification")
+    }
     const result = await quoteCommunityHandle({
       env: c.env,
       userId: actor.userId,
       communityId,
+      namespaceVerificationId,
       body,
       userRepository,
       communityRepository,

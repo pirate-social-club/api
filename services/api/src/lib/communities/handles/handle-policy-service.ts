@@ -144,7 +144,11 @@ export function namespaceSupportsSpacesSubspace(
     || policy.normalized_label.startsWith("@")
 }
 
-export async function getNamespacePolicy(executor: DbExecutor, communityId: string): Promise<NamespacePolicyRow | null> {
+export async function getNamespacePolicy(
+  executor: DbExecutor,
+  communityId: string,
+  selector?: { namespaceId?: string | null; namespaceVerificationId?: string | null },
+): Promise<NamespacePolicyRow | null> {
   const result = await executor.execute({
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
@@ -155,9 +159,16 @@ export async function getNamespacePolicy(executor: DbExecutor, communityId: stri
         ON nhp.namespace_id = nb.namespace_id
       WHERE nb.community_id = ?1
         AND nb.status = 'active'
+        AND (?2 IS NULL OR nb.namespace_id = ?2)
+        AND (?3 IS NULL OR nb.namespace_verification_id = ?3)
+      ORDER BY CASE nb.namespace_role WHEN 'primary' THEN 0 ELSE 1 END
       LIMIT 1
     `,
-    args: [communityId],
+    args: [
+      communityId,
+      selector?.namespaceId ?? null,
+      selector?.namespaceVerificationId ?? null,
+    ],
   })
   const row = result.rows[0]
   if (!row) return null
