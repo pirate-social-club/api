@@ -41,38 +41,25 @@ export type UnsignedStorySettlementCall = {
   calldata: Hex
 }
 
-function assertNonNegative(name: string, value: bigint): void {
-  if (value < 0n) throw new Error(`${name}_must_be_non_negative`)
-}
-
 export function buildStoryRoyaltyPaymentCalls(input: {
   chainId: number
   receiverIpId: string
   payerIpId?: string | null
   amount: bigint
-  wipBalance: bigint
-  wipAllowance: bigint
 }): UnsignedStorySettlementCall[] {
   if (input.amount <= 0n) throw new Error("story_royalty_amount_must_be_positive")
-  assertNonNegative("wip_balance", input.wipBalance)
-  assertNonNegative("wip_allowance", input.wipAllowance)
 
   const addresses = resolveStorySettlementProtocolAddresses(input.chainId)
   const receiverIpId = getAddress(input.receiverIpId)
   const payerIpId = input.payerIpId ? getAddress(input.payerIpId) : zeroAddress
-  const calls: UnsignedStorySettlementCall[] = []
-  const wrapAmount = input.amount > input.wipBalance ? input.amount - input.wipBalance : 0n
-
-  if (wrapAmount > 0n) {
-    calls.push({
+  return [
+    {
       kind: "wip_wrap",
       target: addresses.wipToken,
-      value: wrapAmount,
+      value: input.amount,
       calldata: encodeFunctionData({ abi: WIP_ABI, functionName: "deposit" }),
-    })
-  }
-  if (input.wipAllowance < input.amount) {
-    calls.push({
+    },
+    {
       kind: "wip_approve",
       target: addresses.wipToken,
       value: 0n,
@@ -81,19 +68,18 @@ export function buildStoryRoyaltyPaymentCalls(input: {
         functionName: "approve",
         args: [addresses.royaltyModule, input.amount],
       }),
-    })
-  }
-  calls.push({
-    kind: "story_royalty_payment",
-    target: addresses.royaltyModule,
-    value: 0n,
-    calldata: encodeFunctionData({
-      abi: ROYALTY_MODULE_ABI,
-      functionName: "payRoyaltyOnBehalf",
-      args: [receiverIpId, payerIpId, addresses.wipToken, input.amount],
-    }),
-  })
-  return calls
+    },
+    {
+      kind: "story_royalty_payment",
+      target: addresses.royaltyModule,
+      value: 0n,
+      calldata: encodeFunctionData({
+        abi: ROYALTY_MODULE_ABI,
+        functionName: "payRoyaltyOnBehalf",
+        args: [receiverIpId, payerIpId, addresses.wipToken, input.amount],
+      }),
+    },
+  ]
 }
 
 export function buildStoryParentVaultTransferCall(input: {

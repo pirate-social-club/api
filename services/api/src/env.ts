@@ -1,6 +1,7 @@
 import type { ShardRpc } from "@pirate/api-shared"
 import type { RateLimiterBinding } from "./lib/rate-limit"
 import type { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
+import type { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settlement-wallet-coordinator-do"
 
 export type Env = {
   // Runtime
@@ -260,6 +261,8 @@ export type Env = {
   SCHEDULED_CRON_LOCK?: DurableObjectNamespace
   // Wallet-scoped serial signer/nonce authority for booking operator USDC settlement.
   OPERATOR_SIGNING_COORDINATOR?: DurableObjectNamespace
+  // Wallet-scoped nonce/signature/broadcast journal for Story royalty settlement.
+  STORY_SETTLEMENT_WALLET_COORDINATOR?: DurableObjectNamespace<StorySettlementWalletCoordinatorDO>
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string

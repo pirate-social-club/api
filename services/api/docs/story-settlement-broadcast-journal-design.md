@@ -324,7 +324,7 @@ already admitted transaction.
 | Before plan insert | None | Retry request creates the same derived plan. |
 | After plan insert, before shard mirror | Coordinator plan | Retry retrieves it and repairs the mirror. |
 | After nonce reservation, before signing | Nonce + `reserving` | Expired signing lease retries signing the same call with the reserved nonce. |
-| Reserved nonce becomes permanently unsigned and its plan is cancelled or terminal | Nonce + no signed bytes | Admission freezes until the approved abandoned-nonce repair closes or safely reassigns the gap; later nonces must not continue indefinitely past an unresolved gap. |
+| Reserved nonce becomes permanently unsigned and its plan is cancelled or terminal | Nonce + no signed bytes | Admission freezes while the coordinator signs, journals, broadcasts, and confirms an operator-authorized zero-value self-transaction at the abandoned nonce. Later nonces cannot start while that repair is unresolved. |
 | After signing, before `prepared` CAS | No durable signed bytes | Lease expiry rebuilds and signs with the reserved nonce; the lost bytes were never durable and broadcast was prohibited. |
 | After `prepared` CAS, before broadcast | Signed bytes/hash/nonce | Alarm broadcasts the exact stored bytes. |
 | During/after broadcast response loss | Signed bytes/hash/nonce | Receipt/transaction/nonce reconciliation; never fresh-sign. |
@@ -511,11 +511,13 @@ identity, nonce, or transaction hash.
    settlement signer, prohibit direct signing outside the wallet-scoped coordinator, and decide the
    rotation plan before canary. Prefer a fresh coordinator-exclusive signer unless clean exclusive
    ownership of the current signer is proven.
-7. Approve an abandoned-nonce repair before coordinator integration: either atomically reassign a
-   reserved-but-unsigned nonce to the next runnable step while preserving audit identity, or consume
-   it with a separately journaled zero-value self-transaction. Test cancellation, terminal
-   configuration failure, rights-hold freezes, coordinator restart, and concurrent admission so a
-   reserved unsigned nonce cannot wedge the wallet indefinitely.
+7. **Abandoned-nonce decision — closed.** Never reassign a business call's nonce. Consume a
+   reserved-but-unsigned abandoned nonce with a separately journaled zero-value self-transaction.
+   The repair has its own derived identity, requires a bounded reason plus an immutable operator
+   authorization reference, persists signed bytes/hash before broadcast, and uses the plan's
+   versioned fee/finality policies. New nonce allocation stays frozen until the repair confirms.
+   Tests cover terminal configuration failure, rights-hold freeze, and concurrent admission; the
+   operator runbook must cover cancellation authorization and repair failures before canary.
 8. Scope and verify the web `settlement_pending` checkout/polling experience before production
    admission.
 9. Review the state machine and crash tests specifically for double-pay and nonce-gap risk.
