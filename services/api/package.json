@@ -12,6 +12,7 @@
     "dev:local:reset": "bun run scripts/reset-local-dev-storage.ts",
     "db:doctor:local": "bun run scripts/doctor-local-dev-storage.ts",
     "cancel:story-runtime-pending-tx": "bun run scripts/cancel-story-runtime-pending-tx.ts",
+    "diagnose:stuck-story-settlements": "bun run scripts/list-stuck-story-settlement-effects.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "deploy": "bun run scripts/deploy-with-version.ts",
