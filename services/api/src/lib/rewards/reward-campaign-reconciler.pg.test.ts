@@ -1143,7 +1143,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })
       expect(updated.rows[0]?.coordinator_state).toBe("reserving")
       expect(updated.rows[0]?.settlement_ref).toBeNull()
-      expect(updated.rows[0]?.broadcast_nonce).toBeNull()
+      // The production Postgres decoder omits some nullable integer keys rather
+      // than materialising them as `null`; either representation is still null.
+      expect(updated.rows[0]?.broadcast_nonce ?? null).toBeNull()
     })
   })
 
