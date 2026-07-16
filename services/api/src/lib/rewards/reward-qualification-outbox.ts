@@ -1,6 +1,4 @@
-import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
-import { rowValue, stringOrNull } from "../sql-row"
 import type { InStatement, QueryResult } from "../sql-client"
 
 type Executor = { execute(statement: InStatement | string): Promise<QueryResult> }
@@ -14,14 +12,6 @@ function utcPeriod(now: string): { key: string; start: string; end: string } {
   return { key, start, end }
 }
 
-async function songArtifactBundleId(client: Executor, postId: string): Promise<string | null> {
-  const row = await executeFirst(client, {
-    sql: "SELECT song_artifact_bundle_id FROM posts WHERE post_id = ?1 LIMIT 1",
-    args: [postId],
-  })
-  return stringOrNull(rowValue(row, "song_artifact_bundle_id"))
-}
-
 async function emit(input: {
   activity: "study" | "karaoke"
   client: Executor
@@ -32,8 +22,6 @@ async function emit(input: {
   postId: string
   userId: string
 }): Promise<boolean> {
-  const artifactBundleId = await songArtifactBundleId(input.client, input.postId)
-  if (!artifactBundleId) return false
   const period = utcPeriod(input.now)
   const result = await input.client.execute({
     sql: `
@@ -41,11 +29,14 @@ async function emit(input: {
         event_id, user_id, community_id, post_id, song_artifact_bundle_id,
         activity, qualified_at, reward_period_key, qualification_policy_version,
         evidence_summary_json, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?7)
+      )
+      SELECT ?1, ?2, ?3, ?4, p.song_artifact_bundle_id, ?5, ?6, ?7, ?8, ?9, ?6
+      FROM posts p
+      WHERE p.post_id = ?4 AND p.song_artifact_bundle_id IS NOT NULL
       ON CONFLICT (user_id, post_id, activity, reward_period_key) DO NOTHING
     `,
     args: [
-      makeId("rqo"), input.userId, input.communityId, input.postId, artifactBundleId,
+      makeId("rqo"), input.userId, input.communityId, input.postId,
       input.activity, input.now, period.key, input.policyVersion, JSON.stringify(input.evidence),
     ],
   })
@@ -62,26 +53,41 @@ export async function emitStudyQualificationIfComplete(input: {
 }): Promise<boolean> {
   if (!Number.isSafeInteger(input.targetCount) || input.targetCount <= 0) return false
   const period = utcPeriod(input.now)
-  const row = await executeFirst(input.client, {
+  const result = await input.client.execute({
     sql: `
-      SELECT COUNT(DISTINCT exercise_id) AS completed_exercises
-      FROM song_study_attempt
-      WHERE user_id = ?1 AND post_id = ?2 AND created_at >= ?3 AND created_at < ?4
+      INSERT INTO reward_qualification_outbox (
+        event_id, user_id, community_id, post_id, song_artifact_bundle_id,
+        activity, qualified_at, reward_period_key, qualification_policy_version,
+        evidence_summary_json, created_at
+      )
+      SELECT
+        ?1, ?2, ?3, ?4, p.song_artifact_bundle_id,
+        'study', ?5, ?6, 'study_completed_distinct_set_v1',
+        json_object(
+          'completed_exercises', (
+            SELECT COUNT(DISTINCT exercise_id)
+            FROM song_study_attempt
+            WHERE user_id = ?2 AND post_id = ?4 AND created_at >= ?7 AND created_at < ?8
+          ),
+          'target_exercises', CAST(?9 AS INTEGER)
+        ),
+        ?5
+      FROM posts p
+      WHERE p.post_id = ?4
+        AND p.song_artifact_bundle_id IS NOT NULL
+        AND (
+          SELECT COUNT(DISTINCT exercise_id)
+          FROM song_study_attempt
+          WHERE user_id = ?2 AND post_id = ?4 AND created_at >= ?7 AND created_at < ?8
+        ) >= ?9
+      ON CONFLICT (user_id, post_id, activity, reward_period_key) DO NOTHING
     `,
-    args: [input.userId, input.postId, period.start, period.end],
+    args: [
+      makeId("rqo"), input.userId, input.communityId, input.postId, input.now,
+      period.key, period.start, period.end, input.targetCount,
+    ],
   })
-  const completedExercises = Number(rowValue(row, "completed_exercises") ?? 0)
-  if (!Number.isSafeInteger(completedExercises) || completedExercises < input.targetCount) return false
-  return emit({
-    activity: "study",
-    client: input.client,
-    communityId: input.communityId,
-    evidence: { completed_exercises: completedExercises, target_exercises: input.targetCount },
-    now: input.now,
-    policyVersion: "study_completed_distinct_set_v1",
-    postId: input.postId,
-    userId: input.userId,
-  })
+  return (result.rowsAffected ?? 0) > 0
 }
 
 export async function emitKaraokeQualification(input: {
