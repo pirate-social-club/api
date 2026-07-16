@@ -11,6 +11,12 @@ a retry, a replacement transaction, a database update, or delivery. There is
 currently no supported operator mutation endpoint for these legacy effects.
 Never repair them with hand-written SQL.
 
+Legacy `failed_prebroadcast` parent-vault effects no longer auto-rebroadcast.
+After classification and positive nonce evidence proves non-broadcast, follow
+the legacy disposition section of
+`docs/runbooks/story-settlement-coordinator-operations.md`; coordinator nonce
+repair is not a substitute for a new reviewed legacy effect generation.
+
 ## Collect Evidence
 
 Load read-only Cloudflare credentials and RPC URLs through the normal secret
@@ -142,4 +148,3 @@ the child royalty payment, entitlement mint is last, and delivery exists only
 when the entire sequence is confirmed. Attach the before/after rows, canonical
 receipts, audit events, repair commit or admin-action version, and final scan to
 the incident.
-
