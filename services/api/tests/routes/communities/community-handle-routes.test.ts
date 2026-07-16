@@ -1088,7 +1088,9 @@ describe("community handle routes", () => {
     })).toBe("quoted")
   })
 
-  test("protocol-issued handle quotes require a linked Bitcoin Taproot wallet before payment", async () => {
+  // Re-enable these end-to-end issuance regressions only with the rebuilt issuer;
+  // the commerce kill switch intentionally prevents reaching either flow today.
+  test.skip("protocol-issued handle quotes require a linked Bitcoin Taproot wallet before payment", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1253,7 +1255,7 @@ describe("community handle routes", () => {
     }
   })
 
-  test("protocol owner wallet validation distinguishes wrong user, wrong chain, inactive, and non-taproot wallets", async () => {
+  test.skip("protocol owner wallet validation distinguishes wrong user, wrong chain, inactive, and non-taproot wallets", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1338,7 +1340,7 @@ describe("community handle routes", () => {
     }
   })
 
-  test("protocol issuance policy only enables for Spaces namespaces with a valid mode", async () => {
+  test("protocol issuance policy rejects disabled and invalid modes", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1371,10 +1373,10 @@ describe("community handle routes", () => {
       ctx.env,
       creator.accessToken,
     )
-    expect(hnsProtocolResponse.status).toBe(400)
+    expect(hnsProtocolResponse.status).toBe(403)
     const hnsProtocolError = await json(hnsProtocolResponse) as { code: string; message: string }
-    expect(hnsProtocolError.code).toBe("bad_request")
-    expect(hnsProtocolError.message).toBe("spaces_subspace issuance requires a Spaces namespace")
+    expect(hnsProtocolError.code).toBe("eligibility_failed")
+    expect(hnsProtocolError.message).toBe("Protocol-issued community names are temporarily unavailable")
   })
 
   test("claims_enabled blocks quote and claim but preserves /handles/me for existing owners", async () => {

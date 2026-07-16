@@ -30,7 +30,7 @@ export function requireProtocolIssuanceSupport(
   if (!namespaceSupportsSpacesSubspace(policy)) {
     throw eligibilityFailed("Protocol-issued names require a Spaces namespace")
   }
-  return true
+  throw eligibilityFailed("Protocol-issued community names are temporarily unavailable")
 }
 
 export function findTaprootProtocolOwnerWallet(
