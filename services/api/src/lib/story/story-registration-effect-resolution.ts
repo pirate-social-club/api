@@ -18,6 +18,7 @@ import {
 } from "./story-royalty-registration-service"
 import type { StoryRegistrationEffect } from "./story-registration-effect-store"
 import { resolveStoryRpcUrls } from "./story-runtime-config"
+import { findStorySettlementProtocolAddresses } from "./story-settlement-protocol-addresses"
 
 const STORY_IP_ASSET_REGISTRY_BY_CHAIN: Readonly<Record<number, Address>> = {
   1315: "0x77319B4031e6eF1250907aa00018B8B1c67a244b",
@@ -32,11 +33,6 @@ const STORY_CORE_METADATA_MODULE_BY_CHAIN: Readonly<Record<number, Address>> = {
 const STORY_LICENSING_MODULE_BY_CHAIN: Readonly<Record<number, Address>> = {
   1315: "0x04fbd8a2e56dd85CFD5500A4A4DfA955B9f1dE6f",
   1514: "0x04fbd8a2e56dd85CFD5500A4A4DfA955B9f1dE6f",
-}
-
-const STORY_ROYALTY_MODULE_BY_CHAIN: Readonly<Record<number, Address>> = {
-  1315: "0xD2f60c40fEbccf6311f8B47c4f2Ec6b040400086",
-  1514: "0xD2f60c40fEbccf6311f8B47c4f2Ec6b040400086",
 }
 
 const IP_REGISTERED_ABI = parseAbi([
@@ -442,7 +438,7 @@ export async function verifyStoryRegistrationReceipt(input: {
 
   const metadataModule = STORY_CORE_METADATA_MODULE_BY_CHAIN[input.effect.chainId]
   const licensingModule = STORY_LICENSING_MODULE_BY_CHAIN[input.effect.chainId]
-  const royaltyModule = STORY_ROYALTY_MODULE_BY_CHAIN[input.effect.chainId]
+  const royaltyModule = findStorySettlementProtocolAddresses(input.effect.chainId)?.royaltyModule
   const recoveryEvents = receipt.logs.flatMap((log) => {
     try {
       const decoded = decodeEventLog({
