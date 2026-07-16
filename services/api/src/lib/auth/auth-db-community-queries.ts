@@ -74,27 +74,39 @@ export async function getCommunityRowByRouteSlug(
   executor: DbExecutor,
   routeSlug: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstRow(executor, {
+  const primaryRow = await firstCommunityRow(
+    executor,
+    (columns) => `
+      SELECT ${columns}
+      FROM communities
+      WHERE route_slug = ?1
+      LIMIT 1
+    `,
+    [routeSlug],
+  )
+  if (primaryRow) {
+    return toCommunityRow(primaryRow)
+  }
+
+  const mirrorRow = await firstRow(executor, {
     sql: `
       SELECT ${communityRowColumns("c")}
       FROM communities c
-      LEFT JOIN community_namespace_bindings cnb
+      JOIN community_namespace_bindings cnb
         ON cnb.community_id = c.community_id
        AND cnb.status = 'active'
-      LEFT JOIN namespace_verifications nv
+      JOIN namespace_verifications nv
         ON nv.namespace_verification_id = cnb.namespace_verification_id
-      WHERE c.route_slug = ?1
-         OR CASE
+      WHERE CASE
               WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
               ELSE nv.normalized_root_label
             END = ?1
-      ORDER BY CASE WHEN c.route_slug = ?1 THEN 0 ELSE 1 END
       LIMIT 1
     `,
     args: [routeSlug],
   })
 
-  return row ? toCommunityRow(row) : null
+  return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
 
 export async function getCommunityRowByIdentifierCandidates(
@@ -107,7 +119,30 @@ export async function getCommunityRowByIdentifierCandidates(
   }
 
   const placeholders = normalizedCandidates.map((_, index) => `?${index + 1}`).join(", ")
-  const result = await executor.execute({
+  const primaryResult = await executor.execute({
+    sql: `
+      SELECT ${COMMUNITY_ROW_COLUMNS}
+      FROM communities
+      WHERE community_id IN (${placeholders})
+         OR route_slug IN (${placeholders})
+    `,
+    args: normalizedCandidates,
+  })
+  const primaryRows = primaryResult.rows.map((row) => toCommunityRow(row))
+
+  for (const candidate of normalizedCandidates) {
+    const byId = primaryRows.find((row) => row.community_id === candidate)
+    if (byId) {
+      return byId
+    }
+
+    const byRouteSlug = primaryRows.find((row) => row.route_slug === candidate)
+    if (byRouteSlug) {
+      return byRouteSlug
+    }
+  }
+
+  const mirrorResult = await executor.execute({
     sql: `
       SELECT ${communityRowColumns("c")},
         CASE
@@ -115,34 +150,21 @@ export async function getCommunityRowByIdentifierCandidates(
           ELSE nv.normalized_root_label
         END AS matched_namespace_route
       FROM communities c
-      LEFT JOIN community_namespace_bindings cnb
+      JOIN community_namespace_bindings cnb
         ON cnb.community_id = c.community_id
        AND cnb.status = 'active'
-      LEFT JOIN namespace_verifications nv
+      JOIN namespace_verifications nv
         ON nv.namespace_verification_id = cnb.namespace_verification_id
-      WHERE c.community_id IN (${placeholders})
-         OR c.route_slug IN (${placeholders})
-         OR CASE
+      WHERE CASE
               WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
               ELSE nv.normalized_root_label
             END IN (${placeholders})
     `,
     args: normalizedCandidates,
   })
-  const rows = result.rows.map((row) => toCommunityRow(row))
 
   for (const candidate of normalizedCandidates) {
-    const byId = rows.find((row) => row.community_id === candidate)
-    if (byId) {
-      return byId
-    }
-
-    const byRouteSlug = rows.find((row) => row.route_slug === candidate)
-    if (byRouteSlug) {
-      return byRouteSlug
-    }
-
-    const namespaceMatch = result.rows.find((row) => row.matched_namespace_route === candidate)
+    const namespaceMatch = mirrorResult.rows.find((row) => row.matched_namespace_route === candidate)
     if (namespaceMatch) {
       return toCommunityRow(namespaceMatch)
     }
@@ -155,23 +177,34 @@ export async function getCommunityRowByNamespaceVerificationId(
   executor: DbExecutor,
   namespaceVerificationId: string,
 ): Promise<CommunityRow | null> {
-  const row = await firstRow(executor, {
+  const primaryRow = await firstCommunityRow(
+    executor,
+    (columns) => `
+      SELECT ${columns}
+      FROM communities
+      WHERE namespace_verification_id = ?1
+      LIMIT 1
+    `,
+    [namespaceVerificationId],
+  )
+  if (primaryRow) {
+    return toCommunityRow(primaryRow)
+  }
+
+  const mirrorRow = await firstRow(executor, {
     sql: `
       SELECT ${communityRowColumns("c")}
       FROM communities c
-      LEFT JOIN community_namespace_bindings cnb
+      JOIN community_namespace_bindings cnb
         ON cnb.community_id = c.community_id
        AND cnb.status = 'active'
-       AND cnb.namespace_verification_id = ?1
-      WHERE c.namespace_verification_id = ?1
-         OR cnb.namespace_verification_id = ?1
-      ORDER BY CASE WHEN c.namespace_verification_id = ?1 THEN 0 ELSE 1 END
+      WHERE cnb.namespace_verification_id = ?1
       LIMIT 1
     `,
     args: [namespaceVerificationId],
   })
 
-  return row ? toCommunityRow(row) : null
+  return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
 
 export async function listCreatedCommunityRowsByCreatorUserId(
