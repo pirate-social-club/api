@@ -41,9 +41,6 @@
     }
   },
   "deferred": {
-    "1132_paid_purchase_settlement_recovery.sql": {
-      "rationale": "The migration prepares recovery metadata and indexing for paid purchase settlement, but this API commit does not read or write funding_locked_at, failure_disposition, or broadcast_tx_ref outside its generated provisioning snapshot. Require it when the recovery runtime lands."
-    },
     "1133_multi_namespace_bindings.sql": {
       "rationale": "The migration prepares primary/mirror namespace roles, but this API commit still uses the existing single-binding behavior and does not read or write namespace_role outside its generated provisioning snapshot. Require it when multi-namespace runtime behavior lands."
     }
