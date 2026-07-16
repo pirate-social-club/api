@@ -40,17 +40,15 @@ describe("Story settlement transaction builder", () => {
     expect(() => resolveStorySettlementProtocolAddresses(1)).toThrow("unsupported_story_settlement_chain:1")
   })
 
-  test("builds exact deficit wrap, exact approval, then royalty payment", () => {
+  test("always builds full wrap, exact approval, then royalty payment", () => {
     const addresses = resolveStorySettlementProtocolAddresses(1315)
     const calls = buildStoryRoyaltyPaymentCalls({
       chainId: 1315,
       receiverIpId: RECEIVER,
       amount: 100n,
-      wipBalance: 30n,
-      wipAllowance: 20n,
     })
     expect(calls.map((call) => call.kind)).toEqual(["wip_wrap", "wip_approve", "story_royalty_payment"])
-    expect(calls[0]).toMatchObject({ target: addresses.wipToken, value: 70n })
+    expect(calls[0]).toMatchObject({ target: addresses.wipToken, value: 100n })
     expect(calls[0]!.calldata.slice(0, 10)).toBe("0xd0e30db0")
     expect(decodeFunctionData({ abi: WIP_ABI, data: calls[0]!.calldata }).functionName).toBe("deposit")
     expect(calls[1]!.calldata.slice(0, 10)).toBe("0x095ea7b3")
@@ -65,15 +63,13 @@ describe("Story settlement transaction builder", () => {
     expect(calls[2]!.calldata.slice(0, 10)).toBe("0xd2577f3b")
   })
 
-  test("omits prerequisites already satisfied by the ordered state snapshot", () => {
+  test("has no balance-aware planning surface", () => {
     expect(buildStoryRoyaltyPaymentCalls({
       chainId: 1315,
       receiverIpId: RECEIVER,
       payerIpId: PARENT,
       amount: 100n,
-      wipBalance: 100n,
-      wipAllowance: 100n,
-    }).map((call) => call.kind)).toEqual(["story_royalty_payment"])
+    }).map((call) => call.kind)).toEqual(["wip_wrap", "wip_approve", "story_royalty_payment"])
   })
 
   test("matches the SDK royalty calldata while the mock transport prohibits writes", async () => {
@@ -101,9 +97,7 @@ describe("Story settlement transaction builder", () => {
       chainId: 1315,
       receiverIpId: RECEIVER,
       amount: 100n,
-      wipBalance: 100n,
-      wipAllowance: 100n,
-    })[0]!
+    })[2]!
     expect(localPayment.calldata).toBe(sdkResult.encodedTxData.data)
     expect(localPayment.target).toBe(sdkResult.encodedTxData.to)
     expect(rpcMethods).toEqual(["eth_call"])

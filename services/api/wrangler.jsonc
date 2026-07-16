@@ -63,6 +63,10 @@
         "class_name": "OperatorSigningCoordinatorDO"
       },
       {
+        "name": "STORY_SETTLEMENT_WALLET_COORDINATOR",
+        "class_name": "StorySettlementWalletCoordinatorDO"
+      },
+      {
         "name": "COMMENT_CREATE_RATE_LIMITER",
         "class_name": "CommentCreateRateLimiterDO"
       }
@@ -88,6 +92,10 @@
     {
       "tag": "v1_comment_create_rate_limiter",
       "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
+    },
+    {
+      "tag": "v1_story_settlement_wallet_coordinator",
+      "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
     }
   ],
   "vars": {
@@ -176,6 +184,10 @@
             "class_name": "OperatorSigningCoordinatorDO"
           },
           {
+            "name": "STORY_SETTLEMENT_WALLET_COORDINATOR",
+            "class_name": "StorySettlementWalletCoordinatorDO"
+          },
+          {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
           }
@@ -201,6 +213,10 @@
         {
           "tag": "v1_comment_create_rate_limiter",
           "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
+        },
+        {
+          "tag": "v1_story_settlement_wallet_coordinator",
+          "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
         }
       ],
       "services": [
@@ -335,6 +351,10 @@
             "class_name": "OperatorSigningCoordinatorDO"
           },
           {
+            "name": "STORY_SETTLEMENT_WALLET_COORDINATOR",
+            "class_name": "StorySettlementWalletCoordinatorDO"
+          },
+          {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
           }
@@ -360,6 +380,10 @@
         {
           "tag": "v1_comment_create_rate_limiter",
           "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
+        },
+        {
+          "tag": "v1_story_settlement_wallet_coordinator",
+          "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
         }
       ],
       "services": [
@@ -522,6 +546,10 @@
             "class_name": "OperatorSigningCoordinatorDO"
           },
           {
+            "name": "STORY_SETTLEMENT_WALLET_COORDINATOR",
+            "class_name": "StorySettlementWalletCoordinatorDO"
+          },
+          {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
           }
@@ -547,6 +575,10 @@
         {
           "tag": "v1_comment_create_rate_limiter",
           "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
+        },
+        {
+          "tag": "v1_story_settlement_wallet_coordinator",
+          "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
         }
       ],
       "services": [

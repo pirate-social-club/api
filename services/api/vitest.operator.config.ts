@@ -5,6 +5,7 @@ export default defineWorkersConfig({
     include: [
       "tests/integration/crl.integration.ts",
       "tests/integration/operator-signing-coordinator.integration.ts",
+      "tests/integration/story-wallet.integration.ts",
     ],
     poolOptions: {
       workers: {
@@ -20,6 +21,10 @@ export default defineWorkersConfig({
             },
             OPERATOR_SIGNING_COORDINATOR: {
               className: "OperatorSigningCoordinatorDO",
+              useSQLite: true,
+            },
+            STORY_SETTLEMENT_WALLET_COORDINATOR: {
+              className: "StorySettlementWalletCoordinatorDO",
               useSQLite: true,
             },
           },

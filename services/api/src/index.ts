@@ -74,6 +74,7 @@ import {
 import { LiveRoomRuntimeDO } from "./lib/communities/live-rooms/runtime"
 import { KaraokeSessionRuntimeDO } from "./lib/karaoke/session-do"
 import { OperatorSigningCoordinatorDO, registerOperatorChainPrimitives } from "./lib/communities/bookings/operator-signing-coordinator-do"
+import { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settlement-wallet-coordinator-do"
 import { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
 import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
 import type { Env } from "./env"
@@ -88,6 +89,7 @@ import {
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
 export { OperatorSigningCoordinatorDO }
+export { StorySettlementWalletCoordinatorDO }
 export { CommentCreateRateLimiterDO }
 // Wire the ethers-backed signer into the coordinator DO at worker load. Keeping this out of the DO
 // module itself means test worker bundles (which omit this entry) never pull ethers/`ws`.
