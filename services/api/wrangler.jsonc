@@ -438,7 +438,7 @@
         "REWARDS_ACCRUAL_ENABLED": "true",
         "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "true",
-        "REWARDS_PAYOUTS_ENABLED": "false",
+        "REWARDS_PAYOUTS_ENABLED": "true",
         "REWARDS_CAMPAIGNS_ENABLED": "true",
         "REWARDS_IDENTITY_PROVIDER": "very",
         "REWARDS_CAMPAIGN_CHAIN_ID": "84532",
