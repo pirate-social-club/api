@@ -303,6 +303,9 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "triggers": {
+        "crons": ["*/1 * * * *"]
+      },
       "cache": {
         "enabled": true
       },

@@ -6,6 +6,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true, false)).toEqual([
       "reconcile_booking_settlements",
       "reconcile_royalty_allocation_verifications",
+      "reconcile_reward_campaigns",
       "process_community_jobs",
       "reconcile_d1_provisioning",
       "monitor_reward_campaigns",
@@ -16,6 +17,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(false, false)).toEqual([
       "reconcile_booking_settlements",
       "reconcile_royalty_allocation_verifications",
+      "reconcile_reward_campaigns",
       "process_community_jobs",
       "monitor_reward_campaigns",
     ])
@@ -25,6 +27,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true, true)).toEqual([
       "reconcile_booking_settlements",
       "reconcile_royalty_allocation_verifications",
+      "reconcile_reward_campaigns",
       "process_community_jobs",
       "reconcile_d1_provisioning",
       "revalidate_hns_namespaces",

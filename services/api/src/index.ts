@@ -904,10 +904,11 @@ const SCHEDULED_JOB_CONCURRENCY = 2
 // and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
 const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // Booking settlement and royalty verification occupy the first two concurrency
-// slots. Guarantee that community delivery jobs also start even when both money
-// paths run past the batch start deadline; otherwise queued preview/publish jobs
-// can remain unclaimed indefinitely with attempt_count=0.
-const SCHEDULED_MINIMUM_PRIORITY_STARTS = 3
+// slots. Reward campaign reconciliation is also a money path, and community
+// delivery must retain its liveness guarantee even when all three money paths run
+// past the batch start deadline; otherwise credits or queued preview/publish jobs
+// can remain unclaimed indefinitely.
+const SCHEDULED_MINIMUM_PRIORITY_STARTS = 4
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
@@ -916,6 +917,7 @@ const SCHEDULED_LEASE_TTL_MS = 120_000
 type ScheduledPriorityJobName =
   | "reconcile_booking_settlements"
   | "reconcile_royalty_allocation_verifications"
+  | "reconcile_reward_campaigns"
   | "process_community_jobs"
   | "reconcile_d1_provisioning"
   | "revalidate_hns_namespaces"
@@ -928,6 +930,7 @@ export function scheduledPriorityJobNames(
   return [
     "reconcile_booking_settlements",
     "reconcile_royalty_allocation_verifications",
+    "reconcile_reward_campaigns",
     "process_community_jobs",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
@@ -972,16 +975,17 @@ const handler: ExportedHandler<Env> = {
     const priorityJobRuns: Record<ScheduledPriorityJobName, () => Promise<void>> = {
       reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
+      reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two: royalty verification keeps the second start slot, then
-    // queued community delivery/Story jobs start as soon as either money-path task
-    // completes. Keeping them outside the rotating tail prevents release-critical
-    // jobs from waiting several cron ticks. D1 remains ahead of the slower,
-    // latency-tolerant HNS revalidation and reward monitor.
+    // Concurrency is two. The first four starts guarantee booking settlement,
+    // royalty verification, reward reconciliation, and queued community delivery
+    // each get a turn even if earlier money-path tasks run past the start deadline.
+    // D1 remains ahead of the slower, latency-tolerant HNS revalidation and reward
+    // monitor.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
       canRunD1Reconciler,
       isHnsNamespaceRevalidationEnabled(env),
@@ -992,7 +996,6 @@ const handler: ExportedHandler<Env> = {
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
-      { name: "reconcile_reward_campaigns", run: () => reconcileScheduledRewardCampaigns(env) },
       { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
