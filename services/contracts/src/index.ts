@@ -189,6 +189,42 @@ export type CourtyardWalletInventoryGroup = {
   count: number;
 };
 
+export type NftGateCapabilitySource = {
+  id: string;
+  label: string;
+  chain_namespace: string;
+  contract_address: string;
+  standard: "erc721" | "erc1155";
+  trait_filters_supported: boolean;
+  facet_keys: Array<string>;
+  facet_labels?: Record<string, string>;
+  max_values_per_facet: number;
+  inventory_provider?: string | null;
+  fixed_match?: NftGateInventoryMatch;
+  min_quantity_supported: boolean;
+};
+
+export type NftGateCapabilitySourceListResponse = {
+  sources: Array<NftGateCapabilitySource>;
+};
+
+export type NftGateFacetValue = {
+  value: string;
+  approximate_count?: number;
+};
+
+export type NftGateFacetValuePage = {
+  values: Array<NftGateFacetValue>;
+  next_cursor: string | null;
+  catalog_fetched_at: string;
+};
+
+export type NftGateCatalogUnavailableResponse = {
+  code: "nft_gate_catalog_unavailable";
+  message: string;
+  retryable: true;
+};
+
 export type ProfileActivityPostPage = {
   kind: "post";
   post: LocalizedPostResponse;
@@ -1355,6 +1391,7 @@ export type CommunityHandleQuote = {
 
 export type CommunityHandleQuoteRequest = {
   desired_label: string;
+  namespace_verification?: string | null;
 };
 
 export type CommunityHandleReserveRequest = {
@@ -3768,6 +3805,8 @@ type NamespaceAttachmentInput = {
   route_family?: string | null;
 };
 
+type NftGateInventoryMatch = Record<string, (string | Array<string>)>;
+
 type PolymarketMarketEmbed = {
   embed: string;
   embed_key: string;
@@ -4144,6 +4183,8 @@ export const apiRoutes = {
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
   profilesMeCourtyardInventory: "/profiles/me/courtyard-inventory",
+  gateCapabilitiesNftSources: "/gate-capabilities/nft/sources",
+  gateCapabilitiesNftSourceFacetValues: (sourceId: string, facetKey: string) => `/gate-capabilities/nft/sources/${sourceId}/facets/${facetKey}/values`,
   walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,
   publicNameQuotes: "/public-names/quotes",
   publicNameClaims: "/public-names/claims",

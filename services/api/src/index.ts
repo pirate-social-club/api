@@ -14,6 +14,7 @@ import communities from "./routes/communities"
 import discovery from "./routes/discovery"
 import karaokeSessions from "./routes/karaoke-sessions"
 import geo from "./routes/geo"
+import gateCapabilities from "./routes/gate-capabilities"
 import jobs from "./routes/jobs"
 import mcp from "./routes/mcp"
 import notifications from "./routes/notifications"
@@ -291,6 +292,7 @@ app.route("/comments", comments)
 app.route("/communities", communities)
 app.route("/", publicReadApp)
 app.route("/geo", geo)
+app.route("/gate-capabilities", gateCapabilities)
 app.route("/jobs", jobs)
 app.route("/karaoke/sessions", karaokeSessions)
 app.route("/mcp", mcp)
