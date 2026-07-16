@@ -923,6 +923,7 @@ describe("community handle routes", () => {
       quoteId: quote.id,
     })).toBe("quoted")
 
+    const fundingTxRef = `0x${"ef".repeat(32)}`
     setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
       txRef: input.fundingTxRef,
       fromAddress: input.buyerAddress,
@@ -930,13 +931,19 @@ describe("community handle routes", () => {
       tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
       amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
       chainRef: "eip155:84532",
+      observation: {
+        chainId: 84532,
+        logIndex: 13,
+        blockNumber: 12_347,
+        blockHash: `0x${"ca".repeat(32)}`,
+      },
     }))
     const paidClaimResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/claim`,
       {
         quote: quote.id,
         settlement_wallet_attachment: creator.primaryWalletAttachment,
-        funding_tx_ref: "0xfunded",
+        funding_tx_ref: fundingTxRef,
       },
       ctx.env,
       creator.accessToken,
@@ -950,12 +957,27 @@ describe("community handle routes", () => {
     }
     expect(paidClaim.label).toBe("longname")
     expect(paidClaim.price_cents).toBe(500)
-    expect(paidClaim.funding_tx_ref).toBe("0xfunded")
+    expect(paidClaim.funding_tx_ref).toBe(fundingTxRef)
     expect(await getLocalHandleQuoteStatus({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       quoteId: quote.id,
     })).toBe("claimed")
+
+    const registryReceipt = await ctx.client.execute({
+      sql: `
+        SELECT match_status, consumer_rail, consumer_id, quote_id
+        FROM observed_funding_receipts
+        WHERE tx_hash = ?1 AND log_index = 13
+      `,
+      args: [fundingTxRef],
+    })
+    expect(registryReceipt.rows[0]).toMatchObject({
+      match_status: "claimed",
+      consumer_rail: "community_handle",
+      consumer_id: `${communityId}:${rawHandleQuoteId(quote.id)}`,
+      quote_id: rawHandleQuoteId(quote.id),
+    })
 
     const retryClaimResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/claim`,
@@ -971,7 +993,7 @@ describe("community handle routes", () => {
     }
     expect(retryClaim.id).toBe(paidClaim.id)
     expect(retryClaim.label).toBe("longname")
-    expect(retryClaim.funding_tx_ref).toBe("0xfunded")
+    expect(retryClaim.funding_tx_ref).toBe(fundingTxRef)
   })
 
   test("paid handle claim leaves quote open when label becomes unavailable after payment verification", async () => {

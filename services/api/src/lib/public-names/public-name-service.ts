@@ -8,7 +8,10 @@ import {
   resolvePirateCheckoutSourceChainName,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../communities/commerce/checkout-config"
-import { verifyPirateCheckoutUsdcFunding } from "../communities/commerce/funding-proof-service"
+import {
+  claimVerifiedBuyerFundingReceipt,
+  verifyPirateCheckoutUsdcFunding,
+} from "../communities/commerce/funding-proof-service"
 import { badRequestError, conflictError, eligibilityFailed, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
@@ -468,14 +471,24 @@ export async function claimPublicPirateName(input: {
     throw eligibilityFailed("Public pirate name quote has expired")
   }
 
-  await verifyPirateCheckoutUsdcFunding({
+  const buyerWalletAddress = requiredString(quote, "buyer_wallet_address_normalized")
+  const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
     env: input.env,
     quoteId,
     amountUsd: requiredNumber(quote, "price_cents") / 100,
-    buyerAddress: requiredString(quote, "buyer_wallet_address_normalized"),
+    buyerAddress: buyerWalletAddress,
     fundingTxRef,
     fundingDestinationAddress: resolvePirateCheckoutOperatorAddress(input.env),
     sourceChainJson: buildSourceChainJson(input.env),
+  })
+  await claimVerifiedBuyerFundingReceipt({
+    client: input.client,
+    receipt: fundingReceipt,
+    fallbackSenderAddress: buyerWalletAddress,
+    consumerRail: "public_name",
+    consumerId: quoteId,
+    quoteId,
+    now: checkedAt,
   })
 
   // Single-use funding tx: reject a payment already consumed by a DIFFERENT claimed

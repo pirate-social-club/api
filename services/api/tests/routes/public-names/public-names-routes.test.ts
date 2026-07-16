@@ -42,6 +42,7 @@ async function waitForNextOneSecondRateLimitWindow(bufferMs = 75): Promise<void>
 
 function setSuccessfulPublicNameFundingVerifier(input: {
   env: Parameters<typeof resolvePirateCheckoutOperatorAddress>[0]
+  withObservation?: boolean
   calls?: Array<{
     quoteId: string
     buyerAddress: string
@@ -63,6 +64,14 @@ function setSuccessfulPublicNameFundingVerifier(input: {
       tokenAddress: resolvePirateCheckoutUsdcTokenAddress(input.env),
       amountAtomic: String(BigInt(Math.round(fundingInput.quote.final_price_usd * 1_000_000))),
       chainRef: "eip155:84532",
+      ...(input.withObservation ? {
+        observation: {
+          chainId: 84532,
+          logIndex: 11,
+          blockNumber: 12_346,
+          blockHash: `0x${"bc".repeat(32)}`,
+        },
+      } : {}),
     }
   })
 }
@@ -101,7 +110,8 @@ describe("public names routes", () => {
       amountUsd: number
       fundingTxRef: string
     }> = []
-    setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls })
+    setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls, withObservation: true })
+    const fundingTxRef = `0x${"de".repeat(32)}`
 
     const quoteResponse = await requestJson("http://pirate.test/public-names/quotes", {
       desired_label: "agent-public-name",
@@ -135,7 +145,7 @@ describe("public names routes", () => {
 
     const claimResponse = await requestJson("http://pirate.test/public-names/claims", {
       quote: quoteBody.quote,
-      funding_tx_ref: "0xpublicpiratenamefunding",
+      funding_tx_ref: fundingTxRef,
     }, ctx.env, {
       authorization: "Payment test-x402-credential",
     })
@@ -162,14 +172,29 @@ describe("public names routes", () => {
     expect(claimBody.registration.chain_ref).toBe("eip155:84532")
     expect(claimBody.registration.price_paid_cents).toBe(500)
     expect(claimBody.quote).toBe(quoteBody.quote)
-    expect(claimBody.funding_tx_ref).toBe("0xpublicpiratenamefunding")
-    expect(claimBody.settlement_tx_ref).toBe("0xpublicpiratenamefunding")
+    expect(claimBody.funding_tx_ref).toBe(fundingTxRef)
+    expect(claimBody.settlement_tx_ref).toBe(fundingTxRef)
     expect(fundingCalls).toEqual([{
       quoteId: quoteBody.quote,
       buyerAddress: buyerWallet.toLowerCase(),
       amountUsd: 5,
-      fundingTxRef: "0xpublicpiratenamefunding",
+      fundingTxRef,
     }])
+
+    const registryReceipt = await ctx.client.execute({
+      sql: `
+        SELECT match_status, consumer_rail, consumer_id, quote_id
+        FROM observed_funding_receipts
+        WHERE tx_hash = ?1 AND log_index = 11
+      `,
+      args: [fundingTxRef],
+    })
+    expect(registryReceipt.rows[0]).toMatchObject({
+      match_status: "claimed",
+      consumer_rail: "public_name",
+      consumer_id: quoteBody.quote,
+      quote_id: quoteBody.quote,
+    })
 
     const statusResponse = await app.request("http://pirate.test/public-names/agent-public-name/status", {}, ctx.env)
     expect(statusResponse.status).toBe(200)
