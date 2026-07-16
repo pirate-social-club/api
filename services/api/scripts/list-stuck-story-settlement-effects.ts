@@ -18,6 +18,8 @@ const STORY_EFFECT_KINDS = [
   "story_parent_royalty_vault_transfer",
   "story_entitlement_mint",
 ] as const
+const FUNDING_EFFECT_KIND = "buyer_funding_receipt" as const
+const SCANNED_EFFECT_KINDS = [FUNDING_EFFECT_KIND, ...STORY_EFFECT_KINDS] as const
 
 type Options = {
   concurrency: number
@@ -26,7 +28,10 @@ type Options = {
   limitDbs: number
   limitPerDb: number
   olderThanMinutes: number
-  rpcUrl: string
+  fundingChainId: number
+  fundingRpcUrl: string
+  storyChainId: number
+  storyRpcUrl: string
   signerAddress: string | null
   wranglerConfig: string
 }
@@ -37,6 +42,7 @@ type EffectRow = {
   quote_id: string
   purchase_id: string
   effect_kind: string
+  effect_key: string
   settlement_ref: string | null
   provider_receipt_ref: string | null
   submitted_at: string | null
@@ -44,17 +50,29 @@ type EffectRow = {
   attempt_count: number
 }
 
+function firstNonempty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const normalized = value?.trim() ?? ""
+    if (normalized) return normalized
+  }
+  return ""
+}
+
 function usage(exitCode = 1): never {
   console.error(`Usage:
   bun scripts/list-stuck-story-settlement-effects.ts [options]
 
-Read-only scan of stale submitted Story settlement effects. This command issues only SELECT and
+Read-only scan of stale submitted buyer-funding and Story settlement effects. This command issues only SELECT and
 JSON-RPC read calls. It never updates an effect, signs a transaction, or broadcasts.
 
 Options:
   --env production|staging   Wrangler environment. Default: staging
   --older-than-minutes N     Minimum submitted age. Default: 30
-  --rpc-url URL              Story RPC URL (or STORY_RPC_URL env); omit to skip chain reads
+  --funding-rpc-url URL      Funding-chain RPC (or PIRATE_CHECKOUT_RPC_URL / Base RPC env)
+  --funding-chain-id N       Expected funding chain ID. Default: PIRATE_CHECKOUT_SOURCE_CHAIN_ID or 84532
+  --story-rpc-url URL        Story RPC URL (or STORY_RPC_URL env); omit to skip Story chain reads
+  --story-chain-id N         Expected Story chain ID. Default: STORY_CHAIN_ID or 1315
+  --rpc-url URL              Legacy alias for --story-rpc-url
   --signer-address ADDRESS   Optional expected settlement signer for nonce summary
   --concurrency N            Parallel D1 scans. Default: 4
   --limit-dbs N              Limit configured databases; 0 means all. Default: 0
@@ -65,6 +83,13 @@ Options:
 }
 
 export function parseArgs(argv: string[]): Options {
+  const defaultFundingChainId = Number(process.env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID || 84532)
+  const defaultFundingRpc = firstNonempty(
+    process.env.PIRATE_CHECKOUT_RPC_URL,
+    defaultFundingChainId === 84532 ? process.env.BASE_SEPOLIA_RPC_URL : undefined,
+    defaultFundingChainId === 8453 ? process.env.BASE_MAINNET_RPC_URL : undefined,
+    defaultFundingChainId === 8453 ? process.env.ETHEREUM_RPC_URL : undefined,
+  )
   const options: Options = {
     concurrency: 4,
     cwd: "",
@@ -72,7 +97,10 @@ export function parseArgs(argv: string[]): Options {
     limitDbs: 0,
     limitPerDb: 100,
     olderThanMinutes: 30,
-    rpcUrl: process.env.STORY_RPC_URL ?? "",
+    fundingChainId: defaultFundingChainId,
+    fundingRpcUrl: defaultFundingRpc,
+    storyChainId: Number(process.env.STORY_CHAIN_ID || 1315),
+    storyRpcUrl: process.env.STORY_RPC_URL?.trim() ?? "",
     signerAddress: process.env.STORY_SETTLEMENT_SIGNER_ADDRESS?.trim() || null,
     wranglerConfig: resolve("../community-d1-shard/wrangler.jsonc"),
   }
@@ -83,11 +111,17 @@ export function parseArgs(argv: string[]): Options {
       case "--concurrency": options.concurrency = Number(value); index += 2; break
       case "--cwd": options.cwd = resolve(value); index += 2; break
       case "--env": options.env = value as Options["env"]; index += 2; break
+      case "--funding-chain-id": options.fundingChainId = Number(value); index += 2; break
+      case "--funding-rpc-url": options.fundingRpcUrl = value.trim(); index += 2; break
       case "--limit-dbs": options.limitDbs = Number(value); index += 2; break
       case "--limit-per-db": options.limitPerDb = Number(value); index += 2; break
       case "--older-than-minutes": options.olderThanMinutes = Number(value); index += 2; break
-      case "--rpc-url": options.rpcUrl = value.trim(); index += 2; break
+      // Commerce ops: remove the #499 spelling after 2026-08-16, once saved
+      // invocations have moved to the rail-specific option.
+      case "--rpc-url": options.storyRpcUrl = value.trim(); index += 2; break
       case "--signer-address": options.signerAddress = value.trim() || null; index += 2; break
+      case "--story-chain-id": options.storyChainId = Number(value); index += 2; break
+      case "--story-rpc-url": options.storyRpcUrl = value.trim(); index += 2; break
       case "--wrangler-config": options.wranglerConfig = resolve(value); index += 2; break
       case "-h":
       case "--help": usage(0)
@@ -98,9 +132,11 @@ export function parseArgs(argv: string[]): Options {
   if (options.env !== "production" && options.env !== "staging") throw new Error("--env must be production or staging")
   for (const [name, value, allowZero] of [
     ["--concurrency", options.concurrency, false],
+    ["--funding-chain-id", options.fundingChainId, false],
     ["--limit-dbs", options.limitDbs, true],
     ["--limit-per-db", options.limitPerDb, false],
     ["--older-than-minutes", options.olderThanMinutes, false],
+    ["--story-chain-id", options.storyChainId, false],
   ] as const) {
     if (!Number.isInteger(value) || value < (allowZero ? 0 : 1)) throw new Error(`${name} must be ${allowZero ? "a non-negative" : "a positive"} integer`)
   }
@@ -137,13 +173,23 @@ export function buildStuckEffectsSelect(input: { cutoff: string; limit: number }
   const cutoff = input.cutoff.replaceAll("'", "''")
   return `
 SELECT purchase_settlement_effect_id, community_id, quote_id, purchase_id, effect_kind,
-       settlement_ref, provider_receipt_ref, submitted_at, updated_at, attempt_count
+       effect_key, settlement_ref, provider_receipt_ref, submitted_at, updated_at, attempt_count
 FROM purchase_settlement_effects
 WHERE status = 'submitted'
-  AND effect_kind IN (${STORY_EFFECT_KINDS.map((kind) => `'${kind}'`).join(", ")})
+  AND effect_kind IN (${SCANNED_EFFECT_KINDS.map((kind) => `'${kind}'`).join(", ")})
   AND COALESCE(submitted_at, updated_at) <= '${cutoff}'
 ORDER BY COALESCE(submitted_at, updated_at) ASC
 LIMIT ${input.limit}`.trim()
+}
+
+export function selectEffectTransactionHash(row: Pick<EffectRow,
+  "effect_kind" | "effect_key" | "settlement_ref" | "provider_receipt_ref"
+>): string | null {
+  if (row.effect_kind === FUNDING_EFFECT_KIND) return row.effect_key.trim() || null
+  return selectSettlementTransactionHash({
+    settlementRef: row.settlement_ref,
+    providerReceiptRef: row.provider_receipt_ref,
+  })
 }
 
 async function inspectDb(options: Options, db: string, cutoff: string): Promise<{ db: string; rows: EffectRow[]; error?: string }> {
@@ -181,20 +227,44 @@ async function readEvidence(provider: JsonRpcProvider, hash: string): Promise<Tr
   }
 }
 
+async function assertProviderChain(input: {
+  label: "funding" | "story"
+  provider: JsonRpcProvider
+  expectedChainId: number
+}): Promise<void> {
+  const network = await input.provider.getNetwork()
+  const actualChainId = Number(network.chainId)
+  assertExpectedChainId({ label: input.label, expectedChainId: input.expectedChainId, actualChainId })
+}
+
+export function assertExpectedChainId(input: {
+  label: "funding" | "story"
+  expectedChainId: number
+  actualChainId: number
+}): void {
+  if (input.actualChainId !== input.expectedChainId) {
+    throw new Error(`${input.label}_rpc_chain_mismatch:expected_${input.expectedChainId}:actual_${input.actualChainId}`)
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2))
   const cutoff = new Date(Date.now() - options.olderThanMinutes * 60_000).toISOString()
+  const fundingProvider = options.fundingRpcUrl ? new JsonRpcProvider(options.fundingRpcUrl) : null
+  const storyProvider = options.storyRpcUrl ? new JsonRpcProvider(options.storyRpcUrl) : null
+  await Promise.all([
+    fundingProvider ? assertProviderChain({ label: "funding", provider: fundingProvider, expectedChainId: options.fundingChainId }) : null,
+    storyProvider ? assertProviderChain({ label: "story", provider: storyProvider, expectedChainId: options.storyChainId }) : null,
+  ])
   const dbs = await discoverDbs(options)
   if (dbs.length === 0) throw new Error("no_community_databases_discovered")
   const scanned = await mapConcurrent(dbs, options.concurrency, (db) => inspectDb(options, db, cutoff))
-  const provider = options.rpcUrl ? new JsonRpcProvider(options.rpcUrl) : null
   const effects = scanned.flatMap(({ db, rows }) => rows.map((row) => ({ db, row })))
   const reports = []
   for (const { db, row } of effects) {
-    const transactionHash = selectSettlementTransactionHash({
-      settlementRef: row.settlement_ref,
-      providerReceiptRef: row.provider_receipt_ref,
-    })
+    const evidenceChain = row.effect_kind === FUNDING_EFFECT_KIND ? "funding" : "story"
+    const provider = evidenceChain === "funding" ? fundingProvider : storyProvider
+    const transactionHash = selectEffectTransactionHash(row)
     let evidence: TransactionEvidence | undefined
     let evidenceError: "rpc_read_failed" | null = null
     if (provider && transactionHash && isTransactionHash(transactionHash)) {
@@ -208,6 +278,7 @@ async function main(): Promise<void> {
       quote_id: row.quote_id,
       purchase_id: row.purchase_id,
       effect_kind: row.effect_kind,
+      evidence_chain: evidenceChain,
       submitted_at: row.submitted_at,
       updated_at: row.updated_at,
       attempt_count: Number(row.attempt_count),
@@ -222,10 +293,10 @@ async function main(): Promise<void> {
     })
   }
   let signerNonce: { latest: number; pending: number } | null = null
-  if (provider && options.signerAddress) {
+  if (storyProvider && options.signerAddress) {
     const [latest, pending] = await Promise.all([
-      provider.getTransactionCount(options.signerAddress, "latest"),
-      provider.getTransactionCount(options.signerAddress, "pending"),
+      storyProvider.getTransactionCount(options.signerAddress, "latest"),
+      storyProvider.getTransactionCount(options.signerAddress, "pending"),
     ])
     signerNonce = { latest, pending }
   }
@@ -233,6 +304,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     mode: "read_only",
     environment: options.env,
+    expected_chain_ids: { funding: options.fundingChainId, story: options.storyChainId },
+    chain_reads_requested: { funding: Boolean(fundingProvider), story: Boolean(storyProvider) },
     cutoff,
     databases_scanned: dbs.length,
     scan_complete: databaseErrors.length === 0,
