@@ -180,6 +180,51 @@ describe("evaluateMembershipGatePolicy", () => {
       }])
     })
 
+    test("accepts canonical Base USDC and evaluates it through the asset-specific adapter", async () => {
+      const assetId = "eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+      let queriedAssetId = ""
+      setAssetBalanceReaderForTests(async (candidate) => {
+        queriedAssetId = candidate
+        return 10_000_000n
+      })
+      const policy = validateGatePolicy(atomGate({ type: "asset_balance", asset_id: assetId, min_amount_atomic: "10000000" }))
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy,
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_base",
+          chain_namespace: "eip155:8453",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      })
+      expect(result.outcome).toBe("passed")
+      expect(queriedAssetId).toBe(assetId)
+    })
+
+    test("briefly caches successful balance reads by asset and address", async () => {
+      let calls = 0
+      setAssetBalanceReaderForTests(async () => {
+        calls += 1
+        return 10n
+      })
+      const input = {
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" } as GateAtom),
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_cache",
+          chain_namespace: "eip155:1",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      }
+      expect((await evaluateMembershipGatePolicy(input)).outcome).toBe("passed")
+      expect((await evaluateMembershipGatePolicy(input)).outcome).toBe("passed")
+      expect(calls).toBe(1)
+    })
+
     test("queries an EVM address attached through Polygon for an Ethereum-mainnet asset", async () => {
       setAssetBalanceReaderForTests(async () => 10n)
       const result = await evaluateMembershipGatePolicy({
