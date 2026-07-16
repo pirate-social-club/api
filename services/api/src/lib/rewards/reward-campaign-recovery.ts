@@ -70,7 +70,7 @@ export async function recoverRewardCampaignIncident(input: {
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   return withTransaction(input.client, "write", async (tx) => {
     const campaignResult = await tx.execute({
-      sql: `SELECT status, status_before_operational_hold FROM reward_campaigns WHERE reward_campaign_id = ?1${rowLocks ? " FOR UPDATE" : ""}`,
+      sql: `SELECT status, status_before_operational_hold, ends_at FROM reward_campaigns WHERE reward_campaign_id = ?1${rowLocks ? " FOR UPDATE" : ""}`,
       args: [input.campaignId],
     })
     const campaign = campaignResult.rows[0]
@@ -97,10 +97,13 @@ export async function recoverRewardCampaignIncident(input: {
       args: [input.campaignId, now, input.operatorActorId, note],
     })
     const prior = requiredString(campaign, "status_before_operational_hold")
+    const restoreStatus = Date.parse(requiredString(campaign, "ends_at")) <= Date.parse(now)
+      ? "ended"
+      : prior
     await tx.execute({
-      sql: `UPDATE reward_campaigns SET status = ?2, status_before_operational_hold = NULL, operational_hold_reason = NULL, operational_held_at = NULL, operational_held_by = NULL, operational_recovered_at = ?3, operational_recovered_by = ?4, updated_at = ?5 WHERE reward_campaign_id = ?1 AND status = 'operational_hold'`,
-      args: [input.campaignId, prior, now, input.operatorActorId, now],
+      sql: `UPDATE reward_campaigns SET status = ?2, ended_at = CASE WHEN ?2 = 'ended' THEN COALESCE(ended_at, ?3) ELSE ended_at END, status_before_operational_hold = NULL, operational_hold_reason = NULL, operational_held_at = NULL, operational_held_by = NULL, operational_recovered_at = ?4, operational_recovered_by = ?5, updated_at = ?6 WHERE reward_campaign_id = ?1 AND status = 'operational_hold'`,
+      args: [input.campaignId, restoreStatus, now, now, input.operatorActorId, now],
     })
-    return { campaign_id: input.campaignId, status: prior }
+    return { campaign_id: input.campaignId, status: restoreStatus }
   })
 }

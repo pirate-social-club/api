@@ -19,6 +19,12 @@ import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
+import {
+  KARAOKE_MIN_MEASURED_LINES,
+  KARAOKE_PLATFORM_MIN_SCORE_BPS,
+  KARAOKE_SCORE_SCALE,
+} from "../karaoke/karaoke-qualification-policy"
+import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -45,6 +51,7 @@ export type RewardCampaignTarget = {
   postId: string
   songArtifactBundleId: string
   songOwnerUserId: string
+  karaokeLineCount?: number
 }
 
 export type RewardCampaignCreateInput = RewardCampaignCreateRequest
@@ -62,7 +69,7 @@ export type RewardSongOwnerPolicy = {
 const CAMPAIGN_COLUMNS = `
   reward_campaign_id, rewarder_user_id, community_id, post_id,
   song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
-  daily_reward_cents, milestone_7_cents, milestone_30_cents,
+  min_score_bps, daily_reward_cents, milestone_7_cents, milestone_30_cents,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
   credited_cents, paid_cents, refunded_cents, starts_at, ends_at,
   activated_at, exhausted_at, ended_at, canceled_at, created_at
@@ -108,6 +115,7 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     song_owner: requiredString(row, "song_owner_user_id"),
     status: requiredString(row, "status") as RewardCampaignStatus,
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
+    min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
     milestone_7_cents: integer(rowValue(row, "milestone_7_cents")),
     milestone_30_cents: integer(rowValue(row, "milestone_30_cents")),
@@ -132,6 +140,7 @@ function campaignResource(row: CampaignRow): RewardCampaign {
 function publicRewardOffer(row: CampaignRow): PublicRewardOffer {
   return {
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
+    min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
     ends_at: unixSeconds(rowValue(row, "ends_at")) ?? 0,
   }
@@ -176,6 +185,16 @@ function cents(value: unknown, field: string, allowZero: boolean): number {
   return result
 }
 
+function basisPoints(value: unknown, field: string): number {
+  const result = Number(value)
+  if (
+    !Number.isSafeInteger(result)
+    || result < KARAOKE_PLATFORM_MIN_SCORE_BPS
+    || result > KARAOKE_SCORE_SCALE
+  ) throw badRequestError(`${field} is invalid`)
+  return result
+}
+
 function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCampaignConfig): RewardCampaignCreateInput {
   if (!(["study", "karaoke", "either"] as const).includes(input.eligible_activity)) {
     throw badRequestError("eligible_activity is invalid")
@@ -185,6 +204,7 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     community: nonEmpty(input.community, "community"),
     post: nonEmpty(input.post, "post"),
     idempotency_key: nonEmpty(input.idempotency_key, "idempotency_key"),
+    min_score_bps: basisPoints(input.min_score_bps, "min_score_bps"),
     daily_reward_cents: cents(input.daily_reward_cents, "daily_reward_cents", false),
     milestone_7_cents: cents(input.milestone_7_cents, "milestone_7_cents", true),
     milestone_30_cents: cents(input.milestone_30_cents, "milestone_30_cents", true),
@@ -234,6 +254,7 @@ function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTa
     song_artifact_bundle: target.songArtifactBundleId,
     song_owner: target.songOwnerUserId,
     eligible_activity: input.eligible_activity,
+    min_score_bps: input.min_score_bps,
     daily_reward_cents: input.daily_reward_cents,
     milestone_7_cents: input.milestone_7_cents,
     milestone_30_cents: input.milestone_30_cents,
@@ -355,12 +376,19 @@ export async function createRewardCampaign(input: {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
   const body = validateCreateInput(input.body, config)
+  const now = input.now ?? nowIso()
+  await advanceRewardCampaignLifecycle({ client: input.client, now })
   const target = await input.resolveTarget(body.community, body.post)
   if (target.communityId !== body.community || target.postId !== body.post) {
     throw badRequestError("Campaign target resolution mismatch")
   }
+  if (
+    body.eligible_activity !== "study"
+    && (!Number.isSafeInteger(target.karaokeLineCount) || (target.karaokeLineCount ?? 0) < KARAOKE_MIN_MEASURED_LINES)
+  ) {
+    throw eligibilityFailed(`Karaoke reward campaigns require at least ${KARAOKE_MIN_MEASURED_LINES} timed lyric lines`)
+  }
   const termsHash = await sha256(termsPayload(body, target))
-  const now = input.now ?? nowIso()
   const lockClause = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")) ? " FOR UPDATE" : ""
 
   return await withTransaction(input.client, "write", async (tx) => {
@@ -403,19 +431,19 @@ export async function createRewardCampaign(input: {
         INSERT INTO reward_campaigns (
           reward_campaign_id, campaign_kind, rewarder_user_id, creation_idempotency_key,
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
-          status, eligible_activity, daily_reward_cents, milestone_7_cents,
+          status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents,
           terms_version, terms_hash, starts_at, ends_at, created_at, updated_at
         ) VALUES (
-          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8,
-          ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?16, ?17, ?17
+          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9,
+          ?10, ?11, ?12, ?13, ?14, 2, ?15, ?16, ?17, ?18, ?18
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
         args: [
         campaignId, input.userId, body.idempotency_key, target.communityId, target.postId,
         target.songArtifactBundleId, target.songOwnerUserId, body.eligible_activity,
-        body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
+        body.min_score_bps, body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
         body.reward_period_cap_cents, body.budget_cents, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
         ],
@@ -469,7 +497,13 @@ export async function getPublicActiveRewardCampaign(input: {
 }): Promise<PublicRewardOffer> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
-  if (!row || requiredString(row, "status") !== "active") {
+  const now = Date.now()
+  if (
+    !row
+    || requiredString(row, "status") !== "active"
+    || Date.parse(requiredString(row, "starts_at")) > now
+    || Date.parse(requiredString(row, "ends_at")) <= now
+  ) {
     throw notFoundError("Active reward campaign not found")
   }
   return publicRewardOffer(row)
@@ -487,12 +521,14 @@ export async function getPublicActiveRewardCampaignForSong(input: {
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
       WHERE community_id = ?1 AND post_id = ?2 AND status = 'active'
+        AND starts_at <= ?3 AND ends_at > ?3
       ORDER BY activated_at DESC, reward_campaign_id ASC
       LIMIT 1
     `,
     args: [
       nonEmpty(input.communityId, "community_id"),
       nonEmpty(input.postId, "post_id"),
+      nowIso(),
     ],
   })
   const row = result.rows[0]

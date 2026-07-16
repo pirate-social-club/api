@@ -19,6 +19,12 @@ import { getControlPlaneClient } from "../runtime-deps"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import { resolveCommunityKaraokeScoringPolicy } from "../communities/community-karaoke-policy-service"
 import { emitKaraokeQualification } from "../rewards/reward-qualification-outbox"
+import {
+  KARAOKE_MIN_COVERAGE_BPS,
+  KARAOKE_MIN_MEASURED_LINES,
+  KARAOKE_PLATFORM_MIN_SCORE_BPS,
+  KARAOKE_SCORE_SCALE,
+} from "./karaoke-qualification-policy"
 
 export type KaraokeAttemptCompletionReason =
   | "abandoned"
@@ -75,11 +81,6 @@ type RankedKaraokeAttemptRow = {
   total_ranked: unknown
   user_id: unknown
 }
-
-const KARAOKE_MIN_MEASURED_LINES = 5
-const KARAOKE_MIN_COVERAGE_BPS = 8500
-const KARAOKE_STREAK_PASS_SCORE_BPS = 7000
-const KARAOKE_SCORE_SCALE = 10_000
 
 const KARAOKE_LEADERBOARD_DEFAULT_LIMIT = 50
 const KARAOKE_LEADERBOARD_MAX_LIMIT = 100
@@ -266,7 +267,7 @@ function isRankEligible(input: {
   return input.completionReason === "completed"
     && input.summary.scoredLineCount >= KARAOKE_MIN_MEASURED_LINES
     && measuredCoverageBps(input.summary) >= KARAOKE_MIN_COVERAGE_BPS
-    && input.finalScoreBps >= KARAOKE_STREAK_PASS_SCORE_BPS
+    && input.finalScoreBps >= KARAOKE_PLATFORM_MIN_SCORE_BPS
 }
 
 type ComputedStreak = {

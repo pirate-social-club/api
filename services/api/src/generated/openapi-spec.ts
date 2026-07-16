@@ -16241,6 +16241,7 @@ const spec = {
           "community",
           "post",
           "eligible_activity",
+          "min_score_bps",
           "daily_reward_cents",
           "milestone_7_cents",
           "milestone_30_cents",
@@ -16259,6 +16260,11 @@ const spec = {
           },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "min_score_bps": {
+            "type": "integer",
+            "minimum": 7000,
+            "maximum": 10000
           },
           "daily_reward_cents": {
             "type": "integer",
@@ -16300,12 +16306,18 @@ const spec = {
         "additionalProperties": false,
         "required": [
           "eligible_activity",
+          "min_score_bps",
           "daily_reward_cents",
           "ends_at"
         ],
         "properties": {
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "min_score_bps": {
+            "type": "integer",
+            "minimum": 7000,
+            "maximum": 10000
           },
           "daily_reward_cents": {
             "type": "integer",
@@ -16371,6 +16383,7 @@ const spec = {
           "song_owner",
           "status",
           "eligible_activity",
+          "min_score_bps",
           "daily_reward_cents",
           "milestone_7_cents",
           "milestone_30_cents",
@@ -16416,6 +16429,11 @@ const spec = {
           },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "min_score_bps": {
+            "type": "integer",
+            "minimum": 7000,
+            "maximum": 10000
           },
           "daily_reward_cents": {
             "type": "integer",
@@ -24444,8 +24462,15 @@ const spec = {
           "contract_address": {
             "type": "string"
           },
+          "min_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
           "min_quantity": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           },
           "match": {
             "type": "object",
@@ -24680,7 +24705,9 @@ const spec = {
             "type": "string"
           },
           "min_quantity": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         }
       },

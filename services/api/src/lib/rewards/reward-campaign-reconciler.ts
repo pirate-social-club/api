@@ -11,6 +11,7 @@ import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
+import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 
 const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 
@@ -24,6 +25,7 @@ export type RewardQualificationCandidate = {
   qualifiedAt: string
   periodKey: string
   policyVersion: string
+  finalScoreBps?: number | null
 }
 
 export type RewardCampaignReconciliationSummary = {
@@ -34,12 +36,15 @@ export type RewardCampaignReconciliationSummary = {
   scanned_qualifications: number
   credited_events: number
   credited_cents: number
+  activated_campaigns: number
+  ended_campaigns: number
   skipped_identity: number
   skipped_expired: number
   skipped_owner_blocked: number
   skipped_no_campaign: number
   skipped_budget: number
   skipped_cap: number
+  skipped_score: number
   failed_communities: number
   errors: number
 }
@@ -53,12 +58,15 @@ function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
     scanned_qualifications: 0,
     credited_events: 0,
     credited_cents: 0,
+    activated_campaigns: 0,
+    ended_campaigns: 0,
     skipped_identity: 0,
     skipped_expired: 0,
     skipped_owner_blocked: 0,
     skipped_no_campaign: 0,
     skipped_budget: 0,
     skipped_cap: 0,
+    skipped_score: 0,
     failed_communities: 0,
     errors: 0,
   }
@@ -77,6 +85,16 @@ function text(row: QueryResultRow, key: string): string {
 function qualification(row: QueryResultRow): RewardQualificationCandidate {
   const activity = text(row, "activity")
   if (activity !== "study" && activity !== "karaoke") throw new Error("Reward qualification activity is invalid")
+  let finalScoreBps: number | null = null
+  if (activity === "karaoke") {
+    try {
+      const evidence = JSON.parse(text(row, "evidence_summary_json")) as Record<string, unknown>
+      const score = Number(evidence.final_score_bps)
+      finalScoreBps = Number.isSafeInteger(score) ? score : null
+    } catch {
+      finalScoreBps = null
+    }
+  }
   return {
     eventId: text(row, "reward_qualification_event_id"),
     userId: text(row, "user_id"),
@@ -87,6 +105,7 @@ function qualification(row: QueryResultRow): RewardQualificationCandidate {
     qualifiedAt: text(row, "qualified_at"),
     periodKey: text(row, "reward_period_key"),
     policyVersion: text(row, "qualification_policy_version"),
+    finalScoreBps,
   }
 }
 
@@ -162,7 +181,7 @@ async function ingestCommunity(input: {
   })
 }
 
-type CreditResult = "credited" | "duplicate" | "identity" | "expired" | "owner_blocked" | "no_campaign" | "budget" | "cap"
+type CreditResult = "credited" | "duplicate" | "identity" | "expired" | "owner_blocked" | "no_campaign" | "budget" | "cap" | "score"
 
 export function rewardQualificationExpiresAt(qualifiedAt: string): string {
   const qualifiedAtMs = Date.parse(qualifiedAt)
@@ -193,7 +212,7 @@ export async function creditRewardCampaignQualification(input: {
   return withTransaction(input.client, "write", async (tx) => {
     const campaign = await executeFirst(tx, {
       sql: `
-        SELECT reward_campaign_id, eligible_activity, daily_reward_cents,
+        SELECT reward_campaign_id, eligible_activity, min_score_bps, daily_reward_cents,
           reward_period_cap_cents, funded_cents, reserved_cents, credited_cents,
           refunded_cents, terms_version,
           CASE WHEN EXISTS (
@@ -218,6 +237,13 @@ export async function creditRewardCampaignQualification(input: {
     const campaignRow = campaign as QueryResultRow
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
       return { result: "owner_blocked", amountCents: 0 }
+    }
+    if (input.candidate.activity === "karaoke") {
+      const score = input.candidate.finalScoreBps
+      const minimum = Number(rowValue(campaignRow, "min_score_bps"))
+      if (!Number.isSafeInteger(score) || !Number.isSafeInteger(minimum) || (score ?? 0) < minimum) {
+        return { result: "score", amountCents: 0 }
+      }
     }
     const creditNow = input.currentTime?.() ?? input.now
     if (isRewardQualificationExpired(input.candidate.qualifiedAt, creditNow)) {
@@ -317,6 +343,7 @@ export async function creditRewardCampaignQualification(input: {
         input.candidate.activity, Number(rowValue(campaignRow, "terms_version") ?? 1),
         JSON.stringify({
           daily_reward_cents: amount,
+          min_score_bps: Number(rowValue(campaignRow, "min_score_bps")),
           qualification_event_id: input.candidate.eventId,
           qualification_policy_version: input.candidate.policyVersion,
         }),
@@ -381,6 +408,9 @@ export async function reconcileRewardCampaigns(input: {
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
+  const lifecycle = await advanceRewardCampaignLifecycle({ client: input.controlPlaneClient, now })
+  summary.activated_campaigns = lifecycle.activated_campaigns
+  summary.ended_campaigns = lifecycle.ended_campaigns
   const communityIds = selectScheduledCommunityJobPollIds(
     await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
     Math.max(1, Math.trunc(input.maxCommunities ?? 50)),
@@ -423,7 +453,7 @@ export async function reconcileRewardCampaigns(input: {
       sql: `
         SELECT q.reward_qualification_event_id, q.shard_sequence, q.user_id, q.community_id, q.post_id,
           q.song_artifact_bundle_id, q.activity, q.qualified_at, q.reward_period_key,
-          q.qualification_policy_version
+          q.qualification_policy_version, q.evidence_summary_json
         FROM reward_qualification_events q
         WHERE q.qualified_at > ?1
           ${cursorClause}
@@ -472,6 +502,7 @@ export async function reconcileRewardCampaigns(input: {
         else if (result.result === "no_campaign") summary.skipped_no_campaign += 1
         else if (result.result === "budget") summary.skipped_budget += 1
         else if (result.result === "cap") summary.skipped_cap += 1
+        else if (result.result === "score") summary.skipped_score += 1
       } catch (error) {
         summary.errors += 1
         console.error("[reward-campaigns] qualification credit failed", { error })

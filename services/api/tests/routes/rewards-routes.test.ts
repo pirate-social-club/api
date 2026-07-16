@@ -170,6 +170,7 @@ describe("rewards routes", () => {
     ctx: Awaited<ReturnType<typeof createRouteTestContext>>,
     ownerUserId: string,
     postId = "pst_reward_campaign_song",
+    karaokeLineCount = 5,
   ): Promise<void> {
     const now = new Date().toISOString()
     await createRewardsCommunity(ctx, ownerUserId, now)
@@ -180,13 +181,17 @@ describe("rewards routes", () => {
           INSERT OR IGNORE INTO communities (
             community_id, display_name, status, artist_governance_state, membership_mode,
             default_age_gate_policy, donation_policy_mode, donation_partner_status,
-            governance_mode, created_by_user_id, created_at, updated_at
+            governance_mode, created_by_user_id, created_at, updated_at, karaoke_enabled
           ) VALUES (
             'cmt_rewards_route', 'Rewards Test', 'active', 'fan_run', 'open',
-            'none', 'none', 'unconfigured', 'centralized', ?1, ?2, ?2
+            'none', 'none', 'unconfigured', 'centralized', ?1, ?2, ?2, 1
           )
         `,
         args: [ownerUserId, now],
+      })
+      await handle.client.execute({
+        sql: "UPDATE communities SET karaoke_enabled = 1 WHERE community_id = 'cmt_rewards_route'",
+        args: [],
       })
       await handle.client.execute({
         sql: `
@@ -208,6 +213,32 @@ describe("rewards routes", () => {
     } finally {
       await handle.close()
     }
+    const timedLyrics = Array.from({ length: karaokeLineCount }, (_, index) => ({
+      start_ms: index * 1_000,
+      end_ms: (index + 1) * 1_000,
+      text: `Practice line ${index + 1}`,
+    }))
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO song_artifact_bundles (
+          song_artifact_bundle_id, community_id, creator_user_id, status,
+          primary_audio_json, lyrics_text, lyrics_sha256, instrumental_audio_json,
+          translation_status, alignment_status, karaoke_revision_id, timed_lyrics_json,
+          moderation_status, created_at, updated_at
+        ) VALUES (
+          ?1, 'cmt_rewards_route', ?2, 'ready', '{}', 'Practice these lines',
+          'reward-lyrics-sha', ?3, 'completed', 'completed', ?4, ?5, 'completed', ?6, ?6
+        )
+      `,
+      args: [
+        postId,
+        ownerUserId,
+        JSON.stringify({ storage_ref: "https://media.example.test/instrumental.mp3" }),
+        `krv_${postId}`,
+        JSON.stringify(timedLyrics),
+        now,
+      ],
+    })
   }
 
   function campaignBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -216,6 +247,7 @@ describe("rewards routes", () => {
       community: "cmt_rewards_route",
       post: "pst_reward_campaign_song",
       eligible_activity: "either",
+      min_score_bps: 7000,
       daily_reward_cents: 40,
       milestone_7_cents: 0,
       milestone_30_cents: 0,
@@ -264,6 +296,25 @@ describe("rewards routes", () => {
     }, ctx.env)
     expect(underCapped.status).toBe(400)
 
+    const belowEmissionFloor = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ min_score_bps: 6999 })),
+    }, ctx.env)
+    expect(belowEmissionFloor.status).toBe(400)
+
+    await seedCampaignSong(ctx, session.userId, "pst_reward_campaign_short", 2)
+    const karaokeIneligible = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        post: "pst_reward_campaign_short",
+        eligible_activity: "karaoke",
+        idempotency_key: "reward-campaign-short-karaoke",
+      })),
+    }, ctx.env)
+    expect(karaokeIneligible.status).toBe(403)
+
     const createBody = campaignBody()
     const create = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
@@ -271,8 +322,8 @@ describe("rewards routes", () => {
       body: JSON.stringify(createBody),
     }, ctx.env)
     expect(create.status).toBe(201)
-    const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string }
-    expect(campaign).toMatchObject({ status: "draft", song_owner: session.userId, eligible_activity: "either" })
+    const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string; min_score_bps: number }
+    expect(campaign).toMatchObject({ status: "draft", song_owner: session.userId, eligible_activity: "either", min_score_bps: 7000 })
 
     const replay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
@@ -287,6 +338,13 @@ describe("rewards routes", () => {
       body: JSON.stringify({ ...createBody, daily_reward_cents: 41, reward_period_cap_cents: 41 }),
     }, ctx.env)
     expect(changedReplay.status).toBe(409)
+
+    const changedScoreReplay = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ ...createBody, min_score_bps: 7500 }),
+    }, ctx.env)
+    expect(changedScoreReplay.status).toBe(409)
 
     const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",
@@ -346,6 +404,7 @@ describe("rewards routes", () => {
     expect(publicOffer.status).toBe(200)
     expect(await json(publicOffer)).toEqual({
       eligible_activity: "either",
+      min_score_bps: 7000,
       daily_reward_cents: 40,
       ends_at: expect.any(Number),
     })
@@ -359,6 +418,7 @@ describe("rewards routes", () => {
     expect(songOffer.status).toBe(200)
     expect(await json(songOffer)).toEqual({
       eligible_activity: "either",
+      min_score_bps: 7000,
       daily_reward_cents: 40,
       ends_at: expect.any(Number),
     })

@@ -32,6 +32,10 @@ const SONG_PERIOD_CLAIMS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0142_control_plane_reward_song_period_claims.sql",
   import.meta.url,
 )
+const SCORE_TERMS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0144_control_plane_reward_campaign_score_terms.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -148,6 +152,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
+        ended_at TEXT,
         updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
@@ -205,6 +210,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `)
     await db.unsafe(await readFile(SONG_PERIOD_CLAIMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
@@ -491,6 +497,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           postId: "pst_sequential_pg",
           artifactBundleId: "sab_sequential_pg",
           activity: "karaoke",
+          finalScoreBps: 8000,
           qualifiedAt: "2026-07-10T13:00:00.000Z",
           periodKey: "2026-07-10",
           policyVersion: "karaoke-rank-eligible-v1",
@@ -552,6 +559,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           postId: "pst_cross_race_pg",
           artifactBundleId: "sab_cross_race_pg",
           activity: "karaoke",
+          finalScoreBps: 8000,
           qualifiedAt: "2026-07-10T13:00:00.000Z",
           periodKey: "2026-07-10",
           policyVersion: "karaoke-rank-eligible-v1",
@@ -681,6 +689,19 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         WHERE reward_campaign_id = 'rcp_invariants_pg'
       `))
       expect(message).toContain("reward campaign terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0144 trigger rejects score term mutations", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns SET min_score_bps = 8000
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `))
+      expect(message).toContain("reward campaign score terms are immutable")
     } finally {
       await db.end()
     }
