@@ -1359,10 +1359,6 @@ export type CommunityHandlePolicy = {
   policy_template: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
   claims_enabled: boolean;
-  claim_gate_mode: "none" | "inherit_community" | "explicit";
-  claim_gate_expression_ref: string | null;
-  claim_gate_expression: GatePolicy | null;
-  eligibility_timing: "claim_time" | "continuous";
   settings: CommunityHandlePolicySettings;
   updated_at: number | null;
 };
@@ -1432,9 +1428,6 @@ export type UpdateCommunityHandlePolicyRequest = {
   policy_template?: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
   claims_enabled?: boolean;
-  claim_gate_mode?: "none" | "inherit_community" | "explicit";
-  claim_gate_expression?: GatePolicy | null;
-  eligibility_timing?: "claim_time" | "continuous";
   settings?: CommunityHandlePolicySettings | null;
 };
 
