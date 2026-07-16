@@ -113,3 +113,14 @@ export function resolveStorySettlementDirectSigner(
     expectedAddressField: "MUSIC_PURCHASE_STORY_SETTLEMENT_PKP_ADDRESS",
   })
 }
+
+export function resolveStoryCoordinatorDirectSigner(
+  env: Pick<Env, "STORY_COORDINATOR_SIGNER_PRIVATE_KEY" | "STORY_COORDINATOR_SIGNER_ADDRESS">,
+): ConfigResult<StoryDirectSignerConfig | null> {
+  return resolveStoryDirectSignerConfig({
+    privateKeyValue: env.STORY_COORDINATOR_SIGNER_PRIVATE_KEY,
+    privateKeyField: "STORY_COORDINATOR_SIGNER_PRIVATE_KEY",
+    expectedAddressValue: env.STORY_COORDINATOR_SIGNER_ADDRESS,
+    expectedAddressField: "STORY_COORDINATOR_SIGNER_ADDRESS",
+  })
+}
