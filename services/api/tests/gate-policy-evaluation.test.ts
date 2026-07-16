@@ -180,6 +180,22 @@ describe("evaluateMembershipGatePolicy", () => {
       }])
     })
 
+    test("queries an EVM address attached through Polygon for an Ethereum-mainnet asset", async () => {
+      setAssetBalanceReaderForTests(async () => 10n)
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }),
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_polygon",
+          chain_namespace: "eip155:137",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      })
+      expect(result.outcome).toBe("passed")
+    })
+
     test("passes from a successful subtotal even when a later wallet would fail", async () => {
       setAssetBalanceReaderForTests(async (_assetId, address) => {
         if (address.endsWith("01")) return 10n
