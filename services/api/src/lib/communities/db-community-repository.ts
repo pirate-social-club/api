@@ -29,6 +29,7 @@ export type {
   CommunityJobReadRepository,
   CommunityMembershipProjectionRepository,
   CommunityMutationRepository,
+  CommunityNamespaceReadRepository,
   CommunityPostProjectionRepository,
   CommunityProvisioningRepository,
   CommunityReadRepository,

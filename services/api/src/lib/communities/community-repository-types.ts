@@ -17,7 +17,6 @@ export interface CommunityReadRepository {
   getCommunityById(communityId: string): Promise<CommunityRow | null>
   getCommunityByRouteSlug(routeSlug: string): Promise<CommunityRow | null>
   getCommunityByNamespaceVerificationId(namespaceVerificationId: string): Promise<CommunityRow | null>
-  listCommunityNamespaceAttachments(communityId: string): Promise<CommunityNamespaceAttachmentRow[]>
   listActiveCommunities(input?: {
     limit?: number
     requireReadyRouting?: boolean
@@ -46,6 +45,10 @@ export type CommunityNamespaceAttachmentRow = {
   family: "hns" | "spaces"
   normalizedRootLabel: string
   verificationStatus: "verified" | "stale" | "expired" | "disputed"
+}
+
+export interface CommunityNamespaceReadRepository {
+  listCommunityNamespaceAttachments(communityId: string): Promise<CommunityNamespaceAttachmentRow[]>
 }
 
 export type InitialCommunityDatabaseBinding = {
@@ -266,6 +269,7 @@ export interface CommunityMutationRepository {
 export interface CommunityRepository
   extends CommunityRepositoryLifecycle,
     CommunityReadRepository,
+    CommunityNamespaceReadRepository,
     CommunityDatabaseBindingRepository,
     CommunityJobReadRepository,
     CommunityPostProjectionRepository,
