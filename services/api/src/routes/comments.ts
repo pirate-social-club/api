@@ -27,7 +27,7 @@ import {
 } from "../serializers/comment"
 import { decodePublicCommentId } from "../lib/public-ids"
 import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
-import { enforceRateLimit } from "../lib/rate-limit"
+import { enforceCommentCreateRateLimit } from "../lib/comment-create-rate-limit"
 
 const comments = new Hono<AuthenticatedEnv>()
 
@@ -56,12 +56,7 @@ comments.use("*", async (c, next) => {
 comments.post("/:commentId/replies", async (c) => {
   const actor = c.get("actor")
   if (actor.authType !== "admin") {
-    await enforceRateLimit(
-      c.env.COMMENT_CREATE_RATE_LIMITER,
-      `comment-create:${actor.userId}`,
-      "Comment rate limit exceeded",
-      { scope: "comment_create" },
-    )
+    await enforceCommentCreateRateLimit(c.env.COMMENT_CREATE_RATE_LIMITER, actor.userId)
   }
   const communityRepository = getCommunityRepository(c.env)
   const commentId = decodePublicCommentId(c.req.param("commentId"))

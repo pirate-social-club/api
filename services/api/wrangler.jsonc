@@ -30,11 +30,6 @@
       "name": "REWARD_OFFER_RATE_LIMITER",
       "namespace_id": "1002",
       "simple": { "limit": 120, "period": 60 }
-    },
-    {
-      "name": "COMMENT_CREATE_RATE_LIMITER",
-      "namespace_id": "1003",
-      "simple": { "limit": 20, "period": 60 }
     }
   ],
   "send_email": [
@@ -66,6 +61,10 @@
       {
         "name": "OPERATOR_SIGNING_COORDINATOR",
         "class_name": "OperatorSigningCoordinatorDO"
+      },
+      {
+        "name": "COMMENT_CREATE_RATE_LIMITER",
+        "class_name": "CommentCreateRateLimiterDO"
       }
     ]
   },
@@ -85,6 +84,10 @@
     {
       "tag": "v1_operator_signing_coordinator",
       "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
+    },
+    {
+      "tag": "v1_comment_create_rate_limiter",
+      "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
     }
   ],
   "vars": {
@@ -152,11 +155,6 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
-        },
-        {
-          "name": "COMMENT_CREATE_RATE_LIMITER",
-          "namespace_id": "1003",
-          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -176,6 +174,10 @@
           {
             "name": "OPERATOR_SIGNING_COORDINATOR",
             "class_name": "OperatorSigningCoordinatorDO"
+          },
+          {
+            "name": "COMMENT_CREATE_RATE_LIMITER",
+            "class_name": "CommentCreateRateLimiterDO"
           }
         ]
       },
@@ -195,6 +197,10 @@
         {
           "tag": "v1_operator_signing_coordinator",
           "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
+        },
+        {
+          "tag": "v1_comment_create_rate_limiter",
+          "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
         }
       ],
       "services": [
@@ -308,11 +314,6 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
-        },
-        {
-          "name": "COMMENT_CREATE_RATE_LIMITER",
-          "namespace_id": "1003",
-          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -332,6 +333,10 @@
           {
             "name": "OPERATOR_SIGNING_COORDINATOR",
             "class_name": "OperatorSigningCoordinatorDO"
+          },
+          {
+            "name": "COMMENT_CREATE_RATE_LIMITER",
+            "class_name": "CommentCreateRateLimiterDO"
           }
         ]
       },
@@ -351,6 +356,10 @@
         {
           "tag": "v1_operator_signing_coordinator",
           "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
+        },
+        {
+          "tag": "v1_comment_create_rate_limiter",
+          "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
         }
       ],
       "services": [
@@ -492,11 +501,6 @@
           "name": "REWARD_OFFER_RATE_LIMITER",
           "namespace_id": "1002",
           "simple": { "limit": 120, "period": 60 }
-        },
-        {
-          "name": "COMMENT_CREATE_RATE_LIMITER",
-          "namespace_id": "1003",
-          "simple": { "limit": 20, "period": 60 }
         }
       ],
       "durable_objects": {
@@ -516,6 +520,10 @@
           {
             "name": "OPERATOR_SIGNING_COORDINATOR",
             "class_name": "OperatorSigningCoordinatorDO"
+          },
+          {
+            "name": "COMMENT_CREATE_RATE_LIMITER",
+            "class_name": "CommentCreateRateLimiterDO"
           }
         ]
       },
@@ -535,6 +543,10 @@
         {
           "tag": "v1_operator_signing_coordinator",
           "new_sqlite_classes": ["OperatorSigningCoordinatorDO"]
+        },
+        {
+          "tag": "v1_comment_create_rate_limiter",
+          "new_sqlite_classes": ["CommentCreateRateLimiterDO"]
         }
       ],
       "services": [
