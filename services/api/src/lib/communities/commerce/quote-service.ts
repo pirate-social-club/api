@@ -33,7 +33,10 @@ import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
 } from "./rights-hold-gates"
-import { resolveStorySettlementDirectSigner } from "../../story/story-direct-signer"
+import {
+  resolveStoryCoordinatorDirectSigner,
+  resolveStorySettlementDirectSigner,
+} from "../../story/story-direct-signer"
 import {
   resolvePirateCheckoutOperatorAddress,
 } from "./checkout-config"
@@ -440,7 +443,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       if (route.fundingMode !== "routed") {
         throw eligibilityFailed("Story royalty commerce requires routed buyer funding")
       }
-      const settlementSigner = resolveStorySettlementDirectSigner(input.env)
+      const coordinatorAdmissionEnabled = String(
+        input.env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED || "",
+      ).trim().toLowerCase() === "true"
+      const settlementSigner = coordinatorAdmissionEnabled
+        ? resolveStoryCoordinatorDirectSigner(input.env)
+        : resolveStorySettlementDirectSigner(input.env)
       if (!settlementSigner.ok) {
         throw eligibilityFailed(settlementSigner.error)
       }

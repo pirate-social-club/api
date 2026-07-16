@@ -2,7 +2,7 @@ import { getAddress, zeroAddress, type Hex } from "viem"
 
 import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
-import { resolveStorySettlementDirectSigner } from "../../story/story-direct-signer"
+import { resolveStoryCoordinatorDirectSigner } from "../../story/story-direct-signer"
 import { deriveStorySettlementCallIdentity, type StorySettlementStepKind } from "../../story/story-settlement-call-identity"
 import { resolveStorySettlementProtocolAddresses } from "../../story/story-settlement-protocol-addresses"
 import {
@@ -227,7 +227,7 @@ export async function coordinateStorySettlement(input: {
 
   const binding = input.env.STORY_SETTLEMENT_WALLET_COORDINATOR
   if (!binding) throw badRequestError("story_settlement_coordinator_binding_missing")
-  const signer = resolveStorySettlementDirectSigner(input.env)
+  const signer = resolveStoryCoordinatorDirectSigner(input.env)
   if (!signer.ok) throw badRequestError(signer.error)
   if (!signer.value) throw badRequestError("story_settlement_coordinator_signer_missing")
 

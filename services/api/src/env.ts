@@ -268,6 +268,10 @@ export type Env = {
   STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED?: string
   STORY_SETTLEMENT_FEE_POLICY_VERSION?: string
   STORY_SETTLEMENT_FINALITY_POLICY_VERSION?: string
+  // Coordinator-exclusive signer. Never share this key with legacy Story SDK
+  // settlement code or any operational script that can broadcast transactions.
+  STORY_COORDINATOR_SIGNER_PRIVATE_KEY?: string
+  STORY_COORDINATOR_SIGNER_ADDRESS?: string
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
