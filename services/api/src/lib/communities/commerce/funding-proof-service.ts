@@ -69,10 +69,19 @@ let testBuyerFundingVerifier:
   }) => Promise<BuyerFundingReceipt>)
   | null = null
 
+type BuyerFundingProvider = Pick<JsonRpcProvider, "waitForTransaction">
+let testBuyerFundingProviderFactory: ((rpcUrl: string, chainId: number) => BuyerFundingProvider) | null = null
+
 export function setCommunityCommerceBuyerFundingVerifierForTests(
   verifier: typeof testBuyerFundingVerifier,
 ): void {
   testBuyerFundingVerifier = verifier
+}
+
+export function setBuyerFundingProviderFactoryForTests(
+  factory: typeof testBuyerFundingProviderFactory,
+): void {
+  testBuyerFundingProviderFactory = factory
 }
 
 function requireCheckoutFundingAmountAtomic(quote: CheckoutFundingQuote): bigint {
@@ -123,7 +132,9 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   const expectedSender = getAddress(input.buyerAddress)
   const expectedToken = getAddress(resolvePirateCheckoutUsdcTokenAddress(input.env))
 
-  const provider = new JsonRpcProvider(resolvePirateCheckoutRpcUrl(input.env), expectedSourceChainId)
+  const rpcUrl = resolvePirateCheckoutRpcUrl(input.env)
+  const provider = testBuyerFundingProviderFactory?.(rpcUrl, expectedSourceChainId)
+    ?? new JsonRpcProvider(rpcUrl, expectedSourceChainId)
   const txWaitTimeoutMs = resolvePirateCheckoutTxWaitTimeoutMs(input.env)
   let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
   try {
