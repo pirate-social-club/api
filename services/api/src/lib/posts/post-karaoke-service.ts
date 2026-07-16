@@ -705,6 +705,34 @@ export async function getPostKaraokePayload(input: {
   }
 }
 
+export async function inspectKaraokeRewardEligibility(input: {
+  communityId: string
+  env: Env
+  karaokeEnabled: boolean
+  lyrics: string | null
+  songArtifactBundleId: string
+}): Promise<{ lyricLineCount: number }> {
+  if (!input.karaokeEnabled) return { lyricLineCount: 0 }
+  const bundle = await getSongArtifactBundle(
+    getControlPlaneClient(input.env),
+    input.communityId,
+    decodePublicSongArtifactBundleId(input.songArtifactBundleId),
+  )
+  if (
+    !bundle
+    || (bundle.status !== "ready" && bundle.status !== "consumed")
+    || bundle.alignment_status !== "completed"
+    || !toPlayableArtifactUrl(bundle.instrumental_audio)
+  ) return { lyricLineCount: 0 }
+
+  const timedLyrics = await resolveTimedLyrics({
+    inline: bundle.timed_lyrics,
+    ref: bundle.timed_lyrics_ref,
+  })
+  const karaokeLines = buildSongKaraokeLines({ lyrics: input.lyrics, timedLyrics })
+  return { lyricLineCount: karaokeLines.filter((line) => line.kind === "lyric").length }
+}
+
 export async function loadPublicPostKaraokePayloadCacheContext(input: {
   communityId: string
   communityRepository: PostReadCommunityRepository

@@ -24,6 +24,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { openCommunityReadClient } from "../lib/communities/community-read-access"
 import { rowValue, stringOrNull } from "../lib/sql-row"
 import type { RewardCashoutRequest } from "../types"
+import { inspectKaraokeRewardEligibility } from "../lib/posts/post-karaoke-service"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -49,12 +50,25 @@ rewards.use("/reward_campaigns", authenticate)
 rewards.use("/reward_campaigns/*", authenticate)
 rewards.use("/reward_song_policies/*", authenticate)
 
-async function resolveCampaignTarget(env: AuthenticatedEnv["Bindings"], communityId: string, postId: string): Promise<RewardCampaignTarget> {
-  const handle = await openCommunityReadClient(env, getCommunityRepository(env), communityId)
+async function resolveCampaignTarget(
+  env: AuthenticatedEnv["Bindings"],
+  communityId: string,
+  postId: string,
+  options?: { inspectKaraoke: boolean },
+): Promise<RewardCampaignTarget> {
+  const communityRepository = getCommunityRepository(env)
+  const handle = await openCommunityReadClient(env, communityRepository, communityId)
+  let target: RewardCampaignTarget
+  let karaokeEnabled = false
+  let lyrics: string | null = null
   try {
     const result = await handle.client.execute({
       sql: `
-        SELECT community_id, post_id, author_user_id, post_type, status, song_artifact_bundle_id
+        SELECT community_id, post_id, author_user_id, post_type, status, song_artifact_bundle_id,
+          lyrics, (
+            SELECT karaoke_enabled FROM communities
+            WHERE communities.community_id = posts.community_id LIMIT 1
+          ) AS karaoke_enabled
         FROM posts
         WHERE community_id = ?1 AND post_id = ?2
         LIMIT 1
@@ -72,10 +86,21 @@ async function resolveCampaignTarget(env: AuthenticatedEnv["Bindings"], communit
     if (!songArtifactBundleId || !songOwnerUserId) {
       throw badRequestError("Reward campaign song target is incomplete")
     }
-    return { communityId, postId, songArtifactBundleId, songOwnerUserId }
+    target = { communityId, postId, songArtifactBundleId, songOwnerUserId }
+    karaokeEnabled = Number(rowValue(row, "karaoke_enabled") ?? 0) === 1
+    lyrics = stringOrNull(rowValue(row, "lyrics"))
   } finally {
     await handle.close()
   }
+  if (!options?.inspectKaraoke) return target
+  const eligibility = await inspectKaraokeRewardEligibility({
+    communityId,
+    env,
+    karaokeEnabled,
+    lyrics,
+    songArtifactBundleId: target.songArtifactBundleId,
+  })
+  return { ...target, karaokeLineCount: eligibility.lyricLineCount }
 }
 
 async function canModerateCommunity(
@@ -168,7 +193,9 @@ rewards.post("/reward_campaigns", async (c) => {
     client: getControlPlaneClient(c.env),
     userId: actor.userId,
     body,
-    resolveTarget: (communityId, postId) => resolveCampaignTarget(c.env, communityId, postId),
+    resolveTarget: (communityId, postId) => resolveCampaignTarget(c.env, communityId, postId, {
+      inspectKaraoke: body.eligible_activity !== "study",
+    }),
   })
   return c.json(result, 201, { "cache-control": "no-store" })
 })

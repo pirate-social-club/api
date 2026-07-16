@@ -10,6 +10,7 @@ import { createRouteTestContext, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
 import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
+import { advanceRewardCampaignLifecycle } from "../../src/lib/rewards/reward-campaign-lifecycle"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -41,6 +42,60 @@ function env() {
 }
 
 describe("reward campaign reconciler", () => {
+  test("activates scheduled campaigns and terminally ends elapsed live campaigns", async () => {
+    const ctx = await createRouteTestContext(env())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "campaign-lifecycle-user")
+    const now = "2026-07-10T12:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, membership_mode,
+          status, provisioning_state, transfer_state, created_at, updated_at
+        ) VALUES ('cmt_campaign_lifecycle', ?1, 'Lifecycle', 'open', 'active', 'active', 'none', ?2, ?2)
+      `,
+      args: [session.userId, now],
+    })
+    for (const campaign of [
+      { id: "rcp_due", post: "pst_due", status: "scheduled", starts: "2026-07-10T11:00:00.000Z", ends: "2026-07-10T13:00:00.000Z" },
+      { id: "rcp_future", post: "pst_future", status: "scheduled", starts: "2026-07-10T14:00:00.000Z", ends: "2026-07-10T15:00:00.000Z" },
+      { id: "rcp_elapsed", post: "pst_elapsed", status: "active", starts: "2026-07-10T09:00:00.000Z", ends: "2026-07-10T11:00:00.000Z" },
+      { id: "rcp_paused_elapsed", post: "pst_paused_elapsed", status: "paused", starts: "2026-07-10T09:00:00.000Z", ends: "2026-07-10T11:00:00.000Z" },
+    ]) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_campaigns (
+            reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+            community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+            status, eligible_activity, min_score_bps, daily_reward_cents,
+            milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+            budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+            created_at, updated_at
+          ) VALUES (?1, ?2, ?1, 'cmt_campaign_lifecycle', ?3, ?4, ?2,
+            ?5, 'karaoke', 7000, 40, 0, 0, 40, 100, 100, ?1, ?6, ?7, ?8, ?8)
+        `,
+        args: [campaign.id, session.userId, campaign.post, `sab_${campaign.post}`, campaign.status, campaign.starts, campaign.ends, now],
+      })
+    }
+
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now })).toEqual({
+      activated_campaigns: 1,
+      ended_campaigns: 2,
+    })
+    const rows = await ctx.client.execute(`
+      SELECT reward_campaign_id, status, activated_at, ended_at
+      FROM reward_campaigns
+      WHERE community_id = 'cmt_campaign_lifecycle'
+      ORDER BY reward_campaign_id
+    `)
+    expect(rows.rows).toEqual([
+      { reward_campaign_id: "rcp_due", status: "active", activated_at: now, ended_at: null },
+      { reward_campaign_id: "rcp_elapsed", status: "ended", activated_at: null, ended_at: now },
+      { reward_campaign_id: "rcp_future", status: "scheduled", activated_at: null, ended_at: null },
+      { reward_campaign_id: "rcp_paused_elapsed", status: "ended", activated_at: null, ended_at: now },
+    ])
+  })
+
   test("uses an exact seven-day qualified-at grace boundary across the UTC day", () => {
     for (const qualifiedAt of ["2026-07-10T00:01:00.000Z", "2026-07-10T23:59:00.000Z"]) {
       const expiresAt = rewardQualificationExpiresAt(qualifiedAt)
@@ -135,13 +190,13 @@ describe("reward campaign reconciler", () => {
         INSERT INTO reward_campaigns (
           reward_campaign_id, rewarder_user_id, creation_idempotency_key,
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
-          status, eligible_activity, daily_reward_cents, milestone_7_cents,
+          status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents, funded_cents,
           terms_hash, starts_at, ends_at, activated_at, created_at, updated_at
         ) VALUES (
           'rcp_reconcile', ?1, 'reconcile-create', 'cmt_campaign_reconcile',
           'pst_campaign_reconcile', 'sab_campaign_reconcile', ?1, 'active', 'either',
-          40, 0, 0, 40, 80, 80, 'terms', '2026-07-01T00:00:00.000Z',
+          8500, 40, 0, 0, 40, 120, 120, 'terms', '2026-07-01T00:00:00.000Z',
           '2026-07-31T00:00:00.000Z', ?2, ?2, ?2
         )
       `,
@@ -156,7 +211,7 @@ describe("reward campaign reconciler", () => {
           treasury_address, tx_hash, status, expires_at, confirmed_at, created_at, updated_at
         ) VALUES (
           'rcf_reconcile', 'rcp_reconcile', ?1, 'reconcile-funding', 84532,
-          '0x1000000000000000000000000000000000000001', 80, '800000', '800000',
+          '0x1000000000000000000000000000000000000001', 120, '1200000', '1200000',
           '0x3000000000000000000000000000000000000003',
           '0x2000000000000000000000000000000000000002',
           '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -209,9 +264,16 @@ describe("reward campaign reconciler", () => {
               activity, qualified_at, reward_period_key, qualification_policy_version,
               evidence_summary_json, created_at
             ) VALUES (?1, ?2, 'cmt_campaign_reconcile', 'pst_campaign_reconcile',
-              'sab_campaign_reconcile', ?3, ?4, '2026-07-10', 'policy-v1', '{}', ?4)
+              'sab_campaign_reconcile', ?3, ?4, ?6, 'policy-v1', ?5, ?4)
           `,
-          args: [eventId, session.userId, activity, now],
+          args: [
+            eventId,
+            session.userId,
+            activity,
+            activity === "karaoke" ? reconcileNow : now,
+            JSON.stringify(activity === "karaoke" ? { final_score_bps: 8400 } : {}),
+            activity === "karaoke" ? "2026-07-12" : "2026-07-10",
+          ],
         })
       }
 
@@ -269,7 +331,7 @@ describe("reward campaign reconciler", () => {
         expect.objectContaining({
           status: "credited", amount_cents: 40, qualification_basis: "study",
           reward_kind: "campaign_practice_day", reserved_cents: 0,
-          credited_cents: 80, campaign_status: "exhausted",
+          credited_cents: 80, campaign_status: "active",
         }),
       ]))
       const unverifiedReservations = await ctx.client.execute({
@@ -287,9 +349,29 @@ describe("reward campaign reconciler", () => {
         maxCredits: 10,
         outboxBatchSize: 1,
       })
-      expect(secondActivity).toMatchObject({ ingested_qualifications: 1, credited_events: 0, credited_cents: 0 })
+      expect(secondActivity).toMatchObject({
+        ingested_qualifications: 1,
+        credited_events: 0,
+        credited_cents: 0,
+        skipped_score: 1,
+      })
       checkpoint = await ctx.client.execute("SELECT last_shard_sequence FROM reward_qualification_checkpoints")
       expect(checkpoint.rows).toEqual([{ last_shard_sequence: 2 }])
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_qualification_events (
+            reward_qualification_event_id, community_id, shard_sequence, user_id,
+            post_id, song_artifact_bundle_id, activity, qualified_at,
+            reward_period_key, qualification_policy_version, evidence_summary_json,
+            ingested_at
+          ) VALUES (
+            'rqe_exhaust_campaign', 'cmt_campaign_reconcile', 102, ?1,
+            'pst_campaign_reconcile', 'sab_campaign_reconcile', 'study',
+            '2026-07-12T12:00:00.000Z', '2026-07-12', 'policy-v1', '{}', ?2
+          )
+        `,
+        args: [session.userId, now],
+      })
       const replay = await reconcileRewardCampaigns({
         env: ctx.env,
         communityRepository: jobRepository,
@@ -298,7 +380,7 @@ describe("reward campaign reconciler", () => {
         maxCredits: 10,
         outboxBatchSize: 1,
       })
-      expect(replay).toMatchObject({ ingested_qualifications: 0, credited_events: 0, credited_cents: 0 })
+      expect(replay).toMatchObject({ ingested_qualifications: 0, credited_events: 1, credited_cents: 40 })
 
       const exhausted = await reconcileRewardCampaigns({
         env: ctx.env,
@@ -312,7 +394,7 @@ describe("reward campaign reconciler", () => {
       const exhaustedCampaign = await ctx.client.execute(
         "SELECT status, credited_cents, reserved_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_reconcile'",
       )
-      expect(exhaustedCampaign.rows).toEqual([{ status: "exhausted", credited_cents: 80, reserved_cents: 0 }])
+      expect(exhaustedCampaign.rows).toEqual([{ status: "exhausted", credited_cents: 120, reserved_cents: 0 }])
       await ctx.client.execute({
         sql: `
           INSERT INTO reward_song_owner_policies (
@@ -346,10 +428,17 @@ describe("reward campaign reconciler", () => {
         activityDate: "2026-07-10",
       })
       expect(rewards).toMatchObject({
-        balance_cents: 80,
+        balance_cents: 120,
         today_earned_cents: 40,
       })
       expect(rewards.recent_events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            reward_kind: "campaign_practice_day",
+            reward_campaign_id: "rcp_reconcile",
+            reward_period_key: "2026-07-12",
+            qualification_basis: "study",
+            amount_cents: 40,
+          }),
           expect.objectContaining({
             reward_kind: "campaign_practice_day",
             reward_campaign_id: "rcp_reconcile",

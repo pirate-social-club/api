@@ -2736,6 +2736,7 @@ export type RewardCampaignCapabilities = {
 
 export type PublicRewardOffer = {
   eligible_activity: RewardCampaignEligibleActivity;
+  min_score_bps: number;
   daily_reward_cents: number;
   ends_at: number;
 };
@@ -2761,6 +2762,7 @@ export type RewardCampaign = {
   song_owner: string;
   status: RewardCampaignStatus;
   eligible_activity: RewardCampaignEligibleActivity;
+  min_score_bps: number;
   daily_reward_cents: number;
   milestone_7_cents: number;
   milestone_30_cents: number;
@@ -2785,6 +2787,7 @@ export type RewardCampaignCreateRequest = {
   community: string;
   post: string;
   eligible_activity: RewardCampaignEligibleActivity;
+  min_score_bps: number;
   daily_reward_cents: number;
   milestone_7_cents: number;
   milestone_30_cents: number;
