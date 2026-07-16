@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import type { Client, QueryResult } from "../../sql-client"
 import {
+  claimCanonicalFundingReceipt,
   claimObservedFundingReceipt,
   observeFundingReceipt,
   setObservedFundingReceiptFinality,
@@ -178,5 +179,57 @@ describe("observed funding receipts", () => {
       finalityStatus: "orphaned",
       matchStatus: "refund_review",
     })
+  })
+
+  test("claims a canonical transfer idempotently for the same global consumer", async () => {
+    const claimed = row({
+      finality_status: "canonical",
+      match_status: "claimed",
+      consumer_rail: "community_purchase",
+      consumer_id: "cmt_1:pur_1",
+      quote_id: "quo_1",
+    })
+    const client = clientReturning(
+      { rows: [], rowsAffected: 0 },
+      { rows: [claimed] },
+      { rows: [claimed] },
+    )
+
+    await expect(claimCanonicalFundingReceipt({
+      client,
+      ...EVENT,
+      consumerRail: "community_purchase",
+      consumerId: "cmt_1:pur_1",
+      quoteId: "quo_1",
+      now: "2026-07-15T17:02:00.000Z",
+    })).resolves.toMatchObject({
+      matchStatus: "claimed",
+      consumerId: "cmt_1:pur_1",
+    })
+    expect(client.execute).toHaveBeenCalledTimes(3)
+  })
+
+  test("rejects a transfer already claimed by a purchase in another community", async () => {
+    const claimedElsewhere = row({
+      finality_status: "canonical",
+      match_status: "claimed",
+      consumer_rail: "community_purchase",
+      consumer_id: "cmt_other:pur_other",
+      quote_id: "quo_other",
+    })
+    const client = clientReturning(
+      { rows: [], rowsAffected: 0 },
+      { rows: [claimedElsewhere] },
+      { rows: [] },
+    )
+
+    await expect(claimCanonicalFundingReceipt({
+      client,
+      ...EVENT,
+      consumerRail: "community_purchase",
+      consumerId: "cmt_1:pur_1",
+      quoteId: "quo_1",
+      now: "2026-07-15T17:02:00.000Z",
+    })).rejects.toThrow("Observed funding receipt is not claimable")
   })
 })
