@@ -38,5 +38,13 @@
       ],
       "note": "The outbox INSERT runs inside the study/karaoke attempt's OWN transaction (post-study-service.ts, karaoke-attempt-finalize-service.ts), armed by REWARDS_CAMPAIGNS_ENABLED && REWARDS_ACCRUAL_ENABLED. If 1126 is absent when both flags are on, the INSERT fails and rolls back the whole attempt — a fleet-wide outage of Study and Karaoke, which are LIVE and working. A clean read-only production verification on 2026-07-15 confirmed 1126 and the pinned unconditional requirements on all 94 allocated live shards; see docs/attestations/community-schema/production-rewards-2026-07-15.json. The rewards enablement workflow MUST still run the verifier with --features rewards immediately before either flag is changed so newly allocated or drifted shards fail closed."
     }
+  },
+  "deferred": {
+    "1132_paid_purchase_settlement_recovery.sql": {
+      "rationale": "The migration prepares recovery metadata and indexing for paid purchase settlement, but this API commit does not read or write funding_locked_at, failure_disposition, or broadcast_tx_ref outside its generated provisioning snapshot. Require it when the recovery runtime lands."
+    },
+    "1133_multi_namespace_bindings.sql": {
+      "rationale": "The migration prepares primary/mirror namespace roles, but this API commit still uses the existing single-binding behavior and does not read or write namespace_role outside its generated provisioning snapshot. Require it when multi-namespace runtime behavior lands."
+    }
   }
 }
