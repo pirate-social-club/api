@@ -600,6 +600,19 @@ async function reconcileScheduledPurchaseSettlements(env: Env): Promise<void> {
     if (summary.checked > 0) {
       console.info("[purchase-settlements] reconciled stale attempts", JSON.stringify(summary))
     }
+    if (summary.stillPending > 0 || summary.failed > 0 || summary.errors > 0) {
+      await captureScheduledWarning(
+        env,
+        "Paid purchase settlements require attention",
+        "purchase_settlement_stalled",
+        {
+          count: summary.stillPending + summary.failed + summary.errors,
+          ...summary,
+          communities: summary.stalledCommunityIds.map((communityId) => ({ community_id: communityId })),
+        },
+        { urgency: "high" },
+      )
+    }
   } catch (error) {
     console.error("[purchase-settlements] reconciliation failed", error)
     await captureScheduledError(env, error, "purchase_settlement_reconciliation")

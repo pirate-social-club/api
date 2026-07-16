@@ -15,6 +15,10 @@ import {
   payStoryRoyaltyOnBehalfForPurchase,
   transferStoryRoyaltyToParentVault,
 } from "../../story/story-royalty-settlement-service"
+import {
+  classifyStoryTransactionFailure,
+  storyTransactionHashFromError,
+} from "../../story/story-transaction-failure"
 import type { UserRepository } from "../../auth/repositories"
 import {
   getActiveEntitlementForBuyerIdentity,
@@ -139,6 +143,7 @@ export type PurchaseSettlementReconciliationSummary = {
   failed: number
   stillPending: number
   errors: number
+  stalledCommunityIds: string[]
 }
 
 /**
@@ -470,6 +475,111 @@ function hasConfirmedParentRoyaltyVaultTransfer(input: {
   )
 }
 
+function settlementFailureDisposition(error: unknown): {
+  disposition: "failed_prebroadcast" | "reconciliation_required"
+  broadcastTxRef: string | null
+} {
+  const broadcastTxRef = storyTransactionHashFromError(error)
+  const classification = classifyStoryTransactionFailure(error)
+  return {
+    disposition: classification === "ambiguous" ? "reconciliation_required" : "failed_prebroadcast",
+    broadcastTxRef,
+  }
+}
+
+async function retryFailedPrebroadcastParentVaultTransfers(input: {
+  env: Env
+  client: Client
+  communityId: string
+  quote: PurchaseQuoteRow
+  purchaseId: string
+  asset: AssetRow
+  effects: PurchaseSettlementEffectRow[]
+  now: string
+}): Promise<PurchaseSettlementEffectRow[]> {
+  let retried = false
+  const storyPayoutAmount = resolveAllocationSettlementAmountAtomic({
+    allocations: assertExecutableQuoteAllocationSnapshot(
+      parseQuoteAllocationSnapshot(input.quote.allocation_snapshot_json),
+    ),
+    settlementStrategy: "story_payout",
+  })
+  for (const parentIpId of getStoryDerivativeParentIpIds(input.asset)) {
+    const effectKey = `${input.asset.asset_id}:${parentIpId}`
+    const failedEffect = input.effects.find((effect) =>
+      effect.effect_kind === "story_parent_royalty_vault_transfer"
+      && effect.effect_key === effectKey
+      && effect.status === "failed"
+      && effect.failure_disposition === "failed_prebroadcast"
+    )
+    if (!failedEffect) continue
+    retried = true
+
+    const effect = await beginPurchaseSettlementEffectAttempt({
+      client: input.client,
+      communityId: input.communityId,
+      quoteId: input.quote.quote_id,
+      purchaseId: input.purchaseId,
+      effectKind: "story_parent_royalty_vault_transfer",
+      effectKey,
+      idempotencyKey: failedEffect.idempotency_key,
+      now: input.now,
+    })
+    if (effect.status === "confirmed") continue
+    try {
+      const transfer = await transferStoryRoyaltyToParentVault({
+        env: input.env,
+        childIpId: input.asset.story_ip_id ?? "",
+        parentIpId,
+        royaltyPolicy: input.asset.story_royalty_policy,
+      })
+      await confirmPurchaseSettlementEffect({
+        client: input.client,
+        idempotencyKey: failedEffect.idempotency_key,
+        settlementRef: transfer.transferTxHash,
+        providerReceiptRef: transfer.transferTxHash,
+        metadataJson: JSON.stringify({
+          amount_wip_wei: storyPayoutAmount.toString(),
+          asset: input.asset.asset_id,
+          child_story_ip_id: input.asset.story_ip_id,
+          parent_story_ip_id: parentIpId,
+          story_royalty_policy: input.asset.story_royalty_policy,
+          title: input.asset.display_title,
+        }),
+        now: input.now,
+      })
+    } catch (error) {
+      const failure = settlementFailureDisposition(error)
+      await failPurchaseSettlementEffect({
+        client: input.client,
+        idempotencyKey: failedEffect.idempotency_key,
+        failureReason: error instanceof Error ? error.message : String(error),
+        disposition: failure.disposition,
+        broadcastTxRef: failure.broadcastTxRef,
+        now: input.now,
+      })
+    }
+  }
+  if (retried) {
+    await input.client.execute({
+      sql: `
+        UPDATE purchase_settlement_attempts
+        SET updated_at = ?3
+        WHERE community_id = ?1
+          AND quote_id = ?2
+          AND status = 'attempting'
+      `,
+      args: [input.communityId, input.quote.quote_id, input.now],
+    })
+  }
+  return listPurchaseSettlementEffectsByQuote({
+    client: input.client,
+    communityId: input.communityId,
+    quoteId: input.quote.quote_id,
+    purchaseId: input.purchaseId,
+  })
+}
+
 async function getExistingPurchaseSettlement(input: {
   client: DbExecutor
   communityId: string
@@ -488,12 +598,13 @@ async function getExistingPurchaseSettlement(input: {
 }
 
 async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
+  env: Env
   client: Client
   communityId: string
   attempt: PurchaseSettlementAttemptRow
   now: string
 }): Promise<"finalized" | "failed" | "pending" | "error"> {
-  const quote = await getPurchaseQuoteRow(input.client, input.communityId, input.attempt.quote_id)
+  let quote = await getPurchaseQuoteRow(input.client, input.communityId, input.attempt.quote_id)
   if (!quote) {
     await markPurchaseSettlementAttemptFailed({
       client: input.client,
@@ -504,20 +615,33 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
     return "failed"
   }
 
-  const effects = await listPurchaseSettlementEffectsByQuote({
+  let effects = await listPurchaseSettlementEffectsByQuote({
     client: input.client,
     communityId: input.communityId,
     quoteId: input.attempt.quote_id,
     purchaseId: input.attempt.purchase_id,
   })
-  if (effects.some((effect) => effect.status === "failed")) {
-    await markPurchaseSettlementAttemptFailed({
-      client: input.client,
-      quoteId: input.attempt.quote_id,
-      failureReason: "One or more settlement effects failed",
-      now: input.now,
+  const confirmedFundingEffect = getConfirmedEffect(effects, "buyer_funding_receipt")
+  if (quote.status === "expired" && confirmedFundingEffect) {
+    const fundingLockedAt = confirmedFundingEffect.confirmed_at ?? input.now
+    await input.client.execute({
+      sql: `
+        UPDATE purchase_quotes
+        SET status = 'active',
+            funding_locked_at = COALESCE(funding_locked_at, ?3),
+            updated_at = ?3
+        WHERE community_id = ?1
+          AND quote_id = ?2
+          AND status = 'expired'
+      `,
+      args: [input.communityId, input.attempt.quote_id, fundingLockedAt],
     })
-    return "failed"
+    quote = {
+      ...quote,
+      status: "active",
+      funding_locked_at: quote.funding_locked_at ?? fundingLockedAt,
+      updated_at: fundingLockedAt,
+    }
   }
   if (effects.some((effect) => effect.status === "submitted")) {
     return "pending"
@@ -575,6 +699,19 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
         now: input.now,
       })
       return "failed"
+    }
+    effects = await retryFailedPrebroadcastParentVaultTransfers({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      quote,
+      purchaseId: input.attempt.purchase_id,
+      asset,
+      effects,
+      now: input.now,
+    })
+    if (effects.some((effect) => effect.status === "submitted" || effect.status === "failed")) {
+      return "pending"
     }
     const storyRoyaltyEffect = getConfirmedEffect(effects, "story_royalty_payment")
     settlementTxRef = storyRoyaltyEffect?.settlement_ref?.trim() ?? ""
@@ -654,6 +791,7 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
     failed: 0,
     stillPending: 0,
     errors: 0,
+    stalledCommunityIds: [],
   }
 
   const communities = (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).slice(0, maxCommunities)
@@ -670,6 +808,7 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
         summary.checked += 1
         try {
           const outcome = await reconcileStaleCommunityPurchaseSettlementAttempt({
+            env: input.env,
             client: db.client,
             communityId: community.community_id,
             attempt,
@@ -679,17 +818,32 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
             summary.finalized += 1
           } else if (outcome === "failed") {
             summary.failed += 1
+            if (!summary.stalledCommunityIds.includes(community.community_id)) {
+              summary.stalledCommunityIds.push(community.community_id)
+            }
           } else if (outcome === "pending") {
             summary.stillPending += 1
+            if (!summary.stalledCommunityIds.includes(community.community_id)) {
+              summary.stalledCommunityIds.push(community.community_id)
+            }
           } else {
             summary.errors += 1
+            if (!summary.stalledCommunityIds.includes(community.community_id)) {
+              summary.stalledCommunityIds.push(community.community_id)
+            }
           }
         } catch {
           summary.errors += 1
+          if (!summary.stalledCommunityIds.includes(community.community_id)) {
+            summary.stalledCommunityIds.push(community.community_id)
+          }
         }
       }
     } catch {
       summary.errors += 1
+      if (!summary.stalledCommunityIds.includes(community.community_id)) {
+        summary.stalledCommunityIds.push(community.community_id)
+      }
     } finally {
       db?.close()
     }
@@ -733,7 +887,7 @@ async function settleCommunityPurchaseForBuyer(input: {
       }
       throw badRequestError("Purchase quote is not active")
     }
-    if (new Date(quote.expires_at).getTime() <= Date.now()) {
+    if (!quote.funding_locked_at && new Date(quote.expires_at).getTime() <= Date.now()) {
       await db.client.execute({
         sql: `
           UPDATE purchase_quotes
@@ -920,10 +1074,13 @@ async function settleCommunityPurchaseForBuyer(input: {
             now: createdAt,
           })
         } catch (error) {
+          const failure = settlementFailureDisposition(error)
           await failPurchaseSettlementEffect({
             client: db.client,
             idempotencyKey: storyPaymentIdempotencyKey,
             failureReason: error instanceof Error ? error.message : String(error),
+            disposition: failure.disposition,
+            broadcastTxRef: failure.broadcastTxRef,
             now: createdAt,
           })
           throw error
@@ -985,10 +1142,13 @@ async function settleCommunityPurchaseForBuyer(input: {
                 now: createdAt,
               })
             } catch (error) {
+              const failure = settlementFailureDisposition(error)
               await failPurchaseSettlementEffect({
                 client: db.client,
                 idempotencyKey: transferIdempotencyKey,
                 failureReason: error instanceof Error ? error.message : String(error),
+                disposition: failure.disposition,
+                broadcastTxRef: failure.broadcastTxRef,
                 now: createdAt,
               })
               throw error
@@ -1026,10 +1186,13 @@ async function settleCommunityPurchaseForBuyer(input: {
               now: createdAt,
             })
           } catch (error) {
+            const failure = settlementFailureDisposition(error)
             await failPurchaseSettlementEffect({
               client: db.client,
               idempotencyKey: entitlementIdempotencyKey,
               failureReason: error instanceof Error ? error.message : String(error),
+              disposition: failure.disposition,
+              broadcastTxRef: failure.broadcastTxRef,
               now: createdAt,
             })
             throw error
