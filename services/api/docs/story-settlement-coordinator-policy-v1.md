@@ -1,5 +1,18 @@
 # Story settlement coordinator policy v1
 
+## Network and economics boundary
+
+The current staging and production purchase rails are testnet-only: Story
+Aeneid (chain 1315) and Base Sepolia (chain 84532). Coordinator admission is
+therefore a simulated-money safety canary, not authorization for mainnet money.
+
+The existing settlement snapshot converts cents to WIP at the nominal rule
+`$1.00 = 1 IP`; it does not use a market rate or margin. That rule is acceptable
+only for the Aeneid canary. Story mainnet admission requires a separately
+reviewed pricing/oracle and treasury-risk policy. It also requires re-registering
+the complete IP catalog, vaults, royalty-token allocations, and lineage on chain
+1514; Aeneid identifiers and vault state do not migrate by configuration.
+
 Status: approved configuration baseline; admission remains disabled.
 
 ## Aeneid
@@ -53,4 +66,3 @@ while any plan for the signer is nonterminal. First disable new admission,
 drain or manually disposition every plan, verify the coordinator backlog is
 zero, then deploy the new values and version together. Changing only values
 under an existing version is prohibited.
-

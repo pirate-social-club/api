@@ -6,14 +6,17 @@ import { SQL } from "bun"
 
 export const BOOKING_SETTLEMENT_RESOLVE_SCOPE = "bookings:settlement:resolve"
 export const REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE = "rewards:campaign-incidents:resolve"
+export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 
 export const ALLOWED_SCOPES = new Set([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  STORY_SETTLEMENT_REPAIR_SCOPE,
 ])
 
 const BOOKING_CREDENTIAL_ENV_NAME = "PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL"
 const REWARD_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_CAMPAIGN_OPERATOR_CREDENTIAL"
+const STORY_SETTLEMENT_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL"
 
 type Mode = "issue" | "rotate" | "revoke"
 
@@ -35,6 +38,7 @@ function usage(exitCode = 1): never {
   console.error(`Usage:
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope bookings:settlement:resolve --expires-at 2026-07-31T00:00:00Z
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope rewards:campaign-incidents:resolve --expires-at 2026-08-14T00:00:00Z
+  bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope story:settlement:repair --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts rotate --credential-id opc_... --operator-actor-id svc_... --label "Name" --scope rewards:campaign-incidents:resolve --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts revoke --credential-id opc_...
 
@@ -69,6 +73,9 @@ export function credentialEnvNameForScopes(scopes: string[], explicitName = ""):
   }
   if (uniqueScopes.length === 1 && uniqueScopes[0] === REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE) {
     return REWARD_CREDENTIAL_ENV_NAME
+  }
+  if (uniqueScopes.length === 1 && uniqueScopes[0] === STORY_SETTLEMENT_REPAIR_SCOPE) {
+    return STORY_SETTLEMENT_CREDENTIAL_ENV_NAME
   }
   throw new Error("multi-scope credentials require --credential-env-name")
 }
