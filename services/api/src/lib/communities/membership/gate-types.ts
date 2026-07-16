@@ -58,7 +58,7 @@ export type RequiredAction =
   | { kind: "action"; provider: "very"; capability: "unique_human" }
   | { kind: "action"; provider: "altcha"; capability: "altcha_pow"; scope: string }
   | { kind: "action"; provider: "passport"; capability: "wallet_score"; minimum_score: number; actual_score: number | null }
-  | { kind: "action"; provider: "wallet"; capability: "erc721_holding"; chain_namespace: string; contract_address: string }
+  | { kind: "action"; provider: "wallet"; capability: "erc721_holding"; chain_namespace: string; contract_address: string; min_quantity: number }
   | {
     kind: "action"
     provider: "wallet"

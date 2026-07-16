@@ -60,6 +60,16 @@ export function resolveTokenGateContractAddress(gateConfig: Record<string, unkno
   return normalizeEthereumAddress(gateConfig?.contract_address)
 }
 
+export function readErc721MinQuantity(gateConfig: Record<string, unknown> | null): number | null {
+  const value = gateConfig?.min_count
+  if (value == null) {
+    return 1
+  }
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 100
+    ? value as number
+    : null
+}
+
 export function satisfiesMinimumAgeRequirement(
   user: User,
   acceptedProviders: string[] | null | undefined,

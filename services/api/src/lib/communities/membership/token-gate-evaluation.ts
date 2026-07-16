@@ -8,7 +8,7 @@ import {
   evaluateErc721InventoryMatch,
   readInventoryMatchConfig,
 } from "../community-token-inventory-gates"
-import { parseGateConfig, resolveTokenGateContractAddress } from "./gate-config"
+import { parseGateConfig, readErc721MinQuantity, resolveTokenGateContractAddress } from "./gate-config"
 import type { CommunityGateRuleRow } from "./gate-types"
 
 export async function evaluateTokenGateRule(input: {
@@ -44,7 +44,7 @@ export async function evaluateTokenGateRule(input: {
   if (!contractAddress) {
     return ["unsupported_gate_config"]
   }
-  const minCount = readErc721MinCount(gateConfig)
+  const minCount = readErc721MinQuantity(gateConfig)
   if (minCount == null) {
     return ["unsupported_gate_config"]
   }
@@ -68,12 +68,4 @@ export async function evaluateTokenGateRule(input: {
     mismatchReasons.push("erc721_holding_required")
   }
   return mismatchReasons
-}
-
-function readErc721MinCount(gateConfig: Record<string, unknown> | null): number | null {
-  const raw = gateConfig?.min_count
-  if (raw == null) {
-    return 1
-  }
-  return Number.isInteger(raw) && (raw as number) >= 1 && (raw as number) <= 100 ? raw as number : null
 }
