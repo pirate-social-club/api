@@ -323,6 +323,7 @@ describe("openCommunityDb", () => {
     expect(tableNames).toContain("thread_snapshots")
     expect(tableNames).toContain("donation_partners")
     expect(tableNames).toContain("purchase_settlement_effects")
+    expect(tableNames).toContain("purchase_settlement_transactions")
     expect(tableNames).toContain("purchase_settlement_attempts")
 
     const postColumns = await getTableColumns(databasePath, "posts")
@@ -357,6 +358,23 @@ describe("openCommunityDb", () => {
     expect(settlementEffectColumns).toContain("metadata_json")
     expect(settlementEffectColumns).toContain("failure_disposition")
     expect(settlementEffectColumns).toContain("broadcast_tx_ref")
+    expect(settlementEffectColumns).toContain("request_fingerprint")
+    expect(settlementEffectColumns).toContain("coordinator_plan_ref")
+    expect(settlementEffectColumns).toContain("coordinator_state")
+    expect(settlementEffectColumns).toContain("coordinator_version")
+    expect(settlementEffectColumns).toContain("reconciliation_reason")
+    expect(settlementEffectColumns).toContain("last_reconciled_at")
+    expect(settlementEffectColumns).toContain("finality_confirmed_at")
+
+    const settlementTransactionColumns = await getTableColumns(databasePath, "purchase_settlement_transactions")
+    expect(settlementTransactionColumns).toContain("call_identity_hash")
+    expect(settlementTransactionColumns).toContain("coordinator_step_ref")
+    expect(settlementTransactionColumns).toContain("chain_id")
+    expect(settlementTransactionColumns).toContain("signer_address")
+    expect(settlementTransactionColumns).toContain("nonce")
+    expect(settlementTransactionColumns).toContain("tx_hash")
+    expect(settlementTransactionColumns).toContain("block_number")
+    expect(settlementTransactionColumns).toContain("block_hash")
 
     const settlementAttemptColumns = await getTableColumns(databasePath, "purchase_settlement_attempts")
     expect(settlementAttemptColumns).toContain("attempt_count")
@@ -382,6 +400,9 @@ describe("openCommunityDb", () => {
     const indexNames = await listIndexNames(databasePath)
     expect(indexNames).toContain("idx_community_memberships_state_lookup")
     expect(indexNames).toContain("idx_community_roles_state_lookup")
+    expect(indexNames).toContain("idx_purchase_settlement_transactions_effect_step")
+    expect(indexNames).toContain("idx_purchase_settlement_transactions_coordinator_step")
+    expect(indexNames).toContain("idx_purchase_settlement_transactions_signer_nonce")
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
   testWithTimeout("applies table-rebuild migrations with connection-level foreign-key pragmas", async () => {
