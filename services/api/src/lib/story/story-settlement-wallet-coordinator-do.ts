@@ -105,6 +105,8 @@ export interface StorySettlementGasParameters {
 }
 
 export interface StorySettlementChainPrimitives {
+  nativeBalance(env: Env, input: SignerDomain): Promise<bigint>
+  wipBalance(env: Env, input: SignerDomain): Promise<bigint>
   pendingNonce(env: Env, input: SignerDomain): Promise<number>
   latestNonce(env: Env, input: SignerDomain): Promise<number>
   gasParameters(env: Env, input: SignerDomain & {
@@ -126,6 +128,25 @@ export interface StorySettlementChainPrimitives {
     finalityPolicyVersion: string
   }): Promise<StoryTransactionObservation>
   fault?(point: StoryFaultPoint): Promise<void> | void
+}
+
+export interface StorySettlementCoordinatorHealth {
+  chainId: number
+  signerAddress: Address
+  pendingPlans: number
+  oldestBacklogAgeMs: number
+  reconciliationRequiredSteps: number
+  oldestReconciliationAgeMs: number
+  replacedSteps: number
+  latestNonce: number
+  pendingNonce: number
+  nextAllocatedNonce: number | null
+  nonceGap: boolean
+  nativeBalanceWei: string
+  nativeRequiredWei: string
+  wipBalanceWei: string
+  wipObligationWei: string
+  surplusWipWei: string
 }
 
 interface SignerDomain { chainId: number; signerAddress: Address }
@@ -356,6 +377,98 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     assertBytes32("plan_ref", planRef)
     const plan = this.readPlan(planRef)
     return plan ? this.result(plan) : null
+  }
+
+  async health(): Promise<StorySettlementCoordinatorHealth | null> {
+    const domainRow = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT chain_id, signer_address FROM signer_domain WHERE id=1",
+    ).toArray()[0]
+    if (!domainRow) return null
+    const domain = signerDomain(Number(domainRow.chain_id), String(domainRow.signer_address))
+    const now = Date.now()
+    const planStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      `SELECT COUNT(*) AS count, MIN(created_at) AS oldest
+       FROM plans WHERE state IN ('pending','abandoning')`,
+    ).toArray()[0]!
+    const reconciliationStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      `SELECT COUNT(*) AS count, MIN(updated_at) AS oldest
+       FROM steps WHERE state='reconciliation_required' OR repair_state='reconciliation_required'`,
+    ).toArray()[0]!
+    const replacedStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT COUNT(*) AS count FROM steps WHERE state='replaced' OR repair_state='replaced'",
+    ).toArray()[0]!
+    const nonceState = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT next_nonce FROM nonce_state WHERE id=1",
+    ).toArray()[0]
+    const nonceRows = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT nonce FROM steps WHERE nonce IS NOT NULL AND state NOT IN ('confirmed','reverted','replaced')",
+    ).toArray()
+    const allSteps = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      `SELECT steps.plan_ref,steps.step_kind,steps.state,steps.native_value,steps.identity_json,plans.state AS plan_state
+       FROM steps JOIN plans ON plans.plan_ref=steps.plan_ref`,
+    ).toArray()
+
+    const [latestNonce, pendingNonce, nativeBalance, wipBalance] = await Promise.all([
+      chain().latestNonce(this.env, domain),
+      chain().pendingNonce(this.env, domain),
+      chain().nativeBalance(this.env, domain),
+      chain().wipBalance(this.env, domain),
+    ])
+    const nextAllocatedNonce = nonceState ? Number(nonceState.next_nonce) : null
+    const ownedNonces = new Set(nonceRows.map((row) => Number(row.nonce)))
+    let nonceGap = pendingNonce > (nextAllocatedNonce ?? pendingNonce)
+    if (nextAllocatedNonce != null) {
+      for (let nonce = latestNonce; nonce < nextAllocatedNonce; nonce += 1) {
+        if (!ownedNonces.has(nonce)) { nonceGap = true; break }
+      }
+    }
+
+    const gasLimitCap = BigInt(String(this.env.STORY_COORDINATOR_GAS_LIMIT_MAX || "0"))
+    const maxFeeCap = BigInt(String(this.env.STORY_COORDINATOR_MAX_FEE_PER_GAS_WEI || "0"))
+    let nativeRequired = 0n
+    let remainingSteps = 0n
+    const wrappedPlans = new Set<string>()
+    for (const row of allSteps) {
+      const state = String(row.state) as StorySettlementStepState
+      const planActive = row.plan_state === "pending" || row.plan_state === "abandoning"
+      if (planActive && !isTerminalStorySettlementStepState(state)) {
+        remainingSteps += 1n
+        if (String(row.step_kind) === "wip_wrap") nativeRequired += BigInt(String(row.native_value))
+      }
+      if (planActive && String(row.step_kind) === "wip_wrap" && state === "confirmed") {
+        wrappedPlans.add(String(row.plan_ref))
+      }
+    }
+    nativeRequired += remainingSteps * gasLimitCap * maxFeeCap
+    let wipObligation = 0n
+    for (const row of allSteps) {
+      if (String(row.step_kind) !== "story_royalty_payment" || !wrappedPlans.has(String(row.plan_ref))) continue
+      const state = String(row.state) as StorySettlementStepState
+      if (state === "confirmed" || state === "reverted" || state === "replaced") continue
+      const identity = JSON.parse(String(row.identity_json)) as { amount?: string | null }
+      wipObligation += BigInt(identity.amount ?? "0")
+    }
+    const surplusWip = wipBalance > wipObligation ? wipBalance - wipObligation : 0n
+    const oldestBacklog = planStats.oldest == null ? now : Number(planStats.oldest)
+    const oldestReconciliation = reconciliationStats.oldest == null ? now : Number(reconciliationStats.oldest)
+    return {
+      chainId: domain.chainId,
+      signerAddress: domain.signerAddress,
+      pendingPlans: Number(planStats.count),
+      oldestBacklogAgeMs: planStats.oldest == null ? 0 : Math.max(0, now - oldestBacklog),
+      reconciliationRequiredSteps: Number(reconciliationStats.count),
+      oldestReconciliationAgeMs: reconciliationStats.oldest == null ? 0 : Math.max(0, now - oldestReconciliation),
+      replacedSteps: Number(replacedStats.count),
+      latestNonce,
+      pendingNonce,
+      nextAllocatedNonce,
+      nonceGap,
+      nativeBalanceWei: nativeBalance.toString(),
+      nativeRequiredWei: nativeRequired.toString(),
+      wipBalanceWei: wipBalance.toString(),
+      wipObligationWei: wipObligation.toString(),
+      surplusWipWei: surplusWip.toString(),
+    }
   }
 
   async reconcile(planRef: Hex): Promise<StorySettlementPlanResult> {

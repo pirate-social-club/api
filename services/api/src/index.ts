@@ -59,6 +59,7 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
+import { runStorySettlementCoordinatorWatchdog } from "./lib/story/story-settlement-coordinator-watchdog"
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
@@ -953,6 +954,11 @@ const handler: ExportedHandler<Env> = {
     ctx.waitUntil(
       runStoryRuntimeFundingWatchdog(env).catch((error) => {
         console.error("[scheduled] story funding watchdog crashed (fail-soft)", error)
+      }),
+    )
+    ctx.waitUntil(
+      runStorySettlementCoordinatorWatchdog(env).catch((error) => {
+        console.error("[scheduled] Story settlement coordinator watchdog crashed (fail-soft)", error)
       }),
     )
     ctx.waitUntil(

@@ -110,6 +110,30 @@ describe("Story settlement production chain primitives", () => {
     })).rejects.toThrow("story_coordinator_rpc_chain_id_mismatch")
   })
 
+  test("reads native IP and WIP balances without a write method", async () => {
+    const calls: Array<{ method: string; params: unknown[] }> = []
+    setStorySettlementProviderFactoryForTests(() => fakeProvider({
+      send: async (method, params) => {
+        calls.push({ method, params })
+        if (method === "eth_chainId") return "0x523"
+        if (method === "eth_getBalance") return "0x64"
+        if (method === "eth_call") return "0xc8"
+        throw new Error(`unexpected RPC method: ${method}`)
+      },
+    }))
+    const domain = { chainId: 1315, signerAddress: ADDRESS }
+    expect(await storySettlementRealChain.nativeBalance(env(), domain)).toBe(100n)
+    expect(await storySettlementRealChain.wipBalance(env(), domain)).toBe(200n)
+    expect(calls.map((call) => call.method)).toEqual([
+      "eth_chainId", "eth_getBalance", "eth_chainId", "eth_call",
+    ])
+    expect(calls[1]!.params).toEqual([ADDRESS, "latest"])
+    expect(calls[3]!.params).toEqual([
+      expect.objectContaining({ to: "0x1514000000000000000000000000000000000000" }),
+      "latest",
+    ])
+  })
+
   test("requires canonical receipt evidence and finality before confirmation", async () => {
     setStorySettlementProviderFactoryForTests(() => fakeProvider())
     expect(await storySettlementRealChain.observeTransaction(env(), {

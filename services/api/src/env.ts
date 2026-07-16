@@ -278,6 +278,8 @@ export type Env = {
   STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS?: string
   STORY_COORDINATOR_FINALITY_CONFIRMATIONS?: string
   STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK?: string
+  STORY_COORDINATOR_BACKLOG_ALERT_MS?: string
+  STORY_COORDINATOR_RECONCILIATION_ALERT_MS?: string
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
