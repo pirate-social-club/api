@@ -108,6 +108,15 @@ describe("erc721 gate evaluation", () => {
     expect(summary.gate_type).toBe("erc721_holding")
     expect(summary.chain_namespace).toBe("eip155:1")
     expect(summary.contract_address).toBe("0x1111111111111111111111111111111111111111")
+    expect(summary.min_quantity).toBe(1)
+  })
+
+  test("includes erc721 min_count in the public summary", () => {
+    const summary = buildMembershipGateSummary(makeErc721Rule(
+      "0x1111111111111111111111111111111111111111",
+      { min_count: 10 },
+    ))
+    expect(summary.min_quantity).toBe(10)
   })
 
   test("returns erc721_holding_required when no attached wallet holds the collection", async () => {

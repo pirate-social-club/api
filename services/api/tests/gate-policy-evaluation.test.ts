@@ -639,6 +639,26 @@ describe("evaluateMembershipGatePolicy", () => {
   })
 
   describe("collapsed action sets", () => {
+    test("erc721 actions carry the required collection quantity", async () => {
+      const result = await evaluateMembershipGatePolicy({
+        env: { ETHEREUM_RPC_URL: "https://example.invalid" },
+        policy: atomGate({
+          type: "erc721_holding",
+          chain_namespace: "eip155:1",
+          contract_address: "0x0000000000000000000000000000000000000001",
+          min_count: 10,
+        }),
+        user: makeUser({}),
+        walletAttachments: [],
+      })
+
+      expect(result.requiredActionSet?.items[0]).toMatchObject({
+        kind: "action",
+        capability: "erc721_holding",
+        min_quantity: 10,
+      })
+    })
+
     test("nested same-mode sets collapse", async () => {
       const result = await evaluateMembershipGatePolicy({
         env: {},

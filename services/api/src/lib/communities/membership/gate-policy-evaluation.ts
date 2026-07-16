@@ -434,6 +434,7 @@ async function evaluateTokenAtom(input: {
         capability: "erc721_holding",
         chain_namespace: input.atom.chain_namespace,
         contract_address: input.atom.contract_address,
+        min_quantity: input.atom.min_count ?? 1,
       }
       : {
         kind: "action",

@@ -3,6 +3,7 @@ import {
   parseGateConfig,
   parseProofRequirements,
   readExcludedCountryValues,
+  readErc721MinQuantity,
   readMinimumAge,
   readMinimumScore,
   readRequiredCountryValues,
@@ -60,6 +61,10 @@ export function buildMembershipGateSummary(rule: CommunityGateRuleRow): Membersh
     }
     if (rule.chain_namespace) {
       summary.chain_namespace = rule.chain_namespace
+    }
+    const minQuantity = readErc721MinQuantity(gateConfig)
+    if (minQuantity != null) {
+      summary.min_quantity = minQuantity
     }
   }
 
@@ -162,6 +167,7 @@ function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSumma
     case "erc721_holding":
       summary.chain_namespace = atom.chain_namespace
       summary.contract_address = atom.contract_address
+      summary.min_quantity = atom.min_count ?? 1
       break
     case "erc721_inventory_match":
       summary.chain_namespace = atom.chain_namespace

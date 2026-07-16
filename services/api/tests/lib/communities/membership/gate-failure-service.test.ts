@@ -175,6 +175,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
             capability: "erc721_holding",
             chain_namespace: "eip155:1",
             contract_address: "0x0000000000000000000000000000000000000001",
+            min_quantity: 1,
           }],
         },
       },
