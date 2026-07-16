@@ -66,6 +66,7 @@ import {
   type ResolvedCharityPayout,
 } from "./charity-payout-service"
 import { confirmBuyerFundingForSettlement } from "./funding-proof-service"
+import { coordinateStorySettlement } from "./story-settlement-coordinator-service"
 import {
   type BuyerIdentity,
   buyerIdentityFields,
@@ -107,6 +108,7 @@ import type {
   CommunityPurchaseSettlementEffectListResponse,
   CommunityPurchaseListResponse,
   CommunityPurchaseSettlement,
+  CommunityPurchaseSettlementPending,
   CommunityPurchaseSettlementRequest,
   Env,
 } from "../../../types"
@@ -127,7 +129,8 @@ type RoyaltyEarningEventForNotification = {
 }
 
 export type SettleCommunityPurchaseResult = {
-  settlement: CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement
+  settlement: CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement | null
+  settlementPending?: CommunityPurchaseSettlementPending
   royaltyEarningEvents: RoyaltyEarningEventForNotification[]
 }
 
@@ -643,7 +646,8 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       updated_at: fundingLockedAt,
     }
   }
-  if (effects.some((effect) => effect.status === "submitted")) {
+  const coordinatorOwned = effects.some((effect) => effect.coordinator_plan_ref)
+  if (!coordinatorOwned && effects.some((effect) => effect.status === "submitted")) {
     return "pending"
   }
 
@@ -700,7 +704,37 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       })
       return "failed"
     }
-    effects = await retryFailedPrebroadcastParentVaultTransfers({
+    if (coordinatorOwned) {
+      const storyEffect = effects.find((effect) => effect.effect_kind === "story_royalty_payment")
+      const metadata = parseJsonValue<{ buyer_wallet_address?: string }>(storyEffect?.metadata_json ?? null, {})
+      if (!metadata.buyer_wallet_address?.trim()) return "pending"
+      const coordinated = await coordinateStorySettlement({
+        env: input.env,
+        client: input.client,
+        communityId: input.communityId,
+        quoteId: quote.quote_id,
+        purchaseId: input.attempt.purchase_id,
+        asset,
+        buyerAddress: metadata.buyer_wallet_address,
+        purchaseRef: derivePurchaseRef({
+          communityId: input.communityId,
+          purchaseId: input.attempt.purchase_id,
+          assetId: asset.asset_id,
+        }),
+        amount: resolveAllocationSettlementAmountAtomic({
+          allocations: allocationSnapshot,
+          settlementStrategy: "story_payout",
+        }),
+        now: input.now,
+      })
+      if (coordinated.kind !== "confirmed") return "pending"
+      effects = await listPurchaseSettlementEffectsByQuote({
+        client: input.client,
+        communityId: input.communityId,
+        quoteId: quote.quote_id,
+        purchaseId: input.attempt.purchase_id,
+      })
+    } else effects = await retryFailedPrebroadcastParentVaultTransfers({
       env: input.env,
       client: input.client,
       communityId: input.communityId,
@@ -1018,6 +1052,32 @@ async function settleCommunityPurchaseForBuyer(input: {
         allocations: allocationSnapshot,
         now: createdAt,
       })
+      const coordinated = await coordinateStorySettlement({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        quoteId: quote.quote_id,
+        purchaseId,
+        asset,
+        buyerAddress: assetBuyerWalletAddress,
+        purchaseRef,
+        amount: storyPayoutAmount,
+        now: createdAt,
+      })
+      if (coordinated.kind === "pending") {
+        return {
+          settlement: null,
+          settlementPending: {
+            object: "community_purchase_settlement_pending",
+            community: `com_${input.communityId}`,
+            quote: `pq_${quote.quote_id}`,
+            purchase: `pur_${purchaseId}`,
+            coordinator_plan_ref: coordinated.planRef,
+            status: "settlement_pending",
+          },
+          royaltyEarningEvents: [],
+        }
+      }
       const storyPaymentIdempotencyKey = `${quote.quote_id}:story_royalty:${asset.story_ip_id}:${storyPayoutAmount.toString()}`
       const storyPaymentMetadata = JSON.stringify({
         amount_wip_wei: storyPayoutAmount.toString(),

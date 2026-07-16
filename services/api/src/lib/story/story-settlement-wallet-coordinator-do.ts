@@ -73,6 +73,7 @@ export interface StorySettlementStepResult {
   nonce: number | null
   transactionHash: Hex | null
   receipt: StorySettlementReceiptEvidence | null
+  attemptCount: number
   repairState: RepairState | null
   lastErrorCode: string | null
 }
@@ -232,6 +233,10 @@ function signerDomain(chainId: number, signerAddress: string): SignerDomain {
 export function storySettlementCoordinatorName(chainId: number, signerAddress: string): string {
   const domain = signerDomain(chainId, signerAddress)
   return `story-settlement-signer:${domain.chainId}:${domain.signerAddress.toLowerCase()}`
+}
+
+export function deriveStorySettlementPlanRef(request: StorySettlementPlanRequest): Hex {
+  return derivePlanRef(request, request.steps.map((step) => step.callIdentity))
 }
 
 function derivePlanRef(request: StorySettlementPlanRequest, callIdentities: Hex[]): Hex {
@@ -1010,6 +1015,7 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
         nonce: step.nonce,
         transactionHash: step.transaction_hash,
         receipt: this.snapshot(step).receipt,
+        attemptCount: step.attempt_count,
         repairState: step.repair_state,
         lastErrorCode: step.last_error_code,
       })),

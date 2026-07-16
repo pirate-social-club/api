@@ -13,6 +13,7 @@ export type {
   CommunityPurchaseQuotePreflightRequest,
   CommunityPurchaseQuoteRequest,
   CommunityPurchaseSettlement,
+  CommunityPurchaseSettlementPending,
   CommunityPurchaseSettlementFailure,
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,

@@ -1068,6 +1068,15 @@ export type CommunityPurchaseSettlement = {
   settled_at: number;
 };
 
+export type CommunityPurchaseSettlementPending = {
+  object: "community_purchase_settlement_pending";
+  community: string;
+  quote: string;
+  purchase: string;
+  coordinator_plan_ref: string;
+  status: "settlement_pending";
+};
+
 export type CommunityPurchaseSettlementFailureRequest = {
   quote: string;
 };
