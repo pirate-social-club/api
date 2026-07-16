@@ -189,6 +189,19 @@ export type CourtyardWalletInventoryGroup = {
   count: number;
 };
 
+export type AssetBalanceCapability = {
+  asset_id: string;
+  label: string;
+  chain_namespace: string;
+  standard: "native" | "erc20";
+  symbol: string;
+  decimals: number;
+};
+
+export type AssetBalanceCapabilityListResponse = {
+  assets: Array<AssetBalanceCapability>;
+};
+
 export type NftGateCapabilitySource = {
   id: string;
   label: string;
@@ -1346,6 +1359,10 @@ export type CommunityHandlePolicy = {
   policy_template: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
   claims_enabled: boolean;
+  claim_gate_mode: "none" | "inherit_community" | "explicit";
+  claim_gate_expression_ref: string | null;
+  claim_gate_expression: GatePolicy | null;
+  eligibility_timing: "claim_time" | "continuous";
   settings: CommunityHandlePolicySettings;
   updated_at: number | null;
 };
@@ -1415,6 +1432,9 @@ export type UpdateCommunityHandlePolicyRequest = {
   policy_template?: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
   claims_enabled?: boolean;
+  claim_gate_mode?: "none" | "inherit_community" | "explicit";
+  claim_gate_expression?: GatePolicy | null;
+  eligibility_timing?: "claim_time" | "continuous";
   settings?: CommunityHandlePolicySettings | null;
 };
 
@@ -4203,6 +4223,7 @@ export const apiRoutes = {
   usersMe: "/users/me",
   profilesMe: "/profiles/me",
   profilesMeCourtyardInventory: "/profiles/me/courtyard-inventory",
+  gateCapabilitiesAssets: "/gate-capabilities/assets",
   gateCapabilitiesNftSources: "/gate-capabilities/nft/sources",
   gateCapabilitiesNftSourceFacetValues: (sourceId: string, facetKey: string) => `/gate-capabilities/nft/sources/${sourceId}/facets/${facetKey}/values`,
   walletIdentity: (chainRef: string, walletAddress: string) => `/wallet-identities/${chainRef}/${walletAddress}`,

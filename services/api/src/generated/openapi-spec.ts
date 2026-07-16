@@ -7320,6 +7320,35 @@ const spec = {
         }
       }
     },
+    "/gate-capabilities/assets": {
+      "get": {
+        "tags": [
+          "Gate Capabilities"
+        ],
+        "summary": "List supported asset-balance gate assets",
+        "operationId": "listAssetBalanceGateCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetBalanceCapabilityListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
     "/gate-capabilities/nft/sources/{source_id}/facets/{facet_key}/values": {
       "get": {
         "tags": [
@@ -16917,6 +16946,22 @@ const spec = {
           }
         }
       },
+      "AssetBalanceCapabilityListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/AssetBalanceCapability"
+            }
+          }
+        }
+      },
       "NftGateFacetValuePage": {
         "type": "object",
         "additionalProperties": false,
@@ -18700,7 +18745,8 @@ const spec = {
               "gender",
               "wallet_score",
               "erc721_holding",
-              "erc721_inventory_match"
+              "erc721_inventory_match",
+              "asset_balance"
             ]
           },
           "proof_requirements": {
@@ -18997,7 +19043,8 @@ const spec = {
               "wallet_score",
               "altcha_pow",
               "erc721_holding",
-              "erc721_inventory_match"
+              "erc721_inventory_match",
+              "asset_balance"
             ]
           },
           "accepted_providers": {
@@ -19071,6 +19118,15 @@ const spec = {
           "asset_category": {
             "type": "string",
             "nullable": true
+          },
+          "asset_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "min_amount_atomic": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[1-9][0-9]*$"
           }
         }
       },
@@ -21506,6 +21562,52 @@ const spec = {
           }
         }
       },
+      "AssetBalanceCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset_id",
+          "label",
+          "chain_namespace",
+          "standard",
+          "symbol",
+          "decimals"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "chain_namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "standard": {
+            "type": "string",
+            "enum": [
+              "native",
+              "erc20"
+            ]
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        }
+      },
       "NftGateFacetValue": {
         "type": "object",
         "additionalProperties": false,
@@ -23257,6 +23359,20 @@ const spec = {
             "type": "integer",
             "nullable": true
           },
+          "asset_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "required_amount_atomic": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "current_amount_atomic": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[0-9]+$"
+          },
           "children": {
             "type": "array",
             "items": {
@@ -24663,7 +24779,8 @@ const spec = {
               "wallet_score",
               "altcha_pow",
               "erc721_holding",
-              "erc721_inventory_match"
+              "erc721_inventory_match",
+              "asset_balance"
             ]
           },
           "proof_requirements": {
@@ -24788,7 +24905,8 @@ const spec = {
               "wallet_score",
               "altcha_pow",
               "erc721_holding",
-              "erc721_inventory_match"
+              "erc721_inventory_match",
+              "asset_balance"
             ]
           },
           "provider": {
@@ -24841,6 +24959,13 @@ const spec = {
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "min_amount_atomic": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
           },
           "match": {
             "type": "object",
@@ -25036,7 +25161,8 @@ const spec = {
               "wallet_score",
               "altcha_pow",
               "erc721_holding",
-              "erc721_inventory_match"
+              "erc721_inventory_match",
+              "asset_balance"
             ]
           },
           "scope": {
@@ -25078,6 +25204,21 @@ const spec = {
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "required_amount_atomic": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "current_amount_atomic": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "shortfall_amount_atomic": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
           }
         }
       },
