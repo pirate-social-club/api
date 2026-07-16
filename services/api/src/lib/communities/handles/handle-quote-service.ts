@@ -5,7 +5,7 @@ import { makeId, nowIso } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityWriteClient } from "../community-read-access"
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
-import { requireHandleClaimAccess } from "./handle-access"
+import { evaluateNamespaceHandleClaimEligibility, requireHandleClaimAccess } from "./handle-access"
 import { expireStaleHandleQuotes } from "./handle-claim-validation"
 import {
   type HandleCommunityRepository,
@@ -55,14 +55,22 @@ export async function quoteCommunityHandle(input: {
     }
     const settings = parseHandleClaimSettings(policy.settings_json)
     const claimAccess = await requireHandleClaimAccess({ client: db.client, communityId: input.communityId, userId: input.userId })
+    const gateEligibility = await evaluateNamespaceHandleClaimEligibility({
+      env: input.env,
+      client: db.client,
+      communityId: input.communityId,
+      userId: input.userId,
+      userRepository: input.userRepository,
+      policy,
+    })
 
     assertHandleLabelLength(desired.labelNormalized, settings)
     const activeForUser = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
     const blockingForLabel = await getBlockingHandleForLabel(db.client, policy.namespace_id, desired.labelNormalized)
 
-    let eligible = true
+    let eligible = gateEligibility.satisfied
     let availability: HandleAvailability = "available"
-    let reason: string | null = null
+    let reason: string | null = gateEligibility.reason
     if (isReservedHandleLabel(desired.labelNormalized, settings)) {
       eligible = false
       availability = "reserved"

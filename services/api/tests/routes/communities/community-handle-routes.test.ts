@@ -996,6 +996,93 @@ describe("community handle routes", () => {
     expect(retryClaim.funding_tx_ref).toBe(fundingTxRef)
   })
 
+  test("explicit namespace claim gates are persisted, surfaced on quotes, and rechecked on claim", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-explicit-gate-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const expression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: { type: "unique_human" as const, provider: "very" as const },
+      },
+    }
+    const updateResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        claim_gate_mode: "explicit",
+        claim_gate_expression: expression,
+        eligibility_timing: "claim_time",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(updateResponse.status).toBe(200)
+    const policy = await json(updateResponse) as {
+      claim_gate_mode: string
+      claim_gate_expression_ref: string | null
+      claim_gate_expression: unknown
+      eligibility_timing: string
+    }
+    expect(policy.claim_gate_mode).toBe("explicit")
+    expect(policy.claim_gate_expression_ref?.startsWith("hcgp_")).toBe(true)
+    expect(policy.claim_gate_expression).toEqual(expression)
+    expect(policy.eligibility_timing).toBe("claim_time")
+
+    const quoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "gatedname" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { id: string; eligible: boolean; reason: string | null }
+    expect(quote.eligible).toBe(false)
+    expect(quote.reason).toBe("Namespace eligibility requirements are not satisfied")
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: quote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(403)
+    expect(await json(claimResponse)).toMatchObject({
+      code: "eligibility_failed",
+      message: "Namespace eligibility requirements are not satisfied",
+      details: { claim_gate_mode: "explicit" },
+    })
+
+    const clearWithoutModeResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claim_gate_expression: null },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(clearWithoutModeResponse.status).toBe(400)
+
+    const clearResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claim_gate_mode: "none", claim_gate_expression: null },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(clearResponse.status).toBe(200)
+    expect(await json(clearResponse)).toMatchObject({
+      claim_gate_mode: "none",
+      claim_gate_expression_ref: null,
+      claim_gate_expression: null,
+      eligibility_timing: "claim_time",
+    })
+  })
+
   test("paid handle claim leaves quote open when label becomes unavailable after payment verification", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

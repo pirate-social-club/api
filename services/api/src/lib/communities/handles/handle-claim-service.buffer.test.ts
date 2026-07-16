@@ -21,6 +21,10 @@ const POLICY_ROW = {
   policy_template: "standard",
   pricing_model: null,
   claims_enabled: 1,
+  claim_gate_mode: "none",
+  claim_gate_expression_ref: null,
+  claim_gate_expression_json: null,
+  eligibility_timing: "claim_time",
   settings_json: null,
   updated_at: null,
 }

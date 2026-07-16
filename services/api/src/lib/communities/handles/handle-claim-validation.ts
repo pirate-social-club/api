@@ -1,8 +1,10 @@
 import type { DbExecutor } from "../../db-helpers"
+import type { Env } from "../../../env"
+import type { UserRepository } from "../../auth/repositories"
 import { conflictError, eligibilityFailed, notFoundError } from "../../errors"
 import type { Client, QueryResultRow, Transaction } from "../../sql-client"
 import { requiredNumber, requiredString } from "../../sql-row"
-import { requireHandleClaimAccess } from "./handle-access"
+import { requireHandleClaimAccess, requireNamespaceHandleClaimEligibility } from "./handle-access"
 import {
   type NamespacePolicyRow,
   getNamespacePolicy,
@@ -81,6 +83,8 @@ export async function assertClaimQuoteStillClaimable(input: {
   quote: QueryResultRow
   now: string
   paymentVerified: boolean
+  env: Env
+  userRepository: UserRepository
 }): Promise<{
   policy: NamespacePolicyRow
   labelNormalized: string
@@ -122,6 +126,14 @@ export async function assertClaimQuoteStillClaimable(input: {
   }
   const settings = parseHandleClaimSettings(policy.settings_json)
   await requireHandleClaimAccess({ client: input.executor, communityId: input.communityId, userId: input.userId })
+  await requireNamespaceHandleClaimEligibility({
+    env: input.env,
+    client: input.executor,
+    communityId: input.communityId,
+    userId: input.userId,
+    userRepository: input.userRepository,
+    policy,
+  })
 
   const labelNormalized = requiredString(input.quote, "label_normalized")
   const labelDisplay = requiredString(input.quote, "label_display")

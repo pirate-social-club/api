@@ -7,12 +7,14 @@ import type {
 } from "../../../types"
 import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, eligibilityFailed, internalError } from "../../errors"
-import { nowIso } from "../../helpers"
+import { makeId, nowIso } from "../../helpers"
 import { nullableUnixSeconds } from "../../../serializers/time"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
+import { validateGatePolicy } from "../membership/gate-policy-validation"
+import type { GatePolicy } from "../membership/gate-types"
 
 export type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
 export type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
@@ -27,6 +29,10 @@ export type NamespacePolicyRow = {
   policy_template: CommunityHandlePolicy["policy_template"]
   pricing_model: HandlePricingModel | null
   claims_enabled: boolean
+  claim_gate_mode: CommunityHandlePolicy["claim_gate_mode"]
+  claim_gate_expression_ref: string | null
+  claim_gate_expression_json: string | null
+  eligibility_timing: CommunityHandlePolicy["eligibility_timing"]
   settings_json: string | null
   updated_at: string | null
 }
@@ -119,6 +125,10 @@ export function serializeHandlePolicy(row: NamespacePolicyRow): CommunityHandleP
     policy_template: row.policy_template,
     pricing_model: row.pricing_model,
     claims_enabled: row.claims_enabled,
+    claim_gate_mode: row.claim_gate_mode,
+    claim_gate_expression_ref: row.claim_gate_expression_ref,
+    claim_gate_expression: parseClaimGateExpression(row.claim_gate_expression_json),
+    eligibility_timing: row.eligibility_timing,
     settings: parseHandleClaimSettings(row.settings_json),
     updated_at: nullableUnixSeconds(row.updated_at),
   }
@@ -153,10 +163,15 @@ export async function getNamespacePolicy(
     sql: `
       SELECT nb.community_id, nb.namespace_id, nb.display_label, nb.normalized_label, nb.route_family,
              nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
-             nhp.claims_enabled, nhp.settings_json, nhp.updated_at
+             nhp.claims_enabled, nhp.claim_gate_mode, nhp.claim_gate_expression_ref,
+             nhp.eligibility_timing, hcg.expression_json AS claim_gate_expression_json,
+             nhp.settings_json, nhp.updated_at
       FROM namespace_bindings nb
       JOIN namespace_handle_policies nhp
         ON nhp.namespace_id = nb.namespace_id
+      LEFT JOIN namespace_handle_claim_gate_policies hcg
+        ON hcg.namespace_handle_policy_id = nhp.namespace_handle_policy_id
+       AND hcg.claim_gate_expression_ref = nhp.claim_gate_expression_ref
       WHERE nb.community_id = ?1
         AND nb.status = 'active'
         AND (?2 IS NULL OR nb.namespace_id = ?2)
@@ -182,8 +197,44 @@ export async function getNamespacePolicy(
     policy_template: requiredString(row, "policy_template") as CommunityHandlePolicy["policy_template"],
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
     claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) === 1,
+    claim_gate_mode: assertClaimGateMode(rowValue(row, "claim_gate_mode")),
+    claim_gate_expression_ref: stringOrNull(rowValue(row, "claim_gate_expression_ref")),
+    claim_gate_expression_json: stringOrNull(rowValue(row, "claim_gate_expression_json")),
+    eligibility_timing: assertEligibilityTiming(rowValue(row, "eligibility_timing")),
     settings_json: stringOrNull(rowValue(row, "settings_json")),
     updated_at: stringOrNull(rowValue(row, "updated_at")),
+  }
+}
+
+function assertClaimGateMode(value: unknown): CommunityHandlePolicy["claim_gate_mode"] {
+  if (value === "none" || value === "inherit_community" || value === "explicit") return value
+  throw internalError("Community handle claim gate mode is malformed")
+}
+
+function assertWritableClaimGateMode(value: unknown): CommunityHandlePolicy["claim_gate_mode"] {
+  if (value === "none" || value === "inherit_community" || value === "explicit") return value
+  throw badRequestError("claim_gate_mode must be none, inherit_community, or explicit")
+}
+
+function assertEligibilityTiming(value: unknown): CommunityHandlePolicy["eligibility_timing"] {
+  if (value === "claim_time" || value === "continuous") return value
+  throw internalError("Community handle eligibility timing is malformed")
+}
+
+function assertWritableEligibilityTiming(value: unknown): CommunityHandlePolicy["eligibility_timing"] {
+  if (value === "claim_time") return value
+  if (value === "continuous") {
+    throw eligibilityFailed("Continuous handle eligibility is unavailable until suspension and restoration semantics ship")
+  }
+  throw badRequestError("eligibility_timing must be claim_time or continuous")
+}
+
+function parseClaimGateExpression(raw: string | null): GatePolicy | null {
+  if (!raw?.trim()) return null
+  try {
+    return validateGatePolicy(JSON.parse(raw))
+  } catch {
+    throw internalError("Community handle claim gate expression is malformed")
   }
 }
 
@@ -248,20 +299,44 @@ export async function updateCommunityHandlePolicy(input: {
     if (protocolIssuanceRequired(nextSettings)) {
       throw eligibilityFailed("Protocol-issued community names are temporarily unavailable")
     }
+    const nextClaimGateMode = "claim_gate_mode" in input.body
+      ? assertWritableClaimGateMode(input.body.claim_gate_mode)
+      : current.claim_gate_mode
+    const nextEligibilityTiming = "eligibility_timing" in input.body
+      ? assertWritableEligibilityTiming(input.body.eligibility_timing)
+      : current.eligibility_timing
+    const submittedExpression = "claim_gate_expression" in input.body
+      ? input.body.claim_gate_expression == null ? null : validateGatePolicy(input.body.claim_gate_expression)
+      : parseClaimGateExpression(current.claim_gate_expression_json)
+    if (nextClaimGateMode === "explicit" && !submittedExpression) {
+      throw badRequestError("claim_gate_expression is required when claim_gate_mode is explicit")
+    }
+    if (nextClaimGateMode !== "explicit" && submittedExpression) {
+      throw badRequestError("claim_gate_expression is only allowed when claim_gate_mode is explicit")
+    }
+    const nextExpressionRef = submittedExpression
+      ? current.claim_gate_expression_ref ?? makeId("hcgp")
+      : null
     const updatedAt = nowIso()
-    await db.client.execute({
+    const tx = await db.client.transaction("write")
+    try {
+      await tx.execute({
       sql: `
         INSERT INTO namespace_handle_policies (
           namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-          membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
+          membership_required_for_claim, claims_enabled, claim_gate_mode, claim_gate_expression_ref,
+          eligibility_timing, settings_json, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12
         )
         ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
           policy_template = excluded.policy_template,
           pricing_model = excluded.pricing_model,
           membership_required_for_claim = excluded.membership_required_for_claim,
           claims_enabled = excluded.claims_enabled,
+          claim_gate_mode = excluded.claim_gate_mode,
+          claim_gate_expression_ref = excluded.claim_gate_expression_ref,
+          eligibility_timing = excluded.eligibility_timing,
           settings_json = excluded.settings_json,
           updated_at = excluded.updated_at
       `,
@@ -275,10 +350,39 @@ export async function updateCommunityHandlePolicy(input: {
         "claims_enabled" in input.body
           ? input.body.claims_enabled === true ? 1 : 0
           : current.claims_enabled ? 1 : 0,
+        nextClaimGateMode,
+        nextExpressionRef,
+        nextEligibilityTiming,
         JSON.stringify(nextSettings),
         updatedAt,
       ],
-    })
+      })
+      if (submittedExpression && nextExpressionRef) {
+        await tx.execute({
+          sql: `
+            INSERT INTO namespace_handle_claim_gate_policies (
+              claim_gate_expression_ref, namespace_handle_policy_id, version,
+              expression_json, created_at, updated_at
+            ) VALUES (?1, ?2, 1, ?3, ?4, ?4)
+            ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
+              claim_gate_expression_ref = excluded.claim_gate_expression_ref,
+              version = excluded.version,
+              expression_json = excluded.expression_json,
+              updated_at = excluded.updated_at
+          `,
+          args: [nextExpressionRef, current.namespace_handle_policy_id, JSON.stringify(submittedExpression), updatedAt],
+        })
+      } else {
+        await tx.execute({
+          sql: `DELETE FROM namespace_handle_claim_gate_policies WHERE namespace_handle_policy_id = ?1`,
+          args: [current.namespace_handle_policy_id],
+        })
+      }
+      await tx.commit()
+    } catch (error) {
+      await tx.rollback()
+      throw error
+    }
     const updated = await getNamespacePolicy(db.client, input.communityId, selector)
     if (!updated) throw internalError("Updated community handle policy row is missing")
     return serializeHandlePolicy(updated)
