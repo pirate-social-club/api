@@ -128,6 +128,14 @@ export function protocolIssuanceRequired(settings: HandleClaimSettings): boolean
   return settings.issuance_mode === "spaces_subspace"
 }
 
+export function assertWritableHandleIssuanceMode(value: unknown): HandleClaimSettings["issuance_mode"] {
+  if (value == null || value === "app_internal") return undefined
+  if (value === "spaces_subspace") {
+    throw eligibilityFailed("Protocol-issued community names are temporarily unavailable")
+  }
+  throw badRequestError("issuance_mode must be app_internal or spaces_subspace")
+}
+
 export function namespaceSupportsSpacesSubspace(
   policy: Pick<NamespacePolicyRow, "display_label" | "normalized_label" | "route_family">,
 ): boolean {
@@ -143,7 +151,7 @@ export async function getNamespacePolicy(executor: DbExecutor, communityId: stri
              nhp.namespace_handle_policy_id, nhp.policy_template, nhp.pricing_model,
              nhp.claims_enabled, nhp.settings_json, nhp.updated_at
       FROM namespace_bindings nb
-      LEFT JOIN namespace_handle_policies nhp
+      JOIN namespace_handle_policies nhp
         ON nhp.namespace_id = nb.namespace_id
       WHERE nb.community_id = ?1
         AND nb.status = 'active'
@@ -154,15 +162,15 @@ export async function getNamespacePolicy(executor: DbExecutor, communityId: stri
   const row = result.rows[0]
   if (!row) return null
   return {
-    namespace_handle_policy_id: stringOrNull(rowValue(row, "namespace_handle_policy_id")) ?? `nhp_${communityId}`,
+    namespace_handle_policy_id: requiredString(row, "namespace_handle_policy_id"),
     community_id: requiredString(row, "community_id"),
     namespace_id: requiredString(row, "namespace_id"),
     display_label: requiredString(row, "display_label"),
     normalized_label: requiredString(row, "normalized_label"),
     route_family: stringOrNull(rowValue(row, "route_family")),
-    policy_template: (stringOrNull(rowValue(row, "policy_template")) ?? "standard") as CommunityHandlePolicy["policy_template"],
+    policy_template: requiredString(row, "policy_template") as CommunityHandlePolicy["policy_template"],
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as HandlePricingModel | null,
-    claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) !== 0,
+    claims_enabled: numberOrNull(rowValue(row, "claims_enabled")) === 1,
     settings_json: stringOrNull(rowValue(row, "settings_json")),
     updated_at: stringOrNull(rowValue(row, "updated_at")),
   }
@@ -188,12 +196,6 @@ function optionalIntegerSetting(value: unknown, key: keyof CommunityHandlePolicy
   return numeric
 }
 
-function optionalIssuanceModeSetting(value: unknown): HandleClaimSettings["issuance_mode"] {
-  if (value == null || value === "app_internal") return undefined
-  if (value === "spaces_subspace") return "spaces_subspace"
-  throw badRequestError("issuance_mode must be app_internal or spaces_subspace")
-}
-
 function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefined): HandleClaimSettings {
   if (!input) return {}
   const settings: HandleClaimSettings = {
@@ -203,7 +205,7 @@ function sanitizeSettings(input: CommunityHandlePolicySettings | null | undefine
     min_length: optionalIntegerSetting(input.min_length, "min_length", { min: 1 }),
     max_length: optionalIntegerSetting(input.max_length, "max_length", { min: 1 }),
     quote_ttl_seconds: optionalIntegerSetting(input.quote_ttl_seconds, "quote_ttl_seconds", { min: 60 }),
-    issuance_mode: optionalIssuanceModeSetting(input.issuance_mode),
+    issuance_mode: assertWritableHandleIssuanceMode(input.issuance_mode),
     reserved_labels: Array.isArray(input.reserved_labels)
       ? input.reserved_labels.map((label) => normalizeCommunityHandleLabel(label).labelNormalized)
       : undefined,
@@ -230,8 +232,8 @@ export async function updateCommunityHandlePolicy(input: {
     const nextSettings = "settings" in input.body
       ? sanitizeSettings(input.body.settings ?? null)
       : parseHandleClaimSettings(current.settings_json)
-    if (protocolIssuanceRequired(nextSettings) && !namespaceSupportsSpacesSubspace(current)) {
-      throw badRequestError("spaces_subspace issuance requires a Spaces namespace")
+    if (protocolIssuanceRequired(nextSettings)) {
+      throw eligibilityFailed("Protocol-issued community names are temporarily unavailable")
     }
     const updatedAt = nowIso()
     await db.client.execute({
