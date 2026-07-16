@@ -18,7 +18,8 @@
     "If it only runs behind a flag bundle, declare it under 'features' instead —",
     "then the fleet only has to satisfy it when that feature is being enabled.",
     "1126 is intentionally unconditional because rewards are already enabled in staging and",
-    "a missing outbox turns a reward configuration drift into a Study/Karaoke outage."
+    "a missing outbox turns a reward configuration drift into a Study/Karaoke outage.",
+    "1133 is positively attested by its namespace_role column, replacement indexes, and the absence of the dropped legacy index."
   ],
   "version": 1,
   "unconditional": [
