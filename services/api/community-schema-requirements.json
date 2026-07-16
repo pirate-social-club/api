@@ -9,18 +9,21 @@
     "It exists because nothing used to gate that, and it broke production twice:",
     "  1124 -> async post publish broken on 25 shards",
     "  1127 -> every publish failed: 'no such column: story_ip_metadata_uri'",
-    "and left one latent defect (1126, see below).",
+    "  1126 -> Study/Karaoke attempts rolled back when rewards were enabled on older shards",
     "",
     "Verified by core/scripts/community/verify-community-schema-requirements.ts.",
     "",
     "WHEN YOU ADD A MIGRATION THAT NEW API CODE READS OR WRITES, ADD IT HERE.",
     "If the code path runs regardless of feature flags, it is 'unconditional'.",
     "If it only runs behind a flag bundle, declare it under 'features' instead —",
-    "then the fleet only has to satisfy it when that feature is being enabled."
+    "then the fleet only has to satisfy it when that feature is being enabled.",
+    "1126 is intentionally unconditional because rewards are already enabled in staging and",
+    "a missing outbox turns a reward configuration drift into a Study/Karaoke outage."
   ],
   "version": 1,
   "unconditional": [
     "1124_community_job_checkpoints.sql",
+    "1126_reward_qualification_outbox.sql",
     "1127_asset_story_metadata_refs.sql",
     "1128_community_job_attempt_leases.sql",
     "1129_story_registration_effects.sql",
@@ -28,18 +31,7 @@
     "1131_song_study_generation_runs.sql",
     "1132_paid_purchase_settlement_recovery.sql"
   ],
-  "features": {
-    "rewards": {
-      "flags": [
-        "REWARDS_CAMPAIGNS_ENABLED",
-        "REWARDS_ACCRUAL_ENABLED"
-      ],
-      "migrations": [
-        "1126_reward_qualification_outbox.sql"
-      ],
-      "note": "The outbox INSERT runs inside the study/karaoke attempt's OWN transaction (post-study-service.ts, karaoke-attempt-finalize-service.ts), armed by REWARDS_CAMPAIGNS_ENABLED && REWARDS_ACCRUAL_ENABLED. If 1126 is absent when both flags are on, the INSERT fails and rolls back the whole attempt — a fleet-wide outage of Study and Karaoke, which are LIVE and working. A clean read-only production verification on 2026-07-15 confirmed 1126 and the pinned unconditional requirements on all 94 allocated live shards; see docs/attestations/community-schema/production-rewards-2026-07-15.json. The rewards enablement workflow MUST still run the verifier with --features rewards immediately before either flag is changed so newly allocated or drifted shards fail closed."
-    }
-  },
+  "features": {},
   "deferred": {
     "1132_paid_purchase_settlement_recovery.sql": {
       "rationale": "The migration prepares recovery metadata and indexing for paid purchase settlement, but this API commit does not read or write funding_locked_at, failure_disposition, or broadcast_tx_ref outside its generated provisioning snapshot. Require it when the recovery runtime lands."
