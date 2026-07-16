@@ -370,6 +370,21 @@ function coordinatorRequest(effect: RewardPayoutEffect): OperatorSettleRequest {
   }
 }
 
+export const REWARD_PAYOUT_COORDINATOR_MIRROR_SQL = `
+  UPDATE reward_payout_effects
+  SET coordinator_ref = COALESCE(coordinator_ref, ?2),
+      coordinator_state = ?3,
+      settlement_ref = COALESCE(CAST(?4 AS TEXT), settlement_ref),
+      broadcast_nonce = COALESCE(CAST(?5 AS INTEGER), broadcast_nonce),
+      updated_at = ?6
+  WHERE idempotency_key = ?1
+    AND user_id = ?7
+    AND status != 'confirmed'
+    AND (coordinator_ref IS NULL OR coordinator_ref = ?2)
+    AND (CAST(?4 AS TEXT) IS NULL OR settlement_ref IS NULL OR settlement_ref = CAST(?4 AS TEXT))
+  RETURNING ${PAYOUT_COLUMNS}
+`
+
 async function updateCoordinatorMirror(input: {
   client: Client
   effect: RewardPayoutEffect
@@ -377,20 +392,7 @@ async function updateCoordinatorMirror(input: {
   nowUtc: string
 }): Promise<RewardPayoutEffect> {
   const updated = await input.client.execute({
-    sql: `
-      UPDATE reward_payout_effects
-      SET coordinator_ref = COALESCE(coordinator_ref, ?2),
-          coordinator_state = ?3,
-          settlement_ref = COALESCE(?4, settlement_ref),
-          broadcast_nonce = COALESCE(?5, broadcast_nonce),
-          updated_at = ?6
-      WHERE idempotency_key = ?1
-        AND user_id = ?7
-        AND status != 'confirmed'
-        AND (coordinator_ref IS NULL OR coordinator_ref = ?2)
-        AND (?4 IS NULL OR settlement_ref IS NULL OR settlement_ref = ?4)
-      RETURNING ${PAYOUT_COLUMNS}
-    `,
+    sql: REWARD_PAYOUT_COORDINATOR_MIRROR_SQL,
     args: [input.effect.idempotencyKey, input.result.idempotencyKey, input.result.state, input.result.txHash, input.result.nonce, input.nowUtc, input.effect.userId],
   })
   if (!updated.rows[0]) throw conflictError("Rewards payout coordinator mirror failed")
