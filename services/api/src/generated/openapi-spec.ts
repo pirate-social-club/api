@@ -45,6 +45,9 @@ const spec = {
       "name": "Communities"
     },
     {
+      "name": "Gate Capabilities"
+    },
+    {
       "name": "Handles"
     },
     {
@@ -7277,6 +7280,131 @@ const spec = {
           }
         },
         "operationId": "get_jobs_by_job_id"
+      }
+    },
+    "/gate-capabilities/nft/sources": {
+      "get": {
+        "tags": [
+          "Gate Capabilities"
+        ],
+        "summary": "List trusted NFT gate authoring sources",
+        "operationId": "listNftGateCapabilitySources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftGateCapabilitySourceListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/gate-capabilities/nft/sources/{source_id}/facets/{facet_key}/values": {
+      "get": {
+        "tags": [
+          "Gate Capabilities"
+        ],
+        "summary": "Search trusted NFT facet values",
+        "operationId": "searchNftGateFacetValues",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "facet_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120,
+              "default": ""
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 25
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftGateFacetValuePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NftGateCatalogUnavailableResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/public-communities": {
@@ -16723,6 +16851,75 @@ const spec = {
           }
         }
       },
+      "NftGateCapabilitySourceListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sources"
+        ],
+        "properties": {
+          "sources": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/NftGateCapabilitySource"
+            }
+          }
+        }
+      },
+      "NftGateFacetValuePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "values",
+          "next_cursor",
+          "catalog_fetched_at"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/NftGateFacetValue"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 512
+          },
+          "catalog_fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NftGateCatalogUnavailableResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "nft_gate_catalog_unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
       "StructuredPublicCommunityResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -21179,6 +21376,105 @@ const spec = {
           "refunded"
         ]
       },
+      "NftGateCapabilitySource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "chain_namespace",
+          "contract_address",
+          "standard",
+          "trait_filters_supported",
+          "facet_keys",
+          "max_values_per_facet",
+          "min_quantity_supported"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "chain_namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "contract_address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "standard": {
+            "type": "string",
+            "enum": [
+              "erc721",
+              "erc1155"
+            ]
+          },
+          "trait_filters_supported": {
+            "type": "boolean"
+          },
+          "facet_keys": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "facet_labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "max_values_per_facet": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "inventory_provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "fixed_match": {
+            "$ref": "#/components/schemas/NftGateInventoryMatch"
+          },
+          "min_quantity_supported": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NftGateFacetValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "approximate_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "PublicCommunityIdentity": {
         "type": "object",
         "additionalProperties": false,
@@ -23678,6 +23974,30 @@ const spec = {
           "confirmed",
           "failed"
         ]
+      },
+      "NftGateInventoryMatch": {
+        "type": "object",
+        "maxProperties": 32,
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 10,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          ]
+        }
       },
       "StructuredAccessLink": {
         "type": "object",

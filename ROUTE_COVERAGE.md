@@ -27,6 +27,7 @@ Mounted in `services/api/src/index.ts`:
 - `/communities`
 - `/feed`
 - `/geo`
+- `/gate-capabilities`
 - `/jobs`
 - `/karaoke/sessions`
 - `/notifications`
@@ -80,6 +81,7 @@ Mounted in `services/api/src/index.ts`:
 | `/feed/home` | `src/routes/feed.ts` | `tests/routes/feed-routes.test.ts`, `src/lib/feed/home-feed-service.test.ts`, broader public-post tests | direct | Route coverage includes the empty-feed/community-summary path; service tests cover ranking helpers. |
 | public-read entrypoint app | `src/routes/public-read-app.ts` | `tests/routes/feed-routes.test.ts`, `tests/routes/communities/public-communities-routes.test.ts`, `tests/routes/comments/comments-read-routes.test.ts` | direct | Groups cacheable public read routes for the inner WorkerEntrypoint boundary. |
 | `/geo/search` | `src/routes/geo.ts` | `tests/routes/geo-routes.test.ts` | direct | Covers authenticated Geoapify autocomplete, normalized place payloads, validation errors, missing provider configuration, and optional live smoke coverage. |
+| `/gate-capabilities/*` | `src/routes/gate-capabilities.ts` | `src/routes/gate-capabilities.test.ts`, `src/lib/communities/gate-capabilities/courtyard-catalog-adapter.test.ts` | direct/service | Covers authentication, stable source descriptors, bounds, vendor normalization, pagination, caching, last-known-good fallback, and explicit provider unavailability. |
 | `/jobs/:jobId` | `src/routes/jobs.ts` | `tests/routes/jobs-posts-routes.test.ts`, `tests/routes/communities/community-routes.test.ts` | direct | Dedicated jobs coverage now exists, with broader assertions still present in community flows. |
 | `/karaoke/sessions/:sessionId/websocket` | `src/routes/karaoke-sessions.ts` | `tests/routes/karaoke-sessions.test.ts` | direct | Covers the WebSocket gateway: upgrade requirement, allowed-origin enforcement, gateway token verification (session binding, expiry, future-issued, TTL cap, tampered signature, unsupported protocol version), and 503 when the runtime namespace is unbound. Runtime/DO WebSocket forwarding is exercised via the token-validation surface. |
 | `/notifications/*` | `src/routes/notifications.ts` | `tests/routes/notifications-routes.test.ts` | direct | Covers auth requirement, summary, tasks, feed, mark-read, and dismiss-task. |
