@@ -2,6 +2,7 @@ import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
 import { badRequestError, fundingConfirmationTimeout } from "../../errors"
 import type { Env } from "../../../env"
 import type { Client } from "../../sql-client"
+import { getControlPlaneClient } from "../../runtime-deps"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
 import { toChainRefString } from "./row-types"
 import {
@@ -17,6 +18,7 @@ import {
   failPurchaseSettlementEffect,
   findConfirmedBuyerFundingEffectByTx,
 } from "./settlement-effects"
+import { claimCanonicalFundingReceipt } from "./observed-funding-receipts"
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 const ERC20_TRANSFER_INTERFACE = new Interface([
@@ -40,6 +42,12 @@ export type BuyerFundingReceipt = {
   tokenAddress: string
   amountAtomic: string
   chainRef: string
+  observation?: {
+    chainId: number
+    logIndex: number
+    blockNumber: number
+    blockHash: string
+  }
 }
 
 type CheckoutFundingQuote = Pick<
@@ -183,6 +191,12 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
       tokenAddress: expectedToken,
       amountAtomic: amount.toString(),
       chainRef: toChainRefString(sourceChain),
+      observation: {
+        chainId: expectedSourceChainId,
+        logIndex: log.index,
+        blockNumber: receipt.blockNumber,
+        blockHash: receipt.blockHash,
+      },
     }
     break
   }
@@ -445,6 +459,31 @@ export async function confirmBuyerFundingForSettlement(input: {
       buyerAddress: input.buyerAddress,
       fundingTxRef: txRef,
     })
+    // Test verifiers intentionally avoid control-plane I/O. Production receipts
+    // always include the exact matched log identity so the same transfer cannot
+    // be claimed by purchases in different community shards.
+    if (!testBuyerFundingVerifier) {
+      const observation = receipt.observation
+      if (!observation) {
+        throw badRequestError("Funding receipt observation identity is missing")
+      }
+      await claimCanonicalFundingReceipt({
+        client: getControlPlaneClient(input.env),
+        chainId: observation.chainId,
+        tokenAddress: receipt.tokenAddress,
+        txHash: receipt.txRef,
+        logIndex: observation.logIndex,
+        blockNumber: observation.blockNumber,
+        blockHash: observation.blockHash,
+        senderAddress: receipt.fromAddress ?? input.buyerAddress,
+        recipientAddress: receipt.toAddress,
+        amountAtomic: receipt.amountAtomic,
+        consumerRail: "community_purchase",
+        consumerId: `${input.communityId}:${input.purchaseId}`,
+        quoteId: input.quote.quote_id,
+        now: input.now,
+      })
+    }
     await confirmPurchaseSettlementEffect({
       client: input.client,
       idempotencyKey,

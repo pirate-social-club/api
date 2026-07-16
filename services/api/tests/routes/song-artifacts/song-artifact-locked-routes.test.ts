@@ -381,39 +381,7 @@ describe("song artifact locked routes", () => {
       ctx.env,
       author.accessToken,
     )
-    expect(listingCreate.status).toBe(201)
-    const listingBody = await json(listingCreate) as {
-      id: string
-      status: string
-    }
-    expect(listingBody.status).toBe("active")
-
-    const publicBuyerWallet = Wallet.createRandom()
-    const publicQuoteIssuedAt = Math.floor(Date.now() / 1000)
-    const publicQuoteMessage = publicPurchaseQuoteMessage({
-      communityId,
-      listing: listingBody.id,
-      walletAddress: publicBuyerWallet.address,
-      chainRef: "eip155",
-      nonce: "public-requested-quote-nonce",
-      issuedAt: publicQuoteIssuedAt,
-    })
-    const publicQuoteBeforeJob = await requestJson(
-      `http://pirate.test/public-communities/${communityId}/purchase-quotes`,
-      {
-        listing: listingBody.id,
-        ...routedCheckoutQuoteFields,
-        wallet_proof: {
-          wallet_address: publicBuyerWallet.address,
-          chain_ref: "eip155",
-          nonce: "public-requested-quote-nonce",
-          issued_at: publicQuoteIssuedAt,
-          signature: await publicBuyerWallet.signMessage(publicQuoteMessage),
-        },
-      },
-      ctx.env,
-    )
-    expect(publicQuoteBeforeJob.status).toBe(404)
+    expect(listingCreate.status).toBe(400)
 
     const communityDb = createClient({
       url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,

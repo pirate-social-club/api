@@ -203,3 +203,51 @@ export async function claimObservedFundingReceipt(input: {
   if (!result.rows[0]) throw conflictError("Observed funding receipt is not claimable")
   return decode(result.rows[0])
 }
+
+export async function claimCanonicalFundingReceipt(input: {
+  client: Client
+  chainId: number
+  tokenAddress: string
+  txHash: string
+  logIndex: number
+  blockNumber: number
+  blockHash: string
+  senderAddress: string
+  recipientAddress: string
+  amountAtomic: string
+  consumerRail: string
+  consumerId: string
+  quoteId: string
+  now: string
+}): Promise<ObservedFundingReceipt> {
+  const observed = await observeFundingReceipt({
+    client: input.client,
+    chainId: input.chainId,
+    tokenAddress: input.tokenAddress,
+    txHash: input.txHash,
+    logIndex: input.logIndex,
+    blockNumber: input.blockNumber,
+    blockHash: input.blockHash,
+    senderAddress: input.senderAddress,
+    recipientAddress: input.recipientAddress,
+    amountAtomic: input.amountAtomic,
+    source: "buyer_hint",
+    observedAt: input.now,
+  })
+  const canonical = observed.finalityStatus === "canonical"
+    ? observed
+    : await setObservedFundingReceiptFinality({
+        client: input.client,
+        receiptId: observed.id,
+        status: "canonical",
+        now: input.now,
+      })
+  return await claimObservedFundingReceipt({
+    client: input.client,
+    receiptId: canonical.id,
+    consumerRail: input.consumerRail,
+    consumerId: input.consumerId,
+    quoteId: input.quoteId,
+    now: input.now,
+  })
+}
