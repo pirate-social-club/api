@@ -14,7 +14,7 @@ import {
 } from "./checkout-config"
 import {
   beginPurchaseSettlementEffectAttempt,
-  confirmPurchaseSettlementEffect,
+  confirmBuyerFundingEffectAndLockQuote,
   failPurchaseSettlementEffect,
   findConfirmedBuyerFundingEffectByTx,
 } from "./settlement-effects"
@@ -487,6 +487,17 @@ export async function confirmBuyerFundingForSettlement(input: {
     if (!metadata) {
       throw badRequestError("Funding receipt metadata is missing")
     }
+    await input.client.execute({
+      sql: `
+        UPDATE purchase_quotes
+        SET funding_locked_at = COALESCE(funding_locked_at, ?3),
+            updated_at = ?3
+        WHERE community_id = ?1
+          AND quote_id = ?2
+          AND status = 'active'
+      `,
+      args: [input.communityId, input.quote.quote_id, input.now],
+    })
     return metadata
   }
   try {
@@ -505,8 +516,10 @@ export async function confirmBuyerFundingForSettlement(input: {
       quoteId: input.quote.quote_id,
       now: input.now,
     })
-    await confirmPurchaseSettlementEffect({
+    await confirmBuyerFundingEffectAndLockQuote({
       client: input.client,
+      communityId: input.communityId,
+      quoteId: input.quote.quote_id,
       idempotencyKey,
       settlementRef: receipt.txRef,
       metadataJson: JSON.stringify(receipt),
@@ -518,6 +531,7 @@ export async function confirmBuyerFundingForSettlement(input: {
       client: input.client,
       idempotencyKey,
       failureReason: error instanceof Error ? error.message : String(error),
+      disposition: "failed_prebroadcast",
       now: input.now,
     })
     throw error

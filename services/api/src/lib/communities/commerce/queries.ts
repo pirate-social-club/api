@@ -519,6 +519,7 @@ export async function getPurchaseQuoteRow(
              destination_settlement_decimals, treasury_denomination,
              quote_ttl_seconds, route_required, route_status_policy, route_hop_tolerance,
              settlement_mode, verification_snapshot_ref, pricing_policy_version, status, quoted_at, expires_at,
+             funding_locked_at,
              consumed_at, failed_at, created_at, updated_at
       FROM purchase_quotes
       WHERE community_id = ?1
@@ -568,6 +569,7 @@ export async function getPurchaseQuoteRow(
     status: requiredString(row, "status") as PurchaseQuoteRow["status"],
     quoted_at: requiredString(row, "quoted_at"),
     expires_at: requiredString(row, "expires_at"),
+    funding_locked_at: stringOrNull(row, "funding_locked_at"),
     consumed_at: stringOrNull(row, "consumed_at"),
     failed_at: stringOrNull(row, "failed_at"),
     created_at: requiredString(row, "created_at"),

@@ -12,6 +12,11 @@ import {
   resolveStoryRpcUrls,
   resolveStoryRuntimeSignerTargetBalanceWei,
 } from "./story-runtime-config"
+import {
+  classifyStoryTransactionFailure,
+  storyTransactionHashFromError,
+  type StoryTransactionFailureDisposition,
+} from "./story-transaction-failure"
 import { getAssetRow } from "../communities/commerce/queries"
 import { getActiveRightsHoldForAsset } from "../rights/rights-hold-store"
 import { decodePublicAssetId } from "../public-ids"
@@ -461,79 +466,11 @@ function capStoryRoyaltyGasLimitField(value: unknown, cap: bigint): bigint | und
   return value
 }
 
-function storyErrorChainTransactionHash(error: unknown): string | null {
-  const seen = new Set<unknown>()
-  let current: unknown = error
-  while (current && !seen.has(current)) {
-    seen.add(current)
-    const value = current as { transactionHash?: unknown; cause?: unknown }
-    if (typeof value.transactionHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(value.transactionHash)) {
-      return value.transactionHash
-    }
-    current = value.cause
-  }
-  return null
-}
-
 const STORY_REGISTRATION_MAX_ATTEMPTS = 3
 const STORY_REGISTRATION_RETRY_BASE_DELAY_MS = 400
 
-type StoryRegistrationFailureDisposition =
-  | "retryable_prebroadcast"
-  | "terminal_prebroadcast"
-  | "ambiguous"
-
-function storyErrorChain(error: unknown): Array<Record<string, unknown>> {
-  const chain: Array<Record<string, unknown>> = []
-  const seen = new Set<unknown>()
-  let current: unknown = error
-  while (current && !seen.has(current)) {
-    seen.add(current)
-    if (typeof current !== "object") break
-    const value = current as Record<string, unknown>
-    chain.push(value)
-    current = value.cause
-  }
-  return chain
-}
-
-function storyErrorText(chain: Array<Record<string, unknown>>): string {
-  const parts: string[] = []
-  for (const error of chain) {
-    for (const field of ["name", "message", "shortMessage", "details"] as const) {
-      if (typeof error[field] === "string") parts.push(error[field])
-    }
-    if (Array.isArray(error.metaMessages)) {
-      parts.push(...error.metaMessages.filter((message): message is string => typeof message === "string"))
-    }
-  }
-  return parts.join(" | ")
-}
-
-function hasPrebroadcastStageEvidence(chain: Array<Record<string, unknown>>, text: string): boolean {
-  if (chain.some((error) => (
-    error.name === "CallExecutionError" || error.name === "EstimateGasExecutionError"
-  ))) return true
-
-  // viem includes the JSON-RPC request body in RpcRequestError/TimeoutError metadata.
-  // These methods only prepare or simulate a transaction; none can broadcast it.
-  return /["']method["']\s*:\s*["'](?:eth_call|eth_estimateGas|eth_fillTransaction)["']/i.test(text)
-}
-
-export function classifyStoryRegistrationFailure(error: unknown): StoryRegistrationFailureDisposition {
-  const chain = storyErrorChain(error)
-  const text = storyErrorText(chain)
-  if (storyErrorChainTransactionHash(error)) return "ambiguous"
-  if (chain.some((entry) => (
-    entry.name === "TransactionExecutionError"
-    || entry.name === "WaitForTransactionReceiptTimeoutError"
-    || entry.name === "TransactionReceiptNotFoundError"
-  ))) return "ambiguous"
-  if (/eth_sendRawTransaction|eth_sendTransaction/i.test(text)) return "ambiguous"
-  if (!hasPrebroadcastStageEvidence(chain, text)) return "ambiguous"
-
-  const transient = /RPC Request failed|HTTP request failed|fetch failed|Failed to fetch|timed out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|\b(?:429|500|502|503|504)\b|rate.?limit|InternalRpcError|took too long|network error/i.test(text)
-  return transient ? "retryable_prebroadcast" : "terminal_prebroadcast"
+export function classifyStoryRegistrationFailure(error: unknown): StoryTransactionFailureDisposition {
+  return classifyStoryTransactionFailure(error)
 }
 
 export async function withStoryRegistrationRetry<T>(
@@ -1090,7 +1027,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     })
     return result
   } catch (error) {
-    const broadcastTxRef = storyErrorChainTransactionHash(error) ?? providerTxRef
+    const broadcastTxRef = storyTransactionHashFromError(error) ?? providerTxRef
     const disposition = broadcastTxRef ? "ambiguous" : classifyStoryRegistrationFailure(error)
     const reconciliationRequired = disposition === "ambiguous"
     await failStoryRegistrationEffect({

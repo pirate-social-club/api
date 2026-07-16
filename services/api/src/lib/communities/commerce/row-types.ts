@@ -130,6 +130,7 @@ export type PurchaseQuoteRow = {
   status: "active" | "expired" | "consumed" | "failed"
   quoted_at: string
   expires_at: string
+  funding_locked_at: string | null
   consumed_at: string | null
   failed_at: string | null
   created_at: string

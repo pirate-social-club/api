@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
+import { createClient, type Client } from "@libsql/client"
+import { confirmBuyerFundingForSettlement, type BuyerFundingReceipt } from "./funding-proof-service"
 
-// Regression: a buyer funding tx must be single-use across quotes. Replaying the same
-// on-chain payment to settle a different quote (free paid content / operator drain)
-// must be rejected before any on-chain re-verification.
+// Regression: a buyer funding tx must be single-use across quotes. Use the real
+// effect store here: mock.module is process-global in Bun and previously replaced
+// settlement-effects underneath its own tests when the full unit suite ran.
 
-const RECEIPT = {
+const RECEIPT: BuyerFundingReceipt = {
   txRef: "0xtx",
   fromAddress: "0xfrom",
   toAddress: "0xto",
@@ -13,47 +15,106 @@ const RECEIPT = {
   chainRef: "eip155:1",
 }
 
-let priorUse: { quote_id: string } | null = null
+const clients: Client[] = []
 
-mock.module("./settlement-effects", () => ({
-  findConfirmedBuyerFundingEffectByTx: async () => priorUse,
-  // Return a confirmed effect so the "allowed" paths resolve idempotently without
-  // reaching on-chain verification.
-  beginPurchaseSettlementEffectAttempt: async () => ({ status: "confirmed", metadata_json: JSON.stringify(RECEIPT) }),
-  confirmPurchaseSettlementEffect: async () => {},
-  failPurchaseSettlementEffect: async () => {},
-}))
+async function createFundingClient(input: { quoteId: string }): Promise<Client> {
+  const client = createClient({ url: ":memory:" })
+  clients.push(client)
+  await client.execute(`
+    CREATE TABLE purchase_settlement_effects (
+      purchase_settlement_effect_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      quote_id TEXT NOT NULL,
+      purchase_id TEXT NOT NULL,
+      effect_kind TEXT NOT NULL,
+      effect_key TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      failure_disposition TEXT,
+      broadcast_tx_ref TEXT,
+      settlement_ref TEXT,
+      provider_receipt_ref TEXT,
+      tax_receipt_ref TEXT,
+      metadata_json TEXT,
+      failure_reason TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 1,
+      submitted_at TEXT,
+      confirmed_at TEXT,
+      failed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE purchase_quotes (
+      quote_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      funding_locked_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await client.execute({
+    sql: "INSERT INTO purchase_quotes (quote_id, community_id, status, updated_at) VALUES (?1, 'cmt_1', 'active', ?2)",
+    args: [input.quoteId, "2026-07-02T00:00:00.000Z"],
+  })
+  return client
+}
 
-const { confirmBuyerFundingForSettlement } = await import("./funding-proof-service")
+async function insertConfirmedFundingEffect(input: { client: Client; quoteId: string }): Promise<void> {
+  await input.client.execute({
+    sql: `
+      INSERT INTO purchase_settlement_effects (
+        purchase_settlement_effect_id, community_id, quote_id, purchase_id,
+        effect_kind, effect_key, idempotency_key, status, metadata_json,
+        attempt_count, submitted_at, confirmed_at, created_at, updated_at
+      ) VALUES (
+        ?1, 'cmt_1', ?2, 'pur_1', 'buyer_funding_receipt', ?3,
+        ?4, 'confirmed', ?5, 1, ?6, ?6, ?6, ?6
+      )
+    `,
+    args: [
+      `pse_${input.quoteId}`,
+      input.quoteId,
+      RECEIPT.txRef,
+      `${input.quoteId}:buyer_funding:${RECEIPT.txRef}`,
+      JSON.stringify(RECEIPT),
+      "2026-07-02T00:00:00.000Z",
+    ],
+  })
+}
 
-function settle(quoteId: string) {
+afterEach(() => {
+  for (const client of clients.splice(0)) client.close()
+})
+
+function settle(client: Client, quoteId: string) {
   return confirmBuyerFundingForSettlement({
     env: {} as never,
-    client: {} as never,
+    client,
     communityId: "cmt_1",
     quote: { quote_id: quoteId } as never,
     purchaseId: "pur_1",
     buyerAddress: "0xbuyer",
-    fundingTxRef: "0xtx",
-    now: "2026-07-02T00:00:00.000Z",
+    fundingTxRef: RECEIPT.txRef,
+    now: "2026-07-02T00:05:00.000Z",
   })
 }
 
 describe("confirmBuyerFundingForSettlement — funding tx single-use", () => {
-  beforeEach(() => { priorUse = null })
+  test("rejects a funding tx already confirmed for a different quote", async () => {
+    const client = await createFundingClient({ quoteId: "quote_mine" })
+    await insertConfirmedFundingEffect({ client, quoteId: "quote_other" })
 
-  test("rejects a funding tx already confirmed for a DIFFERENT quote (replay)", async () => {
-    priorUse = { quote_id: "quote_other" }
-    await expect(settle("quote_mine")).rejects.toThrow(/already been used/)
+    await expect(settle(client, "quote_mine")).rejects.toThrow(/already been used/)
   })
 
-  test("allows the same quote to resolve idempotently (same tx, same quote)", async () => {
-    priorUse = { quote_id: "quote_mine" }
-    await expect(settle("quote_mine")).resolves.toMatchObject({ txRef: "0xtx" })
-  })
+  test("allows the same quote idempotently and freezes its expiry", async () => {
+    const client = await createFundingClient({ quoteId: "quote_mine" })
+    await insertConfirmedFundingEffect({ client, quoteId: "quote_mine" })
 
-  test("allows a fresh funding tx (no prior use)", async () => {
-    priorUse = null
-    await expect(settle("quote_mine")).resolves.toMatchObject({ txRef: "0xtx" })
+    await expect(settle(client, "quote_mine")).resolves.toMatchObject({ txRef: RECEIPT.txRef })
+    const quote = await client.execute("SELECT funding_locked_at FROM purchase_quotes WHERE quote_id = 'quote_mine'")
+    expect(quote.rows[0]?.funding_locked_at).toBe("2026-07-02T00:05:00.000Z")
   })
 })

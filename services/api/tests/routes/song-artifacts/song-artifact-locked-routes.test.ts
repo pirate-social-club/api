@@ -2077,6 +2077,11 @@ describe("song artifact locked routes", () => {
     const rawPurchaseId = purchaseBody.id.replace(/^pur_/, "")
     const rawQuoteId = quoteBody.id.replace(/^pq_/, "")
     try {
+      const fundedQuote = await communityDb.execute({
+        sql: "SELECT funding_locked_at FROM purchase_quotes WHERE quote_id = ?1",
+        args: [rawQuoteId],
+      })
+      expect(String(fundedQuote.rows[0]?.funding_locked_at ?? "")).not.toBe("")
       await communityDb.execute({
         sql: `DELETE FROM purchase_allocation_legs WHERE purchase_id = ?1`,
         args: [rawPurchaseId],
@@ -2477,6 +2482,7 @@ describe("song artifact locked routes", () => {
       }
     })
     setStoryParentRoyaltyVaultTransferExecutorForTests(async (input) => {
+      expect(input.env).toBe(ctx.env)
       parentRoyaltyVaultTransferCalls.push({
         childIpId: input.childIpId,
         parentIpId: input.parentIpId,
@@ -2916,12 +2922,38 @@ describe("song artifact locked routes", () => {
         sql: `
           UPDATE purchase_settlement_effects
           SET status = 'failed',
+              failure_disposition = 'failed_prebroadcast',
+              broadcast_tx_ref = NULL,
               submitted_at = NULL,
               failed_at = '2026-04-21T00:00:00.000Z',
               failure_reason = 'transfer_to_vault_failed',
               updated_at = '2026-04-21T00:00:00.000Z'
           WHERE quote_id = ?1
             AND effect_kind = 'story_parent_royalty_vault_transfer'
+        `,
+        args: [rawQuoteId],
+      })
+      await failedCommunityDb.execute({
+        sql: "DELETE FROM purchase_entitlements WHERE purchase_id = ?1",
+        args: [purchaseBody.id.replace(/^pur_/, "")],
+      })
+      await failedCommunityDb.execute({
+        sql: "DELETE FROM purchase_allocation_legs WHERE purchase_id = ?1",
+        args: [purchaseBody.id.replace(/^pur_/, "")],
+      })
+      await failedCommunityDb.execute({
+        sql: "DELETE FROM purchases WHERE purchase_id = ?1",
+        args: [purchaseBody.id.replace(/^pur_/, "")],
+      })
+      await failedCommunityDb.execute({
+        sql: `
+          UPDATE purchase_quotes
+          SET status = 'expired',
+              consumed_at = NULL,
+              expires_at = '2026-04-21T00:00:00.000Z',
+              funding_locked_at = NULL,
+              updated_at = '2026-04-21T00:00:01.000Z'
+          WHERE quote_id = ?1
         `,
         args: [rawQuoteId],
       })
@@ -2938,15 +2970,16 @@ describe("song artifact locked routes", () => {
       })
       expect(failedVaultTransferSummary).toMatchObject({
         checked: 1,
-        finalized: 0,
-        failed: 1,
+        finalized: 1,
+        failed: 0,
         stillPending: 0,
         errors: 0,
       })
+      expect(parentRoyaltyVaultTransferCalls).toHaveLength(2)
     } finally {
       failedCommunityRepository.close?.()
     }
-  }, 10000)
+  }, 20000)
 
   testWithTimeout("settles a locked remix with multiple Story parent assets", async () => {
     const storedObjects = new Map<string, { body: Uint8Array; contentType: string }>()
@@ -3402,10 +3435,14 @@ describe("song artifact locked routes", () => {
       })
       expect(failedSummary).toMatchObject({
         checked: 1,
-        finalized: 0,
-        failed: 1,
+        // The quote was already consumed by the successful settlement above.
+        // A synthetic post-consumption effect mutation cannot roll back the
+        // entitlement; reconciliation converges the attempt to finalized.
+        finalized: 1,
+        failed: 0,
         stillPending: 0,
         errors: 0,
+        stalledCommunityIds: [],
       })
     } finally {
       failedCommunityRepository.close?.()

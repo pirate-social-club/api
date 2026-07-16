@@ -351,9 +351,12 @@ describe("openCommunityDb", () => {
     const purchaseQuoteColumns = await getTableColumns(databasePath, "purchase_quotes")
     expect(purchaseQuoteColumns).toContain("settlement_mode")
     expect(purchaseQuoteColumns).toContain("funding_destination_address")
+    expect(purchaseQuoteColumns).toContain("funding_locked_at")
 
     const settlementEffectColumns = await getTableColumns(databasePath, "purchase_settlement_effects")
     expect(settlementEffectColumns).toContain("metadata_json")
+    expect(settlementEffectColumns).toContain("failure_disposition")
+    expect(settlementEffectColumns).toContain("broadcast_tx_ref")
 
     const settlementAttemptColumns = await getTableColumns(databasePath, "purchase_settlement_attempts")
     expect(settlementAttemptColumns).toContain("attempt_count")

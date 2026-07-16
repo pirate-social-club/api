@@ -31,6 +31,8 @@ async function createSettlementClient() {
       effect_key TEXT NOT NULL,
       idempotency_key TEXT NOT NULL UNIQUE,
       status TEXT NOT NULL,
+      failure_disposition TEXT,
+      broadcast_tx_ref TEXT,
       settlement_ref TEXT,
       provider_receipt_ref TEXT,
       tax_receipt_ref TEXT,
