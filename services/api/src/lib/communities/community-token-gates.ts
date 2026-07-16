@@ -37,15 +37,20 @@ export function hasEthereumRpcConfig(env: Env): boolean {
 }
 
 export function getEthereumProvider(env: Env): JsonRpcProvider | null {
-  const rpcUrl = String(env.ETHEREUM_RPC_URL || "").trim()
+  return getEvmJsonRpcProvider(env, "eip155:1")
+}
+
+export function getEvmJsonRpcProvider(env: Env, chainNamespace: "eip155:1" | "eip155:8453"): JsonRpcProvider | null {
+  const rpcUrl = String(chainNamespace === "eip155:1" ? env.ETHEREUM_RPC_URL : env.BASE_MAINNET_RPC_URL || "").trim()
   if (!rpcUrl) {
     return null
   }
 
-  return globalSingleton("ethereumRpcProvider", rpcUrl, () => {
+  const chainId = chainNamespace === "eip155:1" ? 1 : 8453
+  return globalSingleton(`evmRpcProvider:${chainNamespace}`, rpcUrl, () => {
     const request = new FetchRequest(rpcUrl)
     request.timeout = ETHEREUM_RPC_TIMEOUT_MS
-    return new JsonRpcProvider(request, 1, { staticNetwork: true })
+    return new JsonRpcProvider(request, chainId, { staticNetwork: true })
   })
 }
 

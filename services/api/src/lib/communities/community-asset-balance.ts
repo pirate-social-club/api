@@ -1,11 +1,15 @@
 import { Contract } from "ethers"
 import type { Env } from "../../env"
 import type { WalletAttachmentSummary } from "../../types"
-import { getEthereumProvider } from "./community-token-gates"
+import { getEvmJsonRpcProvider } from "./community-token-gates"
 import { listAttachedEvmWalletAddresses } from "./community-token-inventory-gates"
 import { resolveAssetBalanceDescriptor } from "./membership/asset-balance-registry"
 
 const ERC20_BALANCE_ABI = ["function balanceOf(address owner) view returns (uint256)"] as const
+const ASSET_BALANCE_CACHE_TTL_MS = 15_000
+const ASSET_BALANCE_CACHE_MAX_ENTRIES = 2_000
+
+const balanceCache = new Map<string, { amount: bigint; expiresAt: number }>()
 
 let balanceReaderForTests: ((assetId: string, walletAddress: string) => Promise<bigint>) | null = null
 
@@ -13,6 +17,11 @@ export function setAssetBalanceReaderForTests(
   reader: ((assetId: string, walletAddress: string) => Promise<bigint>) | null,
 ): void {
   balanceReaderForTests = reader
+  balanceCache.clear()
+}
+
+export function clearAssetBalanceCacheForTests(): void {
+  balanceCache.clear()
 }
 
 export type AssetBalanceEvaluation = {
@@ -37,7 +46,7 @@ export async function evaluateAttachedWalletAssetBalance(input: {
 
   for (const address of addresses) {
     try {
-      const balance = await readBalance(input.env, asset.assetId, asset.contractAddress, address)
+      const balance = await readBalance(input.env, asset.assetId, asset.chainNamespace, asset.contractAddress, address)
       if (balance < 0n) throw new Error("negative asset balance")
       current += balance
       if (current >= required) {
@@ -57,9 +66,37 @@ export async function evaluateAttachedWalletAssetBalance(input: {
     : { passed: false, unavailable: false, currentAmountAtomic: current.toString() }
 }
 
-async function readBalance(env: Env, assetId: string, contractAddress: string | null, walletAddress: string): Promise<bigint> {
-  if (balanceReaderForTests) return balanceReaderForTests(assetId, walletAddress)
-  const provider = getEthereumProvider(env)
+async function readBalance(
+  env: Env,
+  assetId: string,
+  chainNamespace: "eip155:1" | "eip155:8453",
+  contractAddress: string | null,
+  walletAddress: string,
+): Promise<bigint> {
+  const cacheKey = `${assetId}:${walletAddress.toLowerCase()}`
+  const cached = balanceCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.amount
+  if (cached) balanceCache.delete(cacheKey)
+
+  const amount = balanceReaderForTests
+    ? await balanceReaderForTests(assetId, walletAddress)
+    : await readProviderBalance(env, chainNamespace, contractAddress, walletAddress)
+  balanceCache.set(cacheKey, { amount, expiresAt: Date.now() + ASSET_BALANCE_CACHE_TTL_MS })
+  while (balanceCache.size > ASSET_BALANCE_CACHE_MAX_ENTRIES) {
+    const oldestKey = balanceCache.keys().next().value
+    if (oldestKey == null) break
+    balanceCache.delete(oldestKey)
+  }
+  return amount
+}
+
+async function readProviderBalance(
+  env: Env,
+  chainNamespace: "eip155:1" | "eip155:8453",
+  contractAddress: string | null,
+  walletAddress: string,
+): Promise<bigint> {
+  const provider = getEvmJsonRpcProvider(env, chainNamespace)
   if (!provider) throw new Error("Ethereum RPC is not configured")
   if (!contractAddress) return provider.getBalance(walletAddress)
   const value = await new Contract(contractAddress, ERC20_BALANCE_ABI, provider).balanceOf(walletAddress)
