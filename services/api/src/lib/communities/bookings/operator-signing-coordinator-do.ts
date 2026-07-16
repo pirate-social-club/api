@@ -16,7 +16,10 @@ export function operatorSigningCoordinatorName(operatorAddress: string, chainId:
   const a = String(operatorAddress || "").trim()
   if (!EVM_ADDRESS_RE.test(a)) throw badRequestError("Operator signer address is invalid")
   // Lowercase (not EIP-55 checksum) so the DO name needs no ethers dependency; deterministic per wallet.
-  const prefix = operatorKind === "rewards" ? "rewards-operator-signer" : "booking-operator-signer"
+  // v1 became unreachable in staging before it ever produced a transaction hash.
+  // A versioned name gives rewards a clean coordinator instance; nonce allocation
+  // remains safe because every instance samples the chain pending nonce first.
+  const prefix = operatorKind === "rewards" ? "rewards-operator-signer-v2" : "booking-operator-signer"
   return `${prefix}:${a.toLowerCase()}:${chainId}`
 }
 
