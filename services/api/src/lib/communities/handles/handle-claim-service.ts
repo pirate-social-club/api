@@ -75,6 +75,8 @@ export async function claimCommunityHandle(input: {
       quote,
       now: nowIso(),
       paymentVerified: false,
+      env: input.env,
+      userRepository: input.userRepository,
     })
     priceCents = checked.priceCents
     requiresProtocolIssuance = checked.protocolIssuanceRequired
@@ -130,6 +132,8 @@ export async function claimCommunityHandle(input: {
       quote,
       now,
       paymentVerified,
+      env: input.env,
+      userRepository: input.userRepository,
     })
     if (checked.protocolIssuanceRequired && !protocolOwner) {
       throw eligibilityFailed("protocol_owner_wallet_attachment is required for protocol-issued names", {
