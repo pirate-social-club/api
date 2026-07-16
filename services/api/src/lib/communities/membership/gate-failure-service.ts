@@ -50,23 +50,23 @@ function actionSpecificMessage(
       return isOnlyAltchaPow
         ? "Proof-of-work is required to post in this community"
         : isOnlyWallet
-          ? "Connect a wallet holding the required collectible to post in this community"
+          ? "Connect a wallet holding the required asset to post in this community"
         : "Verification is required to post in this community"
     case "comment_create":
       return isOnlyAltchaPow
         ? "Proof-of-work is required to comment in this community"
         : isOnlyWallet
-          ? "Connect a wallet holding the required collectible to comment in this community"
+          ? "Connect a wallet holding the required asset to comment in this community"
         : "Verification is required to comment in this community"
     case "vote":
       return isOnlyAltchaPow
         ? "Proof-of-work is required to vote in this community"
         : isOnlyWallet
-          ? "Connect a wallet holding the required collectible to vote in this community"
+          ? "Connect a wallet holding the required asset to vote in this community"
         : "Verification is required to vote in this community"
     default:
       return isOnlyWallet
-        ? "Connect a wallet holding the required collectible to join this community"
+        ? "Connect a wallet holding the required asset to join this community"
         : "Verification is required to join this community"
   }
 }

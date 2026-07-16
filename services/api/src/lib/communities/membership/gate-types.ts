@@ -20,6 +20,7 @@ export type GateAtom =
   | { type: "gender"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: Array<"M" | "F"> }
   | { type: "wallet_score"; provider: "passport"; minimum_score: number }
   | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string; min_count?: number }
+  | { type: "asset_balance"; asset_id: string; min_amount_atomic: string }
   | {
     type: "erc721_inventory_match"
     provider: "courtyard"
@@ -40,6 +41,9 @@ export type GateTraceNode =
     required_score?: number | null
     actual_score?: number | null
     required_age?: number | null
+    asset_id?: string | null
+    required_amount_atomic?: string | null
+    current_amount_atomic?: string | null
   }
 
 export type RequiredActionNode = RequiredAction | RequiredActionSet
@@ -59,6 +63,15 @@ export type RequiredAction =
   | { kind: "action"; provider: "altcha"; capability: "altcha_pow"; scope: string }
   | { kind: "action"; provider: "passport"; capability: "wallet_score"; minimum_score: number; actual_score: number | null }
   | { kind: "action"; provider: "wallet"; capability: "erc721_holding"; chain_namespace: string; contract_address: string; min_quantity: number }
+  | {
+    kind: "action"
+    provider: "wallet"
+    capability: "asset_balance"
+    asset_id: string
+    required_amount_atomic: string
+    current_amount_atomic: string
+    shortfall_amount_atomic: string
+  }
   | {
     kind: "action"
     provider: "wallet"

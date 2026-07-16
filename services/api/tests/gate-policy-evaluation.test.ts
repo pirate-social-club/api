@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { evaluateMembershipGatePolicy } from "../src/lib/communities/membership/gate-policy-evaluation"
 import { validateGatePolicy } from "../src/lib/communities/membership/gate-policy-validation"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { GateAtom, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { User } from "../src/types"
+import { setAssetBalanceReaderForTests } from "../src/lib/communities/community-asset-balance"
+import { buildMembershipGateSummariesFromPolicy } from "../src/lib/communities/membership/gate-summary"
+
+afterEach(() => setAssetBalanceReaderForTests(null))
 
 function makeUser(overrides: {
   uniqueHuman?: { state: "unverified" | "verified"; provider?: "self" | "very" }
@@ -112,6 +116,107 @@ describe("evaluateMembershipGatePolicy", () => {
         accepted_providers: ["passport" as "self"],
         allowed: ["US"],
       }))).toThrow("nationality gate accepted_providers must only include self or zkpassport")
+    })
+
+    test("normalizes supported asset balance atoms and rejects unsafe amounts", () => {
+      expect(validateGatePolicy(atomGate({
+        type: "asset_balance",
+        asset_id: " EIP155:1/SLIP44:60 ",
+        min_amount_atomic: "1000000000000000000",
+      }))).toEqual(atomGate({
+        type: "asset_balance",
+        asset_id: "eip155:1/slip44:60",
+        min_amount_atomic: "1000000000000000000",
+      }))
+
+      for (const min_amount_atomic of ["0", "01", "-1", "1.5", "1e18", 10]) {
+        expect(() => validateGatePolicy({
+          version: 1,
+          expression: { op: "gate", gate: {
+            type: "asset_balance",
+            asset_id: "eip155:1/slip44:60",
+            min_amount_atomic,
+          } },
+        })).toThrow("asset_balance gate min_amount_atomic must be a positive atomic integer string")
+      }
+      expect(() => validateGatePolicy(atomGate({
+        type: "asset_balance",
+        asset_id: "eip155:1/erc20:0x1111111111111111111111111111111111111111",
+        min_amount_atomic: "10",
+      }))).toThrow("asset_balance gate requires a supported canonical asset_id")
+    })
+
+    test("reports an atomic shortfall for an insufficient attached-wallet balance", async () => {
+      setAssetBalanceReaderForTests(async () => 7n)
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }),
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_1",
+          chain_namespace: "eip155:1",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      })
+      expect(result.outcome).toBe("action_required")
+      expect(result.requiredActionSet?.items[0]).toMatchObject({
+        capability: "asset_balance",
+        current_amount_atomic: "7",
+        required_amount_atomic: "10",
+        shortfall_amount_atomic: "3",
+      })
+    })
+
+    test("includes canonical atomic amounts in public summaries", () => {
+      expect(buildMembershipGateSummariesFromPolicy(atomGate({
+        type: "asset_balance",
+        asset_id: "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        min_amount_atomic: "10000000",
+      }))).toEqual([{
+        gate_type: "asset_balance",
+        asset_id: "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        min_amount_atomic: "10000000",
+      }])
+    })
+
+    test("passes from a successful subtotal even when a later wallet would fail", async () => {
+      setAssetBalanceReaderForTests(async (_assetId, address) => {
+        if (address.endsWith("01")) return 10n
+        throw new Error("provider unavailable")
+      })
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }),
+        user: makeUser({}),
+        walletAttachments: [1, 2].map((suffix) => ({
+          wallet_attachment: `wa_${suffix}`,
+          chain_namespace: "eip155:1",
+          wallet_address: `0x${suffix.toString().padStart(40, "0")}`,
+          is_primary: suffix === 1,
+        })),
+      })
+      expect(result.outcome).toBe("passed")
+    })
+
+    test("reports provider unavailable instead of a false shortfall after a partial query failure", async () => {
+      setAssetBalanceReaderForTests(async (_assetId, address) => {
+        if (address.endsWith("01")) return 7n
+        throw new Error("provider unavailable")
+      })
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }),
+        user: makeUser({}),
+        walletAttachments: [1, 2].map((suffix) => ({
+          wallet_attachment: `wa_${suffix}`,
+          chain_namespace: "eip155:1",
+          wallet_address: `0x${suffix.toString().padStart(40, "0")}`,
+          is_primary: suffix === 1,
+        })),
+      })
+      expect(result.outcome).toBe("provider_unavailable")
+      expect(result.requiredActionSet).toBeNull()
     })
 
     test("passes when wallet score meets threshold", async () => {

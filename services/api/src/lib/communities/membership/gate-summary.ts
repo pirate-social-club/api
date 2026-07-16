@@ -179,6 +179,10 @@ function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSumma
         : typeof atom.match.category === "string" ? atom.match.category : null
       summary.asset_filter_label = formatAssetFilterLabel(atom.match)
       break
+    case "asset_balance":
+      summary.asset_id = atom.asset_id
+      summary.min_amount_atomic = atom.min_amount_atomic
+      break
     case "unique_human":
       break
   }
