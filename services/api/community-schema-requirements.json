@@ -33,5 +33,8 @@
     "1133_multi_namespace_bindings.sql"
   ],
   "features": {},
-  "deferred": {}
+  "deferred": {},
+  "ledger_only": {
+    "1133_multi_namespace_bindings.sql": "The migration replaces an existing unique index; its DROP INDEX operation cannot be derived from final schema artifacts, so attest the migration ledger checksum."
+  }
 }
