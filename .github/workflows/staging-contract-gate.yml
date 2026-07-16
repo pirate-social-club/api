@@ -125,7 +125,7 @@ jobs:
           done
           mobile_titles=(
             "joins before a PoW-gated vote, then requests an action-bound proof"
-            "joins from the comment CTA before exposing the mobile composer"
+            "comments on a public thread without joining first"
             "keeps the composer visible but disabled while membership is unknown"
           )
           for title in "${mobile_titles[@]}"; do
@@ -161,7 +161,7 @@ jobs:
           set -euo pipefail
           titles=(
             "joins before a PoW-gated vote, then requests an action-bound proof"
-            "joins from the comment CTA before exposing the mobile composer"
+            "comments on a public thread without joining first"
             "keeps the composer visible but disabled while membership is unknown"
           )
           for title in "${titles[@]}"; do
