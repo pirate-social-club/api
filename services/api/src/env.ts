@@ -1,5 +1,6 @@
 import type { ShardRpc } from "@pirate/api-shared"
 import type { RateLimiterBinding } from "./lib/rate-limit"
+import type { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
 
 export type Env = {
   // Runtime
@@ -247,9 +248,11 @@ export type Env = {
   LIVE_ROOM_JACKTRIP_LINUX_AUDIO_SETUP_RECOMMENDED?: string
   LIVE_ROOM_RUNTIME?: DurableObjectNamespace
   KARAOKE_SESSION_RUNTIME?: DurableObjectNamespace
-  // Cloudflare native rate limiter (configured under `ratelimits` in wrangler).
+  // Cloudflare native rate limiters (configured under `ratelimits` in wrangler).
   LINK_PREVIEW_RATE_LIMITER?: RateLimiterBinding
   REWARD_OFFER_RATE_LIMITER?: RateLimiterBinding
+  // Strongly consistent per-user comment limiter backed by a Durable Object.
+  COMMENT_CREATE_RATE_LIMITER?: DurableObjectNamespace<CommentCreateRateLimiterDO>
   KARAOKE_GATEWAY_SIGNING_KEY?: string
   ELEVENLABS_STT_MODEL?: string
   ELEVENLABS_STT_WEBSOCKET_URL?: string

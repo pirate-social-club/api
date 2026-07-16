@@ -130,7 +130,7 @@ describe("comment-service mutation", () => {
     }
   })
 
-  test("rejects a non-member comment with membership_required, not a community-absence 404", async () => {
+  test("rejects a non-member comment on a members-only thread with membership_required", async () => {
     const rootDir = await createCommentServiceRoot("pirate-comment-nonmember-")
 
     const databasePath = join(rootDir, "community.db")
@@ -147,8 +147,17 @@ describe("comment-service mutation", () => {
       communityId,
       memberUserIds: ["usr_owner"],
     })
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      await db.client.execute({
+        sql: "UPDATE posts SET visibility = 'members_only' WHERE post_id = ?1",
+        args: [postId],
+      })
+    } finally {
+      db.close()
+    }
 
-    expect.assertions(5)
+    expect.assertions(4)
     try {
       await createComment({
         env,
@@ -165,12 +174,8 @@ describe("comment-service mutation", () => {
       expect(error).toBeInstanceOf(HttpError)
       const httpError = error as HttpError
       expect(httpError.status).toBe(403)
-      expect(httpError.code).toBe("eligibility_failed")
-      expect(httpError.details).toEqual({
-        reason: "membership_required",
-        community_id: communityId,
-      })
-      expect(httpError.message).toBe("Join this community to comment")
+      expect(httpError.code).toBe("membership_required")
+      expect(httpError.message).toBe("Join this community to comment on this members-only thread")
     }
   })
 })

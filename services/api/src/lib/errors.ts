@@ -35,6 +35,22 @@ export function eligibilityFailed(message: string, details: Record<string, unkno
   return new HttpError(403, "eligibility_failed", message, false, details)
 }
 
+export function membershipRequired(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(403, "membership_required", message, false, details)
+}
+
+export function banned(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(403, "banned", message, false, details)
+}
+
+export function commentsLocked(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(403, "comments_locked", message, false, details)
+}
+
+export function gateUnsatisfied(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(403, "gate_unsatisfied", message, false, details)
+}
+
 export function rateLimited(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(429, "rate_limited", message, true, details)
 }
