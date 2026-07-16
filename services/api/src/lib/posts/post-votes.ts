@@ -6,7 +6,7 @@ import type {
 } from "../communities/db-community-repository"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
-import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
+import { badRequestError, membershipRequired, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env } from "../../env"
 import type { UserRepository } from "../auth/repositories"
@@ -48,7 +48,7 @@ export async function castPostVote(input: {
         input.userId,
       )
       if (!canAccessCommunity(membership)) {
-        throw eligibilityFailed("Join this community to vote", {
+        throw membershipRequired("Join this community to vote", {
           reason: "membership_required",
         })
       }

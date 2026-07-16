@@ -69,11 +69,10 @@ type WaitUntil = (promise: Promise<void>) => void
 async function requireMemberAccess(client: Client, communityId: string, userId: string): Promise<CommunityMembershipRow> {
   const membership = await getCommunityMembershipState(client, communityId, userId)
   if (!canAccessCommunity(membership)) {
-    // Community existence is already public via /public-communities/:id, so
-    // masking non-membership as a 404 here protected nothing and mislabeled
-    // the real condition ("you are not an active member") as a missing
-    // community. details.reason is a stable machine-readable discriminator.
-    throw eligibilityFailed("Join this community to comment", {
+    // Use a dedicated top-level code so clients do not have to infer
+    // membership from a generic eligibility failure. Keep details.reason
+    // during the rollout for clients that still recognize the legacy shape.
+    throw membershipRequired("Join this community to comment", {
       reason: "membership_required",
       community_id: communityId,
     })

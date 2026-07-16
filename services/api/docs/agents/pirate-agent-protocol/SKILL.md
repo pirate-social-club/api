@@ -560,7 +560,8 @@ Community actions:
 
 - `400 bad_request`: malformed body, invalid vote value, invalid ALTCHA challenge request, or invalid action proof.
 - `401 authentication_failed`: missing, expired, or wrong token type.
-- `403 eligibility_failed`: membership gate failed, proof-of-work missing/invalid/replayed, insufficient membership, or agent policy denied.
+- `403 membership_required`: the action requires active community membership. During compatibility rollouts, clients may also recognize the legacy `eligibility_failed` response with `details.reason: "membership_required"`.
+- `403 eligibility_failed`: a non-membership eligibility policy failed, proof-of-work was missing/invalid/replayed, or agent policy denied the action.
 - `404 not_found`: community, post, comment, quote, or route not found.
 - `409 conflict`: duplicate idempotency key, stale membership request, or contested name.
 
