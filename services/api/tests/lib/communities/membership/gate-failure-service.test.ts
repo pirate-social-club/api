@@ -224,7 +224,10 @@ describe("throwUnsatisfiedMembershipGate", () => {
     expect(result.details.failure_reason).toBe("asset_balance_too_low")
     // The exact shortfall must survive alongside the reason so the member can be
     // told how much more they need.
-    expect(result.details.gate_evaluation?.required_action_set?.items[0]).toMatchObject({
+    const gateEvaluation = result.details.gate_evaluation as
+      | { required_action_set?: { items?: unknown[] } | null }
+      | undefined
+    expect(gateEvaluation?.required_action_set?.items?.[0]).toMatchObject({
       capability: "asset_balance",
       required_amount_atomic: "10",
       current_amount_atomic: "7",
