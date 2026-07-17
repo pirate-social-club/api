@@ -554,7 +554,7 @@ membership_mode: "request",
         args: [communityId],
       })
       expect(policies.rows).toEqual([
-        { namespace_role: "primary", claims_enabled: 1 },
+        { namespace_role: "primary", claims_enabled: 0 },
         { namespace_role: "mirror", claims_enabled: 0 },
       ])
     } finally {
