@@ -7,6 +7,7 @@ import {
   listNftGateCapabilitySources,
   searchNftGateFacetValues,
 } from "../lib/communities/gate-capabilities/courtyard-catalog-adapter"
+import { listAssetBalanceCapabilities } from "../lib/communities/membership/asset-balance-registry"
 
 const gateCapabilities = new Hono<AuthenticatedEnv>()
 const RATE_LIMIT_WINDOW_MS = 60_000
@@ -24,7 +25,7 @@ function enforceRateLimit(actorId: string, nowMs = Date.now()): void {
     return
   }
   if (current.count >= RATE_LIMIT_MAX) {
-    throw rateLimited("NFT gate catalog request limit exceeded. Try again shortly.")
+    throw rateLimited("Gate capability request limit exceeded. Try again shortly.")
   }
   current.count += 1
 }
@@ -44,6 +45,12 @@ function parseLimit(value: string | undefined): number {
 }
 
 gateCapabilities.use("/nft/*", authenticateAdminOrUser)
+gateCapabilities.use("/assets", authenticateAdminOrUser)
+
+gateCapabilities.get("/assets", (c) => {
+  enforceRateLimit(c.get("actor").userId)
+  return c.json({ assets: listAssetBalanceCapabilities() }, 200)
+})
 
 gateCapabilities.get("/nft/sources", (c) => {
   enforceRateLimit(c.get("actor").userId)
