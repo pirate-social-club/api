@@ -13,7 +13,7 @@ import { buildMembershipGateSummariesFromPolicy } from "../src/lib/communities/m
 afterEach(() => setAssetBalanceReaderForTests(null))
 
 function makeUser(overrides: {
-  uniqueHuman?: { state: "unverified" | "verified"; provider?: "self" | "very" }
+  uniqueHuman?: { state: "unverified" | "verified"; provider?: "self" | "very" | "zkpassport" }
   walletScore?: { state: "unverified" | "verified"; score?: number; passing?: boolean }
   minimumAge?: { state: "unverified" | "verified"; provider?: "self" | "zkpassport"; value?: number }
   nationality?: { state: "unverified" | "verified"; provider?: "self" | "zkpassport"; value?: string }
@@ -101,6 +101,18 @@ describe("evaluateMembershipGatePolicy", () => {
   })
 
   describe("single gate", () => {
+    test("accepts and evaluates ZKPassport unique-human gates", async () => {
+      const policy = validateGatePolicy(atomGate({ type: "unique_human", provider: "zkpassport" }))
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy,
+        user: makeUser({ uniqueHuman: { state: "verified", provider: "zkpassport" } }),
+        walletAttachments: [],
+      })
+
+      expect(result.satisfied).toBe(true)
+    })
+
     test("validates document accepted providers additively while preserving self provider", () => {
       expect(validateGatePolicy(atomGate({
         type: "nationality",

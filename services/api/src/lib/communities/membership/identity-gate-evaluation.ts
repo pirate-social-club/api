@@ -113,6 +113,7 @@ export function evaluateIdentityGateRule(input: {
           missingCapabilities.push("unique_human")
           if (includesAcceptedProvider(requirement.accepted_providers, "very")) suggestedProvider = suggestedProvider ?? "very"
           if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = suggestedProvider ?? "self"
+          if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = suggestedProvider ?? "zkpassport"
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         }

@@ -15,7 +15,7 @@ export type DocumentProofProvider = "self" | "zkpassport"
 type GateAtomIdentity = { gate_id?: string }
 
 export type GateAtom = GateAtomIdentity & (
-  | { type: "unique_human"; provider: "very" | "self" }
+  | { type: "unique_human"; provider: "very" | "self" | "zkpassport" }
   | { type: "altcha_pow" }
   | { type: "minimum_age"; provider: "self"; accepted_providers?: DocumentProofProvider[]; minimum_age: number }
   | { type: "nationality"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: string[] }
@@ -67,6 +67,7 @@ export type RequiredAction = RequiredActionIdentity & (
   | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "nationality"; allowed_countries: string[] }
   | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "gender"; allowed_markers: Array<"M" | "F"> }
   | { kind: "action"; provider: "self"; capability: "unique_human" }
+  | { kind: "action"; provider: "zkpassport"; capability: "unique_human" }
   | { kind: "action"; provider: "very"; capability: "unique_human" }
   | { kind: "action"; provider: "altcha"; capability: "altcha_pow"; scope: string }
   | { kind: "action"; provider: "passport"; capability: "wallet_score"; minimum_score: number; actual_score: number | null }

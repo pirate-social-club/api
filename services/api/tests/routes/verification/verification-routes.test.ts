@@ -252,22 +252,41 @@ describe("verification routes", () => {
     expect(body.launch?.zkpassport?.requested_capabilities).toEqual(["nationality"])
   })
 
-  test("zkpassport verification sessions reject unique human capability requests", async () => {
+  test("zkpassport verification sessions accept unique human capability requests", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
     const session = await exchangeJwt(ctx.env, "verification-zkpassport-unique-human-user")
+    setZkPassportProviderForTests({
+      startSession: async (input) => ({
+        upstreamSessionRef: `zkpassport-test-ref:${input.verificationSessionId}`,
+        launch: {
+          domain: "pirate.test",
+          name: "Pirate",
+          logo: null,
+          purpose: "Verify identity uniqueness for Pirate community access",
+          scope: "pirate-document-proof-test",
+          binding: "{\"sid\":\"ver_test\"}",
+          validity_seconds: 3600,
+          dev_mode: true,
+          requested_capabilities: ["unique_human"],
+          verification_requirements: [],
+        },
+      }),
+      getSessionOutcome: async () => ({ status: "failed", failureReason: "unused" }),
+    } satisfies import("../../../src/lib/verification/zkpassport-provider").ZkPassportProvider)
+
     const createdVerification = await requestJson("http://pirate.test/verification-sessions", {
       provider: "zkpassport",
       requested_capabilities: ["unique_human"],
     }, ctx.env, session.accessToken)
 
-    expect(createdVerification.status).toBe(400)
-    const body = await json(createdVerification) as { message: string }
-    expect(body.message).toBe("ZKPassport verification sessions only support minimum_age, nationality, and gender")
+    expect(createdVerification.status).toBe(201)
+    const body = await json(createdVerification) as { requested_capabilities: string[] }
+    expect(body.requested_capabilities).toEqual(["unique_human"])
   })
 
-  test("zkpassport verification completion mints document capabilities without unique human", async () => {
+  test("zkpassport verification completion mints document and unique-human capabilities", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -346,10 +365,13 @@ describe("verification routes", () => {
       unique_human: { state: string; provider?: string | null }
       nationality: { state: string; provider?: string | null; value?: string | null; mechanism?: string | null }
     }
-    expect(userRow.verification_state).toBe("unverified")
-    expect(userRow.capability_provider).toBe(null)
-    expect(capabilities.unique_human.state).toBe("unverified")
-    expect(capabilities.unique_human.provider).toBe(null)
+    expect(userRow.verification_state).toBe("verified")
+    expect(userRow.capability_provider).toBe("zkpass")
+    expect(capabilities.unique_human).toMatchObject({
+      state: "verified",
+      provider: "zkpassport",
+      mechanism: "zkpassport-unique-identifier",
+    })
     expect(capabilities.nationality).toMatchObject({
       state: "verified",
       provider: "zkpassport",
