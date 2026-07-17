@@ -15,6 +15,10 @@ import { reconcileCommunityPurchaseSettlement } from "../lib/communities/commerc
 import { resolveStoryCoordinatorDirectSigner } from "../lib/story/story-direct-signer"
 import { resolveStoryChainId } from "../lib/story/story-runtime-config"
 import { storySettlementCoordinatorName } from "../lib/story/story-settlement-wallet-coordinator-do"
+import { recoverOperatorBlockedPostPublish } from "../lib/posts/operator-blocked-publish-recovery"
+import { openCommunityWriteClient } from "../lib/communities/community-read-access"
+import { decodePublicAssetId, decodePublicCommunityId } from "../lib/public-ids"
+import { operatorAttestStoryRegistrationNotBroadcast } from "../lib/story/story-registration-effect-ops"
 
 type StorySettlementOpsEnv = { Bindings: Env }
 const storySettlementOps = new Hono<StorySettlementOpsEnv>()
@@ -26,15 +30,29 @@ type AlertCapture = typeof captureScheduledWarning
 let testAuthenticator: OperatorAuthenticator | null = null
 let testAlertCapture: AlertCapture | null = null
 let testPurchaseReconciler: typeof reconcileCommunityPurchaseSettlement | null = null
+let testOperatorBlockedPublishRecovery: typeof recoverOperatorBlockedPostPublish | null = null
+type ConfirmRegistrationNoBroadcast = (input: {
+  env: Env
+  communityId: string
+  assetId: string
+  operationId: string
+  actorId: string
+  reason: string
+}) => Promise<{ operationId: string; status: string; errorCode: string | null }>
+let testConfirmRegistrationNoBroadcast: ConfirmRegistrationNoBroadcast | null = null
 
 export function setStorySettlementOpsDependenciesForTests(input: {
   authenticate?: OperatorAuthenticator | null
   captureAlert?: AlertCapture | null
   reconcilePurchase?: typeof reconcileCommunityPurchaseSettlement | null
+  recoverOperatorBlockedPublish?: typeof recoverOperatorBlockedPostPublish | null
+  confirmRegistrationNoBroadcast?: ConfirmRegistrationNoBroadcast | null
 }): void {
   testAuthenticator = input.authenticate ?? null
   testAlertCapture = input.captureAlert ?? null
   testPurchaseReconciler = input.reconcilePurchase ?? null
+  testOperatorBlockedPublishRecovery = input.recoverOperatorBlockedPublish ?? null
+  testConfirmRegistrationNoBroadcast = input.confirmRegistrationNoBroadcast ?? null
 }
 
 function bytes32(name: string, value: unknown): Hex {
@@ -144,6 +162,84 @@ storySettlementOps.post("/purchase-reconciliations", async (c) => {
     outcome,
   }))
   return c.json({ outcome }, outcome === "finalized" ? 200 : 202)
+})
+
+storySettlementOps.post("/operator-blocked-publish-recoveries", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const postId = reference(body.post_id)
+  const authorizationRef = reference(body.authorization_ref)
+  const communityRepository = testOperatorBlockedPublishRecovery
+    ? {} as Parameters<typeof recoverOperatorBlockedPostPublish>[0]["communityRepository"]
+    : getCommunityRepository(c.env)
+  const result = await (testOperatorBlockedPublishRecovery ?? recoverOperatorBlockedPostPublish)({
+    env: c.env,
+    communityRepository,
+    communityId,
+    postId,
+  })
+  console.info(JSON.stringify({
+    message: "operator-blocked Story publish recovery requested",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    postId,
+    jobId: result.jobId,
+  }))
+  return c.json({ result }, 202)
+})
+
+storySettlementOps.post("/registration-effect-no-broadcast-confirmations", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = decodePublicCommunityId(reference(body.community_id))
+  const assetId = decodePublicAssetId(reference(body.asset_id))
+  const operationId = reference(body.operation_id)
+  const authorizationRef = reference(body.authorization_ref)
+  const reason = typeof body.reason === "string" ? body.reason.trim() : ""
+  if (reason.length < 10 || reason.length > 600) throw badRequestError("reason_must_be_10_to_600_characters")
+
+  const confirm = testConfirmRegistrationNoBroadcast ?? (async (input) => {
+    const communityRepository = getCommunityRepository(input.env)
+    const db = await openCommunityWriteClient(input.env, communityRepository, input.communityId)
+    try {
+      const effect = await operatorAttestStoryRegistrationNotBroadcast({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        assetId: input.assetId,
+        expectedOperationId: input.operationId,
+        actorId: input.actorId,
+        reason: input.reason,
+        now: new Date().toISOString(),
+      })
+      return { operationId: effect.operationId, status: effect.status, errorCode: effect.errorCode }
+    } finally {
+      db.close()
+    }
+  })
+  const effect = await confirm({
+    env: c.env,
+    communityId,
+    assetId,
+    operationId,
+    actorId: actor.operatorActorId,
+    reason,
+  })
+  console.info(JSON.stringify({
+    message: "Story registration no-broadcast outcome confirmed",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    assetId,
+    operationId,
+  }))
+  return c.json({ effect, next_action: "recycle the owning finalize job" }, 200)
 })
 
 storySettlementOps.post("/alerts/synthetic", async (c) => {
