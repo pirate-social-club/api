@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { neonConfig } from "@neondatabase/serverless"
-import { configureLocalNeonForUrl, postgresifySql } from "../src/lib/runtime-deps"
-
-// The local neonConfig singleton is configured per control-plane URL (just before
-// each connection opens), not globally at module load — so drive it with a
-// PlanetScale Postgres URL the way the open path does before asserting.
-const PLANETSCALE_URL = "postgres://user:pass@us-east-3.pg.psdb.cloud/control"
+import { postgresifySql, resolveControlPlanePostgresConnectionString } from "../src/lib/runtime-deps"
+import type { Env } from "../src/env"
 
 describe("postgresifySql", () => {
   test("translates namespace verification upserts to PostgreSQL syntax", () => {
@@ -62,23 +57,27 @@ describe("postgresifySql", () => {
   })
 })
 
-describe("neonConfig.fetchEndpoint", () => {
-  test("uses PlanetScale's SQL endpoint for PlanetScale Postgres hosts", () => {
-    configureLocalNeonForUrl(PLANETSCALE_URL)
-    const fetchEndpoint = neonConfig.fetchEndpoint
-    expect(typeof fetchEndpoint).toBe("function")
-    expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
-      .toBe("https://us-east-3.pg.psdb.cloud/sql")
+describe("resolveControlPlanePostgresConnectionString", () => {
+  test("uses Hyperdrive in production", () => {
+    const env = {
+      ENVIRONMENT: "production",
+      CONTROL_PLANE_HYPERDRIVE: { connectionString: "postgres://hyperdrive.internal/control" },
+    } as Env
+    expect(resolveControlPlanePostgresConnectionString(env, "postgres://direct/control"))
+      .toBe("postgres://hyperdrive.internal/control")
   })
-})
 
-describe("neonConfig WebSocket settings", () => {
-  test("uses PlanetScale's WebSocket proxy for interactive transactions", () => {
-    configureLocalNeonForUrl(PLANETSCALE_URL)
-    const wsProxy = neonConfig.wsProxy
-    expect(neonConfig.pipelineConnect).toBe(false)
-    expect(typeof wsProxy).toBe("function")
-    expect(typeof wsProxy === "function" ? wsProxy("us-east-3.pg.psdb.cloud", 5432) : null)
-      .toBe("us-east-3.pg.psdb.cloud/v2?address=us-east-3.pg.psdb.cloud:5432")
+  test("fails closed when the production binding is missing", () => {
+    expect(() => resolveControlPlanePostgresConnectionString(
+      { ENVIRONMENT: "production" } as Env,
+      "postgres://direct/control",
+    )).toThrow("Missing CONTROL_PLANE_HYPERDRIVE binding in production")
+  })
+
+  test("allows a direct pg URL outside production", () => {
+    expect(resolveControlPlanePostgresConnectionString(
+      { ENVIRONMENT: "staging" } as Env,
+      "postgres://direct/control",
+    )).toBe("postgres://direct/control")
   })
 })

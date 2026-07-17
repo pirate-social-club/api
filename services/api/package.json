@@ -68,7 +68,6 @@
     "@ethereumjs/rlp": "^10.1.1",
     "@ethersphere/bee-js": "^11.1.1",
     "@libsql/client": "^0.17.2",
-    "@neondatabase/serverless": "^1.1.0",
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "@pirate-social-club/karaoke-runtime": "file:../../../web/packages/karaoke-runtime",
@@ -85,6 +84,7 @@
     "ethers": "^6.16.0",
     "hono": "^4.12.25",
     "jose": "^6.2.2",
+    "pg": "^8.16.3",
     "viem": "^2.48.1"
   },
   "overrides": {
@@ -104,6 +104,7 @@
     "@cloudflare/workers-types": "^4.20260405.0",
     "@types/bun": "^1.3.13",
     "@types/node": "24.5.2",
+    "@types/pg": "^8.15.5",
     "bun-types": "^1.3.14",
     "knip": "^6.14.2",
     "typescript": "7.0.2",

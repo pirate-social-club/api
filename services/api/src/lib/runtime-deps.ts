@@ -1,31 +1,7 @@
 import { createClient as createLibsqlClient } from "@libsql/client"
 import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@libsql/client"
-import { Pool, neonConfig } from "@neondatabase/serverless"
 import { AsyncLocalStorage } from "node:async_hooks"
-import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } from "@pirate/api-shared"
-
-// Use the LOCAL neonConfig singleton (same instance as Pool imported above).
-// @pirate/api-shared bundles its own @neondatabase/serverless copy with a separate singleton;
-// configuring from there has no effect on Pool here.
-// poolQueryViaFetch is safe for all Postgres providers: routes pool.query() through HTTP
-// instead of persistent WebSocket connections, preventing slot exhaustion.
-neonConfig.poolQueryViaFetch = true
-
-const _defaultFetchEndpoint = neonConfig.fetchEndpoint
-const _defaultWsProxy = neonConfig.wsProxy
-const _defaultPipelineConnect = neonConfig.pipelineConnect
-
-export function configureLocalNeonForUrl(url: string): void {
-  if (!isPlanetScalePostgresUrl(url)) {
-    neonConfig.fetchEndpoint = _defaultFetchEndpoint
-    neonConfig.wsProxy = _defaultWsProxy
-    neonConfig.pipelineConnect = _defaultPipelineConnect
-    return
-  }
-  neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`
-  neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`
-  neonConfig.pipelineConnect = false
-}
+import { Client as PgClient } from "pg"
 import { globalSingleton } from "./db-helpers"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
@@ -35,15 +11,58 @@ type PostgresQueryable = {
   query: (sql: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount?: number | null }>
 }
 
-// Structural pool shape the Postgres adapter depends on, so a test can substitute a non-Neon pool.
+// Structural connection shape the Postgres adapter depends on, so tests can substitute a local database.
 type PostgresPoolLike = PostgresQueryable & {
   connect: () => Promise<PostgresQueryable & { release: () => void }>
   end: () => Promise<void>
 }
 
-// Test-only seam: override how the request-scoped CONTROL-PLANE Postgres pool is built. Default (null)
-// constructs today's Neon pool unchanged. This affects only the Postgres path, never libSQL, and must
-// never be set in production.
+class RequestScopedPgConnection implements PostgresPoolLike {
+  private readonly client: PgClient
+  private connectPromise: Promise<void> | null = null
+
+  constructor(connectionString: string) {
+    this.client = new PgClient({
+      connectionString,
+      connectionTimeoutMillis: 5_000,
+    })
+  }
+
+  private async ensureConnected(): Promise<void> {
+    this.connectPromise ??= this.client.connect().then(() => undefined)
+    await this.connectPromise
+  }
+
+  async query(sql: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }> {
+    await this.ensureConnected()
+    const result = await this.client.query(sql, values)
+    return { rows: result.rows, rowCount: result.rowCount }
+  }
+
+  async connect(): Promise<PostgresQueryable & { release: () => void }> {
+    await this.ensureConnected()
+    return {
+      query: (sql, values) => this.query(sql, values),
+      // The request owns one pg.Client. Hyperdrive owns the underlying pool, so a
+      // transaction release is intentionally deferred until request-scope cleanup.
+      release: () => {},
+    }
+  }
+
+  async end(): Promise<void> {
+    if (!this.connectPromise) {
+      return
+    }
+    try {
+      await this.connectPromise
+    } catch {
+      return
+    }
+    await this.client.end()
+  }
+}
+
+// Test-only seam: override how the request-scoped CONTROL-PLANE Postgres connection is built.
 type ControlPlanePostgresPoolFactory = (url: string) => PostgresPoolLike
 let controlPlanePostgresPoolFactoryForTests: ControlPlanePostgresPoolFactory | null = null
 export function setControlPlanePostgresPoolFactoryForTests(factory: ControlPlanePostgresPoolFactory | null): void {
@@ -61,6 +80,21 @@ const requestControlPlaneStore = new AsyncLocalStorage<RequestControlPlaneStore>
 
 export function isPostgresControlPlaneUrl(value: string): boolean {
   return value.startsWith("postgres://") || value.startsWith("postgresql://")
+}
+
+export function resolveControlPlanePostgresConnectionString(env: Env, fallbackUrl: string): string {
+  const hyperdriveUrl = env.CONTROL_PLANE_HYPERDRIVE?.connectionString
+  if (hyperdriveUrl) {
+    return hyperdriveUrl
+  }
+  if (env.ENVIRONMENT === "production") {
+    throw new Error("Missing CONTROL_PLANE_HYPERDRIVE binding in production")
+  }
+  return fallbackUrl
+}
+
+function createPostgresConnection(env: Env, fallbackUrl: string): PostgresPoolLike {
+  return new RequestScopedPgConnection(resolveControlPlanePostgresConnectionString(env, fallbackUrl))
 }
 
 function normalizeStatement(statement: InStatement | string): InStatement {
@@ -398,13 +432,7 @@ export async function withStandaloneControlPlaneClient<T>(
     return await operation(getControlPlaneClient(env))
   }
 
-  configureLocalNeonForUrl(url)
-  const client = new PostgresClientAdapter(new Pool({
-    connectionString: normalizePostgresConnectionStringForDriver(url),
-    max: 1,
-    connectionTimeoutMillis: 5_000,
-    idleTimeoutMillis: 30_000,
-  }))
+  const client = new PostgresClientAdapter(createPostgresConnection(env, url))
   try {
     return await operation(client)
   } finally {
@@ -412,30 +440,18 @@ export async function withStandaloneControlPlaneClient<T>(
   }
 }
 
-function getRequestScopedPostgresClient(url: string): Client | null {
+function getRequestScopedPostgresClient(env: Env, url: string): Client | null {
   const store = requestControlPlaneStore.getStore()
   if (!store) {
     return null
   }
 
-  // The test seam substitutes the pool and bypasses Neon entirely; the production path is unchanged.
-  if (!controlPlanePostgresPoolFactoryForTests) {
-    configureLocalNeonForUrl(url)
-  }
   const cacheKey = `pg:${url}`
   let client = store.clients.get(cacheKey)
   if (!client) {
-    // max: 1 — one connection per request is sufficient.
-    // connectionTimeoutMillis: fail fast rather than queue behind a stuck slot.
-    // idleTimeoutMillis: recycle the slot even if pool.end() doesn't flush server-side.
     const pool: PostgresPoolLike = controlPlanePostgresPoolFactoryForTests
       ? controlPlanePostgresPoolFactoryForTests(url)
-      : (new Pool({
-          connectionString: normalizePostgresConnectionStringForDriver(url),
-          max: 1,
-          connectionTimeoutMillis: 5_000,
-          idleTimeoutMillis: 30_000,
-        }) as unknown as PostgresPoolLike)
+      : createPostgresConnection(env, url)
     client = new PostgresClientAdapter(pool)
     store.clients.set(cacheKey, client)
   }
@@ -450,8 +466,8 @@ function getControlPlaneClient(env: Env): Client {
   const url = requireControlPlaneDbUrl(env)
   if (isPostgresControlPlaneUrl(url)) {
     // In Cloudflare Workers, Postgres I/O objects must stay request-scoped.
-    // Reusing a cached Neon pool across requests can trigger cross-request I/O failures.
-    const requestScopedClient = getRequestScopedPostgresClient(url)
+    // Hyperdrive owns the underlying pool; the pg.Client itself remains request-scoped.
+    const requestScopedClient = getRequestScopedPostgresClient(env, url)
     if (requestScopedClient) {
       return requestScopedClient
     }

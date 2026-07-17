@@ -1,9 +1,9 @@
 // Production request-scoped path test for the host-config repository. Unlike the lightweight
 // .pg.test.ts (which uses a bun executor shim and imports no runtime-deps), this exercises the REAL
 // production path: withRequestControlPlaneClients -> getControlPlaneClient(env) ->
-// PostgresClientAdapter / PostgresTransactionAdapter -> repository, with only the Neon pool substituted
+// PostgresClientAdapter / PostgresTransactionAdapter -> repository, with only the pg connection substituted
 // via setControlPlanePostgresPoolFactoryForTests. It therefore imports runtime-deps (which pulls
-// @neondatabase/serverless) and must run in the full services/api install job, with a PostgreSQL service.
+// pg) and must run in the full services/api install job, with a PostgreSQL service.
 //
 // Runs only when BOOKINGS_REPO_TEST_ADMIN_URL is set. Isolated DB, full teardown, no credentials printed.
 import { SQL } from "bun";
