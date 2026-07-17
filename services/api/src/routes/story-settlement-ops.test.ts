@@ -21,6 +21,39 @@ function actor() {
 afterEach(() => setStorySettlementOpsDependenciesForTests({}))
 
 describe("Story settlement operator routes", () => {
+  test("reads one coordinator plan without mutating it", async () => {
+    let inspectedPlanRef: string | null = null
+    setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })
+    const env = {
+      STORY_CHAIN_ID: "1315",
+      STORY_COORDINATOR_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
+      STORY_COORDINATOR_SIGNER_ADDRESS: ADDRESS,
+      STORY_SETTLEMENT_WALLET_COORDINATOR: {
+        getByName: () => ({
+          lookup: async (planRef: string) => {
+            inspectedPlanRef = planRef
+            return {
+              planRef: PLAN_REF,
+              state: "pending",
+              version: 7,
+              steps: [{ receipt: { blockNumber: 123n } }],
+            }
+          },
+        }),
+      },
+    } as unknown as Env
+    const response = await storySettlementOps.request("/plan-inspections", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({ plan_ref: PLAN_REF, authorization_ref: "CANARY-DIAGNOSTIC-1" }),
+    }, env)
+    expect(response.status).toBe(200)
+    expect(inspectedPlanRef).toBe(PLAN_REF)
+    expect(await response.json()).toMatchObject({
+      plan: { planRef: PLAN_REF, state: "pending", version: 7, steps: [{ receipt: { blockNumber: "123" } }] },
+    })
+  })
+
   test("submits a fenced abandoned-nonce repair with durable operator identity", async () => {
     let request: Record<string, unknown> | null = null
     setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })

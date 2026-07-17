@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono"
 import { isHex, size, type Hex } from "viem"
 
 import type { Env } from "../env"
-import { badRequestError } from "../lib/errors"
+import { badRequestError, notFoundError } from "../lib/errors"
 import {
   authenticateOperatorCredential,
   requireOperatorScope,
@@ -64,20 +64,44 @@ async function operator(c: Context<StorySettlementOpsEnv>) {
   return actor
 }
 
+function coordinator(c: Context<StorySettlementOpsEnv>) {
+  const binding = c.env.STORY_SETTLEMENT_WALLET_COORDINATOR
+  if (!binding) throw badRequestError("story_settlement_coordinator_binding_missing")
+  const signer = resolveStoryCoordinatorDirectSigner(c.env)
+  if (!signer.ok) throw badRequestError(signer.error)
+  if (!signer.value) throw badRequestError("story_settlement_coordinator_signer_missing")
+  return binding.getByName(storySettlementCoordinatorName(resolveStoryChainId(c.env), signer.value.address))
+}
+
+storySettlementOps.post("/plan-inspections", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const planRef = bytes32("plan_ref", body.plan_ref)
+  const authorizationRef = reference(body.authorization_ref)
+  const plan = await coordinator(c).lookup(planRef)
+  if (!plan) throw notFoundError("Story settlement plan not found")
+  console.info(JSON.stringify({
+    message: "story settlement plan inspected",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    planRef,
+  }))
+  const serializablePlan = JSON.parse(JSON.stringify(plan, (_key, value) => (
+    typeof value === "bigint" ? value.toString() : value
+  )))
+  return c.json({ plan: serializablePlan }, 200)
+})
+
 storySettlementOps.post("/nonce-repairs", async (c) => {
   const actor = await operator(c)
   let body: Record<string, unknown>
   try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
   const reason = typeof body.reason_code === "string" ? body.reason_code : ""
   if (!REASONS.has(reason)) throw badRequestError("reason_code_invalid")
-  const binding = c.env.STORY_SETTLEMENT_WALLET_COORDINATOR
-  if (!binding) throw badRequestError("story_settlement_coordinator_binding_missing")
-  const signer = resolveStoryCoordinatorDirectSigner(c.env)
-  if (!signer.ok) throw badRequestError(signer.error)
-  if (!signer.value) throw badRequestError("story_settlement_coordinator_signer_missing")
   const clientReference = reference(body.authorization_ref)
-  const coordinator = binding.getByName(storySettlementCoordinatorName(resolveStoryChainId(c.env), signer.value.address))
-  const plan = await coordinator.requestAbandonedNonceRepair({
+  const plan = await coordinator(c).requestAbandonedNonceRepair({
     planRef: bytes32("plan_ref", body.plan_ref),
     stepRef: bytes32("step_ref", body.step_ref),
     expectedVersion: positiveVersion(body.expected_version),
