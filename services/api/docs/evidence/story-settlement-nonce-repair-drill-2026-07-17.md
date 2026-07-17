@@ -61,20 +61,17 @@ open.
 
 ## Safe path to complete M4
 
-Choose one:
-
-1. **Naturally eligible incident:** when a real staging step becomes provably abandoned, execute the
-   existing runbook with peer review and retain bounded plan/step/nonce/receipt evidence.
-2. **Purpose-built staging drill harness:** separately design and review a staging-only operator
-   action that admits a synthetic zero-value drill plan, reserves a nonce, intentionally terminates
-   before signing, and exposes no arbitrary transaction or storage mutation capability. The harness
-   must be structurally unavailable outside staging, require the repair scope plus an incident
-   reference, journal every transition, and be removed or disabled after the drill.
+The executable path is a **purpose-built staging drill harness**. It targets one exact
+`community_id:quote_id` in a throwaway staging community, drives that purchase through the normal
+admission path, reserves a real signer nonce, and intentionally terminates before signing. It
+exposes no arbitrary transaction or storage mutation capability. The target must be structurally
+ignored outside staging and removed after the drill.
 
 The harness itself needs state-machine tests, fault injection, exclusive-signer/nonce fencing,
-admission-disabled enforcement, and an explicit maximum gas budget. Building it solely to turn a
-checklist green is not justified without owner approval; waiting for a naturally eligible staging
-incident is the lower-risk default.
+admission-disabled enforcement, and an explicit maximum gas budget.
+
+Waiting for a naturally eligible incident is not an executable alternative while admission is
+disabled: without admission no plan can reserve, and therefore abandon, a nonce.
 
 ## Evidence required for eventual completion
 
