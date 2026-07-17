@@ -30,9 +30,8 @@ describe("Story settlement coordinator admission", () => {
   })
 
   test("rejects a non-exact flag rather than coercing it", () => {
-    for (const value of ["1", "yes", "TRUE ", " true"]) {
-      const expected = value.trim().toLowerCase() === "true"
-      expect(isStorySettlementCoordinatorAdmissionEnabled(env(value, CANARY), CANARY)).toBe(expected)
+    for (const value of ["1", "yes", "TRUE", "TRUE ", " true", "true "]) {
+      expect(isStorySettlementCoordinatorAdmissionEnabled(env(value, CANARY), CANARY)).toBe(false)
     }
   })
 

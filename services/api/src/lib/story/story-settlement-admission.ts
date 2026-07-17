@@ -1,7 +1,5 @@
 import type { Env } from "../../env"
 
-const TRUE = "true"
-
 type AdmissionEnv = Pick<
   Env,
   "STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED" | "STORY_SETTLEMENT_COORDINATOR_ADMISSION_COMMUNITY_IDS"
@@ -20,7 +18,7 @@ export function parseStorySettlementAdmissionCommunityIds(raw: string | undefine
 // community allowlist entry. The flag alone is Worker-wide, so without the
 // allowlist a canary would admit every community sharing the deployment.
 export function isStorySettlementCoordinatorAdmissionEnabled(env: AdmissionEnv, communityId: string): boolean {
-  if (String(env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED || "").trim().toLowerCase() !== TRUE) return false
+  if (env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED !== "true") return false
   const community = String(communityId || "").trim()
   if (!community) return false
   return parseStorySettlementAdmissionCommunityIds(
