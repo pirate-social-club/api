@@ -10,6 +10,7 @@ export type OpsAlertSendResult = {
   delivered: boolean
   sent: number
   sink: "none" | "log" | "email" | "webhook"
+  providerMessageId: string | null
 }
 
 function shortSha(value: unknown): string | null {
@@ -137,7 +138,7 @@ function alertText(input: {
 }
 
 export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAlertSendResult> {
-  if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none" }
+  if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none", providerMessageId: null }
   const environment = env.ENVIRONMENT || "development"
   const timestamp = new Date().toISOString()
   const buildSha = shortSha(env.BUILD_GIT_SHA)
@@ -169,12 +170,12 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
         to: emailTo,
         from: emailFrom,
       })
-      return { delivered: true, sent: alerts.length, sink: "email" }
+      return { delivered: true, sent: alerts.length, sink: "email", providerMessageId: response.messageId }
     } catch (error) {
       logPipelineError("[ops-alerts] email send threw", {
         error: error instanceof Error ? error.message : String(error),
       })
-      return { delivered: false, sent: 0, sink: "email" }
+      return { delivered: false, sent: 0, sink: "email", providerMessageId: null }
     }
   }
 
@@ -185,7 +186,7 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
       keys: alerts.map((alert) => alert.key),
       alerts,
     })
-    return { delivered: true, sent: 0, sink: "log" }
+    return { delivered: true, sent: 0, sink: "log", providerMessageId: null }
   }
 
   try {
@@ -197,14 +198,14 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
     })
     if (!response.ok) {
       logPipelineError("[ops-alerts] webhook post failed", { status: response.status })
-      return { delivered: false, sent: 0, sink: "webhook" }
+      return { delivered: false, sent: 0, sink: "webhook", providerMessageId: null }
     }
-    return { delivered: true, sent: alerts.length, sink: "webhook" }
+    return { delivered: true, sent: alerts.length, sink: "webhook", providerMessageId: null }
   } catch (error) {
     logPipelineError("[ops-alerts] webhook post threw", {
       error: error instanceof Error ? error.message : String(error),
     })
-    return { delivered: false, sent: 0, sink: "webhook" }
+    return { delivered: false, sent: 0, sink: "webhook", providerMessageId: null }
   }
 }
 

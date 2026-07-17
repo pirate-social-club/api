@@ -9,7 +9,10 @@ import {
   STORY_SETTLEMENT_REPAIR_SCOPE,
 } from "../lib/operator-credential-auth"
 import type { OperatorActorContext } from "../lib/operator-credential-auth"
-import { captureScheduledWarning } from "../lib/ops-alerts/scheduled"
+import {
+  captureScheduledWarningWithEvidence,
+  type ScheduledAlertDeliveryResult,
+} from "../lib/ops-alerts/scheduled"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { reconcileCommunityPurchaseSettlement } from "../lib/communities/commerce/settlement-service"
 import { resolveStoryCoordinatorDirectSigner } from "../lib/story/story-direct-signer"
@@ -26,7 +29,13 @@ const REASONS = new Set(["operator_cancelled", "terminal_configuration", "rights
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/
 
 type OperatorAuthenticator = (input: { env: Env; authorization: string | undefined }) => Promise<OperatorActorContext>
-type AlertCapture = typeof captureScheduledWarning
+type AlertCapture = (
+  env: Env,
+  message: string,
+  task: string,
+  extra?: Record<string, unknown>,
+  tags?: Record<string, string>,
+) => Promise<ScheduledAlertDeliveryResult>
 let testAuthenticator: OperatorAuthenticator | null = null
 let testAlertCapture: AlertCapture | null = null
 let testPurchaseReconciler: typeof reconcileCommunityPurchaseSettlement | null = null
@@ -248,7 +257,7 @@ storySettlementOps.post("/alerts/synthetic", async (c) => {
   let body: Record<string, unknown>
   try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
   const authorizationRef = reference(body.authorization_ref)
-  const delivered = await (testAlertCapture ?? captureScheduledWarning)(
+  const delivery = await (testAlertCapture ?? captureScheduledWarningWithEvidence)(
     c.env,
     "Synthetic Story settlement coordinator alert",
     `story_settlement_coordinator_synthetic:${authorizationRef}`,
@@ -260,7 +269,8 @@ storySettlementOps.post("/alerts/synthetic", async (c) => {
     },
     { urgency: "high" },
   )
-  return c.json({ delivered }, delivered ? 202 : 503)
+  const proven = delivery.delivered && delivery.evidenceRecorded
+  return c.json({ ...delivery, proven }, proven ? 202 : 503)
 })
 
 export default storySettlementOps

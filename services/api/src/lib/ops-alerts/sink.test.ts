@@ -31,7 +31,7 @@ describe("sendOpsAlerts", () => {
 
     const result = await sendOpsAlerts(env, [alert])
 
-    expect(result).toEqual({ delivered: true, sent: 1, sink: "email" })
+    expect(result).toEqual({ delivered: true, sent: 1, sink: "email", providerMessageId: "msg_test" })
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({
       to: "piratesocialclub@proton.me",
@@ -58,7 +58,7 @@ describe("sendOpsAlerts", () => {
 
     const result = await sendOpsAlerts(env, [alert])
 
-    expect(result).toEqual({ delivered: false, sent: 0, sink: "email" })
+    expect(result).toEqual({ delivered: false, sent: 0, sink: "email", providerMessageId: null })
   })
 
   test("includes Story signer funding and explorer details in email summaries", async () => {
