@@ -8,6 +8,7 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "process_community_jobs",
+      "reconcile_purchase_settlements",
       "reconcile_d1_provisioning",
       "monitor_reward_campaigns",
     ])
@@ -19,6 +20,7 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "process_community_jobs",
+      "reconcile_purchase_settlements",
       "monitor_reward_campaigns",
     ])
   })
@@ -29,6 +31,7 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "process_community_jobs",
+      "reconcile_purchase_settlements",
       "reconcile_d1_provisioning",
       "revalidate_hns_namespaces",
       "monitor_reward_campaigns",
