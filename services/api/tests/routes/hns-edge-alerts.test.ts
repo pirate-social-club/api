@@ -20,20 +20,35 @@ function request(token = "edge-secret", body: unknown = { text: "deployment drif
   })
 }
 
-const env = {
-  HNS_EDGE_ALERT_TOKEN: "edge-secret",
-  ENVIRONMENT: "test",
-  OPS_ALERT_WEBHOOK_URL: "https://ops.example/hook",
-} as Env
+function testKv() {
+  const values = new Map<string, string>()
+  return {
+    values,
+    binding: {
+      get: async (key: string) => values.get(key) ?? null,
+      put: async (key: string, value: string) => { values.set(key, value) },
+      delete: async (key: string) => { values.delete(key) },
+    } as unknown as KVNamespace,
+  }
+}
+
+function environment(): Env {
+  return {
+    HNS_EDGE_ALERT_TOKEN: "edge-secret",
+    ENVIRONMENT: "test",
+    OPS_ALERT_WEBHOOK_URL: "https://ops.example/hook",
+    OPS_ALERT_DEDUPE: testKv().binding,
+  } as Env
+}
 
 describe("HNS edge alert ingress", () => {
   it("rejects a missing or invalid bearer token", async () => {
-    const response = await app().fetch(request("wrong"), env)
+    const response = await app().fetch(request("wrong"), environment())
     expect(response.status).toBe(401)
   })
 
   it("validates the alert body", async () => {
-    const response = await app().fetch(request("edge-secret", { text: "" }), env)
+    const response = await app().fetch(request("edge-secret", { text: "" }), environment())
     expect(response.status).toBe(400)
   })
 
@@ -45,7 +60,7 @@ describe("HNS edge alert ingress", () => {
       return new Response(null, { status: 204 })
     }) as typeof fetch
     try {
-      const response = await app().fetch(request(), env)
+      const response = await app().fetch(request(), environment())
       expect(response.status).toBe(202)
       expect(await response.json()).toEqual({ accepted: true })
       expect(forwarded).toMatchObject({ text: expect.stringContaining("deployment drift") })
@@ -56,9 +71,36 @@ describe("HNS edge alert ingress", () => {
 
   it("fails closed when no alert sink delivers the message", async () => {
     const response = await app().fetch(request(), {
-      ...env,
+      ...environment(),
       OPS_ALERT_WEBHOOK_URL: undefined,
     })
     expect(response.status).toBe(503)
+  })
+
+  it("records an authenticated heartbeat for an expected host and role", async () => {
+    const kv = testKv()
+    const response = await app().fetch(request("edge-secret", {
+      kind: "heartbeat",
+      host: "ns1-pirate-fluence",
+      role: "hns-chain-observer",
+      core_commit: "a".repeat(40),
+      verified_at: new Date().toISOString(),
+    }), { ...environment(), OPS_ALERT_DEDUPE: kv.binding })
+
+    expect(response.status).toBe(202)
+    expect([...kv.values.keys()]).toEqual([
+      "hns-edge-heartbeat:v1:ns1-pirate-fluence:hns-chain-observer",
+    ])
+  })
+
+  it("rejects unknown heartbeat identities", async () => {
+    const response = await app().fetch(request("edge-secret", {
+      kind: "heartbeat",
+      host: "unknown-host",
+      role: "hns-chain-observer",
+      core_commit: "a".repeat(40),
+      verified_at: new Date().toISOString(),
+    }), environment())
+    expect(response.status).toBe(400)
   })
 })
