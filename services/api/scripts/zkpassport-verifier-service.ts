@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { installGracefulHttpShutdown } from "./_lib/graceful-http-shutdown"
 import { ZKPassport, type ProofResult, type Query, type QueryResult } from "@zkpassport/sdk"
 
 const DEFAULT_PORT = 8794
@@ -252,6 +253,8 @@ const server = createServer(async (req, res) => {
     }, 500))
   }
 })
+
+installGracefulHttpShutdown(server, { service: "zkpassport verifier" })
 
 server.listen(port, hostname, () => {
   console.log(`zkpassport verifier listening on http://${hostname}:${port}`)
