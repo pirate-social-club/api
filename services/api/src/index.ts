@@ -8,6 +8,7 @@ import bookings from "./routes/bookings"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsWallets from "./routes/ops-wallets"
+import hnsEdgeAlerts from "./routes/hns-edge-alerts"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
@@ -296,6 +297,7 @@ app.route("/bookings", bookings)
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
 app.route("/admin/ops", opsWallets)
+app.route("/internal/hns-edge-alerts", hnsEdgeAlerts)
 app.route("/community-media", communityMedia)
 app.route("/comments", comments)
 app.route("/communities", communities)
