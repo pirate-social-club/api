@@ -60,6 +60,7 @@ import {
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
+import { checkHnsEdgeHeartbeatFreshness } from "./lib/ops-alerts/hns-edge-heartbeats"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
 import { runStorySettlementCoordinatorWatchdog } from "./lib/story/story-settlement-coordinator-watchdog"
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
@@ -975,6 +976,11 @@ const handler: ExportedHandler<Env> = {
     ctx.waitUntil(
       checkScheduledD1PoolCapacity(env).catch((error) => {
         console.error("[scheduled] community D1 pool capacity watchdog crashed (fail-soft)", error)
+      }),
+    )
+    ctx.waitUntil(
+      checkHnsEdgeHeartbeatFreshness(env).catch((error) => {
+        console.error("[scheduled] HNS edge heartbeat watchdog crashed (fail-soft)", error)
       }),
     )
 
