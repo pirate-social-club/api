@@ -410,6 +410,7 @@ export async function recordKaraokeAttempt(input: {
         ?18, ?19,
         ?20, ?21, ?22, ?23, ?23
       )
+      RETURNING id
     `,
     args: [
       makeId("kat"),
@@ -438,7 +439,7 @@ export async function recordKaraokeAttempt(input: {
     ],
   })
 
-  const wasInserted = (inserted.rowsAffected ?? 0) > 0
+  const wasInserted = inserted.rows.length > 0
   if (!wasInserted) {
     return {
       inserted: false,
