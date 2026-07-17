@@ -893,8 +893,8 @@ async function completeZkPassportSession(
 }
 
 type IdentityNullifierInput = {
-  provider: "self" | "very"
-  mechanism: "zk-nullifier" | "palm-nullifier"
+  provider: "self" | "very" | "zkpassport"
+  mechanism: "zk-nullifier" | "palm-nullifier" | "zkpassport-unique-identifier"
   nullifierHash: string
 }
 
@@ -997,6 +997,23 @@ async function finalizeZkPassportDocumentVerification(
   }
 
   const attestationInserts: InStatement[] = []
+  const uniqueHumanAttestationId = makeId("att")
+  capabilities.unique_human = {
+    state: "verified",
+    provider: "zkpassport",
+    proof_type: "unique_human",
+    mechanism: "zkpassport-unique-identifier",
+    verified_at: unixSeconds(updatedAt),
+  }
+  attestationInserts.push({
+    sql: `
+      INSERT INTO user_attestations (
+        user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+        capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, 'zkpassport', 'unique_human', 'unique_human', 'accepted', ?4, ?5, ?6, NULL, ?5, ?5)
+    `,
+    args: [uniqueHumanAttestationId, input.userId, row.verification_session_id, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
+  })
   let firstDocumentAttestationId: string | null = null
   const pushDocumentAttestation = (attestation: {
     capabilityKey: "minimum_age" | "nationality" | "gender"
@@ -1068,10 +1085,6 @@ async function finalizeZkPassportDocumentVerification(
     })
   }
 
-  if (!firstDocumentAttestationId) {
-    throw providerUnavailable("ZKPassport verification did not return a requested document capability")
-  }
-
   const resultRef = claims.proofHash ?? input.proofHash ?? null
   if (!activeNullifierUserId) {
     attestationInserts.push({
@@ -1087,7 +1100,7 @@ async function finalizeZkPassportDocumentVerification(
         input.userId,
         identityNullifier.nullifierHash,
         input.verificationSessionId,
-        firstDocumentAttestationId,
+        uniqueHumanAttestationId,
         updatedAt,
       ],
     })
@@ -1110,7 +1123,10 @@ async function finalizeZkPassportDocumentVerification(
     {
       sql: `
         UPDATE users
-        SET verification_capabilities_json = ?2,
+        SET verification_state = 'verified',
+            capability_provider = 'zkpass',
+            verification_capabilities_json = ?2,
+            verified_at = ?3,
             current_verification_session_id = ?1,
             updated_at = ?3
         WHERE user_id = ?4

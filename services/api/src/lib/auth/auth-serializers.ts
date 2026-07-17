@@ -68,7 +68,9 @@ export function serializeUser(row: UserRow): ContractUser {
     verification_state: deriveVerificationState(verificationCapabilities),
     capability_provider: row.capability_provider === "self" || row.capability_provider === "very"
       ? row.capability_provider
-      : null,
+      : row.capability_provider === "zkpass"
+        ? "zkpassport"
+        : null,
     verification_capabilities: verificationCapabilities,
     verified_at: nullableUnixSeconds(row.verified_at),
     created: unixSeconds(row.created_at),
