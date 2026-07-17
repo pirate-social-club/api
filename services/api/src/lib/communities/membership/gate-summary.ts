@@ -133,6 +133,7 @@ export function getGatePolicyMatchMode(policy: GatePolicy | null): "all" | "any"
 
 function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSummary {
   const summary: MembershipGateSummary = {
+    ...(atom.gate_id ? { gate_id: atom.gate_id } : {}),
     gate_type: atom.type as MembershipGateSummary["gate_type"],
   }
 

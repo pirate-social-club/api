@@ -1020,7 +1020,13 @@ describe("community handle routes", () => {
     }
     expect(policy.claim_gate_mode).toBe("explicit")
     expect(policy.claim_gate_expression_ref?.startsWith("hcgp_")).toBe(true)
-    expect(policy.claim_gate_expression).toEqual(expression)
+    expect(policy.claim_gate_expression).toEqual({
+      version: 1,
+      expression: {
+        op: "gate",
+        gate: { gate_id: "legacy_0", type: "unique_human", provider: "very" },
+      },
+    })
     expect(policy.eligibility_timing).toBe("claim_time")
 
     const quoteResponse = await requestJson(

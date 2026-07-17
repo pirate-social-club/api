@@ -12,7 +12,9 @@ export type GateExpression =
 
 export type DocumentProofProvider = "self" | "zkpassport"
 
-export type GateAtom =
+type GateAtomIdentity = { gate_id?: string }
+
+export type GateAtom = GateAtomIdentity & (
   | { type: "unique_human"; provider: "very" | "self" }
   | { type: "altcha_pow" }
   | { type: "minimum_age"; provider: "self"; accepted_providers?: DocumentProofProvider[]; minimum_age: number }
@@ -29,12 +31,15 @@ export type GateAtom =
     min_quantity: number
     match: Record<string, string | string[]>
   }
+)
 
 export type GateTraceNode =
   | { kind: "op"; op: "and" | "or"; passed: boolean; children: GateTraceNode[] }
   | {
     kind: "gate"
+    gate_id?: string | null
     gate_type: GateAtom["type"]
+    outcome?: GateEvaluationOutcome | null
     provider?: string
     passed: boolean
     reason?: string
@@ -55,7 +60,9 @@ export type RequiredActionSet = {
   items: RequiredActionNode[]
 }
 
-export type RequiredAction =
+type RequiredActionIdentity = { gate_id?: string }
+
+export type RequiredAction = RequiredActionIdentity & (
   | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "minimum_age"; required_age: number }
   | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "nationality"; allowed_countries: string[] }
   | { kind: "action"; provider: DocumentProofProvider; accepted_providers?: DocumentProofProvider[]; capability: "gender"; allowed_markers: Array<"M" | "F"> }
@@ -82,6 +89,7 @@ export type RequiredAction =
     contract_address: string
     min_quantity: number
   }
+)
 
 export type GateEvaluationOutcome = "passed" | "action_required" | "terminal_mismatch" | "provider_unavailable"
 

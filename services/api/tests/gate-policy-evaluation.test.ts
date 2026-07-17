@@ -105,6 +105,7 @@ describe("evaluateMembershipGatePolicy", () => {
         accepted_providers: ["zkpassport", "self"],
         allowed: ["US"],
       }))).toEqual(atomGate({
+        gate_id: "legacy_0",
         type: "nationality",
         provider: "self",
         accepted_providers: ["self", "zkpassport"],
@@ -124,6 +125,7 @@ describe("evaluateMembershipGatePolicy", () => {
         asset_id: " EIP155:1/SLIP44:60 ",
         min_amount_atomic: "1000000000000000000",
       }))).toEqual(atomGate({
+        gate_id: "legacy_0",
         type: "asset_balance",
         asset_id: "eip155:1/slip44:60",
         min_amount_atomic: "1000000000000000000",
@@ -144,6 +146,96 @@ describe("evaluateMembershipGatePolicy", () => {
         asset_id: "eip155:1/erc20:0x1111111111111111111111111111111111111111",
         min_amount_atomic: "10",
       }))).toThrow("asset_balance gate requires a supported canonical asset_id")
+    })
+
+    test("preserves valid gate identities, migrates legacy atoms, and rejects duplicates", () => {
+      const policy = validateGatePolicy({
+        version: 1,
+        expression: {
+          op: "and",
+          children: [
+            { op: "gate", gate: { gate_id: "stable-age", type: "minimum_age", provider: "self", minimum_age: 21 } },
+            { op: "gate", gate: { type: "unique_human", provider: "self" } },
+          ],
+        },
+      })
+      if (policy.expression.op !== "and") throw new Error("expected and policy")
+      expect(policy.expression.children[0]).toMatchObject({ gate: { gate_id: "stable-age" } })
+      expect(policy.expression.children[1]).toMatchObject({ gate: { gate_id: "legacy_0_1" } })
+
+      expect(() => validateGatePolicy(andPolicy(
+        { gate_id: "duplicate", type: "unique_human", provider: "self" },
+        { gate_id: "duplicate", type: "altcha_pow" },
+      ))).toThrow("gate atom gate_id values must be unique within a policy")
+      expect(() => validateGatePolicy(atomGate({
+        gate_id: "not valid!",
+        type: "unique_human",
+        provider: "self",
+      }))).toThrow("gate atom gate_id must be 1 to 64 ASCII letters")
+    })
+
+    test("copies stable identity and authoritative outcome to summaries and trace leaves", async () => {
+      const policy = validateGatePolicy(atomGate({
+        gate_id: "balance-main",
+        type: "asset_balance",
+        asset_id: "eip155:1/slip44:60",
+        min_amount_atomic: "10",
+      }))
+      expect(buildMembershipGateSummariesFromPolicy(policy)[0]).toMatchObject({ gate_id: "balance-main" })
+
+      setAssetBalanceReaderForTests(async () => 7n)
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy,
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_1",
+          chain_namespace: "eip155:1",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      })
+      expect(result.trace).toMatchObject({
+        kind: "gate",
+        gate_id: "balance-main",
+        outcome: "action_required",
+      })
+      expect(result.requiredActionSet?.items[0]).toMatchObject({ gate_id: "balance-main" })
+    })
+
+    test("publishes the complete outcome lattice on trace leaves", async () => {
+      const originalConsoleError = console.error
+      console.error = () => {}
+      try {
+        const policy = validateGatePolicy(andPolicy(
+          { gate_id: "passed", type: "unique_human", provider: "self" },
+          { gate_id: "action", type: "wallet_score", provider: "passport", minimum_score: 30 },
+          { gate_id: "mismatch", type: "nationality", provider: "self", allowed: ["CA"] },
+          {
+            gate_id: "outage",
+            type: "erc721_holding",
+            chain_namespace: "eip155:1",
+            contract_address: "0x0000000000000000000000000000000000000001",
+          },
+        ))
+        const result = await evaluateMembershipGatePolicy({
+          env: {},
+          policy,
+          user: makeUser({ nationality: { state: "verified", value: "US" } }),
+          walletAttachments: [],
+        })
+        if (result.trace.kind !== "op") throw new Error("expected operator trace")
+        expect(result.trace.children.map((child) => child.kind === "gate"
+          ? [child.gate_id, child.outcome]
+          : null)).toEqual([
+          ["passed", "passed"],
+          ["action", "action_required"],
+          ["mismatch", "terminal_mismatch"],
+          ["outage", "provider_unavailable"],
+        ])
+      } finally {
+        console.error = originalConsoleError
+      }
     })
 
     test("reports an atomic shortfall for an insufficient attached-wallet balance", async () => {

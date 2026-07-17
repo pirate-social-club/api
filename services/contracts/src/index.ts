@@ -1480,6 +1480,7 @@ export type GateExpression = {
 };
 
 export type GateAtom = {
+  gate_id?: string;
   type: "unique_human" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   provider?: "self" | "zkpassport" | "very" | "passport" | "courtyard" | "altcha" | null;
   accepted_providers?: Array<"self" | "zkpassport"> | null;
@@ -2465,6 +2466,7 @@ export type LocalizedPostEmbedTranslation = {
 };
 
 export type MembershipGateSummary = {
+  gate_id?: string | null;
   gate_type: "nationality" | "gender" | "unique_human" | "age_over_18" | "minimum_age" | "wallet_score" | "altcha_pow" | "erc721_holding" | "erc721_inventory_match" | "asset_balance";
   accepted_providers?: Array<"self" | "zkpassport" | "very" | "passport"> | null;
   required_value?: string | null;
@@ -3640,6 +3642,8 @@ type GateTraceNode = {
   kind: "op" | "gate";
   op?: "and" | "or";
   gate_type?: string;
+  gate_id?: string | null;
+  outcome?: "passed" | "action_required" | "terminal_mismatch" | "provider_unavailable" | null;
   provider?: string;
   passed: boolean;
   reason?: string;
@@ -3978,6 +3982,7 @@ type ReplyQuotaRule = {
 };
 
 type RequiredActionNode = {
+  gate_id?: string | null;
   kind: "action" | "set";
   mode?: "all" | "any";
   items?: Array<Record<string, unknown>>;
