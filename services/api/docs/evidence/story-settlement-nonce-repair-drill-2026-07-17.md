@@ -61,11 +61,10 @@ open.
 
 ## Safe path to complete M4
 
-The executable path is a **purpose-built staging drill harness**. It targets one exact
-`community_id:quote_id` in a throwaway staging community, drives that purchase through the normal
-admission path, reserves a real signer nonce, and intentionally terminates before signing. It
-exposes no arbitrary transaction or storage mutation capability. The target must be structurally
-ignored outside staging and removed after the drill.
+The executable path is a **purpose-built staging drill harness**. A repair-scoped operator action
+arms one throwaway staging community exactly once. Normal admission atomically consumes that arm,
+reserves a real signer nonce, and intentionally terminates before signing. It exposes no arbitrary
+transaction or storage mutation capability and is structurally unavailable outside staging.
 
 The harness itself needs state-machine tests, fault injection, exclusive-signer/nonce fencing,
 admission-disabled enforcement, and an explicit maximum gas budget.
