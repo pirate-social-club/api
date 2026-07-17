@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
-import { selectRotatingCommunityBatch } from "./settlement-service"
+import {
+  listPurchaseSettlementReconciliationCommunities,
+  selectRotatingCommunityBatch,
+} from "./settlement-service"
 
 describe("purchase settlement reconciliation community batching", () => {
   test("keeps the per-run bound while covering communities beyond the oldest 100", () => {
@@ -17,5 +20,18 @@ describe("purchase settlement reconciliation community batching", () => {
   test("returns every community when the fleet fits in one batch", () => {
     const communities = ["community_1", "community_2"]
     expect(selectRotatingCommunityBatch(communities, 100, Date.now())).toEqual(communities)
+  })
+
+  test("enumerates authoritative ready routes without consulting active community lifecycle", async () => {
+    let routedCalls = 0
+    const communities = await listPurchaseSettlementReconciliationCommunities({
+      listSettlementEligibleCommunities: async () => {
+        routedCalls += 1
+        return [{ community_id: "canary_inactive", created_at: "2026-07-17T00:00:00.000Z" }]
+      },
+    }, 100, 0)
+
+    expect(routedCalls).toBe(1)
+    expect(communities.map((community) => community.community_id)).toEqual(["canary_inactive"])
   })
 })
