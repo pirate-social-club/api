@@ -37,6 +37,7 @@ import {
   resolveStoryCoordinatorDirectSigner,
   resolveStorySettlementDirectSigner,
 } from "../../story/story-direct-signer"
+import { isStorySettlementCoordinatorAdmissionEnabled } from "../../story/story-settlement-admission"
 import {
   resolvePirateCheckoutOperatorAddress,
 } from "./checkout-config"
@@ -443,10 +444,9 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       if (route.fundingMode !== "routed") {
         throw eligibilityFailed("Story royalty commerce requires routed buyer funding")
       }
-      const coordinatorAdmissionEnabled = String(
-        input.env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED || "",
-      ).trim().toLowerCase() === "true"
-      const settlementSigner = coordinatorAdmissionEnabled
+      // Eligibility must check whichever signer will actually settle this
+      // community's purchase, so it stays scoped exactly like admission.
+      const settlementSigner = isStorySettlementCoordinatorAdmissionEnabled(input.env, input.communityId)
         ? resolveStoryCoordinatorDirectSigner(input.env)
         : resolveStorySettlementDirectSigner(input.env)
       if (!settlementSigner.ok) {

@@ -59,6 +59,7 @@ function env(admissionEnabled: boolean): Env {
   return {
     STORY_CHAIN_ID: "1315",
     STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED: admissionEnabled ? "true" : "false",
+    STORY_SETTLEMENT_COORDINATOR_ADMISSION_COMMUNITY_IDS: "community_1",
     STORY_SETTLEMENT_FEE_POLICY_VERSION: "aeneid-fees-v1",
     STORY_SETTLEMENT_FINALITY_POLICY_VERSION: "aeneid-finality-v1",
     STORY_COORDINATOR_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
@@ -111,5 +112,24 @@ describe("Story settlement coordinator admission fence", () => {
     expect(retry.kind).toBe("pending")
     const effects = await client.execute("SELECT status, coordinator_plan_ref FROM purchase_settlement_effects")
     expect(effects.rows.every((row) => row.status === "submitted" && Boolean(row.coordinator_plan_ref))).toBe(true)
+  })
+
+  test("an enabled flag does not admit a community outside the allowlist", async () => {
+    const client = await database()
+    const result = await coordinateStorySettlement({
+      env: env(true),
+      client,
+      communityId: "community_2",
+      quoteId: "quote_1",
+      purchaseId: "purchase_1",
+      asset: asset(),
+      buyerAddress: "0x0000000000000000000000000000000000000022",
+      purchaseRef: `0x${"66".repeat(32)}`,
+      amount: 100n,
+      now: "2026-07-16T12:00:00.000Z",
+    })
+    expect(result.kind).toBe("not_coordinator_owned")
+    const effects = await client.execute("SELECT coordinator_plan_ref FROM purchase_settlement_effects")
+    expect(effects.rows).toHaveLength(0)
   })
 })
