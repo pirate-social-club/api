@@ -28,6 +28,14 @@ export type AssetBalanceEvaluation = {
   passed: boolean
   unavailable: boolean
   currentAmountAtomic: string | null
+  /**
+   * How many attached wallets were actually read.
+   *
+   * A zero current amount is produced both by observing wallets that hold
+   * nothing and by having no wallet to observe at all, yet those need opposite
+   * remedies. Report the observation so callers never have to infer it.
+   */
+  evaluatedWalletCount: number
 }
 
 export async function evaluateAttachedWalletAssetBalance(input: {
@@ -37,20 +45,22 @@ export async function evaluateAttachedWalletAssetBalance(input: {
   walletAttachments: WalletAttachmentSummary[]
 }): Promise<AssetBalanceEvaluation> {
   const asset = resolveAssetBalanceDescriptor(input.assetId)
-  if (!asset) return { passed: false, unavailable: true, currentAmountAtomic: null }
+  if (!asset) return { passed: false, unavailable: true, currentAmountAtomic: null, evaluatedWalletCount: 0 }
 
   const addresses = listAttachedEvmWalletAddresses(input.walletAttachments)
   const required = BigInt(input.minAmountAtomic)
   let current = 0n
   let unavailable = false
+  let evaluatedWalletCount = 0
 
   for (const address of addresses) {
     try {
       const balance = await readBalance(input.env, asset.assetId, asset.chainNamespace, asset.contractAddress, address)
       if (balance < 0n) throw new Error("negative asset balance")
       current += balance
+      evaluatedWalletCount += 1
       if (current >= required) {
-        return { passed: true, unavailable: false, currentAmountAtomic: current.toString() }
+        return { passed: true, unavailable: false, currentAmountAtomic: current.toString(), evaluatedWalletCount }
       }
     } catch (error) {
       unavailable = true
@@ -62,8 +72,8 @@ export async function evaluateAttachedWalletAssetBalance(input: {
   }
 
   return unavailable
-    ? { passed: false, unavailable: true, currentAmountAtomic: null }
-    : { passed: false, unavailable: false, currentAmountAtomic: current.toString() }
+    ? { passed: false, unavailable: true, currentAmountAtomic: null, evaluatedWalletCount }
+    : { passed: false, unavailable: false, currentAmountAtomic: current.toString(), evaluatedWalletCount }
 }
 
 async function readBalance(
