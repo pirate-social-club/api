@@ -7,7 +7,7 @@ import type { Client } from "../../sql-client"
 import type { DbExecutor } from "../../db-helpers"
 import type {
   CommunityDatabaseBindingRepository,
-  CommunityReadRepository,
+  CommunityRepository,
 } from "../db-community-repository"
 import { derivePurchaseRef } from "../../story/story-identifiers"
 import {
@@ -116,7 +116,8 @@ import type {
 } from "../../../types"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
-type CommunitySettlementRepository = CommunityDatabaseBindingRepository & Pick<CommunityReadRepository, "listActiveCommunities">
+type CommunitySettlementRepository = CommunityDatabaseBindingRepository
+  & Pick<CommunityRepository, "listSettlementEligibleCommunities">
 
 type RoyaltyEarningEventForNotification = {
   recipientUserId: string
@@ -729,8 +730,8 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
     stalledCommunityIds: [],
   }
 
-  const communities = selectRotatingCommunityBatch(
-    await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
+  const communities = await listPurchaseSettlementReconciliationCommunities(
+    input.communityRepository,
     maxCommunities,
     Date.now(),
   )
@@ -820,6 +821,15 @@ export function selectRotatingCommunityBatch<T>(items: T[], maxItems: number, no
   const epochMinute = Math.floor(nowMs / 60_000)
   const start = (epochMinute * maxItems) % items.length
   return Array.from({ length: maxItems }, (_, offset) => items[(start + offset) % items.length]!)
+}
+
+export async function listPurchaseSettlementReconciliationCommunities(
+  repository: Pick<CommunityRepository, "listSettlementEligibleCommunities">,
+  maxCommunities: number,
+  nowMs: number,
+): Promise<Array<{ community_id: string; created_at: string }>> {
+  const routedCommunities = await repository.listSettlementEligibleCommunities()
+  return selectRotatingCommunityBatch(routedCommunities, maxCommunities, nowMs)
 }
 
 async function settleCommunityPurchaseForBuyer(input: {
