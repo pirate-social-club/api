@@ -62,6 +62,22 @@ const COLUMNS = `
   consumer_rail, consumer_id, quote_id
 `
 
+export async function listFundingReceiptsForRefundReview(input: {
+  client: Client
+  limit: number
+}): Promise<ObservedFundingReceipt[]> {
+  const requestedLimit = Number.isFinite(input.limit) ? Math.trunc(input.limit) : 50
+  const limit = Math.min(100, Math.max(1, requestedLimit))
+  const result = await input.client.execute({
+    sql: `SELECT ${COLUMNS} FROM observed_funding_receipts
+          WHERE match_status = 'refund_review'
+          ORDER BY updated_at ASC, observed_funding_receipt_id ASC
+          LIMIT ?1`,
+    args: [limit],
+  })
+  return result.rows.map(decode)
+}
+
 export async function observeFundingReceipt(input: {
   client: Client
   chainId: number

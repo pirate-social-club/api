@@ -7,6 +7,8 @@ import { buildOpsAlerts, dedupeOpsAlerts, markOpsAlertsSent } from "./emit"
 import { sendOpsAlerts } from "./sink"
 import { collectCommunityPublishAlertSignals } from "./signals"
 import type { CommunityPublishAlertSignals } from "./types"
+import { getControlPlaneClient } from "../runtime-deps"
+import { listFundingReceiptsForRefundReview } from "../communities/commerce/observed-funding-receipts"
 
 const DEFAULT_MAX_COMMUNITIES = 100
 const DEFAULT_LOOKBACK_MS = 15 * 60 * 1000
@@ -85,6 +87,29 @@ export async function runOpsAlerts(input: {
   }
 
   const alerts = buildOpsAlerts(signals)
+  const controlPlane = getControlPlaneClient(env)
+  try {
+    const refundReviews = await listFundingReceiptsForRefundReview({ client: controlPlane, limit: 100 })
+    if (refundReviews.length > 0) {
+      alerts.push({
+        key: "funding_receipt_refund_review",
+        severity: "high",
+        title: "Orphaned claimed funding receipts require refund review",
+        count: refundReviews.length,
+        community_ids: [],
+        details: {
+          truncated: refundReviews.length === 100,
+          consumer_rails: [...new Set(refundReviews.map((receipt) => receipt.consumerRail).filter(Boolean))].sort(),
+        },
+      })
+    }
+  } catch (error) {
+    logPipelineError("[ops-alerts] failed to collect funding refund reviews", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  } finally {
+    controlPlane.close?.()
+  }
   if (alerts.length === 0) return
 
   const bucketMs = intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)

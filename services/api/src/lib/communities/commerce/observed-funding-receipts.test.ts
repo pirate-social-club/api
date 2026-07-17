@@ -4,6 +4,7 @@ import type { Client, QueryResult } from "../../sql-client"
 import {
   claimCanonicalFundingReceipt,
   claimObservedFundingReceipt,
+  listFundingReceiptsForRefundReview,
   observeFundingReceipt,
   setObservedFundingReceiptFinality,
 } from "./observed-funding-receipts"
@@ -53,6 +54,24 @@ function clientReturning(...results: QueryResult[]): Client {
 }
 
 describe("observed funding receipts", () => {
+  test("lists only actionable refund reviews oldest first with a bounded limit", async () => {
+    const client = clientReturning({ rows: [row({
+      finality_status: "orphaned",
+      match_status: "refund_review",
+      consumer_rail: "global_handle",
+      consumer_id: "ghq_1",
+      quote_id: "ghq_1",
+    })] })
+
+    await expect(listFundingReceiptsForRefundReview({ client, limit: 500 })).resolves.toEqual([
+      expect.objectContaining({ matchStatus: "refund_review", consumerRail: "global_handle" }),
+    ])
+    const query = (client.execute as ReturnType<typeof mock>).mock.calls[0]?.[0] as { sql: string; args: unknown[] }
+    expect(query.sql).toContain("WHERE match_status = 'refund_review'")
+    expect(query.sql).toContain("ORDER BY updated_at ASC")
+    expect(query.args).toEqual([100])
+  })
+
   test("normalizes and replays the same observation-shaped event", async () => {
     const client = clientReturning({ rows: [], rowsAffected: 1 }, { rows: [row()] })
 

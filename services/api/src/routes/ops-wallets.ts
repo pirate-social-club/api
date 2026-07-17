@@ -5,8 +5,25 @@ import { getRuntimeWalletFundingStatuses } from "../lib/ops-alerts/runtime-walle
 import { getStoryRuntimeSignerBalances } from "../lib/story/story-runtime-funding"
 import { resolveEnforcedFloorWei, resolveStorySignerExplorerUrl } from "../lib/story/story-runtime-funding-watchdog"
 import { resolveStoryChainId } from "../lib/story/story-runtime-config"
+import { getControlPlaneClient } from "../lib/runtime-deps"
+import { listFundingReceiptsForRefundReview } from "../lib/communities/commerce/observed-funding-receipts"
 
 const opsWallets = new Hono<AuthenticatedEnv>()
+
+opsWallets.get("/funding-refund-reviews", async (c) => {
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const requestedLimit = Number.parseInt(c.req.query("limit") ?? "50", 10)
+  const client = getControlPlaneClient(c.env)
+  try {
+    const items = await listFundingReceiptsForRefundReview({
+      client,
+      limit: Number.isFinite(requestedLimit) ? requestedLimit : 50,
+    })
+    return c.json({ items })
+  } finally {
+    client.close?.()
+  }
+})
 
 function requireOpsAdmin(c: Context<AuthenticatedEnv>) {
   return authenticateAdminTokenOnly({
