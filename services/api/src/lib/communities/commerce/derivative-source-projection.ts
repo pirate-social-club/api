@@ -126,6 +126,7 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
     "story_ip_id != ''",
     "story_license_terms_id IS NOT NULL",
     "story_license_terms_id != ''",
+    "commercial_rev_share_pct > 0",
   ]
   const args: Array<string | number> = []
   let nextArg = 1
