@@ -37,6 +37,16 @@ describe("reward campaign config", () => {
     })
   })
 
+  test("parses an optional post creation allowlist", () => {
+    const unrestricted = resolveRewardCampaignConfig(configuredEnv())
+    expect(unrestricted.postAllowlist).toBeNull()
+
+    const restricted = resolveRewardCampaignConfig(configuredEnv({
+      REWARDS_CAMPAIGN_POST_ALLOWLIST: " post_pst_allowed ,post_pst_second,post_pst_allowed ",
+    }))
+    expect([...restricted.postAllowlist ?? []]).toEqual(["post_pst_allowed", "post_pst_second"])
+  })
+
   test("fails closed when an enabled rail is incomplete or inconsistent", () => {
     for (const env of [
       configuredEnv({ REWARDS_CAMPAIGN_TREASURY_ADDRESS: undefined }),
