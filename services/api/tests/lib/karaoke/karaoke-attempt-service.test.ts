@@ -3,6 +3,7 @@ import { createClient } from "@libsql/client"
 import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
 
 import { karaokeAttemptServiceTestHooks, recordKaraokeAttempt } from "../../../src/lib/karaoke/karaoke-attempt-service"
+import type { InStatement, QueryResult, ReadClient } from "../../../src/lib/sql-client"
 
 async function createKaraokeAttemptSchema(client: ReturnType<typeof createClient>): Promise<void> {
   await client.execute(`
@@ -179,6 +180,46 @@ describe("karaoke attempt leaderboard ranking", () => {
 })
 
 describe("recordKaraokeAttempt streak persistence", () => {
+  test("uses returned rows when a D1 transaction omits rowsAffected", async () => {
+    const client = createClient({ url: ":memory:" })
+    try {
+      await createKaraokeAttemptSchema(client)
+      await createSongStreakSchema(client)
+      const d1TransactionLikeClient: ReadClient = {
+        async execute(statement: InStatement | string): Promise<QueryResult> {
+          const result = await client.execute(statement)
+          const sql = typeof statement === "string" ? statement : statement.sql
+          return sql.includes("INSERT OR IGNORE INTO karaoke_attempt")
+            ? { ...result, rowsAffected: undefined }
+            : result
+        },
+        batch: (statements, mode) => client.batch(statements, mode),
+      }
+
+      const result = await recordKaraokeAttempt({
+        activityDate: "2026-07-17",
+        client: d1TransactionLikeClient,
+        communityId: "cmt_karaoke",
+        completedAt: "2026-07-17T05:10:05.055Z",
+        completionReason: "completed",
+        karaokeRevisionId: "krv_current",
+        postId: "pst_song",
+        scoringModel: "scribe_v2_realtime",
+        scoringProvider: "elevenlabs",
+        sessionId: "session_d1",
+        attemptId: "attempt_d1",
+        summary: passingSummary(),
+        userId: "usr_karaoke",
+      })
+
+      expect(result).toEqual({ inserted: true, rankEligible: true, streakCredited: true })
+      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days")
+      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+    } finally {
+      client.close()
+    }
+  })
+
   test("recomputes a bridged streak when a delayed passing karaoke attempt lands", async () => {
     const client = createClient({ url: ":memory:" })
     try {
