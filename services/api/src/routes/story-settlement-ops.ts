@@ -10,6 +10,8 @@ import {
 } from "../lib/operator-credential-auth"
 import type { OperatorActorContext } from "../lib/operator-credential-auth"
 import { captureScheduledWarning } from "../lib/ops-alerts/scheduled"
+import { getCommunityRepository } from "../lib/communities/db-community-repository"
+import { reconcileCommunityPurchaseSettlement } from "../lib/communities/commerce/settlement-service"
 import { resolveStoryCoordinatorDirectSigner } from "../lib/story/story-direct-signer"
 import { resolveStoryChainId } from "../lib/story/story-runtime-config"
 import { storySettlementCoordinatorName } from "../lib/story/story-settlement-wallet-coordinator-do"
@@ -23,13 +25,16 @@ type OperatorAuthenticator = (input: { env: Env; authorization: string | undefin
 type AlertCapture = typeof captureScheduledWarning
 let testAuthenticator: OperatorAuthenticator | null = null
 let testAlertCapture: AlertCapture | null = null
+let testPurchaseReconciler: typeof reconcileCommunityPurchaseSettlement | null = null
 
 export function setStorySettlementOpsDependenciesForTests(input: {
   authenticate?: OperatorAuthenticator | null
   captureAlert?: AlertCapture | null
+  reconcilePurchase?: typeof reconcileCommunityPurchaseSettlement | null
 }): void {
   testAuthenticator = input.authenticate ?? null
   testAlertCapture = input.captureAlert ?? null
+  testPurchaseReconciler = input.reconcilePurchase ?? null
 }
 
 function bytes32(name: string, value: unknown): Hex {
@@ -87,6 +92,34 @@ storySettlementOps.post("/nonce-repairs", async (c) => {
     planRef: plan.planRef,
   }))
   return c.json({ plan }, 202)
+})
+
+storySettlementOps.post("/purchase-reconciliations", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const quoteId = reference(body.quote_id)
+  const authorizationRef = reference(body.authorization_ref)
+  const communityRepository = testPurchaseReconciler
+    ? {} as Parameters<typeof reconcileCommunityPurchaseSettlement>[0]["communityRepository"]
+    : getCommunityRepository(c.env)
+  const outcome = await (testPurchaseReconciler ?? reconcileCommunityPurchaseSettlement)({
+    env: c.env,
+    communityRepository,
+    communityId,
+    quoteId,
+  })
+  console.info(JSON.stringify({
+    message: "story purchase settlement reconciliation requested",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    quoteId,
+    outcome,
+  }))
+  return c.json({ outcome }, outcome === "finalized" ? 200 : 202)
 })
 
 storySettlementOps.post("/alerts/synthetic", async (c) => {

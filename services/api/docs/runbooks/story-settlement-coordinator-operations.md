@@ -57,6 +57,33 @@ step. A rights hold alone freezes admission and is not proof of abandonment.
 7. Confirm the repair reaches `confirmed`, the abandoned step becomes
    `replaced`, nonce allocation resumes, and no unrelated plan changed.
 
+## Targeted purchase reconciliation
+
+Use this when a purchase already has a coordinator plan reference but its shard
+mirror or local delivery has not advanced, especially for a test or quarantined
+community that is deliberately absent from active-community cron enumeration.
+
+1. Confirm new admission is disabled and record the community, quote, purchase,
+   plan, funding receipt, coordinator version, and every known transaction hash.
+2. Prove the buyer funding effect is confirmed exactly once and that the request
+   will target the original quote. Never create a new quote or funding transfer.
+3. With the dedicated `story:settlement:repair` operator credential, POST:
+
+   ```json
+   {
+     "community_id": "cmt_...",
+     "quote_id": "qte_...",
+     "authorization_ref": "INC-..."
+   }
+   ```
+
+   to `/operator/story-settlement/purchase-reconciliations`.
+4. A `202` means the existing coordinator plan remains pending; repeat only the
+   same scoped action after its alarm/reconciliation delay. A `200` means the
+   plan was confirmed and local purchase delivery finalized.
+5. Verify the coordinator reused the existing plan, nonce space, signed bytes,
+   and funding receipt. Confirm no legacy Story broadcast path ran.
+
 ## Manual fee replacement
 
 V1 does not create automatic replacements. Use this only for a journaled
