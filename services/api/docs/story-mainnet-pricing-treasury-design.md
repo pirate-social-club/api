@@ -20,8 +20,9 @@ Before implementation begins, accountable owners must approve two blocking decis
 The first engineering design invariant is:
 
 > Repricing is permitted before coordinator admission only. Admission durably freezes the price
-> observation, effective rate, margin, WIP amount, expiry, and policy version into the immutable
-> settlement plan.
+> observation, effective rate, fresh-rate base WIP payment amount, protected maximum, expiry, and
+> policy version into the immutable settlement plan. Pricing margin never increases the royalty WIP
+> paid by the plan.
 
 If the rate is stale, unavailable, outside the quote's allowed movement, or the treasury cannot
 cover the admitted obligation and reserves, admission fails before any Story transaction is signed.
@@ -67,27 +68,40 @@ These are mainnet merge and admission gates.
 2. **USD is the product unit.** Buyer price, fees, accounting, refunds, and limits remain integer
    USDC micros/cents. IP/WIP is a separately calculated platform obligation.
 3. **One immutable snapshot.** A coordinator plan references exactly one admitted price snapshot.
-   Its WIP amount and policy version cannot change after admission.
+   Its fresh-rate base WIP payment amount and policy version cannot change after admission.
 4. **No stale admission.** An observation older than its policy maximum age cannot admit a plan.
 5. **No silent fallback.** Provider failure, disagreement, unsupported market, or invalid data fails
    closed. Mainnet must never fall back to `$1 = 1 IP`, the last known price beyond its TTL, or an
    operator-entered value without a separately authorized emergency policy.
 6. **No unbounded subsidy.** The platform margin and rate bounds cap normal FX loss. A sale that
    violates the bound is rejected before admission.
-7. **Solvency before signing.** Admission reserves the full immutable wrap amount, capped gas for
+7. **Margin is not royalty principal.** Margin affects the buyer's USD price/protection and the
+   maximum WIP the quote permits at admission. The plan wraps and pays only the fresh admission-rate
+   `base_wip_atomic`. It never wraps or pays `quote.max_wip_atomic`. Margin therefore cannot
+   overpay royalty recipients or manufacture routine surplus WIP.
+8. **Buyer finality precedes IP spend.** No native IP is wrapped, approved, or otherwise committed
+   until the globally claimed Base-mainnet USDC receipt reaches the approved finality policy and its
+   receipt block remains canonical. An inclusion-level receipt is insufficient.
+9. **Solvency before signing.** Admission reserves the full immutable wrap amount, capped gas for
    every step, and configured safety buffer. Existing unreserved WIP may be counted only under a
    reviewed committed-obligation model; v1 should retain unconditional native-IP wrap semantics.
-8. **Reservations are global.** Coverage is computed across all communities sharing the mainnet
+10. **Reservations are global.** Coverage is computed across all communities sharing the mainnet
    coordinator signer, not per shard.
-9. **Buyer funding is globally unique.** Every USDC rail must claim its canonical receipt before
+11. **Buyer funding is globally unique.** Every USDC rail must claim its canonical receipt before
    real-money launch.
-10. **Money moved without delivery pages.** Any failed/reverted plan, replacement, nonce gap,
+12. **Refunds are journaled value movement.** A platform-to-buyer USDC refund uses a dedicated
+    persist-before-broadcast executor keyed by the canonical funding-receipt identity. It cannot be
+    implemented as an ordinary retryable SDK/wallet call.
+13. **Money moved without delivery pages.** Any failed/reverted plan, replacement, nonce gap,
     insolvency, stale price feed, or confirmed payment lacking delivery creates durable alert
     evidence.
-11. **Recovery is executable.** Mainnet admission remains disabled until nonce repair and audited
+14. **Recovery is executable.** Mainnet admission remains disabled until nonce repair and audited
     same-nonce fee replacement can be invoked through scoped, logged operator actions on staging.
-12. **No mutable catalog identity.** Mainnet assets, lineage, license terms, vaults, allocations,
+15. **No mutable catalog identity.** Mainnet assets, lineage, license terms, vaults, allocations,
     and source-chain provenance are durably mapped; Aeneid IDs are never relabeled as mainnet IDs.
+16. **Required screening precedes admission.** If Gate M0 requires sanctions or other identity
+    screening, the approved result and policy version are an admission preflight. Post-settlement
+    reporting cannot substitute for a required preflight.
 
 ## Quote-to-admission lifecycle
 
@@ -117,8 +131,8 @@ The buyer quote stores:
 - USD price and exact USDC atomic amount;
 - `rate_snapshot_id` and observed IP/USD rate;
 - margin and reserve policy versions;
-- effective protected rate after margin;
-- quoted WIP amount;
+- effective protected rate after margin, used only to derive the admission ceiling;
+- quoted maximum WIP amount;
 - maximum permitted rate movement at admission;
 - quote creation and hard expiry times;
 - checkout chain, canonical USDC token, recipient, and buyer wallet.
@@ -130,37 +144,87 @@ not need to expose sensitive balances, but the persisted quote must remain audit
 
 Buyer funding is verified and globally claimed using chain, token, transaction hash, log index,
 sender, recipient, amount, quote identity, consumer rail, and finality evidence. Receipt claiming is
-not an FX lock. A confirmed USDC payment does not authorize settlement when the quote or rate policy
-has expired.
+not an FX lock. The claim may be recorded while finality is pending, but coordinator admission and
+all IP spending remain prohibited until the receipt reaches the approved Base-mainnet finality rule
+and its block hash is canonical. A confirmed USDC payment does not authorize settlement when the
+quote or rate policy has expired.
 
 Product policy must decide the buyer outcome when funding arrives too late or admission rejects for
-rate/solvency reasons. The only acceptable v1 choices are an automated, journaled USDC refund or an
-explicit `refund_review` workflow with paging and bounded SLA. Silently retaining funds or asking
-the buyer to pay again is prohibited.
+rate/solvency reasons. The only acceptable v1 choices are a refund executed by the dedicated durable
+refund coordinator defined below or an explicit `refund_review` workflow with paging and bounded
+SLA. Silently retaining funds or asking the buyer to pay again is prohibited.
 
 ### Phase 4: admission revalidation
 
 Immediately before coordinator admission:
 
 1. verify the quote and funding claim are canonical and unconsumed by another rail;
-2. verify quote and original rate snapshot have not expired;
-3. obtain a fresh observation under the same approved policy;
-4. compare the fresh rate with the quote's protected rate and max-slippage rule;
-5. compute the final immutable WIP amount using the approved rounding and margin policy;
-6. reject if the WIP amount exceeds the quote's protected maximum;
-7. atomically reserve native IP, capped gas, and operational buffer against global obligations;
-8. persist the admitted price snapshot and reservation;
-9. derive the settlement request fingerprint and coordinator call identities from that snapshot;
-10. admit exactly once.
+2. prove the funding receipt has reached approved Base-mainnet finality and remains canonical;
+3. run every screening preflight required by Gate M0 and persist its policy/result reference;
+4. verify quote and original rate snapshot have not expired;
+5. obtain a fresh observation under the same approved policy;
+6. compute the fresh admission-rate `base_wip_atomic` using round-up semantics;
+7. compare that amount with the quote's protected maximum and max-slippage rule;
+8. reject if `base_wip_atomic` exceeds `quote.max_wip_atomic`;
+9. atomically reserve exactly `base_wip_atomic`, capped gas, and operational buffer against global
+   obligations;
+10. persist the admitted price snapshot and reservation;
+11. derive the settlement request fingerprint and coordinator call identities from that snapshot;
+12. admit exactly once.
 
 The buyer is never charged additional USDC after funding. If the protected quote cannot admit, the
 system follows the approved refund policy.
 
 ### Phase 5: immutable settlement
 
-After admission, the coordinator executes the exact frozen WIP amount. It does not query a price
-provider, revise margin, consume a newer snapshot, or resize calls during reconciliation. Eviction,
-RPC outage, delayed finality, fee replacement, and exact-byte replay preserve the admitted amount.
+After admission, the coordinator wraps and pays exactly the frozen fresh-rate `base_wip_atomic`. It
+does not wrap the quote's protected maximum, query a price provider, revise margin, consume a newer
+snapshot, or resize calls during reconciliation. Eviction, RPC outage, delayed finality, fee
+replacement, and exact-byte replay preserve the admitted amount.
+
+## Durable USDC refund coordinator
+
+A refund is a new value-moving rail, not a database status update. It has the same ambiguous-send,
+crash, nonce, replacement, and double-payment risks as royalty settlement. Mainnet launch therefore
+requires a dedicated wallet-scoped Base refund coordinator or an equivalently reviewed executor.
+
+The refund identity is derived from:
+
+- canonical funding-receipt identity `(chain, token, tx_hash, log_index)`;
+- funding claim/consumer identity and buyer wallet;
+- original received USDC amount;
+- refund reason and refund-policy version;
+- refund generation, where any later generation requires explicit operator authorization.
+
+Its merge-blocking invariants are:
+
+1. One canonical funding receipt can have at most one active/successful refund generation.
+2. Refund eligibility and exact amount are persisted before nonce allocation or signing.
+3. Exact signed bytes, nonce, transaction hash, token, recipient, and amount are committed before
+   broadcast.
+4. Ambiguous broadcast is reconciled from transaction, receipt, and nonce evidence; it never creates
+   a fresh transfer.
+5. Recovery re-broadcasts only identical signed bytes unless an audited same-nonce fee-replacement
+   state machine records every candidate hash.
+6. Buyer, token, and amount cannot be operator-edited after preparation.
+7. A refund reaches `confirmed` only after approved Base-mainnet finality and canonical block-hash
+   verification.
+8. Purchase/refund-review state is finalized from confirmed coordinator evidence, not the HTTP
+   response to broadcast.
+9. Refund failure, replacement, age, or money-moved-without-local-finalization pages through the
+   durable alert sink.
+
+The refund journal stores plan/step identity, funding receipt reference, signer, nonce, immutable
+ERC-20 transfer call, signed bytes, hashes, receipt/block identity, finality, attempts, and bounded
+failure codes. Business records mirror bounded evidence and omit signed bytes. The refund signer
+must have exclusive nonce ownership; sharing it with an uncoordinated checkout or treasury script is
+prohibited.
+
+Required refund tests include crash injection before/after persist, sign, broadcast, receipt, and
+local finalization; concurrent refund requests for one receipt; replay across communities/rails;
+absent hash with used/unused nonce; reverted transfer; reorg before finality; recipient/amount
+conflict; and confirmed chain refund with missing local state. An operator cannot improvise a manual
+USDC send and then mark the journal complete.
 
 ## Rate-source decision
 
@@ -238,19 +302,30 @@ The policy is versioned and immutable for every quote and plan. It includes:
 - minimum USD floor price;
 - rounding mode and fixed-point scale;
 - provider-deviation circuit breaker;
+- USDC-to-IP acquisition venue, fees, spread, slippage, bridging/transfer costs, and treasury
+  replenishment cadence;
 - emergency-disable behavior.
 
 Illustrative formulas, not approved values:
 
 ```text
-base_wip_atomic = ceil(usd_micros * 10^18 / usd_micros_per_ip)
-protected_wip_atomic = ceil(base_wip_atomic * (10_000 + margin_bps) / 10_000)
-admit only when protected_wip_atomic <= quote.max_wip_atomic
+quote_base_wip_atomic = ceil(usd_micros * 10^18 / quoted_usd_micros_per_ip)
+quote.max_wip_atomic = ceil(quote_base_wip_atomic * (10_000 + protection_bps) / 10_000)
+admission_base_wip_atomic = ceil(usd_micros * 10^18 / fresh_usd_micros_per_ip)
+admit only when admission_base_wip_atomic <= quote.max_wip_atomic
+plan.wrap_and_pay = admission_base_wip_atomic
 ```
 
-Margin is not a substitute for a slippage cap or treasury reserve. It absorbs expected movement and
-operational costs; the cap rejects abnormal movement. Policy values require replay against observed
-mainnet price history and expected purchase sizes before approval.
+`quote.max_wip_atomic` is a rejection ceiling, not royalty principal and not a wrap amount. The plan
+never pays the difference between the ceiling and the fresh base amount.
+
+Pricing margin is not a substitute for a slippage cap or treasury reserve. It must cover both the
+quote-to-admission FX window and the platform's actual USDC-to-IP treasury-replenishment round trip:
+venue fees, bid/ask spread, price impact, transfer/bridge costs where applicable, gas, failed or
+partial acquisition overhead, and the delay between collecting USDC and replenishing IP. The cap
+rejects abnormal movement; margin prices expected costs. Policy values require replay against
+observed mainnet price/liquidity history, executable acquisition sizes, and replenishment cadence
+before approval.
 
 ## Durable data model
 
@@ -264,14 +339,14 @@ provider payloads.
 
 ### Quote pricing snapshot
 
-Store USD/USDC amount, observation reference, effective rate, margin, slippage cap, maximum WIP,
-expiry, policy version, and deterministic fingerprint.
+Store USD/USDC amount, observation reference, effective rate, replenishment-cost margin,
+protection/slippage cap, maximum WIP ceiling, expiry, policy version, and deterministic fingerprint.
 
 ### Admission snapshot
 
-Store the quote fingerprint, fresh observation, computed WIP amount, movement calculation,
-reservation identity, treasury-policy version, admitted timestamp, and coordinator plan reference.
-The admission snapshot is append-only after it is linked to a plan.
+Store the quote fingerprint, fresh observation, computed `base_wip_atomic`, quoted maximum WIP
+ceiling, movement calculation, reservation identity, treasury-policy version, admitted timestamp,
+and coordinator plan reference. The admission snapshot is append-only after it is linked to a plan.
 
 ### Treasury reservations
 
@@ -324,6 +399,8 @@ alone are not authoritative; reservations bridge the time between admission and 
 ### Replenishment and withdrawal
 
 - Funding uses a documented treasury source and dual-reviewed transfer procedure.
+- Replenishment records the USDC spent, IP acquired, venue/route, fees, spread/impact, transaction
+  evidence, and realized effective rate so Gate M3 assumptions can be reconciled against reality.
 - Low-balance alerts fire before admission capacity reaches zero.
 - Admission fails closed at the hard reserve floor.
 - Withdrawals require zero impact on reserved obligations and refund liabilities.
@@ -376,6 +453,14 @@ This requires a resumable migration journal with:
 
 Derivatives whose parent is excluded cannot be silently flattened or registered with different
 lineage. They remain ineligible or require a separately approved rights decision.
+
+Before scheduling any parent registration, the migration must resolve whether the canonical parent
+already exists on Story mainnet and who controls it. A parent already registered and owned by a
+third party is referenced through its existing mainnet IP ID and compatible license terms; Pirate
+must not re-register, clone, or claim ownership of it. Incompatible/missing terms, ambiguous
+identity, or inability to prove the relationship blocks the derivative for rights review. The
+migration journal records the external parent reference and verification evidence without treating
+the parent as a Pirate-owned migration result.
 
 ### Decision record
 
@@ -454,13 +539,18 @@ Before engineering implementation beyond read-only spikes, accountable owners ap
 This document records engineering controls, not legal advice. An unresolved owner or control is a
 `no-go`, not an engineering assumption.
 
+If the approved M0 policy requires sanctions or identity screening, it must specify subjects,
+provider/evidence, freshness, re-screening triggers, false-positive/manual-review behavior, and
+policy version. Required screening runs before coordinator admission and before any refund to a
+changed destination. A post-hoc report cannot cure IP already spent for an ineligible transaction.
+
 ## Rollout sequence
 
 1. Approve the business go/no-go and catalog-scope decision records.
 2. Run the read-only mainnet rate-source/liquidity evidence spike.
 3. Approve the FX, slippage, margin, refund, and treasury policy versions.
-4. Build the additive observation, quote-snapshot, admission-snapshot, and reservation ledgers with
-   pricing/admission disabled.
+4. Build the additive observation, quote-snapshot, admission-snapshot, reservation, and refund
+   coordinator ledgers with pricing/admission disabled.
 5. Staging-test the existing abandoned-nonce repair action and build plus staging-test audited fee
    replacement.
 6. Close cross-rail funding replay and remove/fix `executeSongPurchase`.
@@ -485,6 +575,7 @@ Verify:
 
 - fresh rate observation and protected quote;
 - globally claimed buyer funding receipt;
+- finalized and canonical Base-mainnet funding receipt before any IP wrap;
 - immutable admission snapshot and treasury reservation;
 - wrap, approval, royalty payment, every parent transfer, and entitlement mint;
 - finality and canonical block evidence;
@@ -529,6 +620,10 @@ reconciliation.
 - retry never sends or claims a second buyer payment;
 - late funding and admission rejection enter the approved refund path;
 - reorged funding freezes admission/delivery and pages.
+- no IP transaction is prepared before buyer-funding finality;
+- refund persist-before-broadcast, exact replay, nonce fencing, and finality;
+- concurrent refund requests for one receipt yield one transfer;
+- confirmed refund with missing local finalization self-heals without another transfer.
 
 ### Catalog
 
@@ -550,8 +645,8 @@ reconciliation.
 1. **Gate M0 — business go/no-go:** unresolved.
 2. **Gate M1 — catalog scope:** unresolved; choose mainnet-forward-only or journaled migration.
 3. **Gate M2 — rate source:** unresolved; requires mainnet liquidity/freshness evidence.
-4. **Gate M3 — economics:** unresolved; approve quote TTL, slippage, margin, floor, exposure, and
-   refund policy from measured evidence.
+4. **Gate M3 — economics:** unresolved; approve quote TTL, slippage, floor, exposure, refund policy,
+   and margin covering both FX drift and the measured USDC-to-IP replenishment round trip.
 5. **Gate M4 — recovery tools:** open; the nonce-repair route exists but needs a staging-chain drill,
    while same-nonce replacement still requires an executable action and staging proof.
 6. **Gate M5 — adjacent rails:** open; global cross-rail claim and retry-safe/deleted helper.
