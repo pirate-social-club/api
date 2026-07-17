@@ -12515,6 +12515,7 @@ const spec = {
               "erc721_inventory_match_required",
               "token_inventory_unavailable",
               "wallet_score_too_low",
+              "asset_balance_too_low",
               "unsupported",
               "banned"
             ],
@@ -16515,6 +16516,7 @@ const spec = {
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
+          "chain_id",
           "ends_at"
         ],
         "properties": {
@@ -16529,6 +16531,10 @@ const spec = {
           "daily_reward_cents": {
             "type": "integer",
             "minimum": 1
+          },
+          "chain_id": {
+            "type": "integer",
+            "minimum": 0
           },
           "ends_at": {
             "type": "integer",
@@ -19127,6 +19133,16 @@ const spec = {
             "type": "string",
             "nullable": true,
             "pattern": "^[1-9][0-9]*$"
+          },
+          "asset_symbol": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset_decimals": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 36
           }
         }
       },

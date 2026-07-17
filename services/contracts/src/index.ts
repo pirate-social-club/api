@@ -2810,6 +2810,7 @@ export type PublicRewardOffer = {
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
+  chain_id: number;
   ends_at: number;
 };
 
