@@ -1,15 +1,52 @@
 import { describe, expect, test } from "bun:test"
-import { readFile, stat } from "node:fs/promises"
+import { readdir, readFile, stat } from "node:fs/promises"
+import { relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const SERVICE_ROOT = fileURLToPath(new URL("..", import.meta.url))
 const REQUIREMENTS_PATH = fileURLToPath(new URL("../community-schema-requirements.json", import.meta.url))
 const MIGRATIONS_ROOT = fileURLToPath(new URL("../test-fixtures/db/community-template/migrations/", import.meta.url))
+const RUNTIME_ROOT = fileURLToPath(new URL("../src/", import.meta.url))
 
 type RequirementsManifest = {
   unconditional: string[]
   features: Record<string, { migrations: string[] }>
   deferred: Record<string, unknown>
+}
+
+function deferredSchemaIdentifiers(sql: string): string[] {
+  const identifiers = new Set<string>()
+  const patterns = [
+    /\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`]|\[)?([a-zA-Z_][a-zA-Z0-9_]*)/giu,
+    /\bALTER\s+TABLE\s+(?:["`]|\[)?[a-zA-Z_][a-zA-Z0-9_]*(?:["`]|\])?\s+ADD\s+(?:COLUMN\s+)?(?:["`]|\[)?([a-zA-Z_][a-zA-Z0-9_]*)/giu,
+  ]
+  for (const pattern of patterns) {
+    for (const match of sql.matchAll(pattern)) identifiers.add(match[1]!)
+  }
+  return [...identifiers].sort()
+}
+
+async function runtimeSourceFiles(directory = RUNTIME_ROOT): Promise<string[]> {
+  const files: string[] = []
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (entry.name !== "generated") files.push(...await runtimeSourceFiles(path))
+    } else if (entry.isFile() && /\.tsx?$/u.test(entry.name) && !/\.test\.tsx?$/u.test(entry.name)) {
+      files.push(path)
+    }
+  }
+  return files
+}
+
+function runtimeReferences(
+  identifier: string,
+  sources: Array<{ path: string; source: string }>,
+): string[] {
+  const token = new RegExp(`\\b${identifier}\\b`, "u")
+  return sources
+    .filter(({ source }) => token.test(source))
+    .map(({ path }) => relative(SERVICE_ROOT, path))
 }
 
 describe("community schema requirements manifest", () => {
@@ -32,5 +69,41 @@ describe("community schema requirements manifest", () => {
       const migrationPath = `${MIGRATIONS_ROOT}${migration}`
       expect((await stat(migrationPath)).isFile(), `${migration} is absent beneath ${SERVICE_ROOT}`).toBe(true)
     }
+  })
+
+  test("deferred migrations are not referenced by runtime source", async () => {
+    const manifest = JSON.parse(await readFile(REQUIREMENTS_PATH, "utf8")) as RequirementsManifest
+    const sources = await Promise.all(
+      (await runtimeSourceFiles()).map(async (path) => ({ path, source: await readFile(path, "utf8") })),
+    )
+
+    for (const migration of Object.keys(manifest.deferred)) {
+      const sql = await readFile(`${MIGRATIONS_ROOT}${migration}`, "utf8")
+      const identifiers = deferredSchemaIdentifiers(sql)
+      expect(identifiers.length, `${migration} exposes no mechanically checkable table or added-column identifiers`).toBeGreaterThan(0)
+
+      for (const identifier of identifiers) {
+        const references = runtimeReferences(identifier, sources)
+        expect(
+          references,
+          `${migration} is deferred but runtime source references ${identifier}: ${references.join(", ")}`,
+        ).toEqual([])
+      }
+    }
+  })
+
+  test("extracts new tables and added columns from deferred migration DDL", () => {
+    expect(deferredSchemaIdentifiers(`
+      CREATE TABLE IF NOT EXISTS community_handle_label_reservations (id TEXT PRIMARY KEY);
+      ALTER TABLE namespace_bindings ADD COLUMN namespace_role TEXT;
+    `)).toEqual(["community_handle_label_reservations", "namespace_role"])
+  })
+
+  test("detects the runtime references behind the 1133 and 1136 false deferrals", async () => {
+    const sources = await Promise.all(
+      (await runtimeSourceFiles()).map(async (path) => ({ path, source: await readFile(path, "utf8") })),
+    )
+    expect(runtimeReferences("namespace_role", sources).length).toBeGreaterThan(0)
+    expect(runtimeReferences("community_handle_label_reservations", sources).length).toBeGreaterThan(0)
   })
 })
