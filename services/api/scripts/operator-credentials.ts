@@ -14,6 +14,12 @@ export const ALLOWED_SCOPES = new Set([
   STORY_SETTLEMENT_REPAIR_SCOPE,
 ])
 
+export function normalizeOperatorDatabaseUrl(value: string): string {
+  const url = new URL(value)
+  url.searchParams.delete("sslrootcert")
+  return url.toString()
+}
+
 const BOOKING_CREDENTIAL_ENV_NAME = "PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL"
 const REWARD_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_CAMPAIGN_OPERATOR_CREDENTIAL"
 const STORY_SETTLEMENT_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL"
@@ -271,7 +277,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const sql = new SQL({ url: databaseUrl, max: 1 })
+  const sql = new SQL({ url: normalizeOperatorDatabaseUrl(databaseUrl), max: 1 })
   try {
     if (options.mode === "issue") {
       const created = await issue(sql, options)

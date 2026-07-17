@@ -4,6 +4,7 @@ import {
   ALLOWED_SCOPES,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   credentialEnvNameForScopes,
+  normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
 } from "./operator-credentials"
@@ -39,5 +40,13 @@ describe("operator credential issuance config", () => {
       [BOOKING_SETTLEMENT_RESOLVE_SCOPE, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE],
       "PIRATE_COMBINED_OPERATOR_CREDENTIAL",
     )).toBe("PIRATE_COMBINED_OPERATOR_CREDENTIAL")
+  })
+
+  test("removes Bun-incompatible sslrootcert without changing other connection options", () => {
+    expect(normalizeOperatorDatabaseUrl(
+      "postgresql://operator:secret@example.pg.psdb.cloud/pirate?sslmode=require&sslrootcert=%2Fetc%2Fssl%2Fca.pem&application_name=ops",
+    )).toBe(
+      "postgresql://operator:secret@example.pg.psdb.cloud/pirate?sslmode=require&application_name=ops",
+    )
   })
 })
