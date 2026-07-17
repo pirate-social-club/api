@@ -15,6 +15,7 @@ export type RewardCampaignConfig = {
   maxRewardCents: number
   minDurationSeconds: number
   maxDurationSeconds: number
+  postAllowlist: ReadonlySet<string> | null
 }
 
 const CAMPAIGN_ENV_KEYS = [
@@ -66,6 +67,7 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
       maxRewardCents: 0,
       minDurationSeconds: 0,
       maxDurationSeconds: 0,
+      postAllowlist: null,
     }
   }
 
@@ -86,6 +88,13 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
     maxRewardCents: positiveInteger(env, "REWARDS_CAMPAIGN_MAX_REWARD_CENTS"),
     minDurationSeconds: positiveInteger(env, "REWARDS_CAMPAIGN_MIN_DURATION_SECONDS"),
     maxDurationSeconds: positiveInteger(env, "REWARDS_CAMPAIGN_MAX_DURATION_SECONDS"),
+    postAllowlist: (() => {
+      const values = String(env.REWARDS_CAMPAIGN_POST_ALLOWLIST ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+      return values.length > 0 ? new Set(values) : null
+    })(),
   }
   if (
     ![8453, 84532].includes(config.chainId)

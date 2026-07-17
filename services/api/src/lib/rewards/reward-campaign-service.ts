@@ -386,6 +386,9 @@ export async function createRewardCampaign(input: {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
   const body = validateCreateInput(input.body, config)
+  if (config.postAllowlist && !config.postAllowlist.has(body.post)) {
+    throw eligibilityFailed("Reward campaigns are not enabled for this post")
+  }
   const now = input.now ?? nowIso()
   await advanceRewardCampaignLifecycle({ client: input.client, now })
   const target = await input.resolveTarget(body.community, body.post)

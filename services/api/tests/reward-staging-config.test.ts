@@ -36,11 +36,19 @@ describe("staging reward money-loop configuration", () => {
     })
   })
 
-  test("does not copy staging campaign configuration into production", () => {
+  test("limits the production pilot to Arkansas Blues with earning and payouts dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
-    expect(vars.REWARDS_CAMPAIGNS_ENABLED).toBeUndefined()
-    expect(vars.REWARDS_IDENTITY_PROVIDER).toBeUndefined()
-    expect(vars.REWARDS_CAMPAIGN_CHAIN_ID).toBeUndefined()
+    expect(vars).toMatchObject({
+      REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_READS_ENABLED: "true",
+      REWARDS_ACCRUAL_ENABLED: "false",
+      REWARDS_PAYOUTS_ENABLED: "false",
+      REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
+      REWARDS_IDENTITY_PROVIDER: "very",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      REWARDS_CAMPAIGN_POST_ALLOWLIST: "pst_66644f58a5824bff85de4a723a57aa47",
+    })
     expect(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS).toBeUndefined()
   })
 })
