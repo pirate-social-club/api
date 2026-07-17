@@ -30,14 +30,31 @@ step. A rights hold alone freezes admission and is not proof of abandonment.
 2. Confirm no lower unresolved nonce or existing repair exists. A repair blocks
    all later allocation by design.
 3. Create an incident-scoped authorization reference and bounded reason code.
-4. Invoke the audited action that calls
-   `requestAbandonedNonceRepair({planRef, stepRef, expectedVersion,
-   reasonCode, authorizationRef})`. If that operator action is not deployed,
-   stop; direct RPC/storage improvisation is prohibited.
-5. The coordinator journals and signs a zero-value self-transaction at the
+4. Use an active operator credential whose only scope is
+   `story:settlement:repair`. Issue it with `scripts/operator-credentials.ts`
+   and store it under `PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL`; never
+   print the credential.
+5. POST the reviewed evidence to
+   `/operator/story-settlement/nonce-repairs`:
+
+   ```json
+   {
+     "plan_ref": "0x...",
+     "step_ref": "0x...",
+     "expected_version": 3,
+     "reason_code": "rights_hold",
+     "authorization_ref": "INC-2026-0716"
+   }
+   ```
+
+   The route authenticates the dedicated scope, resolves the exclusive signer
+   domain server-side, prefixes the durable authorization reference with the
+   operator credential ID, and calls `requestAbandonedNonceRepair`. A `202`
+   means the request was journaled, not that the repair is final.
+6. The coordinator journals and signs a zero-value self-transaction at the
    abandoned nonce. Verify its recovered signer, nonce, destination, zero
    value, empty calldata, hash, canonical receipt, and finality.
-6. Confirm the repair reaches `confirmed`, the abandoned step becomes
+7. Confirm the repair reaches `confirmed`, the abandoned step becomes
    `replaced`, nonce allocation resumes, and no unrelated plan changed.
 
 ## Manual fee replacement
@@ -77,8 +94,10 @@ the legacy `MUSIC_PURCHASE_STORY_SETTLEMENT_PRIVATE_KEY` role.
    reconciliation-age monitoring before admission.
 5. Deploy with admission still disabled. Verify the application derives the
    new address, the RPC chain, policy versions, and wallet-scoped DO name.
-6. Run the staging crash-matrix canary. Enable only the single approved staging
-   community after every gate passes.
+6. Run the staging crash-matrix canary with a test price below $0.20. The
+   unconditional WIP wrap consumes native IP 1:1 with the payout; the initial
+   0.25 IP reserve must retain gas headroom. Enable only the single approved
+   staging community after every gate passes.
 7. Retain the old key only for explicit legacy incident disposition until the
    legacy path is retired. Any transaction from the new address without a
    coordinator plan is a security incident.
@@ -90,6 +109,16 @@ all plans, verify zero backlog and repairs, deploy new values plus a new version
 atomically, run a non-value preflight/canary, and only then resume admission.
 See `docs/story-settlement-coordinator-policy-v1.md`.
 
+## Staging alert-sink probe
+
+Before canary admission, POST a unique incident-style `authorization_ref` to
+`/operator/story-settlement/alerts/synthetic` with the same scoped operator
+credential. The route is structurally disabled outside `ENVIRONMENT=staging`.
+A `202 {"delivered":true}` proves the configured alert sink accepted the
+high-urgency synthetic coordinator alert; independently verify receipt in the
+destination mailbox. Do not reuse the reference because scheduled-alert
+deduplication is intentional.
+
 ## Legacy stuck effects
 
 Legacy failed parent transfers do not self-heal after API PR #534. Start with
@@ -98,4 +127,3 @@ stuck-effects lister, collect multi-provider transaction and signer-nonce
 evidence, and use a reviewed manual re-settle generation only after positive
 proof of non-broadcast. Never route a legacy effect through coordinator nonce
 repair or infer non-broadcast from an SDK error class.
-
