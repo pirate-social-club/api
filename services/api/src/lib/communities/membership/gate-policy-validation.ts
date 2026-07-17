@@ -17,6 +17,19 @@ const DOCUMENT_PROOF_PROVIDERS: DocumentProofProvider[] = ["self", "zkpassport"]
 const GATE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 export function validateGatePolicy(input: unknown): GatePolicy {
+  return validateGatePolicyInternal(input, "strict")
+}
+
+/**
+ * Validates a policy while repairing only atom identity defects that may have
+ * entered through historical/raw storage paths. Valid explicit ids always win,
+ * including legacy_* ids already exposed to clients.
+ */
+export function normalizeStoredGatePolicy(input: unknown): GatePolicy {
+  return validateGatePolicyInternal(input, "repair_identity")
+}
+
+function validateGatePolicyInternal(input: unknown, identityMode: "strict" | "repair_identity"): GatePolicy {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw eligibilityFailed("gate_policy must be an object")
   }
@@ -26,11 +39,43 @@ export function validateGatePolicy(input: unknown): GatePolicy {
   }
   const atomCount = { value: 0 }
   const gateIds = new Set<string>()
-  const expression = validateGateExpression(policy.expression, 1, atomCount, gateIds, [0])
+  const reservedGateIds = identityMode === "repair_identity"
+    ? collectValidExplicitGateIds(policy.expression)
+    : new Set<string>()
+  const expression = validateGateExpression(
+    policy.expression,
+    1,
+    atomCount,
+    gateIds,
+    reservedGateIds,
+    identityMode,
+    [0],
+  )
   if (atomCount.value === 0) {
     throw eligibilityFailed("gate_policy requires at least one gate")
   }
   return { version: 1, expression }
+}
+
+function collectValidExplicitGateIds(input: unknown): Set<string> {
+  const ids = new Set<string>()
+  const stack: unknown[] = [input]
+  let visited = 0
+  while (stack.length > 0 && visited <= MAX_GATE_POLICY_ATOMS * MAX_GATE_POLICY_DEPTH) {
+    visited += 1
+    const current = stack.pop()
+    if (!current || typeof current !== "object" || Array.isArray(current)) continue
+    const expression = current as Record<string, unknown>
+    if (expression.op === "gate" && expression.gate && typeof expression.gate === "object" && !Array.isArray(expression.gate)) {
+      const gateId = (expression.gate as Record<string, unknown>).gate_id
+      if (typeof gateId === "string" && GATE_ID_PATTERN.test(gateId)) ids.add(gateId)
+      continue
+    }
+    if ((expression.op === "and" || expression.op === "or") && Array.isArray(expression.children)) {
+      stack.push(...expression.children.slice(0, MAX_GATE_POLICY_ATOMS))
+    }
+  }
+  return ids
 }
 
 function validateGateExpression(
@@ -38,6 +83,8 @@ function validateGateExpression(
   depth: number,
   atomCount: { value: number },
   gateIds: Set<string>,
+  reservedGateIds: Set<string>,
+  identityMode: "strict" | "repair_identity",
   path: number[],
 ): GateExpression {
   if (depth > MAX_GATE_POLICY_DEPTH) {
@@ -57,7 +104,15 @@ function validateGateExpression(
     return {
       op: expression.op,
       children: expression.children.map((child, index) =>
-        validateGateExpression(child, depth + 1, atomCount, gateIds, [...path, index])),
+        validateGateExpression(
+          child,
+          depth + 1,
+          atomCount,
+          gateIds,
+          reservedGateIds,
+          identityMode,
+          [...path, index],
+        )),
     }
   }
   if (expression.op === "gate") {
@@ -65,22 +120,55 @@ function validateGateExpression(
     if (atomCount.value > MAX_GATE_POLICY_ATOMS) {
       throw eligibilityFailed(`gate_policy supports at most ${MAX_GATE_POLICY_ATOMS} gates`)
     }
-    return { op: "gate", gate: validateGateAtom(expression.gate, gateIds, path) }
+    return {
+      op: "gate",
+      gate: validateGateAtom(expression.gate, gateIds, reservedGateIds, identityMode, path),
+    }
   }
   throw eligibilityFailed("gate_policy expression op must be and, or, or gate")
 }
 
-function validateGateAtom(input: unknown, gateIds: Set<string>, path: number[]): GateAtom {
+function generatedGateId(path: number[], gateIds: Set<string>, reservedGateIds: Set<string>): string {
+  const base = `legacy_${path.join("_")}`
+  if (!gateIds.has(base) && !reservedGateIds.has(base)) return base
+  for (let suffix = 1; suffix <= MAX_GATE_POLICY_ATOMS; suffix += 1) {
+    const marker = `_repair${suffix}`
+    const candidate = `${base.slice(0, 64 - marker.length)}${marker}`
+    if (!gateIds.has(candidate) && !reservedGateIds.has(candidate)) return candidate
+  }
+  throw eligibilityFailed("gate atom identities could not be normalized uniquely")
+}
+
+function validateGateAtom(
+  input: unknown,
+  gateIds: Set<string>,
+  reservedGateIds: Set<string>,
+  identityMode: "strict" | "repair_identity",
+  path: number[],
+): GateAtom {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw eligibilityFailed("gate atom must be an object")
   }
   const atom = input as Record<string, unknown>
-  const gateId = atom.gate_id == null ? `legacy_${path.join("_")}` : atom.gate_id
-  if (typeof gateId !== "string" || !GATE_ID_PATTERN.test(gateId)) {
-    throw eligibilityFailed("gate atom gate_id must be 1 to 64 ASCII letters, numbers, underscores, or hyphens")
-  }
-  if (gateIds.has(gateId)) {
-    throw eligibilityFailed("gate atom gate_id values must be unique within a policy")
+  const explicitGateId = atom.gate_id
+  let gateId: string
+  if (identityMode === "repair_identity") {
+    gateId = typeof explicitGateId === "string"
+      && GATE_ID_PATTERN.test(explicitGateId)
+      && !gateIds.has(explicitGateId)
+      ? explicitGateId
+      : generatedGateId(path, gateIds, reservedGateIds)
+  } else {
+    gateId = explicitGateId == null ? `legacy_${path.join("_")}` : explicitGateId as string
+    if (typeof explicitGateId !== "undefined" && explicitGateId !== null && typeof explicitGateId !== "string") {
+      throw eligibilityFailed("gate atom gate_id must be 1 to 64 ASCII letters, numbers, underscores, or hyphens")
+    }
+    if (!GATE_ID_PATTERN.test(gateId)) {
+      throw eligibilityFailed("gate atom gate_id must be 1 to 64 ASCII letters, numbers, underscores, or hyphens")
+    }
+    if (gateIds.has(gateId)) {
+      throw eligibilityFailed("gate atom gate_id values must be unique within a policy")
+    }
   }
   gateIds.add(gateId)
   const identity = { gate_id: gateId }

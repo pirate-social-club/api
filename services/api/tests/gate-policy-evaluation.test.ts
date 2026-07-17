@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { evaluateMembershipGatePolicy } from "../src/lib/communities/membership/gate-policy-evaluation"
-import { validateGatePolicy } from "../src/lib/communities/membership/gate-policy-validation"
+import {
+  normalizeStoredGatePolicy,
+  validateGatePolicy,
+} from "../src/lib/communities/membership/gate-policy-validation"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { GateAtom, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { User } from "../src/types"
@@ -172,6 +175,31 @@ describe("evaluateMembershipGatePolicy", () => {
         type: "unique_human",
         provider: "self",
       }))).toThrow("gate atom gate_id must be 1 to 64 ASCII letters")
+    })
+
+    test("repairs stored identity defects without rewriting valid explicit ids", () => {
+      const policy = normalizeStoredGatePolicy({
+        version: 1,
+        expression: {
+          op: "and",
+          children: [
+            { op: "gate", gate: { gate_id: "legacy_0_1", type: "unique_human", provider: "self" } },
+            { op: "gate", gate: { type: "altcha_pow" } },
+            { op: "gate", gate: { gate_id: "duplicate", type: "altcha_pow" } },
+            { op: "gate", gate: { gate_id: "duplicate", type: "altcha_pow" } },
+            { op: "gate", gate: { gate_id: "not valid!", type: "altcha_pow" } },
+          ],
+        },
+      })
+      if (policy.expression.op !== "and") throw new Error("expected and policy")
+      expect(policy.expression.children.map((child) => child.op === "gate" ? child.gate.gate_id : null)).toEqual([
+        "legacy_0_1",
+        "legacy_0_1_repair1",
+        "duplicate",
+        "legacy_0_3",
+        "legacy_0_4",
+      ])
+      expect(() => validateGatePolicy(policy)).not.toThrow()
     })
 
     test("copies stable identity and authoritative outcome to summaries and trace leaves", async () => {

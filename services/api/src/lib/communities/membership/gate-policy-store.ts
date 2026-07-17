@@ -1,5 +1,5 @@
 import type { ReadClient } from "../../sql-client"
-import { validateGatePolicy } from "./gate-policy-validation"
+import { normalizeStoredGatePolicy } from "./gate-policy-validation"
 import type { CommunityGateScope, GatePolicy } from "./gate-types"
 
 async function getGatePolicy(
@@ -22,7 +22,7 @@ async function getGatePolicy(
     return null
   }
   const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
-  return validateGatePolicy(parsed)
+  return normalizeStoredGatePolicy(parsed)
 }
 
 export async function getMembershipGatePolicy(client: ReadClient, communityId: string): Promise<GatePolicy | null> {
