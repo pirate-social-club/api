@@ -200,6 +200,7 @@ describe("evaluateMembershipGatePolicy", () => {
         gate_id: "balance-main",
         outcome: "action_required",
       })
+      expect(result.requiredActionSet?.items[0]).toMatchObject({ gate_id: "balance-main" })
     })
 
     test("publishes the complete outcome lattice on trace leaves", async () => {

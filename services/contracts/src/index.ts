@@ -3982,6 +3982,7 @@ type ReplyQuotaRule = {
 };
 
 type RequiredActionNode = {
+  gate_id?: string | null;
   kind: "action" | "set";
   mode?: "all" | "any";
   items?: Array<Record<string, unknown>>;

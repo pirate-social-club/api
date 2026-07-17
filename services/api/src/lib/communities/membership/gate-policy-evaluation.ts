@@ -93,7 +93,11 @@ async function evaluateExpression(input: {
       },
       requiredActionSet: result.passed || !result.requiredAction
         ? null
-        : { kind: "set", mode: "all", items: [result.requiredAction] },
+        : {
+            kind: "set",
+            mode: "all",
+            items: [{ ...result.requiredAction, gate_id: expression.gate.gate_id }],
+          },
     }
   }
 
