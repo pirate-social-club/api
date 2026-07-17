@@ -561,6 +561,12 @@
     },
     "production": {
       "name": "api-core",
+      "hyperdrive": [
+        {
+          "binding": "CONTROL_PLANE_HYPERDRIVE",
+          "id": "7e457bc33b414671833ee4436548d9ee"
+        }
+      ],
       "cache": {
         "enabled": true
       },

@@ -3,30 +3,28 @@ import { getControlPlaneAgentOwnershipRepository } from "../src/lib/agents/agent
 import { getControlPlaneVerificationRepository } from "../src/lib/verification/verification-repository"
 import { withRequestControlPlaneClients } from "../src/lib/runtime-deps"
 
+const PRODUCTION_POSTGRES_ENV = {
+  CONTROL_PLANE_DATABASE_URL: "postgresql://user:pass@example.invalid/pirate",
+  CONTROL_PLANE_HYPERDRIVE: {
+    connectionString: "postgresql://hyperdrive.invalid/pirate",
+  },
+  ENVIRONMENT: "production",
+} as never
+
 describe("control-plane repository factories", () => {
   test("do not cache request-scoped Postgres verification repositories", async () => {
-    const env = {
-      CONTROL_PLANE_DATABASE_URL: "postgresql://user:pass@example.invalid/pirate",
-      ENVIRONMENT: "production",
-    } as never
-
     await withRequestControlPlaneClients(async () => {
-      const first = getControlPlaneVerificationRepository(env)
-      const second = getControlPlaneVerificationRepository(env)
+      const first = getControlPlaneVerificationRepository(PRODUCTION_POSTGRES_ENV)
+      const second = getControlPlaneVerificationRepository(PRODUCTION_POSTGRES_ENV)
 
       expect(second).not.toBe(first)
     })
   })
 
   test("do not cache request-scoped Postgres agent ownership repositories", async () => {
-    const env = {
-      CONTROL_PLANE_DATABASE_URL: "postgresql://user:pass@example.invalid/pirate",
-      ENVIRONMENT: "production",
-    } as never
-
     await withRequestControlPlaneClients(async () => {
-      const first = getControlPlaneAgentOwnershipRepository(env)
-      const second = getControlPlaneAgentOwnershipRepository(env)
+      const first = getControlPlaneAgentOwnershipRepository(PRODUCTION_POSTGRES_ENV)
+      const second = getControlPlaneAgentOwnershipRepository(PRODUCTION_POSTGRES_ENV)
 
       expect(second).not.toBe(first)
     })
