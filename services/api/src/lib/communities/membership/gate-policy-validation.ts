@@ -14,6 +14,7 @@ import { isAtomicBalanceThreshold, resolveAssetBalanceDescriptor } from "./asset
 const MAX_GATE_POLICY_DEPTH = 4
 const MAX_GATE_POLICY_ATOMS = 20
 const DOCUMENT_PROOF_PROVIDERS: DocumentProofProvider[] = ["self", "zkpassport"]
+const GATE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
 export function validateGatePolicy(input: unknown): GatePolicy {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -24,14 +25,21 @@ export function validateGatePolicy(input: unknown): GatePolicy {
     throw eligibilityFailed("gate_policy version must be 1")
   }
   const atomCount = { value: 0 }
-  const expression = validateGateExpression(policy.expression, 1, atomCount)
+  const gateIds = new Set<string>()
+  const expression = validateGateExpression(policy.expression, 1, atomCount, gateIds, [0])
   if (atomCount.value === 0) {
     throw eligibilityFailed("gate_policy requires at least one gate")
   }
   return { version: 1, expression }
 }
 
-function validateGateExpression(input: unknown, depth: number, atomCount: { value: number }): GateExpression {
+function validateGateExpression(
+  input: unknown,
+  depth: number,
+  atomCount: { value: number },
+  gateIds: Set<string>,
+  path: number[],
+): GateExpression {
   if (depth > MAX_GATE_POLICY_DEPTH) {
     throw eligibilityFailed(`gate_policy supports at most ${MAX_GATE_POLICY_DEPTH} levels`)
   }
@@ -48,7 +56,8 @@ function validateGateExpression(input: unknown, depth: number, atomCount: { valu
     }
     return {
       op: expression.op,
-      children: expression.children.map((child) => validateGateExpression(child, depth + 1, atomCount)),
+      children: expression.children.map((child, index) =>
+        validateGateExpression(child, depth + 1, atomCount, gateIds, [...path, index])),
     }
   }
   if (expression.op === "gate") {
@@ -56,24 +65,33 @@ function validateGateExpression(input: unknown, depth: number, atomCount: { valu
     if (atomCount.value > MAX_GATE_POLICY_ATOMS) {
       throw eligibilityFailed(`gate_policy supports at most ${MAX_GATE_POLICY_ATOMS} gates`)
     }
-    return { op: "gate", gate: validateGateAtom(expression.gate) }
+    return { op: "gate", gate: validateGateAtom(expression.gate, gateIds, path) }
   }
   throw eligibilityFailed("gate_policy expression op must be and, or, or gate")
 }
 
-function validateGateAtom(input: unknown): GateAtom {
+function validateGateAtom(input: unknown, gateIds: Set<string>, path: number[]): GateAtom {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw eligibilityFailed("gate atom must be an object")
   }
   const atom = input as Record<string, unknown>
+  const gateId = atom.gate_id == null ? `legacy_${path.join("_")}` : atom.gate_id
+  if (typeof gateId !== "string" || !GATE_ID_PATTERN.test(gateId)) {
+    throw eligibilityFailed("gate atom gate_id must be 1 to 64 ASCII letters, numbers, underscores, or hyphens")
+  }
+  if (gateIds.has(gateId)) {
+    throw eligibilityFailed("gate atom gate_id values must be unique within a policy")
+  }
+  gateIds.add(gateId)
+  const identity = { gate_id: gateId }
   switch (atom.type) {
     case "altcha_pow":
-      return { type: "altcha_pow" }
+      return { ...identity, type: "altcha_pow" }
     case "unique_human": {
       if (atom.provider !== "self" && atom.provider !== "very") {
         throw eligibilityFailed("unique_human gate provider must be self or very")
       }
-      return { type: "unique_human", provider: atom.provider }
+      return { ...identity, type: "unique_human", provider: atom.provider }
     }
     case "minimum_age": {
       if (atom.provider !== "self") {
@@ -84,6 +102,7 @@ function validateGateAtom(input: unknown): GateAtom {
       }
       const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "minimum_age")
       return {
+        ...identity,
         type: "minimum_age",
         provider: "self",
         ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
@@ -104,6 +123,7 @@ function validateGateAtom(input: unknown): GateAtom {
       }
       const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "nationality")
       return {
+        ...identity,
         type: "nationality",
         provider: "self",
         ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
@@ -123,6 +143,7 @@ function validateGateAtom(input: unknown): GateAtom {
       }
       const acceptedProviders = validateDocumentAcceptedProviders(atom.accepted_providers, "gender")
       return {
+        ...identity,
         type: "gender",
         provider: "self",
         ...(acceptedProviders ? { accepted_providers: acceptedProviders } : {}),
@@ -136,7 +157,7 @@ function validateGateAtom(input: unknown): GateAtom {
       if (typeof atom.minimum_score !== "number" || !Number.isFinite(atom.minimum_score) || atom.minimum_score < 0 || atom.minimum_score > 100) {
         throw eligibilityFailed("wallet_score gate minimum_score must be a number from 0 to 100")
       }
-      return { type: "wallet_score", provider: "passport", minimum_score: atom.minimum_score }
+      return { ...identity, type: "wallet_score", provider: "passport", minimum_score: atom.minimum_score }
     }
     case "erc721_holding": {
       if (atom.chain_namespace !== "eip155:1") {
@@ -150,6 +171,7 @@ function validateGateAtom(input: unknown): GateAtom {
         throw eligibilityFailed("erc721_holding gate min_count must be from 1 to 100")
       }
       return {
+        ...identity,
         type: "erc721_holding",
         chain_namespace: "eip155:1",
         contract_address: contractAddress,
@@ -165,6 +187,7 @@ function validateGateAtom(input: unknown): GateAtom {
         throw eligibilityFailed("asset_balance gate min_amount_atomic must be a positive atomic integer string")
       }
       return {
+        ...identity,
         type: "asset_balance",
         asset_id: asset.assetId,
         min_amount_atomic: atom.min_amount_atomic,
@@ -204,6 +227,7 @@ function validateGateAtom(input: unknown): GateAtom {
       }
       const match = rawMatch as Record<string, string | string[]>
       return {
+        ...identity,
         type: "erc721_inventory_match",
         provider: "courtyard",
         chain_namespace: atom.chain_namespace,

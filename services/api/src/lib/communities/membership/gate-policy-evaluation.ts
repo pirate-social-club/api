@@ -9,7 +9,7 @@ import { evaluateAttachedWalletAssetBalance } from "../community-asset-balance"
 type AtomEvaluation = {
   outcome: GateEvaluationOutcome
   passed: boolean
-  trace: GateTraceNode
+  trace: Omit<Extract<GateTraceNode, { kind: "gate" }>, "gate_id" | "outcome">
   requiredAction: RequiredAction | null
 }
 
@@ -86,7 +86,11 @@ async function evaluateExpression(input: {
     return {
       outcome: result.outcome,
       passed: result.passed,
-      trace: result.trace,
+      trace: {
+        ...result.trace,
+        gate_id: expression.gate.gate_id ?? null,
+        outcome: result.outcome,
+      },
       requiredActionSet: result.passed || !result.requiredAction
         ? null
         : { kind: "set", mode: "all", items: [result.requiredAction] },

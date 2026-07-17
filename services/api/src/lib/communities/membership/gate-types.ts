@@ -12,7 +12,9 @@ export type GateExpression =
 
 export type DocumentProofProvider = "self" | "zkpassport"
 
-export type GateAtom =
+type GateAtomIdentity = { gate_id?: string }
+
+export type GateAtom = GateAtomIdentity & (
   | { type: "unique_human"; provider: "very" | "self" }
   | { type: "altcha_pow" }
   | { type: "minimum_age"; provider: "self"; accepted_providers?: DocumentProofProvider[]; minimum_age: number }
@@ -29,12 +31,15 @@ export type GateAtom =
     min_quantity: number
     match: Record<string, string | string[]>
   }
+)
 
 export type GateTraceNode =
   | { kind: "op"; op: "and" | "or"; passed: boolean; children: GateTraceNode[] }
   | {
     kind: "gate"
+    gate_id?: string | null
     gate_type: GateAtom["type"]
+    outcome?: GateEvaluationOutcome | null
     provider?: string
     passed: boolean
     reason?: string
