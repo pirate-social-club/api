@@ -3,6 +3,7 @@ import { getAddress, zeroAddress, type Hex } from "viem"
 import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
 import { resolveStoryCoordinatorDirectSigner } from "../../story/story-direct-signer"
+import { isStorySettlementCoordinatorAdmissionEnabled } from "../../story/story-settlement-admission"
 import { deriveStorySettlementCallIdentity, type StorySettlementStepKind } from "../../story/story-settlement-call-identity"
 import { resolveStorySettlementProtocolAddresses } from "../../story/story-settlement-protocol-addresses"
 import {
@@ -34,8 +35,6 @@ import {
   type StorySettlementEffectPlanBinding,
 } from "./story-settlement-coordinator-mirror"
 
-const TRUE = "true"
-
 type EffectPlan = {
   effectKind: Extract<PurchaseSettlementEffectKind, "story_royalty_payment" | "story_parent_royalty_vault_transfer" | "story_entitlement_mint">
   effectKey: string
@@ -50,10 +49,6 @@ export type CoordinateStorySettlementResult =
   | { kind: "not_coordinator_owned" }
   | { kind: "pending"; planRef: Hex; plan: StorySettlementPlanResult | null }
   | { kind: "confirmed"; planRef: Hex; plan: StorySettlementPlanResult }
-
-function enabled(env: Env): boolean {
-  return String(env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED || "").trim().toLowerCase() === TRUE
-}
 
 function requiredPolicyVersion(value: string | undefined, field: string): string {
   const normalized = String(value || "").trim()
@@ -223,7 +218,10 @@ export async function coordinateStorySettlement(input: {
     purchaseId: input.purchaseId,
   })
   const existingPlanRef = existing.find((effect) => effect.coordinator_plan_ref)?.coordinator_plan_ref as Hex | undefined
-  if (!enabled(input.env) && !existingPlanRef) return { kind: "not_coordinator_owned" }
+  if (
+    !isStorySettlementCoordinatorAdmissionEnabled(input.env, input.communityId)
+    && !existingPlanRef
+  ) return { kind: "not_coordinator_owned" }
 
   const binding = input.env.STORY_SETTLEMENT_WALLET_COORDINATOR
   if (!binding) throw badRequestError("story_settlement_coordinator_binding_missing")

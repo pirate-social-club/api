@@ -265,7 +265,12 @@ export type Env = {
   STORY_SETTLEMENT_WALLET_COORDINATOR?: DurableObjectNamespace<StorySettlementWalletCoordinatorDO>
   // Fail-closed rollout gate for new Story settlement plan admission. Existing
   // coordinator-owned effects are always reconciled regardless of this flag.
+  // Both this flag and a community allowlist entry are required to admit a plan.
   STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED?: string
+  // Comma-separated community ids allowed to admit new coordinator plans. Empty
+  // or absent admits nothing, so a canary is scoped to named communities rather
+  // than every community sharing the Worker.
+  STORY_SETTLEMENT_COORDINATOR_ADMISSION_COMMUNITY_IDS?: string
   STORY_SETTLEMENT_FEE_POLICY_VERSION?: string
   STORY_SETTLEMENT_FINALITY_POLICY_VERSION?: string
   // Coordinator-exclusive signer. Never share this key with legacy Story SDK
