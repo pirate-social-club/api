@@ -21,6 +21,7 @@ import {
 } from "../communities/bookings/operator-signing-coordinator-do"
 import {
   assertDistinctBookingAndRewardsSignerDomains,
+  assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
@@ -579,8 +580,8 @@ export async function cashOutRewards(input: {
   const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
   const nowUtc = input.nowUtc ?? new Date().toISOString()
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
-  const chainId = Number(input.env.REWARDS_CAMPAIGN_CHAIN_ID)
-  if (!Number.isSafeInteger(chainId) || chainId < 1) throw eligibilityFailed("Rewards settlement chain is not configured")
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardPayoutsEnabled(input.env)) {
     throw eligibilityFailed("Rewards cashout is not enabled")
   }
@@ -625,8 +626,8 @@ export async function getRewardCashoutForUser(input: {
   const client = input.client ?? getControlPlaneClient(input.env)
   const effect = await getPayoutByUserIdAndEffectId(client, input.userId, cashoutId)
   if (!effect) throw notFoundError("Rewards cashout not found")
-  const chainId = Number(input.env.REWARDS_CAMPAIGN_CHAIN_ID)
-  if (!Number.isSafeInteger(chainId) || chainId < 1) throw eligibilityFailed("Rewards settlement chain is not configured")
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
   return serializeCashout(effect, await currentBalanceCents(client, input.userId), chainId)
 }
 

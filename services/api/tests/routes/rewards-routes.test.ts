@@ -50,6 +50,7 @@ describe("rewards routes", () => {
     return {
       REWARDS_CAMPAIGNS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
       REWARDS_CAMPAIGN_RPC_URL: "https://base-sepolia.example.test",
@@ -841,6 +842,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -962,6 +964,7 @@ describe("rewards routes", () => {
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -1017,6 +1020,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "zkpassport",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1076,6 +1080,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1230,6 +1235,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1295,6 +1301,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1395,6 +1402,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1470,6 +1478,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1540,6 +1549,7 @@ describe("rewards routes", () => {
       REWARDS_READS_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })

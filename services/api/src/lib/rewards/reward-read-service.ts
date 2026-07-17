@@ -3,6 +3,10 @@ import type { Client, QueryResultRow } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import { getControlPlaneClient } from "../runtime-deps"
+import {
+  assertRewardsCampaignAndSettlementChainsMatch,
+  resolveRewardsSettlementChainId,
+} from "../communities/bookings/booking-chain-config"
 import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import type {
   RewardEventKind,
@@ -51,12 +55,6 @@ function serializeRewardEvent(row: QueryResultRow): RewardEventSummary {
   }
 }
 
-function rewardChainId(env: Pick<Env, "REWARDS_CAMPAIGN_CHAIN_ID">): number {
-  const chainId = Number(env.REWARDS_CAMPAIGN_CHAIN_ID)
-  if (!Number.isSafeInteger(chainId) || chainId < 1) throw new Error("invalid_rewards_chain_id")
-  return chainId
-}
-
 function serializeRewardPayout(row: QueryResultRow, chainId: number): RewardPayoutSummary {
   const status = requiredString(row, "status")
   if (status !== "submitted" && status !== "confirmed" && status !== "failed") {
@@ -88,7 +86,8 @@ export async function getRewardsSummaryForUser(input: {
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
-  const chainId = rewardChainId(input.env)
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardReadsEnabled(input.env)) {
     return {
       chain_id: chainId,
