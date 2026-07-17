@@ -20,6 +20,29 @@ coordinator state with hand-written SQL or direct Durable Object storage edits.
 
 ## Abandoned nonce repair
 
+### Staging drill setup
+
+Do not wait for a natural abandoned nonce while admission is disabled; that state cannot arise.
+For the testnet drill, use one throwaway staging community and a quote created before the drill:
+
+1. Set `STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED=true`, allowlist only the throwaway
+   community, and set `STORY_SETTLEMENT_NONCE_REPAIR_DRILL_TARGET` to the exact
+   `<community_id>:<quote_id>`. The drill target is ignored unless `ENVIRONMENT=staging`.
+2. Deploy staging and submit that quote through the normal settlement endpoint once. Do not submit
+   any other purchase. The coordinator admits the normal immutable plan, durably reserves the real
+   signer nonce for its first step, transitions that unsigned step to `failed_prebroadcast`, and
+   freezes the plan in `abandoning`. It never signs or broadcasts the business call.
+3. Inspect the plan and verify: reserved nonce present; signed bytes and transaction hash absent;
+   `last_error_code=staging_nonce_repair_drill_abandoned`; signer pending nonce has not consumed the
+   reservation.
+4. Disable admission and remove both the community allowlist entry and drill target before invoking
+   repair. Existing coordinator-owned plans remain reconcilable.
+5. Continue with the repair procedure below. Retain the deployment commits and configuration-change
+   audit records with the drill evidence.
+
+Never use a production environment, direct Durable Object storage changes, an arbitrary calldata
+endpoint, or a manually broadcast gap transaction for this drill.
+
 The latest staging drill preflight and its honest no-candidate result are recorded in
 `../evidence/story-settlement-nonce-repair-drill-2026-07-17.md`. That scan does not satisfy M4; use
 the evidence checklist there when an eligible staging nonce exists.

@@ -15,6 +15,7 @@ import {
 
 import type { Env } from "../../env"
 import { badRequestError, conflictError } from "../errors"
+import { isStorySettlementNonceRepairDrillTarget } from "./story-settlement-nonce-repair-drill"
 import {
   deriveStorySettlementCallIdentity,
   type StorySettlementCallIdentityInput,
@@ -205,6 +206,7 @@ interface PlanRow {
   finality_policy_version: string
   state: PlanState
   version: number
+  drill_abandon_after_reserve: boolean
 }
 
 let registeredChain: StorySettlementChainPrimitives | null = null
@@ -293,7 +295,9 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
         plan_ref TEXT PRIMARY KEY, chain_id INTEGER NOT NULL, signer_address TEXT NOT NULL,
         community_id TEXT NOT NULL, quote_id TEXT NOT NULL, purchase_id TEXT NOT NULL,
         fee_policy_version TEXT NOT NULL, finality_policy_version TEXT NOT NULL,
-        state TEXT NOT NULL, version INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        state TEXT NOT NULL, version INTEGER NOT NULL,
+        drill_abandon_after_reserve INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         UNIQUE(community_id, quote_id, purchase_id)
       )`)
       this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS steps (
@@ -316,6 +320,25 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS nonce_state (id INTEGER PRIMARY KEY CHECK (id = 1), next_nonce INTEGER NOT NULL)")
       this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS signer_domain (id INTEGER PRIMARY KEY CHECK (id = 1), chain_id INTEGER NOT NULL, signer_address TEXT NOT NULL)")
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
+      const migration2Applied = this.ctx.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id=2",
+      ).one().count > 0
+      if (!migration2Applied) {
+        this.ctx.storage.transactionSync(() => {
+          // Fresh objects already have the column from CREATE TABLE. Existing
+          // objects need the additive migration exactly once.
+          const columns = this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(plans)").toArray()
+          if (!columns.some((column) => column.name === "drill_abandon_after_reserve")) {
+            this.ctx.storage.sql.exec(
+              "ALTER TABLE plans ADD COLUMN drill_abandon_after_reserve INTEGER NOT NULL DEFAULT 0",
+            )
+          }
+          this.ctx.storage.sql.exec(
+            "INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (2, ?1)",
+            Date.now(),
+          )
+        })
+      }
     })
   }
 
@@ -347,10 +370,12 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       }
       this.ctx.storage.sql.exec(
         `INSERT INTO plans (plan_ref, chain_id, signer_address, community_id, quote_id, purchase_id,
-         fee_policy_version, finality_policy_version, state, version, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 1, ?9, ?9)`,
+         fee_policy_version, finality_policy_version, state, version, drill_abandon_after_reserve,
+         created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 1, ?9, ?10, ?10)`,
         normalized.planRef, request.chainId, normalized.signerAddress, request.communityId, request.quoteId,
-        request.purchaseId, request.feePolicyVersion, request.finalityPolicyVersion, now,
+        request.purchaseId, request.feePolicyVersion, request.finalityPolicyVersion,
+        isStorySettlementNonceRepairDrillTarget(this.env, request) ? 1 : 0, now,
       )
       for (const step of normalized.steps) {
         this.ctx.storage.sql.exec(
@@ -616,6 +641,9 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
   private async advanceStep(input: StepRow): Promise<void> {
     let step = input
     if (step.state === "planned") step = await this.reserveNonce(step)
+    // A staging nonce-repair drill deliberately stops after durable reservation.
+    // The operator repair RPC is the only path that may advance an abandoning plan.
+    if (this.readPlan(step.plan_ref)?.state === "abandoning") return
     if (step.state === "failed_prebroadcast") {
       step = this.writeTransition(step, this.transition(step, {
         expectedVersion: step.version,
@@ -662,6 +690,30 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       })
     })
     await chain().fault?.("after_nonce_reserved")
+    if (plan.drill_abandon_after_reserve) {
+      const current = this.readStep(step.step_ref)!
+      if (current.state === "reserving" && current.nonce != null && !current.signed_transaction) {
+        const failed = this.writeTransition(current, this.transition(current, {
+          expectedVersion: current.version,
+          to: "failed_prebroadcast",
+        }), {
+          last_error_code: "staging_nonce_repair_drill_abandoned",
+          next_attempt_at: null,
+        })
+        this.ctx.storage.sql.exec(
+          "UPDATE plans SET state='abandoning', version=version+1, updated_at=?2 WHERE plan_ref=?1",
+          plan.plan_ref,
+          Date.now(),
+        )
+        console.warn(JSON.stringify({
+          message: "staging Story settlement nonce-repair drill abandoned reserved nonce",
+          planRef: plan.plan_ref,
+          stepRef: failed.step_ref,
+          nonce: failed.nonce,
+        }))
+        return failed
+      }
+    }
     return reserved
   }
 
@@ -1060,6 +1112,7 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       finality_policy_version: String(row.finality_policy_version),
       state: String(row.state) as PlanState,
       version: Number(row.version),
+      drill_abandon_after_reserve: Number(row.drill_abandon_after_reserve ?? 0) === 1,
     } : null
   }
 

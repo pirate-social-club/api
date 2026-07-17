@@ -276,6 +276,9 @@ export type Env = {
   // or absent admits nothing, so a canary is scoped to named communities rather
   // than every community sharing the Worker.
   STORY_SETTLEMENT_COORDINATOR_ADMISSION_COMMUNITY_IDS?: string
+  // Staging-only exact <community_id>:<quote_id> target for the audited
+  // reserve-then-abandon nonce-repair drill. Ignored outside staging.
+  STORY_SETTLEMENT_NONCE_REPAIR_DRILL_TARGET?: string
   STORY_SETTLEMENT_FEE_POLICY_VERSION?: string
   STORY_SETTLEMENT_FINALITY_POLICY_VERSION?: string
   // Coordinator-exclusive signer. Never share this key with legacy Story SDK
