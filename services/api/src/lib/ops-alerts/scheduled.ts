@@ -99,7 +99,9 @@ function ttlSecondsForBucket(bucketMs: number): number {
 
 function evidenceStore(env: Env): OpsAlertDeliveryEvidenceStore | null {
   if (testEvidenceStore !== undefined) return testEvidenceStore
-  if (!env.CONTROL_PLANE_HYPERDRIVE && !String(env.CONTROL_PLANE_DATABASE_URL || "").trim()) return null
+  const databaseUrl = String(env.CONTROL_PLANE_DATABASE_URL || "").trim()
+  const hasPostgresUrl = databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://")
+  if (!env.CONTROL_PLANE_HYPERDRIVE && !hasPostgresUrl) return null
   return createOpsAlertDeliveryEvidenceStore(getControlPlaneClient(env))
 }
 
