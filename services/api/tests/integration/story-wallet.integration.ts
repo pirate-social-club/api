@@ -469,6 +469,7 @@ describe("StorySettlementWalletCoordinatorDO (real workerd + SQLite)", () => {
     const result = (await stub.lookup(admitted.planRef))!
     expect(result.state).toBe("failed")
     expect(result.steps.map((step) => [step.state, step.nonce])).toEqual([["reverted", 7], ["planned", null]])
+    expect(await stub.health()).toMatchObject({ failedPlans: 1, revertedSteps: 1, pendingPlans: 0 })
   })
 
   it("fences a consumed nonce discovered after pre-finality mining before replacement", async () => {
