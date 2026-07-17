@@ -6,6 +6,7 @@ import type { DbExecutor } from "../../db-helpers"
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import { getListingRowByAssetId } from "../commerce/shared"
 import { createSongAssetForPost } from "../commerce/service"
+import { assertDerivativeParentRevenueShare } from "../commerce/derivative-parent-revenue-share"
 import { mergeAnalysisState } from "../../posts/post-analysis"
 import { songRightsInvariantFailure } from "../../posts/song-rights-invariant"
 import { getPostById } from "../../posts/community-post-query-store"
@@ -623,6 +624,29 @@ export async function runPostPublishFinalize(
         retryable: false,
         now: nowIso(),
       })
+    }
+
+    try {
+      await assertDerivativeParentRevenueShare({
+        env: input.env,
+        client: db.client,
+        communityId: input.job.community_id,
+        upstreamAssetRefs: post.upstream_asset_refs,
+      })
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 400) {
+        return await markPostPublishFinalizeFailed({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId: input.job.community_id,
+          postId: post.post_id,
+          failureCode: "song_rights_reference_required",
+          failureMessage: error.message,
+          retryable: false,
+          now: nowIso(),
+        })
+      }
+      throw error
     }
 
     const controlClient = dependencies.getControlPlaneClient(input.env)

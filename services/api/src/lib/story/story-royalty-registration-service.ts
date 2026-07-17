@@ -26,6 +26,7 @@ import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-
 import { loadStoryRoyaltySharesForAsset } from "../communities/commerce/royalty-allocations"
 import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-allocations"
 import { getControlPlaneClient } from "../runtime-deps"
+import { assertDerivativeParentRevenueShare } from "../communities/commerce/derivative-parent-revenue-share"
 import {
   findUploadedSongArtifactByStorageRef,
   isSongArtifactUploadContentHashServerVerified,
@@ -819,13 +820,20 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     return null
   }
 
-  const derivativeParents = rightsBasis === "derivative"
-    ? await resolveStoryRoyaltyDerivativeParents({
-        client: input.client,
-        communityId: input.communityId,
-        upstreamAssetRefs: input.upstreamAssetRefs,
-      })
-    : null
+  let derivativeParents: ResolvedDerivativeParent[] | null = null
+  if (rightsBasis === "derivative") {
+    await assertDerivativeParentRevenueShare({
+      env: input.env,
+      client: input.client,
+      communityId: input.communityId,
+      upstreamAssetRefs: input.upstreamAssetRefs,
+    })
+    derivativeParents = await resolveStoryRoyaltyDerivativeParents({
+      client: input.client,
+      communityId: input.communityId,
+      upstreamAssetRefs: input.upstreamAssetRefs,
+    })
+  }
   if (rightsBasis === "derivative" && !derivativeParents) {
     return null
   }

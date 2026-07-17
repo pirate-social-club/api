@@ -39,6 +39,8 @@ import {
   assertListingNotRightsHeld,
 } from "./rights-hold-gates"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
+import { excludeKnownZeroRevenueShareStoryParents } from "./derivative-parent-revenue-share"
+import { parseJsonValue } from "./row-types"
 import {
   getReplayAssetListingTarget,
   getLiveRoomListingTarget,
@@ -69,6 +71,22 @@ type ListingVinylReleaseConfig = {
 type CommunityListingRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 type ListingExecutor = Pick<Client, "execute">
 type ListingAssetKind = NonNullable<Awaited<ReturnType<typeof getAssetRow>>>["asset_kind"]
+
+async function assertDerivativeParentsReadyForListing(input: {
+  env: Env
+  asset: NonNullable<Awaited<ReturnType<typeof getAssetRow>>>
+}): Promise<void> {
+  const parentIpIds = parseJsonValue<string[]>(input.asset.story_derivative_parent_ip_ids_json, [])
+    .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
+    .map((parentIpId) => parentIpId.trim())
+  const payableParentIpIds = await excludeKnownZeroRevenueShareStoryParents({
+    env: input.env,
+    parentIpIds,
+  })
+  if (payableParentIpIds.length !== parentIpIds.length) {
+    throw badRequestError("Derivative sources must have a positive commercial revenue share")
+  }
+}
 
 function parseUpstreamAssetRefs(value: string | null): string[] {
   if (!value) return []
@@ -354,6 +372,7 @@ export async function prepareCommunityListingWrite(input: {
       asset,
     })
     assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+    await assertDerivativeParentsReadyForListing({ env: input.env, asset })
     await assertAssetNotRightsHeld({
       client: input.client,
       communityId: input.communityId,
@@ -566,6 +585,7 @@ export async function updateCommunityListing(input: {
         asset,
       })
       assertAssetReadyForStoryRoyaltyCommerce(asset, input.env)
+      await assertDerivativeParentsReadyForListing({ env: input.env, asset })
     } else if ((input.body.status ?? listing.status) === "active") {
       await assertListingNotRightsHeld({
         client: db.client,

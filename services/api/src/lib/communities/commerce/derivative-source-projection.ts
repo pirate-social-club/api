@@ -171,3 +171,62 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
     updated_at: requiredString(row, "updated_at"),
   }))
 }
+
+export async function findZeroRevenueShareStoryParentIpIds(input: {
+  env: Env
+  storyIpIds: string[]
+}): Promise<Set<string>> {
+  const storyIpIds = Array.from(new Set(input.storyIpIds
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)))
+  if (storyIpIds.length === 0) return new Set()
+
+  const client = getControlPlaneClient(input.env)
+  const placeholders = storyIpIds.map((_, index) => `?${index + 1}`).join(", ")
+  const result = await client.execute({
+    sql: `
+      SELECT story_ip_id
+      FROM story_registered_asset_projections
+      WHERE LOWER(story_ip_id) IN (${placeholders})
+      GROUP BY LOWER(story_ip_id)
+      HAVING MAX(COALESCE(commercial_rev_share_pct, 0)) <= 0
+    `,
+    args: storyIpIds,
+  })
+  return new Set(result.rows.map((row) => requiredString(row, "story_ip_id").toLowerCase()))
+}
+
+export async function findZeroRevenueShareStoryParentRefs(input: {
+  env: Env
+  refs: Array<{ storyIpId: string; licenseTermsId: string }>
+}): Promise<Set<string>> {
+  const refs = Array.from(new Map(input.refs.map((ref) => {
+    const normalized = {
+      storyIpId: ref.storyIpId.trim().toLowerCase(),
+      licenseTermsId: ref.licenseTermsId.trim(),
+    }
+    return [`${normalized.storyIpId}:${normalized.licenseTermsId}`, normalized] as const
+  })).values()).filter((ref) => ref.storyIpId && ref.licenseTermsId)
+  if (refs.length === 0) return new Set()
+
+  const clauses: string[] = []
+  const args: string[] = []
+  for (const ref of refs) {
+    const nextArg = args.length + 1
+    clauses.push(`(LOWER(story_ip_id) = ?${nextArg} AND story_license_terms_id = ?${nextArg + 1})`)
+    args.push(ref.storyIpId, ref.licenseTermsId)
+  }
+  const client = getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE (${clauses.join(" OR ")})
+        AND commercial_rev_share_pct <= 0
+    `,
+    args,
+  })
+  return new Set(result.rows.map((row) =>
+    `${requiredString(row, "story_ip_id").toLowerCase()}:${requiredString(row, "story_license_terms_id")}`
+  ))
+}
