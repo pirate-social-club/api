@@ -5,6 +5,7 @@ import { permanentPreviewFailure } from "../src/lib/song-artifacts/song-preview-
 import { extractVideoAudioSampleForObject } from "../src/lib/song-artifacts/video-audio-sample"
 import type { Env } from "../src/env"
 import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
+import { installGracefulHttpShutdown } from "./_lib/graceful-http-shutdown"
 
 const DEFAULT_PORT = 8795
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024
@@ -356,6 +357,8 @@ const server = createServer(async (req, res) => {
     }, 500))
   }
 })
+
+installGracefulHttpShutdown(server, { service: "song preview service" })
 
 server.listen(port, hostname, () => {
   console.log(`song preview service listening on http://${hostname}:${port}`)
