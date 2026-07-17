@@ -61,6 +61,26 @@ export async function getActiveHandleLabelReservationForQuote(input: {
   return result.rows[0] ?? null
 }
 
+export async function getActivePaymentHandleLabelReservationForUser(input: {
+  executor: Client | Transaction
+  userId: string
+  now: string
+}): Promise<QueryResultRow | null> {
+  const result = await input.executor.execute({
+    sql: `
+      SELECT *
+      FROM community_handle_label_reservations
+      WHERE user_id = ?1
+        AND purpose = 'payment'
+        AND status = 'active'
+        AND expires_at > ?2
+      LIMIT 1
+    `,
+    args: [input.userId, input.now],
+  })
+  return result.rows[0] ?? null
+}
+
 export async function acquireHandleLabelReservation(input: {
   executor: Client | Transaction
   communityId: string

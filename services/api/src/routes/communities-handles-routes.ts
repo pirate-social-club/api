@@ -28,6 +28,7 @@ import type {
 } from "../types"
 import { decodePublicNamespaceVerificationId } from "../lib/public-ids"
 import { badRequestError } from "../lib/errors"
+import { enforceRateLimit } from "../lib/rate-limit"
 
 function namespaceVerificationSelector(value: string | undefined): string | null {
   const publicId = value?.trim() || null
@@ -117,6 +118,12 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
 
   communities.post("/:communityId/handles/quote", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    await enforceRateLimit(
+      c.env.HANDLE_QUOTE_RATE_LIMITER,
+      `community-handle-quote:${actor.userId}`,
+      "Community handle quote rate limit exceeded",
+      { scope: "community_handle_quote" },
+    )
     const body = await requireJsonBody<CommunityHandleQuoteRequest>(c, "Invalid community handle quote payload")
     const namespaceVerificationId = namespaceVerificationSelector(body.namespace_verification ?? undefined)
     const result = await quoteCommunityHandle({
@@ -147,6 +154,12 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
 
   communities.post("/:communityId/handles/claim", async (c) => {
     const { actor, communityId, communityRepository, userRepository } = await getResolvedCommunityRouteContext(c)
+    await enforceRateLimit(
+      c.env.HANDLE_CLAIM_RATE_LIMITER,
+      `community-handle-claim:${actor.userId}`,
+      "Community handle claim rate limit exceeded",
+      { scope: "community_handle_claim" },
+    )
     const body = await requireJsonBody<CommunityHandleClaimRequest>(c, "Invalid community handle claim payload")
     const result = await claimCommunityHandle({
       env: c.env,

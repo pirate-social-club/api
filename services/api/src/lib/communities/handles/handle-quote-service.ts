@@ -31,6 +31,7 @@ import { getActiveHandleForUser, getBlockingHandleForLabel } from "./handle-row-
 import {
   acquireHandleLabelReservation,
   getActiveHandleLabelReservation,
+  getActivePaymentHandleLabelReservationForUser,
 } from "./handle-label-reservation"
 
 export async function quoteCommunityHandle(input: {
@@ -155,6 +156,20 @@ export async function quoteCommunityHandle(input: {
       })
     }
 
+    const activeUserPaymentReservation = price.priceCents > 0
+      ? await getActivePaymentHandleLabelReservationForUser({
+        executor: db.client,
+        userId: input.userId,
+        now: quotedAt,
+      })
+      : null
+    if (activeUserPaymentReservation) {
+      throw conflictError("An active paid handle quote must expire or be claimed before quoting another label", {
+        reason: "active_payment_reservation",
+        expires_at: requiredString(activeUserPaymentReservation, "expires_at"),
+      })
+    }
+
     const activePaymentReservation = price.priceCents > 0
       ? await getActiveHandleLabelReservation({
         executor: db.client,
@@ -240,6 +255,17 @@ export async function quoteCommunityHandle(input: {
         if (racedReservation) {
           const raceReason = "Desired label is temporarily reserved for another payment"
           throw conflictError(raceReason, handleAvailabilityDetails("taken", raceReason))
+        }
+        const racedUserReservation = await getActivePaymentHandleLabelReservationForUser({
+          executor: db.client,
+          userId: input.userId,
+          now: quotedAt,
+        })
+        if (racedUserReservation) {
+          throw conflictError("An active paid handle quote must expire or be claimed before quoting another label", {
+            reason: "active_payment_reservation",
+            expires_at: requiredString(racedUserReservation, "expires_at"),
+          })
         }
         throw error
       } finally {
