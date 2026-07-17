@@ -135,6 +135,8 @@ export interface StorySettlementCoordinatorHealth {
   signerAddress: Address
   pendingPlans: number
   oldestBacklogAgeMs: number
+  failedPlans: number
+  revertedSteps: number
   reconciliationRequiredSteps: number
   oldestReconciliationAgeMs: number
   replacedSteps: number
@@ -394,6 +396,12 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       `SELECT COUNT(*) AS count, MIN(updated_at) AS oldest
        FROM steps WHERE state='reconciliation_required' OR repair_state='reconciliation_required'`,
     ).toArray()[0]!
+    const failedStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT COUNT(*) AS count FROM plans WHERE state='failed'",
+    ).toArray()[0]!
+    const revertedStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT COUNT(*) AS count FROM steps WHERE state='reverted' OR repair_state='reverted'",
+    ).toArray()[0]!
     const replacedStats = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
       "SELECT COUNT(*) AS count FROM steps WHERE state='replaced' OR repair_state='replaced'",
     ).toArray()[0]!
@@ -456,6 +464,8 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       signerAddress: domain.signerAddress,
       pendingPlans: Number(planStats.count),
       oldestBacklogAgeMs: planStats.oldest == null ? 0 : Math.max(0, now - oldestBacklog),
+      failedPlans: Number(failedStats.count),
+      revertedSteps: Number(revertedStats.count),
       reconciliationRequiredSteps: Number(reconciliationStats.count),
       oldestReconciliationAgeMs: reconciliationStats.oldest == null ? 0 : Math.max(0, now - oldestReconciliation),
       replacedSteps: Number(replacedStats.count),

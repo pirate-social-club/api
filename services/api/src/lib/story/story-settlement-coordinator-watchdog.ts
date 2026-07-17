@@ -35,6 +35,12 @@ export function classifyStorySettlementCoordinatorHealth(
     nextAllocatedNonce: health.nextAllocatedNonce,
   }
   const alerts: StorySettlementCoordinatorAlert[] = []
+  if (health.failedPlans > 0 || health.revertedSteps > 0) alerts.push({
+    key: "failed_plans",
+    title: "Story settlement coordinator has terminal failed plans",
+    urgency: "high",
+    details: { ...common, failedPlans: health.failedPlans, revertedSteps: health.revertedSteps },
+  })
   if (health.oldestBacklogAgeMs >= thresholds.backlogMs) alerts.push({
     key: "backlog_age",
     title: "Story settlement coordinator backlog is stale",

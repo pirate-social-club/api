@@ -175,6 +175,21 @@ export async function ensureStoryEntitlementMinterAuthorized(params: {
   })
 }
 
+export async function isStoryEntitlementMinterAuthorized(params: {
+  env: StoryDeliveryContractEnv
+  provider: JsonRpcProvider
+  minterAddress: string
+}): Promise<boolean> {
+  const minterAddress = getAddress(params.minterAddress)
+  const deliveryContracts = resolveStoryDeliveryContracts(params.env)
+  const contract = new Contract(
+    deliveryContracts.purchaseEntitlementToken,
+    PURCHASE_ENTITLEMENT_TOKEN_ABI,
+    params.provider,
+  )
+  return Boolean(await contract.isSettlementMinter(minterAddress))
+}
+
 export async function ensureStoryAccessSignerAuthorized(params: {
   env: Pick<
     Env,

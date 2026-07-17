@@ -1,8 +1,10 @@
+import { JsonRpcProvider } from "ethers"
 import { getAddress, zeroAddress, type Hex } from "viem"
 
 import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
 import { resolveStoryCoordinatorDirectSigner } from "../../story/story-direct-signer"
+import { isStoryEntitlementMinterAuthorized } from "../../story/story-runtime-authorization"
 import { isStorySettlementCoordinatorAdmissionEnabled } from "../../story/story-settlement-admission"
 import { deriveStorySettlementCallIdentity, type StorySettlementStepKind } from "../../story/story-settlement-call-identity"
 import { resolveStorySettlementProtocolAddresses } from "../../story/story-settlement-protocol-addresses"
@@ -19,7 +21,7 @@ import {
   type StorySettlementPlanRequest,
   type StorySettlementPlanResult,
 } from "../../story/story-settlement-wallet-coordinator-do"
-import { resolveStoryChainId, resolveStoryDeliveryContracts } from "../../story/story-runtime-config"
+import { resolveStoryChainId, resolveStoryDeliveryContracts, resolveStoryRpcUrl } from "../../story/story-runtime-config"
 import type { DbExecutor } from "../../db-helpers"
 import type { AssetRow } from "./row-types"
 import { parseJsonValue } from "./row-types"
@@ -50,6 +52,36 @@ export type CoordinateStorySettlementResult =
   | { kind: "not_coordinator_owned" }
   | { kind: "pending"; planRef: Hex; plan: StorySettlementPlanResult | null }
   | { kind: "confirmed"; planRef: Hex; plan: StorySettlementPlanResult }
+
+type EntitlementMinterVerifier = (input: {
+  env: Env
+  chainId: number
+  signerAddress: string
+}) => Promise<boolean>
+
+let entitlementMinterVerifierForTests: EntitlementMinterVerifier | null = null
+
+export function setEntitlementMinterVerifierForTests(verifier: EntitlementMinterVerifier | null): void {
+  entitlementMinterVerifierForTests = verifier
+}
+
+async function verifyEntitlementMinter(input: {
+  env: Env
+  chainId: number
+  signerAddress: string
+}): Promise<boolean> {
+  if (entitlementMinterVerifierForTests) return entitlementMinterVerifierForTests(input)
+  const provider = new JsonRpcProvider(resolveStoryRpcUrl(input.env), input.chainId)
+  const rawChainId = await provider.send("eth_chainId", [])
+  if (Number(BigInt(String(rawChainId))) !== input.chainId) {
+    throw badRequestError("story_settlement_entitlement_minter_rpc_chain_mismatch")
+  }
+  return isStoryEntitlementMinterAuthorized({
+    env: input.env,
+    provider,
+    minterAddress: input.signerAddress,
+  })
+}
 
 function requiredPolicyVersion(value: string | undefined, field: string): string {
   const normalized = String(value || "").trim()
@@ -239,6 +271,14 @@ export async function coordinateStorySettlement(input: {
     input.env.STORY_SETTLEMENT_FINALITY_POLICY_VERSION,
     "story_settlement_finality_policy_version",
   )
+  if (!existingPlanRef && input.asset.access_mode === "locked") {
+    const authorized = await verifyEntitlementMinter({
+      env: input.env,
+      chainId,
+      signerAddress: signer.value.address,
+    })
+    if (!authorized) throw badRequestError("story_settlement_coordinator_entitlement_minter_unauthorized")
+  }
   const persistedParentIpIds = parseJsonValue<unknown[]>(input.asset.story_derivative_parent_ip_ids_json, [])
     .filter((parentIpId): parentIpId is string => typeof parentIpId === "string" && Boolean(parentIpId.trim()))
     .map((parentIpId) => parentIpId.trim())
