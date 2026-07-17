@@ -2744,6 +2744,7 @@ export type RewardsCashoutSummary = {
 };
 
 export type RewardsSummaryResponse = {
+  chain_id: number;
   balance_cents: number;
   today_earned_cents: number;
   recent_events: Array<RewardEventSummary>;
@@ -2755,6 +2756,7 @@ export type RewardPayoutStatus = "submitted" | "confirmed" | "failed";
 
 export type RewardPayoutSummary = {
   id: string;
+  chain_id: number;
   amount_cents: number;
   recipient_address: string;
   status: RewardPayoutStatus;
@@ -2776,6 +2778,7 @@ export type RewardCashoutRequest = {
 
 export type RewardCashoutResponse = {
   payout: RewardPayoutSummary;
+  chain_id: number;
   balance_cents: number;
 };
 
@@ -3646,6 +3649,7 @@ type GateTraceNode = {
   asset_id?: string | null;
   required_amount_atomic?: string | null;
   current_amount_atomic?: string | null;
+  evaluated_wallet_count?: number | null;
   children?: Array<Record<string, unknown>>;
 };
 
@@ -3993,6 +3997,7 @@ type RequiredActionNode = {
   required_amount_atomic?: string;
   current_amount_atomic?: string;
   shortfall_amount_atomic?: string;
+  evaluated_wallet_count?: number;
 };
 
 type RequiredActionSet = {

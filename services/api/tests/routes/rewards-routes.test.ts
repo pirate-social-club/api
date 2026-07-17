@@ -840,6 +840,7 @@ describe("rewards routes", () => {
   test("GET /me/rewards returns ledger balance, today earnings, recent events, and nullifier gate state", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -960,6 +961,7 @@ describe("rewards routes", () => {
 
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {
     const ctx = await createRouteTestContext({
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -986,6 +988,7 @@ describe("rewards routes", () => {
     )
     expect(summary.status).toBe(200)
     expect(await json(summary)).toEqual({
+      chain_id: 84532,
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
@@ -1013,6 +1016,7 @@ describe("rewards routes", () => {
   test("does not accept ZKPassport as the configured reward identity namespace", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "zkpassport",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1071,6 +1075,7 @@ describe("rewards routes", () => {
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1156,6 +1161,8 @@ describe("rewards routes", () => {
       balance_cents: number
     }
     expect(body.payout.amount_cents).toBe(100)
+    expect((body as typeof body & { chain_id: number }).chain_id).toBe(84532)
+    expect((body.payout as typeof body.payout & { chain_id: number }).chain_id).toBe(84532)
     expect(body.payout.status).toBe("confirmed")
     expect(body.payout.settlement_ref).toBe("0xrewardtx")
     expect(body.payout.recipient_address).toBe("0x1000000000000000000000000000000000000001")
@@ -1222,6 +1229,7 @@ describe("rewards routes", () => {
   test("deduplicates different idempotency keys while one cashout is submitted", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1286,6 +1294,7 @@ describe("rewards routes", () => {
   test("POST /me/rewards/cashouts can attach a verified Privy wallet at claim time", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1385,6 +1394,7 @@ describe("rewards routes", () => {
   test("POST /me/rewards/cashouts rejects a claim-time wallet proof linked to another account", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1459,6 +1469,7 @@ describe("rewards routes", () => {
   test("submitted reward payouts are reconciled without creating a new payout effect", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1528,6 +1539,7 @@ describe("rewards routes", () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })

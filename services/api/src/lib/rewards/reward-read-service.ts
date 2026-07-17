@@ -51,13 +51,20 @@ function serializeRewardEvent(row: QueryResultRow): RewardEventSummary {
   }
 }
 
-function serializeRewardPayout(row: QueryResultRow): RewardPayoutSummary {
+function rewardChainId(env: Pick<Env, "REWARDS_CAMPAIGN_CHAIN_ID">): number {
+  const chainId = Number(env.REWARDS_CAMPAIGN_CHAIN_ID)
+  if (!Number.isSafeInteger(chainId) || chainId < 1) throw new Error("invalid_rewards_chain_id")
+  return chainId
+}
+
+function serializeRewardPayout(row: QueryResultRow, chainId: number): RewardPayoutSummary {
   const status = requiredString(row, "status")
   if (status !== "submitted" && status !== "confirmed" && status !== "failed") {
     throw new Error(`unexpected_reward_payout_status:${status}`)
   }
   return {
     id: requiredString(row, "reward_payout_effect_id"),
+    chain_id: chainId,
     amount_cents: requiredNumber(row, "amount_cents"),
     recipient_address: requiredString(row, "recipient_address"),
     status,
@@ -81,8 +88,10 @@ export async function getRewardsSummaryForUser(input: {
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
+  const chainId = rewardChainId(input.env)
   if (!rewardReadsEnabled(input.env)) {
     return {
+      chain_id: chainId,
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
@@ -154,6 +163,7 @@ export async function getRewardsSummaryForUser(input: {
   const verificationState = resolveVerificationState(hasNullifier)
 
   return {
+    chain_id: chainId,
     balance_cents: balanceCents,
     today_earned_cents: todayEarnedCents,
     recent_events: eventRows.rows.map(serializeRewardEvent),
@@ -162,6 +172,6 @@ export async function getRewardsSummaryForUser(input: {
       min_cents: minCashoutCents,
       verification_state: verificationState,
     },
-    latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow) : null,
+    latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow, chainId) : null,
   }
 }
