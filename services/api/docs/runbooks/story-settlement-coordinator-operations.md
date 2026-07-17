@@ -20,6 +20,10 @@ coordinator state with hand-written SQL or direct Durable Object storage edits.
 
 ## Abandoned nonce repair
 
+The latest staging drill preflight and its honest no-candidate result are recorded in
+`../evidence/story-settlement-nonce-repair-drill-2026-07-17.md`. That scan does not satisfy M4; use
+the evidence checklist there when an eligible staging nonce exists.
+
 Use only for a step that is durably `reserving`, has a reserved nonce, has no
 signed transaction or transaction hash, and cannot ever become a valid plan
 step. A rights hold alone freezes admission and is not proof of abandonment.
