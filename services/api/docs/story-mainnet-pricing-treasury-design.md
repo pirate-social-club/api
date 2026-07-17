@@ -231,6 +231,8 @@ USDC send and then mark the journal complete.
 No provider is approved by this document. A dedicated evidence spike must determine whether a
 liquid, manipulation-resistant IP/USD mainnet market and usable oracle exist. The spike must use
 primary provider/protocol documentation and read-only observations over a representative window.
+The bounded procedure and required deliverables are specified in
+`spikes/story-mainnet-ip-usd-rate-source.md`.
 
 ### Option A: on-chain oracle
 
