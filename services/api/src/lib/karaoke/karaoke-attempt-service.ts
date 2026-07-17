@@ -270,53 +270,6 @@ function isRankEligible(input: {
     && input.finalScoreBps >= KARAOKE_PLATFORM_MIN_SCORE_BPS
 }
 
-type ComputedStreak = {
-  bestStreak: number
-  currentStreak: number
-  lastQualifiedDate: string
-  streakStartedDate: string
-  totalQualifiedDays: number
-}
-
-function dayOrdinal(date: string): number {
-  const parsed = Date.parse(`${date}T00:00:00.000Z`)
-  return Number.isFinite(parsed) ? Math.floor(parsed / 86_400_000) : NaN
-}
-
-function computeStreakFromQualifiedDates(dates: string[]): ComputedStreak | null {
-  const uniqueDates = Array.from(new Set(dates.map((date) => date.trim()).filter(Boolean))).sort()
-  if (uniqueDates.length === 0) return null
-
-  let bestStreak = 0
-  let runLength = 0
-  let runStart = uniqueDates[0]
-  let previousOrdinal: number | null = null
-  let currentRunStart = uniqueDates[0]
-
-  for (const date of uniqueDates) {
-    const ordinal = dayOrdinal(date)
-    if (!Number.isFinite(ordinal)) continue
-    if (previousOrdinal != null && ordinal === previousOrdinal + 1) {
-      runLength += 1
-    } else {
-      runLength = 1
-      currentRunStart = date
-    }
-    if (runLength > bestStreak) bestStreak = runLength
-    previousOrdinal = ordinal
-    runStart = currentRunStart
-  }
-
-  if (previousOrdinal == null) return null
-  return {
-    bestStreak,
-    currentStreak: runLength,
-    lastQualifiedDate: uniqueDates[uniqueDates.length - 1],
-    streakStartedDate: runStart,
-    totalQualifiedDays: uniqueDates.length,
-  }
-}
-
 async function materializeKaraokeStreakFromLedger(input: {
   client: ReadClient
   communityId: string
@@ -324,47 +277,57 @@ async function materializeKaraokeStreakFromLedger(input: {
   postId: string
   userId: string
 }): Promise<void> {
-  const rows = await input.client.execute({
-    sql: `
-      SELECT activity_date
-      FROM song_engagement_days
-      WHERE user_id = ?1
-        AND post_id = ?2
-        AND qualified = 1
-      ORDER BY activity_date ASC
-    `,
-    args: [input.userId, input.postId],
-  })
-  const computed = computeStreakFromQualifiedDates(rows.rows.map((row) => stringOrNull(rowValue(row, "activity_date")) ?? ""))
-  if (!computed) return
-
   await input.client.execute({
     sql: `
+      WITH qualified_dates AS (
+        SELECT DISTINCT activity_date
+        FROM song_engagement_days
+        WHERE user_id = ?1
+          AND post_id = ?2
+          AND qualified = 1
+      ),
+      numbered_dates AS (
+        SELECT
+          activity_date,
+          julianday(activity_date) - ROW_NUMBER() OVER (ORDER BY activity_date) AS streak_group
+        FROM qualified_dates
+      ),
+      streak_runs AS (
+        SELECT
+          MIN(activity_date) AS streak_started_date,
+          MAX(activity_date) AS last_qualified_date,
+          COUNT(*) AS streak_length
+        FROM numbered_dates
+        GROUP BY streak_group
+      ),
+      streak_summary AS (
+        SELECT
+          (SELECT streak_length FROM streak_runs ORDER BY last_qualified_date DESC LIMIT 1) AS current_streak,
+          MAX(streak_length) AS best_streak,
+          (SELECT last_qualified_date FROM streak_runs ORDER BY last_qualified_date DESC LIMIT 1) AS last_qualified_date,
+          (SELECT streak_started_date FROM streak_runs ORDER BY last_qualified_date DESC LIMIT 1) AS streak_started_date,
+          (SELECT COUNT(*) FROM qualified_dates) AS total_qualified_days
+        FROM streak_runs
+      )
       INSERT INTO song_streaks (
         user_id, post_id, community_id, current_streak, best_streak,
         last_qualified_date, streak_started_date, total_qualified_days,
         created_at, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+      SELECT ?1, ?2, ?3, current_streak, best_streak,
+             last_qualified_date, streak_started_date, total_qualified_days,
+             ?4, ?4
+      FROM streak_summary
+      WHERE total_qualified_days > 0
       ON CONFLICT(user_id, post_id) DO UPDATE SET
-        current_streak = ?4,
-        best_streak = MAX(song_streaks.best_streak, ?5),
-        last_qualified_date = ?6,
-        streak_started_date = ?7,
-        total_qualified_days = ?8,
-        updated_at = ?9
+        current_streak = excluded.current_streak,
+        best_streak = excluded.best_streak,
+        last_qualified_date = excluded.last_qualified_date,
+        streak_started_date = excluded.streak_started_date,
+        total_qualified_days = excluded.total_qualified_days,
+        updated_at = excluded.updated_at
     `,
-    args: [
-      input.userId,
-      input.postId,
-      input.communityId,
-      computed.currentStreak,
-      computed.bestStreak,
-      computed.lastQualifiedDate,
-      computed.streakStartedDate,
-      computed.totalQualifiedDays,
-      input.now,
-    ],
+    args: [input.userId, input.postId, input.communityId, input.now],
   })
 }
 
@@ -383,6 +346,12 @@ export async function recordKaraokeAttempt(input: {
   summary: KaraokeSessionSummary
   userId: string
   emitRewardQualification?: boolean
+  /**
+   * Set only after an authoritative pre-read immediately before opening a
+   * buffered D1 write transaction. A uniqueness race then fails and rolls back
+   * the whole batch instead of double-counting engagement.
+   */
+  attemptKnownAbsent?: boolean
 }): Promise<RecordKaraokeAttemptResult> {
   const finalScoreBps = scoreBps(input.summary.finalScore) ?? 0
   const lyricsScoreBps = scoreBps(input.summary.lyricsScore) ?? 0
@@ -393,9 +362,10 @@ export async function recordKaraokeAttempt(input: {
     summary: input.summary,
   })
 
+  const insertKeyword = input.attemptKnownAbsent ? "INSERT" : "INSERT OR IGNORE"
   const inserted = await input.client.execute({
     sql: `
-      INSERT OR IGNORE INTO karaoke_attempt (
+      ${insertKeyword} INTO karaoke_attempt (
         id, session_id, attempt_id, user_id, post_id, community_id,
         karaoke_revision_id, scoring_version, scoring_provider, scoring_model,
         final_score, lyrics_score, timing_score, timing_trend,
@@ -439,7 +409,7 @@ export async function recordKaraokeAttempt(input: {
     ],
   })
 
-  const wasInserted = inserted.rows.length > 0
+  const wasInserted = input.attemptKnownAbsent || inserted.rows.length > 0
   if (!wasInserted) {
     return {
       inserted: false,

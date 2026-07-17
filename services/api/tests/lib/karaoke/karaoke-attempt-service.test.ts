@@ -180,6 +180,91 @@ describe("karaoke attempt leaderboard ranking", () => {
 })
 
 describe("recordKaraokeAttempt streak persistence", () => {
+  test("buffers the full D1 write unit after an authoritative absence check", async () => {
+    const client = createClient({ url: ":memory:" })
+    try {
+      await createKaraokeAttemptSchema(client)
+      await createSongStreakSchema(client)
+      await client.execute(`
+        CREATE TABLE posts (
+          post_id TEXT PRIMARY KEY,
+          song_artifact_bundle_id TEXT
+        )
+      `)
+      await client.execute(`
+        INSERT INTO posts (post_id, song_artifact_bundle_id)
+        VALUES ('pst_song', 'sab_song')
+      `)
+      await client.execute(`
+        CREATE TABLE reward_qualification_outbox (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          community_id TEXT NOT NULL,
+          post_id TEXT NOT NULL,
+          song_artifact_bundle_id TEXT NOT NULL,
+          activity TEXT NOT NULL,
+          qualified_at TEXT NOT NULL,
+          reward_period_key TEXT NOT NULL,
+          qualification_policy_version TEXT NOT NULL,
+          evidence_summary_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE (user_id, post_id, activity, reward_period_key)
+        )
+      `)
+      const statements: InStatement[] = []
+      const bufferedD1Transaction: ReadClient = {
+        async execute(statement: InStatement | string): Promise<QueryResult> {
+          statements.push(typeof statement === "string" ? { sql: statement } : statement)
+          return { rows: [] }
+        },
+        async batch(batchStatements): Promise<QueryResult[]> {
+          statements.push(...batchStatements)
+          return batchStatements.map(() => ({ rows: [] }))
+        },
+      }
+
+      const result = await recordKaraokeAttempt({
+        activityDate: "2026-07-17",
+        attemptKnownAbsent: true,
+        client: bufferedD1Transaction,
+        communityId: "cmt_karaoke",
+        completedAt: "2026-07-17T05:10:05.055Z",
+        completionReason: "completed",
+        karaokeRevisionId: "krv_current",
+        postId: "pst_song",
+        scoringModel: "scribe_v2_realtime",
+        scoringProvider: "elevenlabs",
+        sessionId: "session_buffered_d1",
+        attemptId: "attempt_buffered_d1",
+        emitRewardQualification: true,
+        summary: passingSummary(),
+        userId: "usr_karaoke",
+      })
+
+      expect(result).toEqual({ inserted: true, rankEligible: true, streakCredited: true })
+      expect(statements[0]?.sql).toContain("INSERT INTO karaoke_attempt")
+      expect(statements[0]?.sql).not.toContain("INSERT OR IGNORE")
+      await client.batch(statements, "write")
+
+      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days")
+      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+      const streak = await client.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
+      expect(streak.rows[0]).toEqual({ current_streak: 1, best_streak: 1, total_qualified_days: 1 })
+      const outbox = await client.execute("SELECT activity, qualification_policy_version FROM reward_qualification_outbox")
+      expect(outbox.rows[0]).toEqual({
+        activity: "karaoke",
+        qualification_policy_version: "karaoke_rank_eligible_v1",
+      })
+
+      await expect(client.batch(statements, "write")).rejects.toThrow()
+      const unchangedDay = await client.execute("SELECT karaoke_pass_count FROM song_engagement_days")
+      expect(unchangedDay.rows[0]).toEqual({ karaoke_pass_count: 1 })
+    } finally {
+      client.close()
+    }
+  })
+
   test("uses returned rows when a D1 transaction omits rowsAffected", async () => {
     const client = createClient({ url: ":memory:" })
     try {
