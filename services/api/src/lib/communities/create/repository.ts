@@ -26,6 +26,7 @@ import { serializeCommunity } from "../community-serialization"
 import { openCommunityReadClient } from "../community-read-access"
 import { normalizeCommunityCountryCode } from "../country-code"
 import type { GatePolicy } from "../membership/gate-types"
+import { normalizeStoredGatePolicy } from "../membership/gate-policy-validation"
 import type {
   CreateCommunityAuth,
   CreateCommunityRequestBody,
@@ -168,7 +169,7 @@ export async function loadCommunityLocalSnapshot(
     })
     const gate_policy = gatePolicyResult.rows[0]?.expression_json == null
       ? null
-      : JSON.parse(String(gatePolicyResult.rows[0].expression_json)) as LocalCommunitySnapshot["gate_policy"]
+      : normalizeStoredGatePolicy(JSON.parse(String(gatePolicyResult.rows[0].expression_json)))
 
     let donation_partner: LocalCommunitySnapshot["donation_partner"] = null
     if (row.donation_partner_id) {
