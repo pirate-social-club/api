@@ -153,6 +153,24 @@ export async function finalizeKaraokeAttempt(input: {
     }
     const scoringPolicy = parseStoredScoringPolicy(creation.scoringPolicyJson)
 
+    const existingAttempt = await executeFirst(db.client, {
+      sql: `
+        SELECT rank_eligible
+        FROM karaoke_attempt
+        WHERE session_id = ?1
+          AND attempt_id = ?2
+        LIMIT 1
+      `,
+      args: [input.payload.sessionId, input.payload.attemptId],
+    })
+    if (existingAttempt) {
+      return {
+        inserted: false,
+        rank_eligible: Number(rowValue(existingAttempt, "rank_eligible")) === 1,
+        streak_credited: false,
+      }
+    }
+
     const tx = await db.client.transaction("write")
     try {
       const result = await recordKaraokeAttempt({
@@ -169,6 +187,7 @@ export async function finalizeKaraokeAttempt(input: {
         sessionId: input.payload.sessionId,
         summary: input.payload.summary,
         userId: creation.subjectUserId,
+        attemptKnownAbsent: true,
         emitRewardQualification: envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
           && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false),
       })
