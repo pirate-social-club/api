@@ -76,6 +76,19 @@ export function resolveRewardsSettlementChainId(env: Env): number {
   return resolveSettlementChainId(env, "rewards")
 }
 
+export function assertRewardsCampaignAndSettlementChainsMatch(env: Env): void {
+  const campaignChainRaw = String(env.REWARDS_CAMPAIGN_CHAIN_ID ?? "").trim()
+  if (!campaignChainRaw) return
+
+  const campaignChainId = Number(campaignChainRaw)
+  if (!Number.isSafeInteger(campaignChainId) || campaignChainId < 1) {
+    throw badRequestError("REWARDS_CAMPAIGN_CHAIN_ID must be a positive integer")
+  }
+  if (campaignChainId !== resolveRewardsSettlementChainId(env)) {
+    throw badRequestError("Reward campaign and settlement chain IDs must match")
+  }
+}
+
 function resolveSettlementUsdcTokenAddress(env: Env, kind: SettlementOperatorKind): string {
   const names = envNames(kind)
   const chainId = resolveSettlementChainId(env, kind)

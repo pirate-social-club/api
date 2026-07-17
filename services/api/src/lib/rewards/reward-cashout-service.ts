@@ -21,6 +21,7 @@ import {
 } from "../communities/bookings/operator-signing-coordinator-do"
 import {
   assertDistinctBookingAndRewardsSignerDomains,
+  assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
@@ -473,10 +474,12 @@ async function pollConfirm(input: { env: Env; req: OperatorSettleRequest; txHash
   return result
 }
 
-function serializeCashout(effect: RewardPayoutEffect, balanceCents: number): RewardCashoutResponse {
+function serializeCashout(effect: RewardPayoutEffect, balanceCents: number, chainId: number): RewardCashoutResponse {
   return {
+    chain_id: chainId,
     payout: {
       id: effect.rewardPayoutEffectId,
+      chain_id: chainId,
       amount_cents: effect.amountCents,
       recipient_address: effect.recipientAddress,
       status: effect.status,
@@ -577,6 +580,8 @@ export async function cashOutRewards(input: {
   const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey)
   const nowUtc = input.nowUtc ?? new Date().toISOString()
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardPayoutsEnabled(input.env)) {
     throw eligibilityFailed("Rewards cashout is not enabled")
   }
@@ -596,7 +601,7 @@ export async function cashOutRewards(input: {
     walletIdentity: input.walletIdentity,
   })
   if (reserved.effect.status === "confirmed" || reserved.effect.status === "failed") {
-    return serializeCashout(reserved.effect, await currentBalanceCents(client, input.userId))
+    return serializeCashout(reserved.effect, await currentBalanceCents(client, input.userId), chainId)
   }
 
   const effect = await advanceSubmittedPayout({
@@ -607,7 +612,7 @@ export async function cashOutRewards(input: {
     confirmPollMs: input.confirmPollMs,
   })
 
-  return serializeCashout(effect, await currentBalanceCents(client, input.userId))
+  return serializeCashout(effect, await currentBalanceCents(client, input.userId), chainId)
 }
 
 export async function getRewardCashoutForUser(input: {
@@ -621,7 +626,9 @@ export async function getRewardCashoutForUser(input: {
   const client = input.client ?? getControlPlaneClient(input.env)
   const effect = await getPayoutByUserIdAndEffectId(client, input.userId, cashoutId)
   if (!effect) throw notFoundError("Rewards cashout not found")
-  return serializeCashout(effect, await currentBalanceCents(client, input.userId))
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
+  return serializeCashout(effect, await currentBalanceCents(client, input.userId), chainId)
 }
 
 export async function reconcileSubmittedRewardPayouts(input: {

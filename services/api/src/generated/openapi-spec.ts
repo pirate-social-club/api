@@ -16323,6 +16323,7 @@ const spec = {
       "RewardsSummaryResponse": {
         "type": "object",
         "required": [
+          "chain_id",
           "balance_cents",
           "today_earned_cents",
           "recent_events",
@@ -16330,6 +16331,10 @@ const spec = {
           "latest_in_flight_cashout"
         ],
         "properties": {
+          "chain_id": {
+            "type": "integer",
+            "minimum": 1
+          },
           "balance_cents": {
             "type": "integer"
           },
@@ -16374,11 +16379,16 @@ const spec = {
         "type": "object",
         "required": [
           "payout",
+          "chain_id",
           "balance_cents"
         ],
         "properties": {
           "payout": {
             "$ref": "#/components/schemas/RewardPayoutSummary"
+          },
+          "chain_id": {
+            "type": "integer",
+            "minimum": 1
           },
           "balance_cents": {
             "type": "integer"
@@ -16436,7 +16446,7 @@ const spec = {
           },
           "chain_id": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 1
           },
           "token_address": {
             "type": "string"
@@ -16534,7 +16544,7 @@ const spec = {
           },
           "chain_id": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 1
           },
           "ends_at": {
             "type": "integer",
@@ -16811,7 +16821,8 @@ const spec = {
             "type": "string"
           },
           "chain_id": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           },
           "token_address": {
             "type": "string"
@@ -21414,6 +21425,7 @@ const spec = {
         "type": "object",
         "required": [
           "id",
+          "chain_id",
           "amount_cents",
           "recipient_address",
           "status",
@@ -21423,6 +21435,10 @@ const spec = {
         "properties": {
           "id": {
             "type": "string"
+          },
+          "chain_id": {
+            "type": "integer",
+            "minimum": 1
           },
           "amount_cents": {
             "type": "integer"
@@ -23389,6 +23405,11 @@ const spec = {
             "nullable": true,
             "pattern": "^[0-9]+$"
           },
+          "evaluated_wallet_count": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
           "children": {
             "type": "array",
             "items": {
@@ -25235,6 +25256,10 @@ const spec = {
           "shortfall_amount_atomic": {
             "type": "string",
             "pattern": "^[1-9][0-9]*$"
+          },
+          "evaluated_wallet_count": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
