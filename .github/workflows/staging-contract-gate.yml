@@ -114,6 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           titles=(
+            "exposes stable gate identity and authoritative outcomes in live join eligibility"
             "follows a real staging community and persists after reload"
             "uploads a public video through direct multipart in a real browser"
             "creates and quotes a global booking hold on staging"
@@ -137,6 +138,11 @@ jobs:
         timeout-minutes: 10
         working-directory: web
         run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates and quotes a global booking hold on staging"
+
+      - name: Verify gate identity and outcome contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "exposes stable gate identity and authoritative outcomes in live join eligibility"
 
       - name: Verify community follow contract
         timeout-minutes: 10
