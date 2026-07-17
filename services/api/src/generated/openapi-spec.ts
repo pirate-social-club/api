@@ -9856,6 +9856,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true
@@ -19049,6 +19050,11 @@ const spec = {
           "gate_type"
         ],
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "gate_type": {
             "type": "string",
             "enum": [
@@ -22029,6 +22035,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true
@@ -23165,6 +23172,7 @@ const spec = {
         "x-valid-providers-by-proof-type": {
           "unique_human": [
             "self",
+            "zkpassport",
             "very"
           ],
           "age_over_18": [
@@ -23369,6 +23377,21 @@ const spec = {
           },
           "gate_type": {
             "type": "string"
+          },
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "outcome": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "passed",
+              "action_required",
+              "terminal_mismatch",
+              "provider_unavailable"
+            ]
           },
           "provider": {
             "type": "string"
@@ -24932,6 +24955,10 @@ const spec = {
           "type"
         ],
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "type": {
             "type": "string",
             "enum": [
@@ -25145,6 +25172,11 @@ const spec = {
         ],
         "additionalProperties": true,
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "kind": {
             "type": "string",
             "enum": [

@@ -17,6 +17,21 @@ async function startSessionDevMode(envOverrides: Record<string, string>): Promis
 }
 
 describe("zkpassport dev mode", () => {
+  test("supports a unique-human-only nullifier query", async () => {
+    const env = { ENVIRONMENT: "test", PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.sc" } as unknown as Env
+    const session = await getZkPassportProvider(env).startSession({
+      verificationSessionId: "ver_unique_human_test",
+      userId: "user_unique_human_test",
+      requestedCapabilities: ["unique_human"],
+      verificationRequirements: [],
+      verificationIntent: "community_join",
+      policyId: null,
+      challengeExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    })
+
+    expect(session.launch.requested_capabilities).toEqual(["unique_human"])
+  })
+
   test("ZKPASSPORT_DEV_MODE is ignored in production", async () => {
     expect(await startSessionDevMode({ ENVIRONMENT: "production", ZKPASSPORT_DEV_MODE: "1" })).toBe(false)
   })

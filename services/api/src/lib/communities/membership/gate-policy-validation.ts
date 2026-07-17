@@ -176,8 +176,8 @@ function validateGateAtom(
     case "altcha_pow":
       return { ...identity, type: "altcha_pow" }
     case "unique_human": {
-      if (atom.provider !== "self" && atom.provider !== "very") {
-        throw eligibilityFailed("unique_human gate provider must be self or very")
+      if (atom.provider !== "self" && atom.provider !== "very" && atom.provider !== "zkpassport") {
+        throw eligibilityFailed("unique_human gate provider must be self, zkpassport, or very")
       }
       return { ...identity, type: "unique_human", provider: atom.provider }
     }

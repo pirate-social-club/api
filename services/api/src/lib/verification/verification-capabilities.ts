@@ -63,7 +63,7 @@ export function applyLazyCapabilityExpiry(
 
   if (
     next.unique_human.state === "verified"
-    && (next.unique_human.provider === "self" || next.unique_human.provider === "very")
+    && (next.unique_human.provider === "self" || next.unique_human.provider === "very" || next.unique_human.provider === "zkpassport")
     && isOlderThanTtl(next.unique_human.verified_at, INTERACTIVE_VERIFICATION_TTL_MS, nowMs)
   ) {
     next.unique_human.state = "expired"
