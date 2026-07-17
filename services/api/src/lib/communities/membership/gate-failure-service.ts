@@ -82,6 +82,10 @@ function failureReasonFromActionSet(
     .map((item) => item.capability)
   if (capabilities.includes("erc721_holding")) return "erc721_holding_required"
   if (capabilities.includes("erc721_inventory_match")) return "erc721_inventory_match_required"
+  // Appended last so the reason reported for existing token policies is
+  // unchanged. The required action set still carries the exact shortfall, so
+  // this only replaces the misleading "missing_verification" readout.
+  if (capabilities.includes("asset_balance")) return "asset_balance_too_low"
   return "missing_verification"
 }
 

@@ -218,6 +218,18 @@ describe("throwUnsatisfiedMembershipGate", () => {
     })
 
     expect(result.message).toBe("Connect a wallet holding the required asset to post in this community")
+    // An insufficient balance is its own reason: reporting "missing_verification"
+    // sends a member to identity verification that cannot help, and "unsupported"
+    // renders dead-end copy.
+    expect(result.details.failure_reason).toBe("asset_balance_too_low")
+    // The exact shortfall must survive alongside the reason so the member can be
+    // told how much more they need.
+    expect(result.details.gate_evaluation?.required_action_set?.items[0]).toMatchObject({
+      capability: "asset_balance",
+      required_amount_atomic: "10",
+      current_amount_atomic: "7",
+      shortfall_amount_atomic: "3",
+    })
   })
 
   test("renders missing RPC configuration as a provider outage", () => {

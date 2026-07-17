@@ -169,6 +169,9 @@ describe("evaluateMembershipGatePolicy", () => {
     })
 
     test("includes canonical atomic amounts in public summaries", () => {
+      // Symbol and decimals travel on the summary because members are shown this
+      // gate by a synchronous formatter that cannot reach the authenticated
+      // capability catalog. Without them "10000000" is unrenderable.
       expect(buildMembershipGateSummariesFromPolicy(atomGate({
         type: "asset_balance",
         asset_id: "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -177,6 +180,22 @@ describe("evaluateMembershipGatePolicy", () => {
         gate_type: "asset_balance",
         asset_id: "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
         min_amount_atomic: "10000000",
+        asset_symbol: "USDC",
+        asset_decimals: 6,
+      }])
+    })
+
+    test("keeps summaries self-describing for assets with different precision", () => {
+      expect(buildMembershipGateSummariesFromPolicy(atomGate({
+        type: "asset_balance",
+        asset_id: "eip155:8453/slip44:60",
+        min_amount_atomic: "500000000000000000",
+      }))).toEqual([{
+        gate_type: "asset_balance",
+        asset_id: "eip155:8453/slip44:60",
+        min_amount_atomic: "500000000000000000",
+        asset_symbol: "ETH",
+        asset_decimals: 18,
       }])
     })
 

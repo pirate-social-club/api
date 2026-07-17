@@ -30,8 +30,9 @@ describe("gate capability routes", () => {
     expect(assets.status).toBe(401)
   })
 
-  test("lists canonical balance assets with authoring metadata", async () => {
-    const response = await app().request("/gate-capabilities/assets", { headers: adminHeaders }, adminEnv)
+  test("lists canonical balance assets with authoring metadata when every transport is configured", async () => {
+    const env = { ...adminEnv, ETHEREUM_RPC_URL: "https://eth.example", BASE_MAINNET_RPC_URL: "https://base.example" } as Env
+    const response = await app().request("/gate-capabilities/assets", { headers: adminHeaders }, env)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({
       assets: [
@@ -41,6 +42,25 @@ describe("gate capability routes", () => {
         { asset_id: "eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", label: "USDC on Base", chain_namespace: "eip155:8453", standard: "erc20", symbol: "USDC", decimals: 6 },
       ],
     })
+  })
+
+  test("omits assets whose chain transport is not configured in this environment", async () => {
+    // Advertising an asset this deployment cannot evaluate would let a moderator
+    // author a gate that fails closed for every member.
+    const env = { ...adminEnv, ETHEREUM_RPC_URL: "https://eth.example" } as Env
+    const response = await app().request("/gate-capabilities/assets", { headers: adminHeaders }, env)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { assets: Array<{ asset_id: string }> }
+    expect(body.assets.map((asset) => asset.asset_id)).toEqual([
+      "eip155:1/slip44:60",
+      "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    ])
+  })
+
+  test("returns an empty catalog rather than unevaluable assets when no transport is configured", async () => {
+    const response = await app().request("/gate-capabilities/assets", { headers: adminHeaders }, adminEnv)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ assets: [] })
   })
 
   test("lists stable trusted sources for an authenticated actor", async () => {

@@ -1,7 +1,11 @@
+import type { Env } from "../../../env"
+import { hasEvmRpcConfig } from "../community-token-gates"
+import type { EvmChainNamespace } from "../community-token-gates"
+
 export type AssetBalanceDescriptor = {
   assetId: string
   label: string
-  chainNamespace: "eip155:1" | "eip155:8453"
+  chainNamespace: EvmChainNamespace
   standard: "native" | "erc20"
   contractAddress: string | null
   decimals: number
@@ -49,7 +53,22 @@ const ASSETS: AssetBalanceDescriptor[] = [
 
 const BY_ASSET_ID = new Map(ASSETS.map((asset) => [asset.assetId, asset]))
 
-export function listAssetBalanceCapabilities(): Array<{
+/**
+ * Whether an asset can be evaluated in this deployment.
+ *
+ * Registry membership fixes the contract and standard, but a gate is only
+ * usable if this environment also has a transport for the asset's chain.
+ * Without one, every evaluation fails closed and the community is unjoinable,
+ * so an unevaluable asset must never be offered for authoring.
+ *
+ * Deliberately a config check, not a live request: provider downtime must not
+ * become an authoring outage.
+ */
+export function isAssetBalanceEvaluable(env: Env, asset: AssetBalanceDescriptor): boolean {
+  return hasEvmRpcConfig(env, asset.chainNamespace)
+}
+
+export function listAssetBalanceCapabilities(env: Env): Array<{
   asset_id: string
   label: string
   chain_namespace: string
@@ -57,14 +76,16 @@ export function listAssetBalanceCapabilities(): Array<{
   symbol: string
   decimals: number
 }> {
-  return ASSETS.map((asset) => ({
-    asset_id: asset.assetId,
-    label: asset.label,
-    chain_namespace: asset.chainNamespace,
-    standard: asset.standard,
-    symbol: asset.symbol,
-    decimals: asset.decimals,
-  }))
+  return ASSETS
+    .filter((asset) => isAssetBalanceEvaluable(env, asset))
+    .map((asset) => ({
+      asset_id: asset.assetId,
+      label: asset.label,
+      chain_namespace: asset.chainNamespace,
+      standard: asset.standard,
+      symbol: asset.symbol,
+      decimals: asset.decimals,
+    }))
 }
 
 export function resolveAssetBalanceDescriptor(value: unknown): AssetBalanceDescriptor | null {

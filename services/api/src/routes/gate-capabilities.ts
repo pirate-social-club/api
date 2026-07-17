@@ -49,7 +49,7 @@ gateCapabilities.use("/assets", authenticateAdminOrUser)
 
 gateCapabilities.get("/assets", (c) => {
   enforceRateLimit(c.get("actor").userId)
-  return c.json({ assets: listAssetBalanceCapabilities() }, 200)
+  return c.json({ assets: listAssetBalanceCapabilities(c.env) }, 200)
 })
 
 gateCapabilities.get("/nft/sources", (c) => {

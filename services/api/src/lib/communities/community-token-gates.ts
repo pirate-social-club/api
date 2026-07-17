@@ -10,6 +10,8 @@ const ERC721_COLLECTION_ABI = [
 const ERC721_INTERFACE_ID = "0x80ac58cd"
 const ETHEREUM_RPC_TIMEOUT_MS = 8_000
 
+export type EvmChainNamespace = "eip155:1" | "eip155:8453"
+
 let erc721OwnershipCheckerForTests: ((input: {
   contractAddress: string
   env: Env
@@ -33,15 +35,37 @@ export function setErc721ContractSupportCheckerForTests(
 }
 
 export function hasEthereumRpcConfig(env: Env): boolean {
-  return String(env.ETHEREUM_RPC_URL || "").trim().length > 0
+  return hasEvmRpcConfig(env, "eip155:1")
+}
+
+/**
+ * Whether this deployment has a transport configured for `chainNamespace`.
+ *
+ * This is a configuration check, never a liveness check: it answers "can this
+ * environment ever evaluate this chain", not "is the provider up right now".
+ * Authoring decisions must use it so that a transient provider outage cannot
+ * turn into an authoring outage, while an unconfigured chain is still refused
+ * up front instead of producing a gate that fails closed for every member.
+ */
+export function hasEvmRpcConfig(env: Env, chainNamespace: EvmChainNamespace): boolean {
+  return readEvmRpcUrl(env, chainNamespace) != null
+}
+
+function readEvmRpcUrl(env: Env, chainNamespace: EvmChainNamespace): string | null {
+  // Read the raw value first: `String(undefined)` is the non-empty string
+  // "undefined", so coercing before the empty check would treat an unset
+  // secret as a configured URL.
+  const configured = chainNamespace === "eip155:1" ? env.ETHEREUM_RPC_URL : env.BASE_MAINNET_RPC_URL
+  const rpcUrl = typeof configured === "string" ? configured.trim() : ""
+  return rpcUrl.length > 0 ? rpcUrl : null
 }
 
 export function getEthereumProvider(env: Env): JsonRpcProvider | null {
   return getEvmJsonRpcProvider(env, "eip155:1")
 }
 
-export function getEvmJsonRpcProvider(env: Env, chainNamespace: "eip155:1" | "eip155:8453"): JsonRpcProvider | null {
-  const rpcUrl = String(chainNamespace === "eip155:1" ? env.ETHEREUM_RPC_URL : env.BASE_MAINNET_RPC_URL || "").trim()
+export function getEvmJsonRpcProvider(env: Env, chainNamespace: EvmChainNamespace): JsonRpcProvider | null {
+  const rpcUrl = readEvmRpcUrl(env, chainNamespace)
   if (!rpcUrl) {
     return null
   }
