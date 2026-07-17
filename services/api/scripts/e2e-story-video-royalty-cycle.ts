@@ -692,6 +692,32 @@ async function readAsset(input: {
   })
 }
 
+async function waitForLockedDerivativeReady(input: {
+  apiBaseUrl: string
+  communityId: string
+  session: E2ESession
+  asset: string
+}): Promise<Awaited<ReturnType<typeof readAsset>>> {
+  const timeoutMs = Number(readEnvAlias("PIRATE_E2E_ASSET_READY_TIMEOUT_MS", "PIRATE_SMOKE_ASSET_READY_TIMEOUT_MS", "240000"))
+  const intervalMs = Number(readEnvAlias("PIRATE_E2E_ASSET_READY_INTERVAL_MS", "PIRATE_SMOKE_ASSET_READY_INTERVAL_MS", "5000"))
+  const deadline = Date.now() + timeoutMs
+  let latest = await readAsset(input)
+  while (
+    latest.story_royalty_registration_status !== "registered"
+    || !latest.story_ip?.trim()
+    || latest.locked_delivery_status !== "ready"
+    || !latest.story_cdr_vault_uuid
+    || !latest.story_entitlement_token
+  ) {
+    if (Date.now() >= deadline) {
+      throw new Error(`locked derivative video did not become ready before timeout: ${JSON.stringify(latest)}`)
+    }
+    await sleep(intervalMs)
+    latest = await readAsset(input)
+  }
+  return latest
+}
+
 async function createSongPost(input: {
   apiBaseUrl: string
   communityId: string
@@ -1316,7 +1342,7 @@ async function main(): Promise<void> {
     upload: videoUpload,
     upstreamAssetRefs,
   })
-  const videoAsset = await readAsset({
+  const videoAsset = await waitForLockedDerivativeReady({
     apiBaseUrl,
     communityId,
     session: videoCreator,
