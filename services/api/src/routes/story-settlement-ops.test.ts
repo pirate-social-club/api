@@ -127,6 +127,42 @@ describe("Story settlement operator routes", () => {
     })
   })
 
+  test("retargets only the expected unconsumed staging drill arm", async () => {
+    let request: Record<string, unknown> | null = null
+    setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })
+    const env = {
+      ENVIRONMENT: "staging",
+      STORY_CHAIN_ID: "1315",
+      STORY_COORDINATOR_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
+      STORY_COORDINATOR_SIGNER_ADDRESS: ADDRESS,
+      STORY_SETTLEMENT_WALLET_COORDINATOR: {
+        getByName: () => ({
+          retargetNonceRepairDrill: async (input: Record<string, unknown>) => {
+            request = input
+            return { armRef: PLAN_REF, communityId: "community_ready", retargetRef: STEP_REF }
+          },
+        }),
+      },
+    } as unknown as Env
+    const response = await storySettlementOps.request(`/nonce-repair-drills/${PLAN_REF}/retargets`, {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        community_id: "community_ready",
+        authorization_ref: "CANARY-NONCE-RETARGET-1",
+      }),
+    }, env)
+    expect(response.status).toBe(202)
+    expect(request).toEqual({
+      armRef: PLAN_REF,
+      communityId: "community_ready",
+      authorizationRef: "operator:opc_story_ops:CANARY-NONCE-RETARGET-1",
+    })
+    expect(await response.json()).toEqual({
+      drill: { armRef: PLAN_REF, communityId: "community_ready", retargetRef: STEP_REF },
+    })
+  })
+
   test("synthetic alert is staging-only and reports sink delivery", async () => {
     const captured: string[] = []
     setStorySettlementOpsDependenciesForTests({
