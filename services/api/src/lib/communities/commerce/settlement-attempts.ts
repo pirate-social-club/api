@@ -61,6 +61,7 @@ export async function reservePurchaseSettlementAttempt(input: {
   purchaseId: string
   settlementWalletAttachmentId: string
   settlementTxRef: string | null
+  coordinatorOwned: boolean
   now: string
 }): Promise<"reserved" | "finalized"> {
   const attemptId = `psa_${input.purchaseId.replace(/^pur_/, "")}`
@@ -112,6 +113,13 @@ export async function reservePurchaseSettlementAttempt(input: {
       `,
       args: [input.quoteId, input.now],
     })
+    return "reserved"
+  }
+
+  // The wallet coordinator owns broadcast exclusivity for a plan-ref'd purchase.
+  // Re-entry is how polling and cron reconciliation drive its durable journal; the
+  // legacy attempt lease must not fence that read/reconcile path.
+  if (input.coordinatorOwned) {
     return "reserved"
   }
 

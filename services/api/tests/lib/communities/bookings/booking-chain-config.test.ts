@@ -4,6 +4,7 @@ import { Wallet, getAddress } from "ethers"
 import type { Env } from "../../../../src/env"
 import {
   assertDistinctBookingAndRewardsSignerDomains,
+  assertRewardsCampaignAndSettlementChainsMatch,
   resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorAddress,
   resolveBookingSettlementRpcUrl,
@@ -119,5 +120,17 @@ describe("booking settlement chain config", () => {
     } as Env
 
     expect(() => assertDistinctBookingAndRewardsSignerDomains(env)).not.toThrow()
+  })
+
+  test("requires reward campaign funding and settlement to use the same chain", () => {
+    expect(() => assertRewardsCampaignAndSettlementChainsMatch({
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+    } as Env)).toThrow(/must match/)
+
+    expect(() => assertRewardsCampaignAndSettlementChainsMatch({
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+    } as Env)).not.toThrow()
   })
 })

@@ -51,10 +51,11 @@ function asset(): AssetRow {
   } as unknown as AssetRow
 }
 
-function env(admissionEnabled: boolean): Env {
+function env(admissionEnabled: boolean, calls?: { lookup: number; reconcile: number; admit: number }): Env {
   const stub = {
-    lookup: async () => null,
-    admit: async () => { throw new Error("coordinator RPC timeout") },
+    lookup: async () => { if (calls) calls.lookup += 1; return null },
+    reconcile: async () => { if (calls) calls.reconcile += 1; throw new Error("coordinator RPC timeout") },
+    admit: async () => { if (calls) calls.admit += 1; throw new Error("coordinator RPC timeout") },
   }
   return {
     STORY_CHAIN_ID: "1315",
@@ -108,8 +109,10 @@ describe("Story settlement coordinator admission fence", () => {
       now: "2026-07-16T12:00:00.000Z",
     }
     await coordinateStorySettlement({ ...request, env: env(true) })
-    const retry = await coordinateStorySettlement({ ...request, env: env(false), now: "2026-07-16T12:01:00.000Z" })
+    const calls = { lookup: 0, reconcile: 0, admit: 0 }
+    const retry = await coordinateStorySettlement({ ...request, env: env(false, calls), now: "2026-07-16T12:01:00.000Z" })
     expect(retry.kind).toBe("pending")
+    expect(calls).toEqual({ lookup: 0, reconcile: 1, admit: 0 })
     const effects = await client.execute("SELECT status, coordinator_plan_ref FROM purchase_settlement_effects")
     expect(effects.rows.every((row) => row.status === "submitted" && Boolean(row.coordinator_plan_ref))).toBe(true)
   })

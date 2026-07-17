@@ -3,6 +3,10 @@ import type { Client, QueryResultRow } from "../sql-client"
 import { executeFirst } from "../db-helpers"
 import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../sql-row"
 import { getControlPlaneClient } from "../runtime-deps"
+import {
+  assertRewardsCampaignAndSettlementChainsMatch,
+  resolveRewardsSettlementChainId,
+} from "../communities/bookings/booking-chain-config"
 import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import type {
   RewardEventKind,
@@ -51,13 +55,14 @@ function serializeRewardEvent(row: QueryResultRow): RewardEventSummary {
   }
 }
 
-function serializeRewardPayout(row: QueryResultRow): RewardPayoutSummary {
+function serializeRewardPayout(row: QueryResultRow, chainId: number): RewardPayoutSummary {
   const status = requiredString(row, "status")
   if (status !== "submitted" && status !== "confirmed" && status !== "failed") {
     throw new Error(`unexpected_reward_payout_status:${status}`)
   }
   return {
     id: requiredString(row, "reward_payout_effect_id"),
+    chain_id: chainId,
     amount_cents: requiredNumber(row, "amount_cents"),
     recipient_address: requiredString(row, "recipient_address"),
     status,
@@ -81,8 +86,11 @@ export async function getRewardsSummaryForUser(input: {
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardReadsEnabled(input.env)) {
     return {
+      chain_id: chainId,
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
@@ -154,6 +162,7 @@ export async function getRewardsSummaryForUser(input: {
   const verificationState = resolveVerificationState(hasNullifier)
 
   return {
+    chain_id: chainId,
     balance_cents: balanceCents,
     today_earned_cents: todayEarnedCents,
     recent_events: eventRows.rows.map(serializeRewardEvent),
@@ -162,6 +171,6 @@ export async function getRewardsSummaryForUser(input: {
       min_cents: minCashoutCents,
       verification_state: verificationState,
     },
-    latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow) : null,
+    latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow, chainId) : null,
   }
 }

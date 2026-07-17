@@ -728,7 +728,11 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
     stalledCommunityIds: [],
   }
 
-  const communities = (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).slice(0, maxCommunities)
+  const communities = selectRotatingCommunityBatch(
+    await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
+    maxCommunities,
+    Date.now(),
+  )
   for (const community of communities) {
     let db: CommunityWriteHandle | null = null
     try {
@@ -784,6 +788,13 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
   }
 
   return summary
+}
+
+export function selectRotatingCommunityBatch<T>(items: T[], maxItems: number, nowMs: number): T[] {
+  if (items.length <= maxItems) return items
+  const epochMinute = Math.floor(nowMs / 60_000)
+  const start = (epochMinute * maxItems) % items.length
+  return Array.from({ length: maxItems }, (_, offset) => items[(start + offset) % items.length]!)
 }
 
 async function settleCommunityPurchaseForBuyer(input: {
@@ -848,6 +859,12 @@ async function settleCommunityPurchaseForBuyer(input: {
     } = extractDonationCompatibilityFields({
       allocationSnapshot,
     })
+    const coordinatorOwnedAttempt = (await listPurchaseSettlementEffectsByQuote({
+      client: db.client,
+      communityId: input.communityId,
+      quoteId: quote.quote_id,
+      purchaseId,
+    })).some((effect) => Boolean(effect.coordinator_plan_ref))
     const reservation = await reservePurchaseSettlementAttempt({
       client: db.client,
       communityId: input.communityId,
@@ -855,6 +872,7 @@ async function settleCommunityPurchaseForBuyer(input: {
       purchaseId,
       settlementWalletAttachmentId: input.settlementWalletAttachmentId,
       settlementTxRef: input.body.settlement_tx_ref ?? null,
+      coordinatorOwned: coordinatorOwnedAttempt,
       now: createdAt,
     })
     if (reservation === "finalized") {

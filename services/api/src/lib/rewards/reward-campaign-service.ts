@@ -25,6 +25,10 @@ import {
   KARAOKE_SCORE_SCALE,
 } from "../karaoke/karaoke-qualification-policy"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
+import {
+  assertRewardsCampaignAndSettlementChainsMatch,
+  resolveRewardsSettlementChainId,
+} from "../communities/bookings/booking-chain-config"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -142,12 +146,12 @@ function campaignResource(row: CampaignRow): RewardCampaign {
   }
 }
 
-function publicRewardOffer(row: CampaignRow): PublicRewardOffer {
+function publicRewardOffer(row: CampaignRow, settlementChainId: number): PublicRewardOffer {
   return {
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
-    chain_id: integer(rowValue(row, "chain_id")),
+    chain_id: settlementChainId,
     ends_at: unixSeconds(rowValue(row, "ends_at")) ?? 0,
   }
 }
@@ -512,7 +516,8 @@ export async function getPublicActiveRewardCampaign(input: {
   ) {
     throw notFoundError("Active reward campaign not found")
   }
-  return publicRewardOffer(row)
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  return publicRewardOffer(row, resolveRewardsSettlementChainId(input.env))
 }
 
 export async function getPublicActiveRewardCampaignForSong(input: {
@@ -539,7 +544,8 @@ export async function getPublicActiveRewardCampaignForSong(input: {
   })
   const row = result.rows[0]
   if (!row) throw notFoundError("Active reward campaign not found")
-  return publicRewardOffer(row)
+  assertRewardsCampaignAndSettlementChainsMatch(input.env)
+  return publicRewardOffer(row, resolveRewardsSettlementChainId(input.env))
 }
 
 async function resolveFundingSender(exec: Pick<Client | Transaction, "execute">, userId: string): Promise<string> {

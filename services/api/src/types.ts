@@ -181,6 +181,7 @@ type RewardsCashoutSummary = {
 }
 
 export type RewardsSummaryResponse = {
+  chain_id: number
   balance_cents: number
   today_earned_cents: number
   recent_events: RewardEventSummary[]
@@ -192,6 +193,7 @@ export type RewardPayoutStatus = "submitted" | "confirmed" | "failed"
 
 export type RewardPayoutSummary = {
   id: string
+  chain_id: number
   amount_cents: number
   recipient_address: string
   status: RewardPayoutStatus
@@ -211,6 +213,7 @@ export type RewardCashoutRequest = {
 
 export type RewardCashoutResponse = {
   payout: RewardPayoutSummary
+  chain_id: number
   balance_cents: number
 }
 

@@ -133,9 +133,26 @@ async function forceAlarm(stub: Stub): Promise<void> {
   await runInDurableObject(stub, (instance) => instance.alarm())
 }
 
+async function storedAlarm(stub: Stub): Promise<number | null> {
+  return runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())
+}
+
 beforeEach(() => setStorySettlementChainPrimitivesForTests(null))
 
 describe("StorySettlementWalletCoordinatorDO (real workerd + SQLite)", () => {
+  it("re-arms a fired alarm when the next step is not runnable yet", async () => {
+    const stub = freshStub()
+    await injectChain(stub, harness())
+    await stub.admit(plan())
+    const future = Date.now() + 60_000
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec("UPDATE steps SET next_attempt_at=?1", future)
+      await state.storage.setAlarm(Date.now() - 1)
+      await instance.alarm()
+    })
+    expect(await storedAlarm(stub)).toBe(future)
+  })
+
   it("admits immutable calls, derives the signed hash, and finality-gates serial nonces", async () => {
     const stub = freshStub()
     const state = harness()
