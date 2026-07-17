@@ -571,18 +571,43 @@ async function uploadVideo(input: {
   size_bytes?: number | null
   storage_ref: string
 }> {
-  const upload = await api<{ id: string }>({
+  const digest = await crypto.subtle.digest("SHA-256", input.bytes)
+  const contentHash = `0x${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+  const upload = await api<{
+    id: string
+    upload_session: { id: string; total_parts: number; upload_id: string }
+  }>({
     apiBaseUrl: input.apiBaseUrl,
     method: "POST",
     path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads`,
     token: input.session.accessToken,
     body: {
+      upload_mode: "direct_multipart",
       artifact_kind: "primary_video",
       mime_type: "video/mp4",
       filename: input.filename,
       size_bytes: input.bytes.byteLength,
+      content_hash: contentHash,
     },
   })
+  if (upload.upload_session.total_parts !== 1) {
+    throw new Error(`expected tiny video fixture to have 1 part, got ${upload.upload_session.total_parts}`)
+  }
+  const signed = await api<{ url: string }>({
+    apiBaseUrl: input.apiBaseUrl,
+    method: "GET",
+    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/sessions/${encodeURIComponent(upload.upload_session.id)}/parts/1/signed-url`,
+    token: input.session.accessToken,
+  })
+  const uploaded = await fetch(signed.url, {
+    method: "PUT",
+    headers: { "content-type": "video/mp4" },
+    body: toRequestArrayBuffer(input.bytes),
+  })
+  const etag = uploaded.headers.get("etag")
+  if (!uploaded.ok || !etag) {
+    throw new Error(`video part upload failed: ${uploaded.status}; etag=${etag}; body=${(await uploaded.text()).slice(0, 800)}`)
+  }
   const completed = await api<{
     content_hash?: string | null
     id: string
@@ -592,10 +617,13 @@ async function uploadVideo(input: {
   }>({
     apiBaseUrl: input.apiBaseUrl,
     method: "POST",
-    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/content`,
+    path: `/communities/${encodeURIComponent(input.communityId)}/song-artifact-uploads/${encodeURIComponent(upload.id)}/sessions/${encodeURIComponent(upload.upload_session.id)}/complete`,
     token: input.session.accessToken,
-    bytes: input.bytes,
-    contentType: "video/mp4",
+    body: {
+      upload_id: upload.upload_session.upload_id,
+      parts: [{ part_number: 1, etag }],
+      content_hash: contentHash,
+    },
   })
   console.log("[e2e] video upload", {
     upload: completed.id,
