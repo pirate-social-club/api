@@ -85,6 +85,7 @@ import {
   type PurchaseSettlementEffectRow,
 } from "./settlement-effects"
 import {
+  getPurchaseSettlementAttempt,
   listStalePurchaseSettlementAttempts,
   markPurchaseSettlementAttemptFailed,
   reservePurchaseSettlementAttempt,
@@ -788,6 +789,30 @@ export async function reconcileStaleCommunityPurchaseSettlements(input: {
   }
 
   return summary
+}
+
+export async function reconcileCommunityPurchaseSettlement(input: {
+  env: Env
+  communityRepository: CommunitySettlementRepository
+  communityId: string
+  quoteId: string
+}): Promise<"finalized" | "failed" | "pending" | "error"> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  try {
+    const attempt = await getPurchaseSettlementAttempt({ client: db.client, quoteId: input.quoteId })
+    if (!attempt || attempt.community_id !== input.communityId) {
+      throw notFoundError("Purchase settlement attempt not found")
+    }
+    return await reconcileStaleCommunityPurchaseSettlementAttempt({
+      env: input.env,
+      client: db.client,
+      communityId: input.communityId,
+      attempt,
+      now: nowIso(),
+    })
+  } finally {
+    db.close()
+  }
 }
 
 export function selectRotatingCommunityBatch<T>(items: T[], maxItems: number, nowMs: number): T[] {

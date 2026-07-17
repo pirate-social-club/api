@@ -36,7 +36,7 @@ function toPurchaseSettlementAttemptRow(row: Record<string, unknown>): PurchaseS
   }
 }
 
-async function getPurchaseSettlementAttempt(input: {
+export async function getPurchaseSettlementAttempt(input: {
   client: SettlementExecutor
   quoteId: string
 }): Promise<PurchaseSettlementAttemptRow | null> {

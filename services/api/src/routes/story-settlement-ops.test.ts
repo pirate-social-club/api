@@ -76,4 +76,23 @@ describe("Story settlement operator routes", () => {
     const production = await storySettlementOps.request("/alerts/synthetic", init, { ENVIRONMENT: "production" } as Env)
     expect(production.status).toBe(403)
   })
+
+  test("runs one scoped purchase reconciliation under the repair credential", async () => {
+    let request: Record<string, unknown> | null = null
+    setStorySettlementOpsDependenciesForTests({
+      authenticate: async () => actor(),
+      reconcilePurchase: async (input) => { request = input as unknown as Record<string, unknown>; return "pending" },
+    })
+    const response = await storySettlementOps.request("/purchase-reconciliations", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        community_id: "cmt_canary",
+        quote_id: "qte_canary",
+        authorization_ref: "CANARY-RECOVERY-1",
+      }),
+    }, {} as Env)
+    expect(response.status).toBe(202)
+    expect(request).toMatchObject({ communityId: "cmt_canary", quoteId: "qte_canary" })
+  })
 })
