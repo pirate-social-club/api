@@ -848,6 +848,12 @@ async function settleCommunityPurchaseForBuyer(input: {
     } = extractDonationCompatibilityFields({
       allocationSnapshot,
     })
+    const coordinatorOwnedAttempt = (await listPurchaseSettlementEffectsByQuote({
+      client: db.client,
+      communityId: input.communityId,
+      quoteId: quote.quote_id,
+      purchaseId,
+    })).some((effect) => Boolean(effect.coordinator_plan_ref))
     const reservation = await reservePurchaseSettlementAttempt({
       client: db.client,
       communityId: input.communityId,
@@ -855,6 +861,7 @@ async function settleCommunityPurchaseForBuyer(input: {
       purchaseId,
       settlementWalletAttachmentId: input.settlementWalletAttachmentId,
       settlementTxRef: input.body.settlement_tx_ref ?? null,
+      coordinatorOwned: coordinatorOwnedAttempt,
       now: createdAt,
     })
     if (reservation === "finalized") {
