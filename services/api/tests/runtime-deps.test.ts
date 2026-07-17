@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { neonConfig } from "@neondatabase/serverless"
-import { configureLocalNeonForUrl, postgresifySql } from "../src/lib/runtime-deps"
+import {
+  configureLocalNeonForUrl,
+  postgresifySql,
+  withFixedLengthPostgresBody,
+} from "../src/lib/runtime-deps"
 
 // The local neonConfig singleton is configured per control-plane URL (just before
 // each connection opens), not globally at module load — so drive it with a
@@ -69,6 +73,29 @@ describe("neonConfig.fetchEndpoint", () => {
     expect(typeof fetchEndpoint).toBe("function")
     expect(typeof fetchEndpoint === "function" ? fetchEndpoint("us-east-3.pg.psdb.cloud", 5432) : null)
       .toBe("https://us-east-3.pg.psdb.cloud/sql")
+  })
+
+  test("sends PlanetScale SQL JSON as a fixed-length byte body", () => {
+    configureLocalNeonForUrl(PLANETSCALE_URL)
+    const body = JSON.stringify({ query: "SELECT 1", params: [] })
+    const init = withFixedLengthPostgresBody({
+      method: "POST",
+      headers: { "Neon-Array-Mode": "true" },
+      body,
+    })
+
+    expect(init?.method).toBe("POST")
+    expect(init?.headers).toEqual({ "Neon-Array-Mode": "true" })
+    expect(init?.body).toBeInstanceOf(Uint8Array)
+    expect(new TextDecoder().decode(init?.body as Uint8Array)).toBe(body)
+    expect(typeof neonConfig.fetchFunction).toBe("function")
+  })
+
+  test("preserves already fixed-length Postgres request bodies", () => {
+    const body = new Uint8Array([1, 2, 3])
+    const init = withFixedLengthPostgresBody({ method: "POST", body })
+
+    expect(init?.body).toBe(body)
   })
 })
 

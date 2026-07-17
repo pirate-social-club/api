@@ -12,17 +12,40 @@ import { isPlanetScalePostgresUrl, normalizePostgresConnectionStringForDriver } 
 neonConfig.poolQueryViaFetch = true
 
 const _defaultFetchEndpoint = neonConfig.fetchEndpoint
+const _defaultFetchFunction = neonConfig.fetchFunction
 const _defaultWsProxy = neonConfig.wsProxy
 const _defaultPipelineConnect = neonConfig.pipelineConnect
+
+const postgresRequestEncoder = new TextEncoder()
+
+export function withFixedLengthPostgresBody(init?: RequestInit): RequestInit | undefined {
+  if (typeof init?.body !== "string") {
+    return init
+  }
+
+  return {
+    ...init,
+    body: postgresRequestEncoder.encode(init.body),
+  }
+}
+
+async function fetchPlanetScalePostgres(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return await fetch(input, withFixedLengthPostgresBody(init))
+}
 
 export function configureLocalNeonForUrl(url: string): void {
   if (!isPlanetScalePostgresUrl(url)) {
     neonConfig.fetchEndpoint = _defaultFetchEndpoint
+    neonConfig.fetchFunction = _defaultFetchFunction
     neonConfig.wsProxy = _defaultWsProxy
     neonConfig.pipelineConnect = _defaultPipelineConnect
     return
   }
   neonConfig.fetchEndpoint = (host: string) => `https://${host}/sql`
+  // Cloudflare derives Content-Length from a fixed-length body. Encoding the driver's JSON string
+  // prevents some colos from forwarding the request as chunked, which PlanetScale rejects with
+  // `NeonDbError: missing Content-Length`.
+  neonConfig.fetchFunction = fetchPlanetScalePostgres
   neonConfig.wsProxy = (host: string, port: string | number) => `${host}/v2?address=${host}:${port}`
   neonConfig.pipelineConnect = false
 }
