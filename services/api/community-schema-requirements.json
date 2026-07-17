@@ -33,12 +33,9 @@
     "1132_paid_purchase_settlement_recovery.sql",
     "1133_multi_namespace_bindings.sql",
     "1134_story_settlement_coordinator_mirror.sql",
-    "1135_namespace_handle_claim_gates.sql"
+    "1135_namespace_handle_claim_gates.sql",
+    "1136_community_handle_label_reservations.sql"
   ],
   "features": {},
-  "deferred": {
-    "1136_community_handle_label_reservations.sql": {
-      "rationale": "This API commit does not read or write community_handle_label_reservations. The additive table is bundled only in the fresh-shard schema snapshot for a future handle-label reservation rollout."
-    }
-  }
+  "deferred": {}
 }
