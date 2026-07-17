@@ -8,6 +8,7 @@ import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { splitSqlStatements } from "../../../shared/sql-migration"
 import { internalError } from "../errors"
 import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
+import { normalizeStoredGatePolicy } from "./membership/gate-policy-validation"
 import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -533,6 +534,7 @@ export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput
   }
 
   if (input.gatePolicy) {
+    const gatePolicy = normalizeStoredGatePolicy(input.gatePolicy)
     statements.push({
       sql: `
         INSERT INTO community_gate_policies (
@@ -543,7 +545,7 @@ export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput
           expression_json = excluded.expression_json,
           updated_at = excluded.updated_at
       `,
-      args: [input.communityId, JSON.stringify(input.gatePolicy), now],
+      args: [input.communityId, JSON.stringify(gatePolicy), now],
     })
   }
 
