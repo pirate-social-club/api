@@ -30,6 +30,7 @@ import {
   serializeSetupNameservers,
   type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
+import { assertNamespaceRootLabelIsAttachable } from "./namespace-root-policy"
 
 export async function startNamespaceVerificationSession(
   client: Client,
@@ -51,6 +52,7 @@ export async function startNamespaceVerificationSession(
   const normalizedRootLabel = input.family === "spaces"
     ? normalizeRootLabel(input.rootLabel)
     : normalizeHnsRootLabel(input.rootLabel)
+  assertNamespaceRootLabelIsAttachable(normalizedRootLabel)
   const sessionId = makeId("nvs")
   if (input.family === "spaces") {
     if (!isSpacesVerifierConfigured(env)) {
