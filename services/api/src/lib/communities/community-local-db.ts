@@ -512,13 +512,12 @@ export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput
           namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
           membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, 1, 1, ?6, ?7, ?7
+          ?1, ?2, ?3, ?4, ?5, 1, 0, ?6, ?7, ?7
         )
         ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
           policy_template = excluded.policy_template,
           pricing_model = excluded.pricing_model,
           membership_required_for_claim = excluded.membership_required_for_claim,
-          claims_enabled = excluded.claims_enabled,
           updated_at = excluded.updated_at
       `,
       args: [

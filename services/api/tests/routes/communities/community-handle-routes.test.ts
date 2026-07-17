@@ -53,7 +53,15 @@ async function createNamespaceBackedCommunity(input: {
   }, input.env, input.accessToken)
   expect(created.status).toBe(202)
   const body = await json(created) as { community: { id: string } }
-  return rawCommunityId(body.community.id)
+  const communityId = rawCommunityId(body.community.id)
+  const enabled = await requestJson(
+    `http://pirate.test/communities/${communityId}/handle-policy`,
+    { claims_enabled: true },
+    input.env,
+    input.accessToken,
+  )
+  expect(enabled.status).toBe(200)
+  return communityId
 }
 
 async function exchangeJwtWithWallet(env: Env, sub: string): Promise<{
@@ -1614,7 +1622,7 @@ describe("community handle routes", () => {
     }
     expect(policy.policy_template).toBe("premium")
     expect(policy.pricing_model).toBe("flat_by_length")
-    expect(policy.claims_enabled).toBe(true)
+    expect(policy.claims_enabled).toBe(false)
     expect(policy.settings.flat_price_cents).toBe(500)
     expect(policy.settings.premium_price_cents).toBe(2500)
     expect(policy.settings.premium_max_length).toBe(4)
@@ -1643,6 +1651,14 @@ describe("community handle routes", () => {
     expect(created.status).toBe(202)
     const body = await json(created) as { community: { id: string } }
     const communityId = rawCommunityId(body.community.id)
+
+    const enableClaims = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claims_enabled: true },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(enableClaims.status).toBe(200)
 
     // 4-char label is premium ($25)
     const premiumQuoteResponse = await requestJson(
@@ -1710,6 +1726,7 @@ describe("community handle routes", () => {
     const policyResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handle-policy`,
       {
+        claims_enabled: true,
         settings: {
           flat_price_cents: 500,
           premium_price_cents: 2500,
