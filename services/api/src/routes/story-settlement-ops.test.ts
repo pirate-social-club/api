@@ -96,7 +96,16 @@ describe("Story settlement operator routes", () => {
     const captured: string[] = []
     setStorySettlementOpsDependenciesForTests({
       authenticate: async () => actor(),
-      captureAlert: async (_env, _title, task) => { captured.push(task); return true },
+      captureAlert: async (_env, _title, task) => {
+        captured.push(task)
+        return {
+          delivered: true,
+          deduplicated: false,
+          evidenceRecorded: true,
+          deliveryAttemptId: "oad_synthetic",
+          sink: "email",
+        }
+      },
     })
     const init = {
       method: "POST",
@@ -106,8 +115,34 @@ describe("Story settlement operator routes", () => {
     const staging = await storySettlementOps.request("/alerts/synthetic", init, { ENVIRONMENT: "staging" } as Env)
     expect(staging.status).toBe(202)
     expect(captured).toEqual(["story_settlement_coordinator_synthetic:CANARY-1"])
+    expect(await staging.json()).toMatchObject({
+      delivered: true,
+      evidenceRecorded: true,
+      deliveryAttemptId: "oad_synthetic",
+      proven: true,
+    })
     const production = await storySettlementOps.request("/alerts/synthetic", init, { ENVIRONMENT: "production" } as Env)
     expect(production.status).toBe(403)
+  })
+
+  test("synthetic alert is not proven when durable evidence cannot be recorded", async () => {
+    setStorySettlementOpsDependenciesForTests({
+      authenticate: async () => actor(),
+      captureAlert: async () => ({
+        delivered: true,
+        deduplicated: false,
+        evidenceRecorded: false,
+        deliveryAttemptId: null,
+        sink: "email",
+      }),
+    })
+    const response = await storySettlementOps.request("/alerts/synthetic", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({ authorization_ref: "CANARY-NO-EVIDENCE" }),
+    }, { ENVIRONMENT: "staging" } as Env)
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ delivered: true, evidenceRecorded: false, proven: false })
   })
 
   test("runs one scoped purchase reconciliation under the repair credential", async () => {

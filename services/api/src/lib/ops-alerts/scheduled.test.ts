@@ -1,8 +1,57 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
-import { captureScheduledError, captureScheduledWarning } from "./scheduled"
+import {
+  captureScheduledError,
+  captureScheduledWarning,
+  captureScheduledWarningWithEvidence,
+  setScheduledAlertEvidenceStoreForTests,
+} from "./scheduled"
+
+afterEach(() => setScheduledAlertEvidenceStoreForTests(undefined))
 
 describe("scheduled alert capture", () => {
+  test("persists attempting evidence before send and final delivery evidence afterward", async () => {
+    const events: string[] = []
+    setScheduledAlertEvidenceStoreForTests({
+      begin: async (input) => { events.push(`begin:${input.attemptId}`) },
+      finish: async (input) => {
+        events.push(`finish:${input.attemptId}:${input.delivery.providerMessageId}`)
+      },
+    })
+    const env = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async () => {
+          events.push("send")
+          return { messageId: "msg_durable" }
+        },
+      },
+    } as unknown as Env
+
+    const result = await captureScheduledWarningWithEvidence(
+      env,
+      "Synthetic Story settlement coordinator alert",
+      "story_settlement_coordinator_synthetic:TEST",
+      { synthetic: true },
+      { urgency: "high" },
+    )
+
+    expect(result).toMatchObject({
+      delivered: true,
+      deduplicated: false,
+      evidenceRecorded: true,
+      sink: "email",
+    })
+    expect(result.deliveryAttemptId).toStartWith("oad_")
+    expect(events).toEqual([
+      `begin:${result.deliveryAttemptId}`,
+      "send",
+      `finish:${result.deliveryAttemptId}:msg_durable`,
+    ])
+  })
+
   test("delivers a recurring scheduled error once per dedupe bucket", async () => {
     const sent: Array<{ text?: string }> = []
     const kv = new Map<string, string>()
