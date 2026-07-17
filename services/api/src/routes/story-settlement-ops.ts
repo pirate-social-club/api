@@ -145,6 +145,27 @@ storySettlementOps.post("/nonce-repairs", async (c) => {
   return c.json({ plan }, 202)
 })
 
+storySettlementOps.post("/nonce-repair-drills", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const clientReference = reference(body.authorization_ref)
+  const drill = await coordinator(c).armNonceRepairDrill({
+    communityId,
+    authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
+  })
+  console.info(JSON.stringify({
+    message: "staging Story settlement nonce-repair drill armed by operator",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: clientReference,
+    armRef: drill.armRef,
+    communityId,
+  }))
+  return c.json({ drill }, 202)
+})
+
 storySettlementOps.post("/purchase-reconciliations", async (c) => {
   const actor = await operator(c)
   let body: Record<string, unknown>

@@ -15,7 +15,6 @@ import {
 
 import type { Env } from "../../env"
 import { badRequestError, conflictError } from "../errors"
-import { isStorySettlementNonceRepairDrillTarget } from "./story-settlement-nonce-repair-drill"
 import {
   deriveStorySettlementCallIdentity,
   type StorySettlementCallIdentityInput,
@@ -84,6 +83,11 @@ export interface AbandonedNonceRepairRequest {
   stepRef: Hex
   expectedVersion: number
   reasonCode: "operator_cancelled" | "terminal_configuration" | "rights_hold"
+  authorizationRef: string
+}
+
+export interface ArmNonceRepairDrillRequest {
+  communityId: string
   authorizationRef: string
 }
 
@@ -319,6 +323,14 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       )`)
       this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS nonce_state (id INTEGER PRIMARY KEY CHECK (id = 1), next_nonce INTEGER NOT NULL)")
       this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS signer_domain (id INTEGER PRIMARY KEY CHECK (id = 1), chain_id INTEGER NOT NULL, signer_address TEXT NOT NULL)")
+      this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS nonce_repair_drill_arms (
+        arm_ref TEXT PRIMARY KEY, singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1),
+        community_id TEXT NOT NULL, authorization_ref TEXT NOT NULL,
+        consumed_plan_ref TEXT, created_at INTEGER NOT NULL, consumed_at INTEGER
+      )`)
+      this.ctx.storage.sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS one_active_nonce_repair_drill_arm ON nonce_repair_drill_arms(singleton) WHERE consumed_plan_ref IS NULL",
+      )
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
       const migration2Applied = this.ctx.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id=2",
@@ -356,6 +368,11 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     if (existingPurchase) throw conflictError("Story settlement purchase already has a different immutable plan")
     this.ctx.storage.transactionSync(() => {
       const now = Date.now()
+      const drillArm = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+        `SELECT arm_ref FROM nonce_repair_drill_arms
+         WHERE community_id=?1 AND consumed_plan_ref IS NULL LIMIT 1`,
+        request.communityId,
+      ).toArray()[0]
       const domain = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
         "SELECT chain_id,signer_address FROM signer_domain WHERE id=1",
       ).toArray()[0]
@@ -375,8 +392,16 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 1, ?9, ?10, ?10)`,
         normalized.planRef, request.chainId, normalized.signerAddress, request.communityId, request.quoteId,
         request.purchaseId, request.feePolicyVersion, request.finalityPolicyVersion,
-        isStorySettlementNonceRepairDrillTarget(this.env, request) ? 1 : 0, now,
+        drillArm ? 1 : 0, now,
       )
+      if (drillArm) {
+        const consumed = this.ctx.storage.sql.exec(
+          `UPDATE nonce_repair_drill_arms SET consumed_plan_ref=?2, consumed_at=?3
+           WHERE arm_ref=?1 AND consumed_plan_ref IS NULL RETURNING arm_ref`,
+          String(drillArm.arm_ref), normalized.planRef, now,
+        ).toArray()
+        if (consumed.length !== 1) throw conflictError("Story settlement nonce-repair drill arm conflict")
+      }
       for (const step of normalized.steps) {
         this.ctx.storage.sql.exec(
           `INSERT INTO steps (
@@ -404,6 +429,42 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     assertBytes32("plan_ref", planRef)
     const plan = this.readPlan(planRef)
     return plan ? this.result(plan) : null
+  }
+
+  armNonceRepairDrill(request: ArmNonceRepairDrillRequest): { armRef: Hex; communityId: string } {
+    if (this.env.ENVIRONMENT !== "staging") {
+      throw conflictError("Story settlement nonce-repair drill is staging-only")
+    }
+    const communityId = exactId("community_id", request.communityId)
+    const authorizationRef = exactId("authorization_ref", request.authorizationRef)
+    const armRef = keccak256(encodeAbiParameters(
+      parseAbiParameters("string domain, string communityId, string authorizationRef"),
+      ["story-settlement-nonce-repair-drill-v1", communityId, authorizationRef],
+    ))
+    try {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO nonce_repair_drill_arms
+         (arm_ref,community_id,authorization_ref,created_at) VALUES (?1,?2,?3,?4)`,
+        armRef, communityId, authorizationRef, Date.now(),
+      )
+    } catch {
+      const existing = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+        "SELECT arm_ref,community_id,authorization_ref FROM nonce_repair_drill_arms WHERE consumed_plan_ref IS NULL LIMIT 1",
+      ).toArray()[0]
+      if (existing && String(existing.arm_ref) === armRef
+        && String(existing.community_id) === communityId
+        && String(existing.authorization_ref) === authorizationRef) {
+        return { armRef, communityId }
+      }
+      throw conflictError("A Story settlement nonce-repair drill is already armed")
+    }
+    console.warn(JSON.stringify({
+      message: "staging Story settlement nonce-repair drill armed",
+      armRef,
+      communityId,
+      authorizationRef,
+    }))
+    return { armRef, communityId }
   }
 
   async health(): Promise<StorySettlementCoordinatorHealth | null> {

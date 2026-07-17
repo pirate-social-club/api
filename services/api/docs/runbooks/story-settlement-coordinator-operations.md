@@ -23,21 +23,23 @@ coordinator state with hand-written SQL or direct Durable Object storage edits.
 ### Staging drill setup
 
 Do not wait for a natural abandoned nonce while admission is disabled; that state cannot arise.
-For the testnet drill, use one throwaway staging community and a quote created before the drill:
+For the testnet drill, use one throwaway staging community:
 
 1. Set `STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED=true`, allowlist only the throwaway
-   community, and set `STORY_SETTLEMENT_NONCE_REPAIR_DRILL_TARGET` to the exact
-   `<community_id>:<quote_id>`. The drill target is ignored unless `ENVIRONMENT=staging`.
-2. Deploy staging and submit that quote through the normal settlement endpoint once. Do not submit
-   any other purchase. The coordinator admits the normal immutable plan, durably reserves the real
+   community, and deploy staging.
+2. With peer approval, call repair-scoped `POST
+   /operator/story-settlement/nonce-repair-drills` for that community and an incident reference.
+   The coordinator rejects it outside staging and permits only one unconsumed arm per signer.
+3. Submit one purchase in that community through the normal settlement endpoint. Do not submit any
+   other purchase. Admission atomically consumes the arm. The coordinator admits the normal immutable plan, durably reserves the real
    signer nonce for its first step, transitions that unsigned step to `failed_prebroadcast`, and
    freezes the plan in `abandoning`. It never signs or broadcasts the business call.
-3. Inspect the plan and verify: reserved nonce present; signed bytes and transaction hash absent;
+4. Inspect the plan and verify: reserved nonce present; signed bytes and transaction hash absent;
    `last_error_code=staging_nonce_repair_drill_abandoned`; signer pending nonce has not consumed the
    reservation.
-4. Disable admission and remove both the community allowlist entry and drill target before invoking
-   repair. Existing coordinator-owned plans remain reconcilable.
-5. Continue with the repair procedure below. Retain the deployment commits and configuration-change
+5. Disable admission and remove the community allowlist entry before invoking repair. Existing
+   coordinator-owned plans remain reconcilable.
+6. Continue with the repair procedure below. Retain the deployment commits and configuration-change
    audit records with the drill evidence.
 
 Never use a production environment, direct Durable Object storage changes, an arbitrary calldata
