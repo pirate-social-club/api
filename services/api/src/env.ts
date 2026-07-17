@@ -310,6 +310,9 @@ export type Env = {
   REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS?: string
   REWARDS_CAMPAIGN_TREASURY_ADDRESS?: string
   REWARDS_CAMPAIGN_RPC_URL?: string
+  // Optional comma-separated public post IDs. When set, self-serve campaign
+  // creation fails closed for every other post.
+  REWARDS_CAMPAIGN_POST_ALLOWLIST?: string
   // Required ownership metadata for durable reward incident alerts.
   REWARDS_CAMPAIGN_ALERT_OWNER?: string
   REWARDS_CAMPAIGN_ALERT_DESTINATION?: string
