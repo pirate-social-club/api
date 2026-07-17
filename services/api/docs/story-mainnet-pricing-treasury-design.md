@@ -642,6 +642,11 @@ reconciliation.
 
 ## Decision gates
 
+Owner-ready decision records for the two non-engineering gates live in
+`decisions/story-mainnet-m0-real-money-go-no-go.md` and
+`decisions/story-mainnet-m1-catalog-scope.md`. Blank ownership or an unresolved record remains a
+no-go.
+
 1. **Gate M0 — business go/no-go:** unresolved.
 2. **Gate M1 — catalog scope:** unresolved; choose mainnet-forward-only or journaled migration.
 3. **Gate M2 — rate source:** unresolved; requires mainnet liquidity/freshness evidence.
