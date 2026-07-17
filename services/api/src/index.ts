@@ -916,7 +916,7 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // delivery must retain its liveness guarantee even when all three money paths run
 // past the batch start deadline; otherwise credits or queued preview/publish jobs
 // can remain unclaimed indefinitely.
-const SCHEDULED_MINIMUM_PRIORITY_STARTS = 4
+const SCHEDULED_MINIMUM_PRIORITY_STARTS = 5
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
@@ -927,6 +927,7 @@ type ScheduledPriorityJobName =
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
   | "process_community_jobs"
+  | "reconcile_purchase_settlements"
   | "reconcile_d1_provisioning"
   | "revalidate_hns_namespaces"
   | "monitor_reward_campaigns"
@@ -940,6 +941,7 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "process_community_jobs",
+    "reconcile_purchase_settlements",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
@@ -990,13 +992,15 @@ const handler: ExportedHandler<Env> = {
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
+      reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two. The first four starts guarantee booking settlement,
-    // royalty verification, reward reconciliation, and queued community delivery
-    // each get a turn even if earlier money-path tasks run past the start deadline.
+    // Concurrency is two. The first five starts guarantee booking settlement,
+    // royalty verification, reward reconciliation, queued community delivery, and
+    // purchase settlement recovery each get a turn even if earlier money-path tasks
+    // run past the start deadline.
     // D1 remains ahead of the slower, latency-tolerant HNS revalidation and reward
     // monitor.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
@@ -1012,7 +1016,6 @@ const handler: ExportedHandler<Env> = {
       { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
       { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
-      { name: "reconcile_purchase_settlements", run: () => reconcileScheduledPurchaseSettlements(env) },
     ]
     const rotatedJobs: NamedTask[] = [
       ...(reconcilerOnly ? [] : generalJobs),
