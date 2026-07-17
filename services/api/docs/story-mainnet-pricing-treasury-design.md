@@ -654,8 +654,8 @@ no-go.
 3. **Gate M2 — rate source:** unresolved; requires mainnet liquidity/freshness evidence.
 4. **Gate M3 — economics:** unresolved; approve quote TTL, slippage, floor, exposure, refund policy,
    and margin covering both FX drift and the measured USDC-to-IP replenishment round trip.
-5. **Gate M4 — recovery tools:** open; the nonce-repair route exists but needs a staging-chain drill,
-   while same-nonce replacement still requires an executable action and staging proof.
+5. **Gate M4 — recovery tools:** open overall; abandoned-nonce repair is staging-chain proven, while
+   same-nonce replacement still requires an executable action and staging proof.
 6. **Gate M5 — adjacent rails:** open; global cross-rail claim and retry-safe/deleted helper.
 7. **Gate M6 — mainnet provisioning:** open; contracts, exclusive signer, minter role, treasury,
    watchdog, gas/finality policies, and catalog mapping.
