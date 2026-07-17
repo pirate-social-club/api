@@ -96,6 +96,7 @@ export async function reserveCommunityHandleOnClient(
     executor: client,
     namespaceId: policy.namespace_id,
     labelNormalized: input.desired.labelNormalized,
+    now,
   })
   if (blockingReservation) {
     const reason = "Desired label is temporarily reserved for another payment"

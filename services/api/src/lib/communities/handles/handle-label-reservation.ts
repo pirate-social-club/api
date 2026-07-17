@@ -26,6 +26,7 @@ export async function getActiveHandleLabelReservation(input: {
   executor: Client | Transaction
   namespaceId: string
   labelNormalized: string
+  now: string
 }): Promise<QueryResultRow | null> {
   const result = await input.executor.execute({
     sql: `
@@ -34,9 +35,10 @@ export async function getActiveHandleLabelReservation(input: {
       WHERE namespace_id = ?1
         AND label_normalized = ?2
         AND status = 'active'
+        AND expires_at > ?3
       LIMIT 1
     `,
-    args: [input.namespaceId, input.labelNormalized],
+    args: [input.namespaceId, input.labelNormalized, input.now],
   })
   return result.rows[0] ?? null
 }

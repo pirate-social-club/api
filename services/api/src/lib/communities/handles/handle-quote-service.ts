@@ -160,6 +160,7 @@ export async function quoteCommunityHandle(input: {
         executor: db.client,
         namespaceId: policy.namespace_id,
         labelNormalized: desired.labelNormalized,
+        now: quotedAt,
       })
       : null
     if (activePaymentReservation) {
@@ -234,6 +235,7 @@ export async function quoteCommunityHandle(input: {
           executor: db.client,
           namespaceId: policy.namespace_id,
           labelNormalized: desired.labelNormalized,
+          now: quotedAt,
         })
         if (racedReservation) {
           const raceReason = "Desired label is temporarily reserved for another payment"
