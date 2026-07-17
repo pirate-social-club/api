@@ -22,6 +22,8 @@ export type Env = {
   OPS_ALERT_EMAIL_FROM_NAME?: string
   OPS_ALERT_EMAIL_TO?: string
   OPS_ALERT_WEBHOOK_URL?: string
+  /** Dedicated bearer token for the VPS edge-alert ingress. */
+  HNS_EDGE_ALERT_TOKEN?: string
   OPS_ALERT_MAX_COMMUNITIES?: string
   OPS_ALERT_LOOKBACK_MS?: string
   OPS_ALERT_BUCKET_MS?: string
