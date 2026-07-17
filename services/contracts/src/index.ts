@@ -2480,6 +2480,8 @@ export type MembershipGateSummary = {
   asset_category?: string | null;
   asset_id?: string | null;
   min_amount_atomic?: string | null;
+  asset_symbol?: string | null;
+  asset_decimals?: number | null;
 };
 
 export type MembershipGateExpressionSummary = (MembershipGateExpressionGate | MembershipGateExpressionGroup);
@@ -2538,7 +2540,7 @@ export type JoinEligibility = {
   missing_capabilities?: Array<"unique_human" | "age_over_18" | "minimum_age" | "nationality" | "gender" | "wallet_score" | "altcha_pow">;
   suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
-  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "asset_balance_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
     current_score_decimal?: string | null;
     required_score_decimal?: string | null;
@@ -2574,7 +2576,7 @@ export type GateFailureDetails = {
   missing_capabilities?: Array<string> | null;
   suggested_verification_provider?: "self" | "zkpassport" | "very" | "passport" | null;
   suggested_verification_intent?: "community_join" | "post_create" | "comment_create" | null;
-  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "unsupported" | "banned" | null;
+  failure_reason?: "missing_verification" | "provider_not_accepted" | "nationality_mismatch" | "gender_mismatch" | "minimum_age_mismatch" | "erc721_holding_required" | "erc721_inventory_match_required" | "token_inventory_unavailable" | "wallet_score_too_low" | "asset_balance_too_low" | "unsupported" | "banned" | null;
   wallet_score_status?: ({
     current_score_decimal?: string | null;
     required_score_decimal?: string | null;

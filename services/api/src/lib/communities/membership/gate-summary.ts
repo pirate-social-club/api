@@ -10,6 +10,7 @@ import {
   resolveTokenGateContractAddress,
 } from "./gate-config"
 import { formatAssetFilterLabel, readInventoryMatchConfig } from "../community-token-inventory-gates"
+import { resolveAssetBalanceDescriptor } from "./asset-balance-registry"
 import type { CommunityGateRuleRow, GateAtom, GateExpression, GatePolicy } from "./gate-types"
 
 export function buildMembershipGateSummary(rule: CommunityGateRuleRow): MembershipGateSummary {
@@ -179,10 +180,20 @@ function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSumma
         : typeof atom.match.category === "string" ? atom.match.category : null
       summary.asset_filter_label = formatAssetFilterLabel(atom.match)
       break
-    case "asset_balance":
+    case "asset_balance": {
       summary.asset_id = atom.asset_id
       summary.min_amount_atomic = atom.min_amount_atomic
+      // Record display metadata on the summary itself: members are shown this
+      // gate by a synchronous formatter that cannot reach the authenticated
+      // capability catalog, and the label must stay truthful even if the asset
+      // later leaves that catalog.
+      const asset = resolveAssetBalanceDescriptor(atom.asset_id)
+      if (asset) {
+        summary.asset_symbol = asset.symbol
+        summary.asset_decimals = asset.decimals
+      }
       break
+    }
     case "unique_human":
       break
   }
