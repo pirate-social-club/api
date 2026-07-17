@@ -45,9 +45,11 @@ For the testnet drill, use one throwaway staging community:
 Never use a production environment, direct Durable Object storage changes, an arbitrary calldata
 endpoint, or a manually broadcast gap transaction for this drill.
 
-The latest staging drill preflight and its honest no-candidate result are recorded in
-`../evidence/story-settlement-nonce-repair-drill-2026-07-17.md`. That scan does not satisfy M4; use
-the evidence checklist there when an eligible staging nonce exists.
+The no-candidate preflight is recorded in
+`../evidence/story-settlement-nonce-repair-drill-2026-07-17.md`. The subsequently completed live
+staging drill and canonical-chain evidence are recorded in
+`../evidence/story-settlement-nonce-repair-drill-2026-07-18.md`. That proof closes the nonce-repair
+half of M4; it does not satisfy the separate fee-replacement requirement.
 
 Use only for a step that is durably `reserving`, has a reserved nonce, has no
 signed transaction or transaction hash, and cannot ever become a valid plan
