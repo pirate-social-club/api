@@ -91,6 +91,10 @@ export interface ArmNonceRepairDrillRequest {
   authorizationRef: string
 }
 
+export interface RetargetNonceRepairDrillRequest extends ArmNonceRepairDrillRequest {
+  armRef: Hex
+}
+
 type StoryFaultPoint =
   | "after_nonce_reserved"
   | "after_signed_before_persist"
@@ -331,6 +335,11 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         "CREATE UNIQUE INDEX IF NOT EXISTS one_active_nonce_repair_drill_arm ON nonce_repair_drill_arms(singleton) WHERE consumed_plan_ref IS NULL",
       )
+      this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS nonce_repair_drill_retargets (
+        retarget_ref TEXT PRIMARY KEY, arm_ref TEXT NOT NULL, from_community_id TEXT NOT NULL,
+        to_community_id TEXT NOT NULL, authorization_ref TEXT NOT NULL, created_at INTEGER NOT NULL,
+        FOREIGN KEY(arm_ref) REFERENCES nonce_repair_drill_arms(arm_ref)
+      )`)
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
       const migration2Applied = this.ctx.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id=2",
@@ -465,6 +474,54 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       authorizationRef,
     }))
     return { armRef, communityId }
+  }
+
+  retargetNonceRepairDrill(request: RetargetNonceRepairDrillRequest): {
+    armRef: Hex
+    communityId: string
+    retargetRef: Hex
+  } {
+    if (this.env.ENVIRONMENT !== "staging") {
+      throw conflictError("Story settlement nonce-repair drill is staging-only")
+    }
+    assertBytes32("arm_ref", request.armRef)
+    const communityId = exactId("community_id", request.communityId)
+    const authorizationRef = exactId("authorization_ref", request.authorizationRef)
+    const current = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      `SELECT community_id FROM nonce_repair_drill_arms
+       WHERE arm_ref=?1 AND consumed_plan_ref IS NULL`,
+      request.armRef,
+    ).toArray()[0]
+    if (!current) throw conflictError("Story settlement nonce-repair drill arm is not active")
+    const fromCommunityId = String(current.community_id)
+    if (fromCommunityId === communityId) throw conflictError("Story settlement nonce-repair drill target is unchanged")
+    const retargetRef = keccak256(encodeAbiParameters(
+      parseAbiParameters("string domain, bytes32 armRef, string fromCommunityId, string toCommunityId, string authorizationRef"),
+      ["story-settlement-nonce-repair-drill-retarget-v1", request.armRef, fromCommunityId, communityId, authorizationRef],
+    ))
+    this.ctx.storage.transactionSync(() => {
+      const updated = this.ctx.storage.sql.exec(
+        `UPDATE nonce_repair_drill_arms SET community_id=?2, authorization_ref=?3
+         WHERE arm_ref=?1 AND consumed_plan_ref IS NULL AND community_id=?4 RETURNING arm_ref`,
+        request.armRef, communityId, authorizationRef, fromCommunityId,
+      ).toArray()
+      if (updated.length !== 1) throw conflictError("Story settlement nonce-repair drill arm conflict")
+      this.ctx.storage.sql.exec(
+        `INSERT INTO nonce_repair_drill_retargets
+         (retarget_ref,arm_ref,from_community_id,to_community_id,authorization_ref,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6)`,
+        retargetRef, request.armRef, fromCommunityId, communityId, authorizationRef, Date.now(),
+      )
+    })
+    console.warn(JSON.stringify({
+      message: "staging Story settlement nonce-repair drill retargeted",
+      armRef: request.armRef,
+      retargetRef,
+      fromCommunityId,
+      communityId,
+      authorizationRef,
+    }))
+    return { armRef: request.armRef, communityId, retargetRef }
   }
 
   async health(): Promise<StorySettlementCoordinatorHealth | null> {
