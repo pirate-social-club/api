@@ -7,15 +7,20 @@ import type { DbExecutor } from "./db-helpers"
 
 export const BOOKING_SETTLEMENT_RESOLVE_SCOPE = "bookings:settlement:resolve"
 export const REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE = "rewards:campaign-incidents:resolve"
+export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 
 const ALLOWED_OPERATOR_SCOPES = new Set<string>([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  STORY_SETTLEMENT_REPAIR_SCOPE,
 ])
 const DUMMY_SHA256_HEX = "0".repeat(64)
 const LAST_USED_TOUCH_INTERVAL_MS = 5 * 60 * 1000
 
-export type OperatorScope = typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE | typeof REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE
+export type OperatorScope =
+  | typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE
+  | typeof REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE
+  | typeof STORY_SETTLEMENT_REPAIR_SCOPE
 
 export type OperatorActorContext = {
   authType: "operator_credential"
