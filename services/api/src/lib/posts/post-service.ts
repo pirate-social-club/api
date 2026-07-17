@@ -58,6 +58,7 @@ import { preparePostCreate } from "./post-create-preparation"
 import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
 import { hashPostCreateRequestBody, isPostCreateIdempotencyConflict } from "./post-create-idempotency"
+import { assertDerivativeParentRevenueShare } from "../communities/commerce/derivative-parent-revenue-share"
 
 type PostWaitUntil = (promise: Promise<void>) => void
 type PostAssetCreator = typeof createAssetForPost
@@ -368,6 +369,12 @@ export async function createPost(input: {
       communityDbClient: db.client,
       profileRepository: input.profileRepository,
       writeTarget: "top_level_post",
+    })
+    await assertDerivativeParentRevenueShare({
+      env: input.env,
+      client: db.client,
+      communityId: input.communityId,
+      upstreamAssetRefs: input.body.upstream_asset_refs,
     })
     const {
       writeBody,

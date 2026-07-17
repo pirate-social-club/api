@@ -67,6 +67,7 @@ import {
 } from "./charity-payout-service"
 import { confirmBuyerFundingForSettlement } from "./funding-proof-service"
 import { coordinateStorySettlement } from "./story-settlement-coordinator-service"
+import { excludeKnownZeroRevenueShareStoryParents } from "./derivative-parent-revenue-share"
 import {
   type BuyerIdentity,
   buyerIdentityFields,
@@ -458,10 +459,11 @@ function getConfirmedEffect(
   return effects.find((effect) => effect.effect_kind === kind && effect.status === "confirmed") ?? null
 }
 
-function getStoryDerivativeParentIpIds(asset: AssetRow): string[] {
-  return parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
+async function getPayableStoryDerivativeParentIpIds(env: Env, asset: AssetRow): Promise<string[]> {
+  const parentIpIds = parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
     .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
     .map((parentIpId) => parentIpId.trim())
+  return excludeKnownZeroRevenueShareStoryParents({ env, parentIpIds })
 }
 
 function hasConfirmedParentRoyaltyVaultTransfer(input: {
@@ -650,7 +652,7 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
     if (!settlementTxRef) {
       return "pending"
     }
-    for (const parentIpId of getStoryDerivativeParentIpIds(asset)) {
+    for (const parentIpId of await getPayableStoryDerivativeParentIpIds(input.env, asset)) {
       if (!hasConfirmedParentRoyaltyVaultTransfer({ effects, asset, parentIpId })) {
         return "pending"
       }
@@ -1001,7 +1003,7 @@ async function settleCommunityPurchaseForBuyer(input: {
           purchaseId,
           title: asset.display_title,
         })
-        for (const parentIpId of getStoryDerivativeParentIpIds(asset)) {
+        for (const parentIpId of await getPayableStoryDerivativeParentIpIds(input.env, asset)) {
           if (!hasConfirmedParentRoyaltyVaultTransfer({
             effects: coordinatedEffects,
             asset,
@@ -1095,8 +1097,7 @@ async function settleCommunityPurchaseForBuyer(input: {
             title: asset.display_title,
           })
         }
-        const parentIpIds = parseJsonValue<string[]>(asset.story_derivative_parent_ip_ids_json, [])
-          .filter((parentIpId) => typeof parentIpId === "string" && parentIpId.trim())
+        const parentIpIds = await getPayableStoryDerivativeParentIpIds(input.env, asset)
         if (parentIpIds.length > 0) {
           for (const parentIpId of parentIpIds) {
             const normalizedParentIpId = parentIpId.trim()

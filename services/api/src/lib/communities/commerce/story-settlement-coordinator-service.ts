@@ -34,6 +34,7 @@ import {
   mirrorStorySettlementCoordinatorPlan,
   type StorySettlementEffectPlanBinding,
 } from "./story-settlement-coordinator-mirror"
+import { excludeKnownZeroRevenueShareStoryParents } from "./derivative-parent-revenue-share"
 
 type EffectPlan = {
   effectKind: Extract<PurchaseSettlementEffectKind, "story_royalty_payment" | "story_parent_royalty_vault_transfer" | "story_entitlement_mint">
@@ -64,6 +65,7 @@ function createEffectPlans(input: {
   buyerAddress: string
   purchaseRef: Hex
   amount: bigint
+  parentIpIds: string[]
 }): EffectPlan[] {
   const protocol = resolveStorySettlementProtocolAddresses(input.chainId)
   const paymentKey = `${input.quoteId}:story_royalty:${input.asset.story_ip_id}:${input.amount.toString()}`
@@ -97,8 +99,7 @@ function createEffectPlans(input: {
     })),
   }]
 
-  for (const parentIpId of parseJsonValue<unknown[]>(input.asset.story_derivative_parent_ip_ids_json, [])) {
-    if (typeof parentIpId !== "string" || !parentIpId.trim()) continue
+  for (const parentIpId of input.parentIpIds) {
     const parentRef = parentIpId.trim()
     const normalizedParent = getAddress(parentRef)
     const effectKey = `${input.asset.asset_id}:${parentRef}`
@@ -238,7 +239,14 @@ export async function coordinateStorySettlement(input: {
     input.env.STORY_SETTLEMENT_FINALITY_POLICY_VERSION,
     "story_settlement_finality_policy_version",
   )
-  const effectPlans = createEffectPlans({ ...input, chainId })
+  const persistedParentIpIds = parseJsonValue<unknown[]>(input.asset.story_derivative_parent_ip_ids_json, [])
+    .filter((parentIpId): parentIpId is string => typeof parentIpId === "string" && Boolean(parentIpId.trim()))
+    .map((parentIpId) => parentIpId.trim())
+  const parentIpIds = await excludeKnownZeroRevenueShareStoryParents({
+    env: input.env,
+    parentIpIds: persistedParentIpIds,
+  })
+  const effectPlans = createEffectPlans({ ...input, chainId, parentIpIds })
   const steps: StorySettlementCoordinatorStepInput[] = []
   const mirrorStepGroups: Array<StorySettlementEffectPlanBinding["steps"]> = []
   let ordinal = 0

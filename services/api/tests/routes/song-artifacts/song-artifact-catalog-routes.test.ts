@@ -1128,6 +1128,37 @@ describe("song artifact catalog routes", () => {
     expect(bundleBody.moderation_result?.analysis_state).toBe("allow_with_required_reference")
     expect(bundleBody.moderation_result?.audio_identification?.match_found).toBe(true)
 
+    const zeroShareParentIpId = "0x7777777777777777777777777777777777777777"
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId,
+      creatorUserId: author.userId,
+      assetId: "ast_zero_share_raw_ref_parent",
+      title: "Zero-share raw ref parent",
+      assetKind: "song_audio",
+      storyIpId: zeroShareParentIpId,
+      storyLicenseTermsId: "17",
+      commercialRevSharePct: 0,
+    })
+    const zeroSharePostCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        idempotency_key: "song-post-zero-share-raw-ref",
+        post_type: "song",
+        identity_mode: "public",
+        title: "Zero-share raw ref remix",
+        song_mode: "remix",
+        rights_basis: "derivative",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        upstream_asset_refs: [`story:ip:${zeroShareParentIpId}#licenseTermsId=17`],
+        song_artifact_bundle: bundleBody.id,
+      },
+      ctx.env,
+      author.accessToken,
+    )
+    expect(zeroSharePostCreate.status).toBe(400)
+
     const blockedPostCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/posts`,
       {
