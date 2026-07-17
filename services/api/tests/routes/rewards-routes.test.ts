@@ -406,6 +406,7 @@ describe("rewards routes", () => {
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
+      chain_id: 84532,
       ends_at: expect.any(Number),
     })
     expect(publicOffer.headers.get("cache-control")).toBe("public, max-age=0")
@@ -420,6 +421,7 @@ describe("rewards routes", () => {
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
+      chain_id: 84532,
       ends_at: expect.any(Number),
     })
     expect(offerRateLimitCalls).toBe(2)

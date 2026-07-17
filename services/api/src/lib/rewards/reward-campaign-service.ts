@@ -72,7 +72,12 @@ const CAMPAIGN_COLUMNS = `
   min_score_bps, daily_reward_cents, milestone_7_cents, milestone_30_cents,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
   credited_cents, paid_cents, refunded_cents, starts_at, ends_at,
-  activated_at, exhausted_at, ended_at, canceled_at, created_at
+  activated_at, exhausted_at, ended_at, canceled_at, created_at,
+  (SELECT chain_id FROM reward_campaign_funding_effects
+    WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
+      AND status = 'confirmed'
+    ORDER BY confirmed_at DESC, reward_campaign_funding_effect_id DESC
+    LIMIT 1) AS chain_id
 `
 
 const FUNDING_COLUMNS = `
@@ -142,6 +147,7 @@ function publicRewardOffer(row: CampaignRow): PublicRewardOffer {
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
+    chain_id: integer(rowValue(row, "chain_id")),
     ends_at: unixSeconds(rowValue(row, "ends_at")) ?? 0,
   }
 }
