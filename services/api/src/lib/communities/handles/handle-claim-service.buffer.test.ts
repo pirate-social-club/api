@@ -7,7 +7,8 @@ import type { Client } from "../../sql-client"
  * Buffer-safety regression for reserveCommunityHandleOnClient. Under the D1 buffering
  * client a SELECT inside a write tx sees nothing until commit, so the namespace
  * policy + blocking-handle reads must run on the base client BEFORE the tx, the tx
- * body must be a single INSERT, and the created row is read back AFTER commit. The
+ * body must remain write-only while it acquires and consumes the label mutex around
+ * the handle INSERT, and the created row is read back AFTER commit. The
  * recording client routes canned rows by SQL and records base vs in-tx statements;
  * the test fails if a read leaks into the tx.
  */
@@ -76,7 +77,7 @@ const hasRead = (sqls: string[]) =>
   sqls.some((s) => /pragma/i.test(s)) || sqls.some((s) => /^\s*select\b/i.test(s))
 
 describe("reserveCommunityHandleOnClient (buffer-safe)", () => {
-  test("policy + blocking reads pre-tx; tx is INSERT-only; readback post-commit", async () => {
+  test("policy + blocking reads pre-tx; tx is write-only; readback post-commit", async () => {
     const { client, baseSqls, txSqls } = recordingClient()
     const handle = await reserveCommunityHandleOnClient(client, {
       communityId: "cmt_h",
@@ -88,10 +89,12 @@ describe("reserveCommunityHandleOnClient (buffer-safe)", () => {
     // The policy + blocking lookups ran on the base client (pre-tx).
     expect(baseSqls.some((s) => /namespace_bindings/i.test(s))).toBe(true)
     expect(baseSqls.some((s) => /label_normalized/i.test(s))).toBe(true)
-    // No read leaked into the buffered tx; only the INSERT ran there.
+    // No read leaked into the buffered tx: acquire mutex, insert handle, consume mutex.
     expect(hasRead(txSqls)).toBe(false)
-    expect(txSqls.length).toBe(1)
-    expect(txSqls[0]).toMatch(/insert\s+into\s+community_handles/i)
+    expect(txSqls.length).toBe(3)
+    expect(txSqls.some((s) => /insert\s+into\s+community_handle_label_reservations/i.test(s))).toBe(true)
+    expect(txSqls.some((s) => /insert\s+into\s+community_handles/i.test(s))).toBe(true)
+    expect(txSqls.some((s) => /update\s+community_handle_label_reservations/i.test(s))).toBe(true)
     // The readback ran on the base client after the tx.
     expect(baseSqls.some((s) => /community_handle_id\s*=\s*\?1/i.test(s))).toBe(true)
   })

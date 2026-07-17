@@ -18,6 +18,10 @@ import {
   getActiveHandleForUser,
   getBlockingHandleForLabel,
 } from "./handle-row-store"
+import {
+  expireStaleHandleLabelReservations,
+  getActiveHandleLabelReservationForQuote,
+} from "./handle-label-reservation"
 
 export async function expireStaleHandleQuotes(input: {
   executor: Client | Transaction
@@ -36,6 +40,11 @@ export async function expireStaleHandleQuotes(input: {
         AND (?3 IS NULL OR user_id = ?3)
     `,
     args: [input.communityId, input.now, input.userId ?? null],
+  })
+  await expireStaleHandleLabelReservations({
+    executor: input.executor,
+    communityId: input.communityId,
+    now: input.now,
   })
 }
 
@@ -161,11 +170,25 @@ export async function assertClaimQuoteStillClaimable(input: {
     throw conflictError(reason, handleAvailabilityDetails(status === "reserved" ? "reserved" : "taken", reason))
   }
 
+  const priceCents = requiredNumber(input.quote, "price_cents")
+  if (priceCents > 0) {
+    const paymentReservation = await getActiveHandleLabelReservationForQuote({
+      executor: input.executor,
+      quoteId: input.quoteId,
+    })
+    if (!paymentReservation
+      || requiredString(paymentReservation, "namespace_id") !== policy.namespace_id
+      || requiredString(paymentReservation, "label_normalized") !== labelNormalized
+      || Date.parse(requiredString(paymentReservation, "expires_at")) <= Date.parse(input.now)) {
+      throw eligibilityFailed("Payment reservation is no longer active; request a new quote")
+    }
+  }
+
   return {
     policy,
     labelNormalized,
     labelDisplay,
-    priceCents: requiredNumber(input.quote, "price_cents"),
+    priceCents,
     protocolIssuanceRequired: requireProtocolIssuanceSupport(policy, settings),
   }
 }

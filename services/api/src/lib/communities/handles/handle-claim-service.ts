@@ -17,8 +17,13 @@ import {
   serializeHandle,
 } from "./handle-row-store"
 import {
+  addHandleQuoteSeconds,
   handleAvailabilityDetails,
 } from "./handle-quote-domain"
+import {
+  acquireHandleLabelReservation,
+  consumeHandleLabelReservation,
+} from "./handle-label-reservation"
 import {
   createProtocolIssuanceForHandle,
   requireProtocolOwnerWalletForClaim,
@@ -200,7 +205,28 @@ export async function applyHandleClaimWrites(
 ): Promise<QueryResultRow> {
   const handleId = makeId("ch")
   const tx = await client.transaction("write")
+  let transientReservationId: string | null = null
   try {
+    if (input.priceCents > 0) {
+      await consumeHandleLabelReservation({
+        executor: tx,
+        quoteId: input.quoteId,
+        now: input.now,
+      })
+    } else {
+      transientReservationId = await acquireHandleLabelReservation({
+        executor: tx,
+        communityId: input.communityId,
+        namespaceId: input.namespaceId,
+        labelNormalized: input.labelNormalized,
+        userId: input.userId,
+        quoteId: null,
+        purpose: "claim",
+        reservedAt: input.now,
+        expiresAt: addHandleQuoteSeconds(input.now, 60),
+      })
+    }
+
     await tx.execute({
       sql: `
         INSERT INTO community_handles (
@@ -246,6 +272,14 @@ export async function applyHandleClaimWrites(
         communityHandleId: handleId,
         labelNormalized: input.labelNormalized,
         scriptPubkeyHex: input.protocolOwner.scriptPubkeyHex,
+        now: input.now,
+      })
+    }
+
+    if (transientReservationId) {
+      await consumeHandleLabelReservation({
+        executor: tx,
+        reservationId: transientReservationId,
         now: input.now,
       })
     }

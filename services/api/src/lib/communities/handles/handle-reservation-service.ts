@@ -6,7 +6,7 @@ import { requiredString } from "../../sql-row"
 import { withTransaction } from "../../transactions"
 import { openCommunityWriteClient } from "../community-read-access"
 import { requireCommunityOwner } from "../commerce/access"
-import { assertHandleLabelLength, handleAvailabilityDetails, isReservedHandleLabel } from "./handle-quote-domain"
+import { addHandleQuoteSeconds, assertHandleLabelLength, handleAvailabilityDetails, isReservedHandleLabel } from "./handle-quote-domain"
 import {
   type HandleCommunityRepository,
   getNamespacePolicy,
@@ -14,6 +14,12 @@ import {
   parseHandleClaimSettings,
 } from "./handle-policy-service"
 import { getBlockingHandleForLabel, serializeHandle } from "./handle-row-store"
+import {
+  acquireHandleLabelReservation,
+  consumeHandleLabelReservation,
+  expireStaleHandleLabelReservations,
+  getActiveHandleLabelReservation,
+} from "./handle-label-reservation"
 
 function normalizeSubmittedHandleId(value: string): string {
   const trimmed = value.trim()
@@ -85,8 +91,30 @@ export async function reserveCommunityHandleOnClient(
   }
 
   const now = nowIso()
+  await expireStaleHandleLabelReservations({ executor: client, communityId: input.communityId, now })
+  const blockingReservation = await getActiveHandleLabelReservation({
+    executor: client,
+    namespaceId: policy.namespace_id,
+    labelNormalized: input.desired.labelNormalized,
+    now,
+  })
+  if (blockingReservation) {
+    const reason = "Desired label is temporarily reserved for another payment"
+    throw conflictError(reason, handleAvailabilityDetails("taken", reason))
+  }
   const handleId = makeId("ch")
   await withTransaction(client, "write", async (tx) => {
+    const reservationId = await acquireHandleLabelReservation({
+      executor: tx,
+      communityId: input.communityId,
+      namespaceId: policy.namespace_id,
+      labelNormalized: input.desired.labelNormalized,
+      userId: input.userId,
+      quoteId: null,
+      purpose: "admin_reserve",
+      reservedAt: now,
+      expiresAt: addHandleQuoteSeconds(now, 60),
+    })
     await tx.execute({
       sql: `
         INSERT INTO community_handles (
@@ -111,6 +139,7 @@ export async function reserveCommunityHandleOnClient(
         now,
       ],
     })
+    await consumeHandleLabelReservation({ executor: tx, reservationId, now })
   })
 
   const result = await client.execute({
