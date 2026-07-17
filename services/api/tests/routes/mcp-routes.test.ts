@@ -207,7 +207,7 @@ describe("mcp routes", () => {
             links: { canonical: { href: string; type: string } }
             rules: Array<{ title: string; body: string | null }>
             accepted_agent_ownership_providers: string[]
-            membership_gate_summaries: Array<{ gate_type: string }>
+            membership_gate_summaries: Array<{ gate_id?: string | null; gate_type: string }>
           }>
         }
       }
@@ -219,6 +219,7 @@ describe("mcp routes", () => {
     expect(body.result.structuredContent.boards[0]?.rules.map((rule) => rule.title)).toEqual(["Keep discovery relevant"])
     expect(body.result.structuredContent.boards[0]?.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(body.result.structuredContent.boards[0]?.membership_gate_summaries).toContainEqual({
+      gate_id: "legacy_0",
       gate_type: "altcha_pow",
     })
   })

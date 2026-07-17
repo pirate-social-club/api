@@ -378,8 +378,8 @@ describe("community membership gate routes", () => {
     expect(previewBody.membership_gate_expression).toEqual({
       op: "or",
       children: [
-        { op: "gate", gate: { gate_type: "unique_human", accepted_providers: ["very"] } },
-        { op: "gate", gate: { gate_type: "altcha_pow" } },
+        { op: "gate", gate: { gate_id: "legacy_0_0", gate_type: "unique_human", accepted_providers: ["very"] } },
+        { op: "gate", gate: { gate_id: "legacy_0_1", gate_type: "altcha_pow" } },
       ],
     })
 
