@@ -185,7 +185,7 @@ export async function findZeroRevenueShareStoryParentIpIds(input: {
   const placeholders = storyIpIds.map((_, index) => `?${index + 1}`).join(", ")
   const result = await client.execute({
     sql: `
-      SELECT story_ip_id
+      SELECT LOWER(story_ip_id) AS story_ip_id
       FROM story_registered_asset_projections
       WHERE LOWER(story_ip_id) IN (${placeholders})
       GROUP BY LOWER(story_ip_id)
