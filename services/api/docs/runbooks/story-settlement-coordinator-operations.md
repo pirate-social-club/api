@@ -113,6 +113,10 @@ community that is deliberately absent from active-community cron enumeration.
 
 ## Manual fee replacement
 
+Implementation is gated by `../story-settlement-manual-fee-replacement-design.md`. Until the linked
+multi-candidate journal and scoped action are deployed and staging-proven, stop here; do not replace
+transactions with a wallet CLI or direct signer access.
+
 V1 does not create automatic replacements. Use this only for a journaled
 transaction that remains pending beyond the broadcast-age alert and whose
 nonce is still occupied by that exact hash.
