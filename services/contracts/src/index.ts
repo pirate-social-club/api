@@ -3646,6 +3646,7 @@ type GateTraceNode = {
   asset_id?: string | null;
   required_amount_atomic?: string | null;
   current_amount_atomic?: string | null;
+  evaluated_wallet_count?: number | null;
   children?: Array<Record<string, unknown>>;
 };
 
@@ -3993,6 +3994,7 @@ type RequiredActionNode = {
   required_amount_atomic?: string;
   current_amount_atomic?: string;
   shortfall_amount_atomic?: string;
+  evaluated_wallet_count?: number;
 };
 
 type RequiredActionSet = {

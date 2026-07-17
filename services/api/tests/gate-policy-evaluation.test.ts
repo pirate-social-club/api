@@ -165,7 +165,66 @@ describe("evaluateMembershipGatePolicy", () => {
         current_amount_atomic: "7",
         required_amount_atomic: "10",
         shortfall_amount_atomic: "3",
+        evaluated_wallet_count: 1,
       })
+    })
+
+    test("separates an unattached wallet from an attached wallet holding nothing", async () => {
+      // Both report current "0" and a full-requirement shortfall, but they need
+      // opposite remedies: connect a wallet versus acquire more of the asset.
+      // Only the observed wallet count tells them apart.
+      setAssetBalanceReaderForTests(async () => 0n)
+      const policy = atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" })
+
+      const withoutWallet = await evaluateMembershipGatePolicy({
+        env: {},
+        policy,
+        user: makeUser({}),
+        walletAttachments: [],
+      })
+      const withEmptyWallet = await evaluateMembershipGatePolicy({
+        env: {},
+        policy,
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_1",
+          chain_namespace: "eip155:1",
+          wallet_address: "0x0000000000000000000000000000000000000001",
+          is_primary: true,
+        }],
+      })
+
+      // Indistinguishable on every other field.
+      for (const result of [withoutWallet, withEmptyWallet]) {
+        expect(result.outcome).toBe("action_required")
+        expect(result.requiredActionSet?.items[0]).toMatchObject({
+          capability: "asset_balance",
+          current_amount_atomic: "0",
+          shortfall_amount_atomic: "10",
+        })
+      }
+
+      expect(withoutWallet.requiredActionSet?.items[0]).toMatchObject({ evaluated_wallet_count: 0 })
+      expect(withEmptyWallet.requiredActionSet?.items[0]).toMatchObject({ evaluated_wallet_count: 1 })
+    })
+
+    test("counts only wallets whose balance was actually read", async () => {
+      // A wallet on a chain this asset does not live on is never read, so it
+      // must not be counted as an observation.
+      setAssetBalanceReaderForTests(async () => 0n)
+      const result = await evaluateMembershipGatePolicy({
+        env: {},
+        policy: atomGate({ type: "asset_balance", asset_id: "eip155:1/slip44:60", min_amount_atomic: "10" }),
+        user: makeUser({}),
+        walletAttachments: [{
+          wallet_attachment: "wa_btc",
+          chain_namespace: "bip122:000000000019d6689c085ae165831e93",
+          wallet_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+          is_primary: true,
+        }],
+      })
+
+      expect(result.requiredActionSet?.items[0]).toMatchObject({ evaluated_wallet_count: 0 })
     })
 
     test("includes canonical atomic amounts in public summaries", () => {
