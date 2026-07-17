@@ -479,6 +479,7 @@ async function evaluateAssetBalanceAtom(input: {
       asset_id: input.atom.asset_id,
       required_amount_atomic: input.atom.min_amount_atomic,
       current_amount_atomic: current,
+      evaluated_wallet_count: result.evaluatedWalletCount,
     },
     requiredAction: result.passed || result.unavailable || current == null || shortfall == null ? null : {
       kind: "action",
@@ -488,6 +489,9 @@ async function evaluateAssetBalanceAtom(input: {
       required_amount_atomic: input.atom.min_amount_atomic,
       current_amount_atomic: current,
       shortfall_amount_atomic: shortfall,
+      // Zero means no wallet was observed at all, which a zero current amount
+      // cannot express on its own.
+      evaluated_wallet_count: result.evaluatedWalletCount,
     },
   }
 }

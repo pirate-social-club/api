@@ -209,6 +209,7 @@ describe("throwUnsatisfiedMembershipGate", () => {
             required_amount_atomic: "10",
             current_amount_atomic: "7",
             shortfall_amount_atomic: "3",
+            evaluated_wallet_count: 1,
           }],
         },
       },
