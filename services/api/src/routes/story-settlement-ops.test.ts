@@ -128,4 +128,66 @@ describe("Story settlement operator routes", () => {
     expect(response.status).toBe(202)
     expect(request).toMatchObject({ communityId: "cmt_canary", quoteId: "qte_canary" })
   })
+
+  test("requeues one operator-funding-blocked publish under the repair credential", async () => {
+    let request: Record<string, unknown> | null = null
+    setStorySettlementOpsDependenciesForTests({
+      authenticate: async () => actor(),
+      recoverOperatorBlockedPublish: async (input) => {
+        request = input as unknown as Record<string, unknown>
+        return { outcome: "requeued", jobId: "cjb_recovery", postId: input.postId }
+      },
+    })
+    const response = await storySettlementOps.request("/operator-blocked-publish-recoveries", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        community_id: "cmt_canary",
+        post_id: "pst_blocked",
+        authorization_ref: "CANARY-TOPUP-1",
+      }),
+    }, {} as Env)
+    expect(response.status).toBe(202)
+    expect(request).toMatchObject({ communityId: "cmt_canary", postId: "pst_blocked" })
+    expect(await response.json()).toEqual({
+      result: { outcome: "requeued", jobId: "cjb_recovery", postId: "pst_blocked" },
+    })
+  })
+
+  test("confirms a registration no-broadcast outcome under the scoped repair credential", async () => {
+    let request: Record<string, unknown> | null = null
+    setStorySettlementOpsDependenciesForTests({
+      authenticate: async () => actor(),
+      confirmRegistrationNoBroadcast: async (input) => {
+        request = input as unknown as Record<string, unknown>
+        return {
+          operationId: input.operationId,
+          status: "failed_prebroadcast",
+          errorCode: "ops_confirmed_no_broadcast:staging drill evidence",
+        }
+      },
+    })
+    const response = await storySettlementOps.request("/registration-effect-no-broadcast-confirmations", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        community_id: "cmt_canary",
+        asset_id: "ast_canary",
+        operation_id: "op_canary",
+        authorization_ref: "DRILL-2026-0717",
+        reason: "Verified no broadcast in signer history and provider traces",
+      }),
+    }, {} as Env)
+    expect(response.status).toBe(200)
+    expect(request).toMatchObject({
+      communityId: "cmt_canary",
+      assetId: "ast_canary",
+      operationId: "op_canary",
+      actorId: "svc_story_ops",
+    })
+    expect(await response.json()).toMatchObject({
+      effect: { operationId: "op_canary", status: "failed_prebroadcast" },
+      next_action: "recycle the owning finalize job",
+    })
+  })
 })
