@@ -151,6 +151,7 @@ async function insertDerivativeSourceAsset(input: {
   publicationStatus: "story_published" | "withdrawn"
   storyIpId?: string
   storyLicenseTermsId?: string
+  commercialRevSharePct?: number
   postStatus?: "published" | "deleted" | "hidden" | "removed"
 }): Promise<void> {
   const client = createClient({
@@ -185,7 +186,6 @@ async function insertDerivativeSourceAsset(input: {
         now,
       ],
     })
-
     await client.execute({
       sql: `
         INSERT INTO assets (
@@ -228,6 +228,12 @@ async function insertDerivativeSourceAsset(input: {
         now,
       ],
     })
+    if (input.commercialRevSharePct != null) {
+      await client.execute({
+        sql: "UPDATE assets SET commercial_rev_share_pct = ?2 WHERE asset_id = ?1",
+        args: [input.assetId, input.commercialRevSharePct],
+      })
+    }
   } finally {
     client.close()
   }
@@ -242,6 +248,7 @@ async function insertDerivativeSourceProjection(input: {
   assetKind: "song_audio" | "video_file"
   storyIpId?: string
   storyLicenseTermsId?: string
+  commercialRevSharePct?: number
   postStatus?: "published" | "deleted" | "hidden" | "removed"
 }): Promise<void> {
   const now = new Date().toISOString()
@@ -254,7 +261,7 @@ async function insertDerivativeSourceProjection(input: {
       creatorUserId: input.creatorUserId,
       assetKind: input.assetKind,
       licensePreset: "commercial-remix",
-      commercialRevSharePct: 15,
+      commercialRevSharePct: input.commercialRevSharePct ?? 15,
       storyIpId: input.storyIpId ?? `0x${input.assetId.padEnd(40, "0").slice(0, 40)}`,
       storyLicenseTermsId: input.storyLicenseTermsId ?? "17",
       sourcePostId: `post_${input.assetId}`,
@@ -341,6 +348,19 @@ describe("song artifact catalog routes", () => {
       publicationStatus: "story_published",
       storyIpId: "0x2222222222222222222222222222222222222222",
       storyLicenseTermsId: "18",
+    })
+    await insertDerivativeSourceAsset({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      creatorUserId: owner.userId,
+      assetId: "ast_zero_share_song",
+      title: "Zero Share Source",
+      assetKind: "song_audio",
+      rightsBasis: "original",
+      publicationStatus: "story_published",
+      storyIpId: "0x6666666666666666666666666666666666666666",
+      storyLicenseTermsId: "22",
+      commercialRevSharePct: 0,
     })
     await insertDerivativeSourceAsset({
       communityDbRoot: ctx.communityDbRoot,
@@ -540,6 +560,17 @@ describe("song artifact catalog routes", () => {
       assetKind: "song_audio",
       storyIpId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       storyLicenseTermsId: "22",
+    })
+    await insertDerivativeSourceProjection({
+      env: ctx.env,
+      communityId: sourceCommunityId,
+      creatorUserId: sourceOwner.userId,
+      assetId: "ast_zero_share_global_source",
+      title: "Free Parent",
+      assetKind: "song_audio",
+      storyIpId: "0xcccccccccccccccccccccccccccccccccccccccc",
+      storyLicenseTermsId: "23",
+      commercialRevSharePct: 0,
     })
 
     const response = await app.request(

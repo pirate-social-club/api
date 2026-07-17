@@ -276,6 +276,7 @@ export async function listDerivativeSourceRows(input: {
     "a.story_ip_id != ''",
     "a.story_license_terms_id IS NOT NULL",
     "a.story_license_terms_id != ''",
+    "a.commercial_rev_share_pct > 0",
     "p.status = 'published'",
   ]
 
