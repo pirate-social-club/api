@@ -36,7 +36,7 @@ function toPurchaseSettlementAttemptRow(row: Record<string, unknown>): PurchaseS
   }
 }
 
-async function getPurchaseSettlementAttempt(input: {
+export async function getPurchaseSettlementAttempt(input: {
   client: SettlementExecutor
   quoteId: string
 }): Promise<PurchaseSettlementAttemptRow | null> {
@@ -124,7 +124,8 @@ export async function reservePurchaseSettlementAttempt(input: {
   }
 
   const updatedAtMs = Date.parse(attempt.updated_at)
-  if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs >= SETTLEMENT_ATTEMPT_STALE_MS) {
+  const nowMs = Date.parse(input.now)
+  if (Number.isFinite(updatedAtMs) && Number.isFinite(nowMs) && nowMs - updatedAtMs >= SETTLEMENT_ATTEMPT_STALE_MS) {
     const reclaimResult = await input.client.execute({
       sql: `
         UPDATE purchase_settlement_attempts

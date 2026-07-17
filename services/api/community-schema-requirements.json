@@ -34,7 +34,8 @@
     "1133_multi_namespace_bindings.sql",
     "1134_story_settlement_coordinator_mirror.sql",
     "1135_namespace_handle_claim_gates.sql",
-    "1136_community_handle_label_reservations.sql"
+    "1136_community_handle_label_reservations.sql",
+    "1137_community_handle_payment_reservation_cap.sql"
   ],
   "features": {},
   "deferred": {}

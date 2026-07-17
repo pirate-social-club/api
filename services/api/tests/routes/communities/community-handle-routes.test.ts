@@ -249,6 +249,28 @@ async function getLocalHandleReservationStatus(input: {
   }
 }
 
+async function releaseLocalHandleReservation(input: {
+  communityDbRoot: string
+  communityId: string
+  quoteId: string
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE community_handle_label_reservations
+        SET status = 'released', released_at = updated_at
+        WHERE handle_claim_quote_id = ?1
+      `,
+      args: [rawHandleQuoteId(input.quoteId)],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function countLocalHandleQuotes(input: {
   communityDbRoot: string
   communityId: string
@@ -1049,7 +1071,23 @@ describe("community handle routes", () => {
   })
 
   test("paid quote reserves the label before funding and consumes the reservation on claim", async () => {
-    const ctx = await createRouteTestContext()
+    let quoteRateLimitCalls = 0
+    let claimRateLimitCalls = 0
+    let quoteRateLimitAllows = true
+    const ctx = await createRouteTestContext({
+      HANDLE_QUOTE_RATE_LIMITER: {
+        limit: async () => {
+          quoteRateLimitCalls += 1
+          return { success: quoteRateLimitAllows }
+        },
+      },
+      HANDLE_CLAIM_RATE_LIMITER: {
+        limit: async () => {
+          claimRateLimitCalls += 1
+          return { success: true }
+        },
+      },
+    })
     cleanup = ctx.cleanup
 
     const creator = await exchangeJwtWithWallet(ctx.env, "community-handle-paid-race-creator")
@@ -1093,6 +1131,28 @@ describe("community handle routes", () => {
       quoteId: quote.id,
     })).toBe("active")
 
+    const repeatedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "racepay" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(repeatedQuoteResponse.status).toBe(200)
+    expect((await json(repeatedQuoteResponse) as { id: string }).id).toBe(quote.id)
+
+    const competingQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "otherpay" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(competingQuoteResponse.status).toBe(409)
+    expect(await json(competingQuoteResponse)).toMatchObject({
+      code: "conflict",
+      details: { reason: "active_payment_reservation" },
+    })
+    expect(quoteRateLimitCalls).toBe(3)
+
     let attemptedBlocker = false
     setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
       if (!attemptedBlocker) {
@@ -1128,6 +1188,7 @@ describe("community handle routes", () => {
       creator.accessToken,
     )
     expect(claimResponse.status).toBe(200)
+    expect(claimRateLimitCalls).toBe(1)
     expect(await getLocalHandleQuoteStatus({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
@@ -1138,6 +1199,19 @@ describe("community handle routes", () => {
       communityId,
       quoteId: quote.id,
     })).toBe("consumed")
+
+    quoteRateLimitAllows = false
+    const rateLimitedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "limited" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(rateLimitedQuoteResponse.status).toBe(429)
+    expect(await json(rateLimitedQuoteResponse)).toMatchObject({
+      code: "rate_limited",
+      details: { scope: "community_handle_quote" },
+    })
   })
 
   // Re-enable these end-to-end issuance regressions only with the rebuilt issuer;
@@ -1626,11 +1700,17 @@ describe("community handle routes", () => {
     )
     expect(premiumQuoteResponse.status).toBe(200)
     const premiumQuote = await json(premiumQuoteResponse) as {
+      id: string
       price_cents: number
       pricing_tier: string
     }
     expect(premiumQuote.price_cents).toBe(2500)
     expect(premiumQuote.pricing_tier).toBe("premium")
+    await releaseLocalHandleReservation({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      quoteId: premiumQuote.id,
+    })
 
     const crownQuoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
@@ -1640,11 +1720,17 @@ describe("community handle routes", () => {
     )
     expect(crownQuoteResponse.status).toBe(200)
     const crownQuote = await json(crownQuoteResponse) as {
+      id: string
       price_cents: number
       pricing_tier: string
     }
     expect(crownQuote.price_cents).toBe(100000)
     expect(crownQuote.pricing_tier).toBe("special")
+    await releaseLocalHandleReservation({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      quoteId: crownQuote.id,
+    })
 
     // 5-char label is standard ($5)
     const standardQuoteResponse = await requestJson(

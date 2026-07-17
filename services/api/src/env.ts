@@ -253,6 +253,8 @@ export type Env = {
   // Cloudflare native rate limiters (configured under `ratelimits` in wrangler).
   LINK_PREVIEW_RATE_LIMITER?: RateLimiterBinding
   REWARD_OFFER_RATE_LIMITER?: RateLimiterBinding
+  HANDLE_QUOTE_RATE_LIMITER?: RateLimiterBinding
+  HANDLE_CLAIM_RATE_LIMITER?: RateLimiterBinding
   // Strongly consistent per-user comment limiter backed by a Durable Object.
   COMMENT_CREATE_RATE_LIMITER?: DurableObjectNamespace<CommentCreateRateLimiterDO>
   KARAOKE_GATEWAY_SIGNING_KEY?: string

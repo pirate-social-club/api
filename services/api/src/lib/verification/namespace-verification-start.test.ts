@@ -105,6 +105,27 @@ describe("startNamespaceVerificationSession", () => {
     })).rejects.toThrow("Namespace family must match root label prefix")
   })
 
+  test("rejects platform-reserved HNS and Spaces roots after normalization", async () => {
+    const client = new PlatformManagedZoneBootstrapClient()
+    const reservedLabels = ["u", "g", "api", "auth", "settings", "admin"]
+
+    for (const rootLabel of reservedLabels) {
+      await expect(startNamespaceVerificationSession(client, {}, {
+        userId: "usr_test",
+        family: "hns",
+        rootLabel: rootLabel.toUpperCase(),
+      })).rejects.toThrow("Namespace root label is reserved by Pirate")
+
+      await expect(startNamespaceVerificationSession(client, {}, {
+        userId: "usr_test",
+        family: "spaces",
+        rootLabel: `@${rootLabel.toUpperCase()}`,
+      })).rejects.toThrow("Namespace root label is reserved by Pirate")
+    }
+
+    expect(client.insertAttempts).toBe(0)
+  })
+
   test("starts HNS sessions with nameserver and TXT records before delegation is detected", async () => {
     const calls: string[] = []
     globalThis.fetch = mockFetch(async (input, init) => {
