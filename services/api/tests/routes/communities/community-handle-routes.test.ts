@@ -224,6 +224,31 @@ async function getLocalHandleQuoteStatus(input: {
   }
 }
 
+async function getLocalHandleReservationStatus(input: {
+  communityDbRoot: string
+  communityId: string
+  quoteId: string
+}): Promise<string | null> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT status
+        FROM community_handle_label_reservations
+        WHERE handle_claim_quote_id = ?1
+        LIMIT 1
+      `,
+      args: [rawHandleQuoteId(input.quoteId)],
+    })
+    const value = result.rows[0]?.status
+    return typeof value === "string" ? value : null
+  } finally {
+    client.close()
+  }
+}
+
 async function countLocalHandleQuotes(input: {
   communityDbRoot: string
   communityId: string
@@ -243,74 +268,6 @@ async function countLocalHandleQuotes(input: {
       args: [input.communityId, input.labelNormalized],
     })
     return Number(result.rows[0]?.count ?? 0)
-  } finally {
-    client.close()
-  }
-}
-
-async function getLocalActiveNamespaceId(input: {
-  communityDbRoot: string
-  communityId: string
-}): Promise<string> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
-  })
-  try {
-    const result = await client.execute({
-      sql: `
-        SELECT namespace_id
-        FROM namespace_bindings
-        WHERE community_id = ?1
-          AND status = 'active'
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    })
-    const namespaceId = result.rows[0]?.namespace_id
-    if (typeof namespaceId !== "string") {
-      throw new Error("active namespace binding missing")
-    }
-    return namespaceId
-  } finally {
-    client.close()
-  }
-}
-
-async function insertLocalReservedHandle(input: {
-  communityDbRoot: string
-  communityId: string
-  namespaceId: string
-  userId: string
-  label: string
-}): Promise<void> {
-  const client = createClient({
-    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
-  })
-  try {
-    const now = new Date().toISOString()
-    await client.execute({
-      sql: `
-        INSERT INTO community_handles (
-          community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-          label_normalized, label_display, status, issuance_source, price_cents, currency,
-          pricing_model, pricing_tier, settlement_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
-          lease_started_at, lease_expires_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, ?4, NULL,
-          ?5, ?5, 'reserved', 'admin_grant', 0, 'USD',
-          NULL, 'reserved', NULL, NULL, NULL,
-          NULL, NULL, ?6, ?6
-        )
-      `,
-      args: [
-        `test_reserved_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-        input.communityId,
-        input.userId,
-        input.namespaceId,
-        input.label,
-        now,
-      ],
-    })
   } finally {
     client.close()
   }
@@ -1091,7 +1048,7 @@ describe("community handle routes", () => {
     })
   })
 
-  test("paid handle claim leaves quote open when label becomes unavailable after payment verification", async () => {
+  test("paid quote reserves the label before funding and consumes the reservation on claim", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -1116,11 +1073,6 @@ describe("community handle routes", () => {
       ctx.env,
       creator.accessToken,
     )
-    const namespaceId = await getLocalActiveNamespaceId({
-      communityDbRoot: ctx.communityDbRoot,
-      communityId,
-    })
-
     const quoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
       { desired_label: "racepay" },
@@ -1135,18 +1087,25 @@ describe("community handle routes", () => {
     }
     expect(quote.price_cents).toBe(500)
     expect(quote.pricing_tier).toBe("standard")
+    expect(await getLocalHandleReservationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      quoteId: quote.id,
+    })).toBe("active")
 
-    let insertedBlocker = false
+    let attemptedBlocker = false
     setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
-      if (!insertedBlocker) {
-        insertedBlocker = true
-        await insertLocalReservedHandle({
-          communityDbRoot: ctx.communityDbRoot,
-          communityId,
-          namespaceId,
-          userId: creator.userId,
-          label: "racepay",
-        })
+      if (!attemptedBlocker) {
+        attemptedBlocker = true
+        const reserveResponse = await requestJson(
+          `http://pirate.test/communities/${communityId}/handles/reserve`,
+          { desired_label: "racepay" },
+          ctx.env,
+          creator.accessToken,
+        )
+        expect(reserveResponse.status).toBe(409)
+        const reserveError = await json(reserveResponse) as { details: { reason: string } }
+        expect(reserveError.details.reason).toBe("Desired label is temporarily reserved for another payment")
       }
       return {
         txRef: input.fundingTxRef,
@@ -1168,19 +1127,17 @@ describe("community handle routes", () => {
       ctx.env,
       creator.accessToken,
     )
-    expect(claimResponse.status).toBe(409)
-    const claimError = await json(claimResponse) as {
-      code: string
-      details: { availability: string; reason: string }
-    }
-    expect(claimError.code).toBe("conflict")
-    expect(claimError.details.availability).toBe("reserved")
-    expect(claimError.details.reason).toBe("Payment was verified, but this name became unavailable before the claim completed")
+    expect(claimResponse.status).toBe(200)
     expect(await getLocalHandleQuoteStatus({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
       quoteId: quote.id,
-    })).toBe("quoted")
+    })).toBe("claimed")
+    expect(await getLocalHandleReservationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      quoteId: quote.id,
+    })).toBe("consumed")
   })
 
   // Re-enable these end-to-end issuance regressions only with the rebuilt issuer;

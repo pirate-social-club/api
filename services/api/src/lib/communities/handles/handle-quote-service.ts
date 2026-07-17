@@ -1,6 +1,6 @@
 import type { CommunityHandleQuote, CommunityHandleQuoteRequest, Env } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
-import { eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { conflictError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityWriteClient } from "../community-read-access"
@@ -22,11 +22,16 @@ import {
   type HandleAvailability,
   addHandleQuoteSeconds,
   assertHandleLabelLength,
+  handleAvailabilityDetails,
   isReservedHandleLabel,
   resolveHandlePrice,
   serializeHandleQuote,
 } from "./handle-quote-domain"
 import { getActiveHandleForUser, getBlockingHandleForLabel } from "./handle-row-store"
+import {
+  acquireHandleLabelReservation,
+  getActiveHandleLabelReservation,
+} from "./handle-label-reservation"
 
 export async function quoteCommunityHandle(input: {
   env: Env
@@ -117,10 +122,20 @@ export async function quoteCommunityHandle(input: {
           AND label_normalized = ?4
           AND status = 'quoted'
           AND expires_at > ?5
+          AND (
+            ?6 = 0 OR EXISTS (
+              SELECT 1
+              FROM community_handle_label_reservations hlr
+              WHERE hlr.handle_claim_quote_id = community_handle_claim_quotes.handle_claim_quote_id
+                AND hlr.purpose = 'payment'
+                AND hlr.status = 'active'
+                AND hlr.expires_at > ?5
+            )
+          )
         ORDER BY created_at DESC
         LIMIT 8
       `,
-      args: [input.communityId, input.userId, policy.namespace_id, desired.labelNormalized, quotedAt],
+      args: [input.communityId, input.userId, policy.namespace_id, desired.labelNormalized, quotedAt, price.priceCents],
     })).rows.find((row) => {
       return requiredNumber(row, "price_cents") === price.priceCents
         && stringOrNull(rowValue(row, "currency")) === "USD"
@@ -139,10 +154,29 @@ export async function quoteCommunityHandle(input: {
         protocolIssuanceReason,
       })
     }
+
+    const activePaymentReservation = price.priceCents > 0
+      ? await getActiveHandleLabelReservation({
+        executor: db.client,
+        namespaceId: policy.namespace_id,
+        labelNormalized: desired.labelNormalized,
+      })
+      : null
+    if (activePaymentReservation) {
+      eligible = false
+      availability = "taken"
+      reason = "Desired label is temporarily reserved for another payment"
+    }
     const expiresAt = addHandleQuoteSeconds(quotedAt, quoteTtlSeconds)
     const quoteId = makeId("hcq")
+    // Keep rejected quotes claimable long enough for the claim path to return the
+    // authoritative policy/gate error. Only eligible paid quotes need to hold the
+    // label mutex while the user funds them.
+    const quoteStatus = "quoted"
+    const reserveForPayment =
+      eligible && availability === "available" && price.priceCents > 0
 
-    await db.client.execute({
+    const insertQuote = {
       sql: `
         INSERT INTO community_handle_claim_quotes (
           handle_claim_quote_id, community_id, user_id, namespace_id, label_normalized, label_display,
@@ -150,8 +184,8 @@ export async function quoteCommunityHandle(input: {
           quoted_at, expires_at, claimed_at, settings_snapshot_json, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6,
-          'quoted', ?7, 'USD', ?8, ?9, ?10,
-          ?11, ?12, NULL, ?13, ?11, ?11
+          ?7, ?8, 'USD', ?9, ?10, ?11,
+          ?12, ?13, NULL, ?14, ?12, ?12
         )
       `,
       args: [
@@ -161,6 +195,7 @@ export async function quoteCommunityHandle(input: {
         policy.namespace_id,
         desired.labelNormalized,
         desired.labelDisplay,
+        quoteStatus,
         price.priceCents,
         price.pricingModel,
         price.pricingTier,
@@ -175,7 +210,42 @@ export async function quoteCommunityHandle(input: {
           settings,
         }),
       ],
-    })
+    }
+
+    if (reserveForPayment) {
+      const tx = await db.client.transaction("write")
+      try {
+        await tx.execute(insertQuote)
+        await acquireHandleLabelReservation({
+          executor: tx,
+          communityId: input.communityId,
+          namespaceId: policy.namespace_id,
+          labelNormalized: desired.labelNormalized,
+          userId: input.userId,
+          quoteId,
+          purpose: "payment",
+          reservedAt: quotedAt,
+          expiresAt,
+        })
+        await tx.commit()
+      } catch (error) {
+        await tx.rollback().catch(() => undefined)
+        const racedReservation = await getActiveHandleLabelReservation({
+          executor: db.client,
+          namespaceId: policy.namespace_id,
+          labelNormalized: desired.labelNormalized,
+        })
+        if (racedReservation) {
+          const raceReason = "Desired label is temporarily reserved for another payment"
+          throw conflictError(raceReason, handleAvailabilityDetails("taken", raceReason))
+        }
+        throw error
+      } finally {
+        tx.close()
+      }
+    } else {
+      await db.client.execute(insertQuote)
+    }
 
     const row = (await db.client.execute({
       sql: `SELECT * FROM community_handle_claim_quotes WHERE handle_claim_quote_id = ?1 LIMIT 1`,
