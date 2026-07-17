@@ -316,7 +316,7 @@ export async function coordinateStorySettlement(input: {
   const coordinator = binding.getByName(storySettlementCoordinatorName(chainId, signer.value.address))
   let plan: StorySettlementPlanResult
   try {
-    const existingPlan = existingPlanRef ? await coordinator.lookup(existingPlanRef) : null
+    const existingPlan = existingPlanRef ? await coordinator.reconcile(existingPlanRef) : null
     plan = existingPlan ?? await coordinator.admit(request)
   } catch (error) {
     // Coordinator ownership was durably claimed before this await. An RPC timeout

@@ -526,7 +526,7 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     if (repair) {
       const runnableAt = Math.max(repair.next_attempt_at ?? Date.now(), repair.claim_expires_at ?? 0)
       if (runnableAt > Date.now()) {
-        await this.ensureAlarm(runnableAt)
+        await this.ctx.storage.setAlarm(runnableAt)
         return
       }
       try { await this.advanceRepair(repair) } catch (error) { this.recordRetry(repair, error) }
@@ -540,7 +540,7 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     }
     const runnableAt = Math.max(step.next_attempt_at ?? Date.now(), step.claim_expires_at ?? 0)
     if (runnableAt > Date.now()) {
-      await this.ensureAlarm(runnableAt)
+      await this.ctx.storage.setAlarm(runnableAt)
       return
     }
     try { await this.advanceStep(step) } catch (error) { this.recordRetry(step, error) }
