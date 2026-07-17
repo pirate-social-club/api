@@ -104,26 +104,22 @@ storySettlementOps.post("/purchase-reconciliations", async (c) => {
   const communityRepository = testPurchaseReconciler
     ? {} as Parameters<typeof reconcileCommunityPurchaseSettlement>[0]["communityRepository"]
     : getCommunityRepository(c.env)
-  try {
-    const outcome = await (testPurchaseReconciler ?? reconcileCommunityPurchaseSettlement)({
-      env: c.env,
-      communityRepository,
-      communityId,
-      quoteId,
-    })
-    console.info(JSON.stringify({
-      message: "story purchase settlement reconciliation requested",
-      operatorCredentialId: actor.operatorCredentialId,
-      operatorActorId: actor.operatorActorId,
-      authorizationRef,
-      communityId,
-      quoteId,
-      outcome,
-    }))
-    return c.json({ outcome }, outcome === "finalized" ? 200 : 202)
-  } finally {
-    await communityRepository.close?.()
-  }
+  const outcome = await (testPurchaseReconciler ?? reconcileCommunityPurchaseSettlement)({
+    env: c.env,
+    communityRepository,
+    communityId,
+    quoteId,
+  })
+  console.info(JSON.stringify({
+    message: "story purchase settlement reconciliation requested",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    quoteId,
+    outcome,
+  }))
+  return c.json({ outcome }, outcome === "finalized" ? 200 : 202)
 })
 
 storySettlementOps.post("/alerts/synthetic", async (c) => {
