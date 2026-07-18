@@ -25,6 +25,8 @@ import {
   type ShardAdminResetResponse,
   type ShardAdminReleaseRequest,
   type ShardAdminReleaseResponse,
+  type ShardAdminDecommissionRequest,
+  type ShardAdminDecommissionResponse,
 } from "@pirate/api-shared"
 
 /**
@@ -781,6 +783,64 @@ export async function runShardReset(
 
   await db.batch(metadataTableNames.map((name) => db.prepare(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(name)}`)))
   return { ok: true, value: { tablesDropped: metadataTableNames.length } }
+}
+
+/**
+ * Admin: irreversibly empty and release an explicitly identified staging binding.
+ *
+ * This is intentionally separate from runShardReset: reset protects unfinished
+ * provisioning and must continue refusing loaded databases. Decommission is
+ * guarded by a staging-only kill switch and re-checks the exact community-to-
+ * binding mapping in the shard-owned pool before touching the target database.
+ */
+export async function runShardDecommission(
+  env: ShardEnv,
+  input: ShardAdminDecommissionRequest,
+): Promise<ShardResult<ShardAdminDecommissionResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  if (env.STAGING_RECLAIM_ENABLED !== "true") {
+    return err(SHARD_READ_ERROR.ADMIN_UNAUTHORIZED, "staging reclaim is disabled")
+  }
+
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+  const poolRow = await pool
+    .prepare("SELECT community_id FROM d1_pool WHERE binding_name = ?1")
+    .bind(input.bindingName)
+    .first()
+  if (!poolRow || String((poolRow as { community_id?: unknown }).community_id ?? "") !== input.communityId) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to decommission ${input.bindingName}: community mapping does not match`,
+    )
+  }
+
+  const db = resolveD1(env, input.bindingName)
+  if ("ok" in db) return db
+  const tables = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
+  const tableNames = (tables.results ?? [])
+    .map((row) => String((row as { name: unknown }).name))
+    .filter((name) => !name.startsWith("sqlite_") && !name.startsWith("_cf_"))
+  if (tableNames.length > 0) {
+    await db.batch([
+      db.prepare("PRAGMA defer_foreign_keys = ON"),
+      ...tableNames.map((name) => db.prepare(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(name)}`)),
+    ])
+  }
+
+  const released = await pool
+    .prepare(
+      "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
+        "last_error = NULL, released_at = ?3, version = version + 1 " +
+        "WHERE binding_name = ?1 AND community_id = ?2",
+    )
+    .bind(input.bindingName, input.communityId, input.now)
+    .run()
+  return {
+    ok: true,
+    value: { tablesDropped: tableNames.length, released: (released.meta?.changes ?? 0) > 0 },
+  }
 }
 
 /** Admin: free a pool binding (sets community_id NULL + released_at for the §5 quarantine). */

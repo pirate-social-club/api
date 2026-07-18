@@ -104,7 +104,17 @@ console.log("[community-create-smoke] community accepted", {
 
 await pollProvisioning({ token, communityId: created.communityId, jobId: created.jobId })
 
+await requestJson({
+  method: "POST",
+  url: `${apiBase}/communities/${encodeURIComponent(created.communityId)}/archive`,
+  token,
+  body: {},
+  okStatuses: [200],
+  prefix,
+})
+
 console.log("[community-create-smoke] ok", {
   communityId: created.communityId,
   jobId: created.jobId,
+  archived: true,
 })

@@ -334,6 +334,32 @@ describe("debug pipeline routes", () => {
     expect(response.status).toBe(401)
   })
 
+  test("POST /admin/debug/staging-d1/reclaim requires admin auth", async () => {
+    const ctx = await createRouteTestContext({ ENVIRONMENT: "staging", PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const response = await app.request(
+      "http://pirate.test/admin/debug/staging-d1/reclaim",
+      { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+      ctx.env,
+    )
+    expect(response.status).toBe(401)
+  })
+
+  test("POST /admin/debug/staging-d1/reclaim is absent outside staging", async () => {
+    const ctx = await createRouteTestContext({ ENVIRONMENT: "production", PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const response = await app.request(
+      "http://pirate.test/admin/debug/staging-d1/reclaim",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        body: JSON.stringify({ community_ids: ["cmt_smoke"] }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(404)
+  })
+
   test("POST /admin/debug/community-job/recycle queues a running community job", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
