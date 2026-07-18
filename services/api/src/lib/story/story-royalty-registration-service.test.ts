@@ -5,9 +5,13 @@ import {
   capStoryRoyaltyWriteContractRequestForTests,
   classifyStoryRegistrationFailure,
   maybeRegisterStoryRoyaltyForAsset,
+  setStoryRoyaltySdkClientFactoryForTests,
   withStoryRegistrationRetry,
 } from "./story-royalty-registration-service"
 import type { DirectTxGasPolicy } from "../evm-direct-tx"
+import { setStoryRuntimeFundingAssertionForTests } from "./story-runtime-funding"
+import { privateKeyToAccount } from "viem/accounts"
+import { sha256Hex } from "../crypto"
 
 // 100 gwei fee cap, 1 gwei priority cap, 2M gas limit cap, 1.2x estimate buffer.
 const GAS_POLICY: DirectTxGasPolicy = {
@@ -268,5 +272,151 @@ describe("maybeRegisterStoryRoyaltyForAsset rights holds", () => {
       bundle: null,
       primaryContentHash: `0x${"1".repeat(64)}`,
     })).rejects.toThrow("rights_hold_blocked")
+  })
+})
+
+function canonical(value: unknown): unknown {
+  if (typeof value === "bigint") return { bigint: value.toString() }
+  if (value == null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map(canonical)
+  return Object.fromEntries(
+    Object.keys(value as Record<string, unknown>).sort().map((key) => [
+      key,
+      canonical((value as Record<string, unknown>)[key]),
+    ]),
+  )
+}
+
+describe("maybeRegisterStoryRoyaltyForAsset durable retries", () => {
+  test("replays the persisted creator, parent/share order, metadata, and calldata after inputs drift", async () => {
+    const privateKey = `0x${"11".repeat(32)}` as const
+    const signerAddress = privateKeyToAccount(privateKey).address
+    const spgNftContract = "0x2222222222222222222222222222222222222222" as const
+    const originalCreator = "0x3333333333333333333333333333333333333333" as const
+    const originalRequest = {
+      nft: { type: "mint", spgNftContract, recipient: originalCreator, allowDuplicates: true },
+      derivData: {
+        parentIpIds: [
+          "0x4444444444444444444444444444444444444444",
+          "0x5555555555555555555555555555555555555555",
+        ],
+        licenseTermsIds: [1n, 2n],
+      },
+      royaltyShares: [
+        { recipient: "0x6666666666666666666666666666666666666666", percentage: 60 },
+        { recipient: "0x7777777777777777777777777777777777777777", percentage: 40 },
+      ],
+      ipMetadata: {
+        ipMetadataURI: "ipfs://original-ip",
+        ipMetadataHash: `0x${"88".repeat(32)}`,
+        nftMetadataURI: "ipfs://original-nft",
+        nftMetadataHash: `0x${"99".repeat(32)}`,
+      },
+    }
+    const durable = {
+      version: 1,
+      registrationKind: "derivative",
+      chainId: 1315,
+      signerAddress: signerAddress.toLowerCase(),
+      spgNftContract,
+      royaltyPolicy: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      metadata: {
+        ipMetadataUri: "ipfs://original-ip",
+        ipMetadataHash: `0x${"88".repeat(32)}`,
+        nftMetadataUri: "ipfs://original-nft",
+        nftMetadataHash: `0x${"99".repeat(32)}`,
+      },
+      derivativeParentIpIds: originalRequest.derivData.parentIpIds,
+      request: originalRequest,
+    }
+    const durableRequestJson = JSON.stringify(canonical(durable))
+    const callDataHash = `0x${await sha256Hex(JSON.stringify(canonical({
+      version: 1,
+      chainId: 1315,
+      signerAddress: signerAddress.toLowerCase(),
+      registrationKind: "derivative",
+      request: originalRequest,
+    })))}`
+    let status = "failed_prebroadcast"
+    const effectRow = () => ({
+      operation_id: "sro_original",
+      registration_kind: "derivative",
+      chain_id: 1315,
+      signer_address: signerAddress,
+      creator_wallet_address: originalCreator,
+      primary_content_hash: `0x${"ab".repeat(32)}`,
+      call_data_hash: callDataHash,
+      durable_request_json: durableRequestJson,
+      status,
+      provider_tx_ref: null,
+      error_code: "story_registration_prebroadcast_retries_exhausted",
+      result_json: null,
+      attempt_count: 1,
+    })
+    const client = {
+      async execute(statement: { sql: string; args?: unknown[] } | string) {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("FROM assets") || sql.includes("FROM rights_holds")) return { rows: [] }
+        if (sql.includes("SELECT") && sql.includes("FROM story_registration_effects")) {
+          return { rows: [effectRow()] }
+        }
+        if (sql.includes("INSERT OR IGNORE INTO story_registration_effects")) return { rows: [], rowsAffected: 0 }
+        if (sql.includes("SET status = 'executing'")) {
+          status = "executing"
+          return { rows: [], rowsAffected: 1 }
+        }
+        if (sql.includes("SET status = 'confirmed'")) return { rows: [], rowsAffected: 1 }
+        throw new Error(`unexpected_sql:${sql}`)
+      },
+    }
+    let executedRequest: unknown
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryRoyaltySdkClientFactoryForTests(() => ({
+      ipAsset: {
+        registerDerivativeIpAsset: async (request) => {
+          executedRequest = request
+          return {
+            ipId: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            tokenId: 42n,
+            txHash: `0x${"cc".repeat(32)}`,
+            ipRoyaltyVault: "0xdddddddddddddddddddddddddddddddddddddddd",
+          }
+        },
+        registerIpAsset: async () => { throw new Error("unexpected_original_registration") },
+      },
+    }))
+    try {
+      await maybeRegisterStoryRoyaltyForAsset({
+        env: {
+          STORY_CHAIN_ID: "1315",
+          STORY_OPERATOR_PRIVATE_KEY: privateKey,
+          STORY_ROYALTY_SPG_NFT_CONTRACT: spgNftContract,
+        } as any,
+        client,
+        communityId: "cmt_drift",
+        assetId: "ast_drift",
+        creatorWalletAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        title: "Changed title",
+        rightsBasis: "original",
+        licensePreset: "commercial-use",
+        commercialRevSharePct: 99,
+        upstreamAssetRefs: ["changed-parent"],
+        assetKind: "video_file",
+        accessMode: "locked",
+        bundle: null,
+        primaryContentHash: `0x${"ff".repeat(32)}`,
+        royaltyShares: [...originalRequest.royaltyShares].reverse().map((share) => ({
+          collaboratorId: "col_drift",
+          walletAddress: share.recipient,
+          walletAddressNormalized: share.recipient,
+          bps: share.percentage * 100,
+          percentage: share.percentage,
+        })) as any,
+      })
+      expect(executedRequest).toEqual(originalRequest)
+    } finally {
+      setStoryRoyaltySdkClientFactoryForTests(null)
+      setStoryRuntimeFundingAssertionForTests(null)
+    }
   })
 })

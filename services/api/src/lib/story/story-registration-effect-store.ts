@@ -14,6 +14,7 @@ export type StoryRegistrationEffect = {
   creatorWalletAddress: string
   primaryContentHash: string
   callDataHash: string
+  durableRequestJson: string | null
   status: EffectStatus
   providerTxRef: string | null
   errorCode: string | null
@@ -23,7 +24,7 @@ export type StoryRegistrationEffect = {
 
 const SELECT_COLUMNS = `
   operation_id, registration_kind, chain_id, signer_address, creator_wallet_address,
-  primary_content_hash, call_data_hash,
+  primary_content_hash, call_data_hash, durable_request_json,
   status, provider_tx_ref, error_code, result_json, attempt_count
 `
 
@@ -40,6 +41,7 @@ function toRow(row: unknown): StoryRegistrationEffect {
     creatorWalletAddress: requiredString(row, "creator_wallet_address"),
     primaryContentHash: requiredString(row, "primary_content_hash"),
     callDataHash: requiredString(row, "call_data_hash"),
+    durableRequestJson: stringOrNull(rowValue(row, "durable_request_json")),
     status: requiredString(row, "status") as EffectStatus,
     providerTxRef: stringOrNull(rowValue(row, "provider_tx_ref")),
     errorCode: stringOrNull(rowValue(row, "error_code")),
@@ -57,24 +59,12 @@ async function loadEffect(client: DbExecutor, key: string): Promise<StoryRegistr
   return toRow(row)
 }
 
-function assertSameRequest(row: StoryRegistrationEffect, input: {
-  registrationKind: RegistrationKind
-  chainId: number
-  signerAddress: string
-  creatorWalletAddress: string
-  primaryContentHash: string
-  callDataHash: string
-}): void {
-  if (
-    row.registrationKind !== input.registrationKind
-    || row.chainId !== input.chainId
-    || row.signerAddress.toLowerCase() !== input.signerAddress.toLowerCase()
-    || row.creatorWalletAddress.toLowerCase() !== input.creatorWalletAddress.toLowerCase()
-    || row.primaryContentHash.toLowerCase() !== input.primaryContentHash.toLowerCase()
-    || row.callDataHash.toLowerCase() !== input.callDataHash.toLowerCase()
-  ) {
-    throw new Error("story_registration_effect_request_conflict")
-  }
+async function loadEffectOrNull(client: DbExecutor, key: string): Promise<StoryRegistrationEffect | null> {
+  const row = await executeFirst(client, {
+    sql: `SELECT ${SELECT_COLUMNS} FROM story_registration_effects WHERE effect_key = ?1 LIMIT 1`,
+    args: [key],
+  })
+  return row ? toRow(row) : null
 }
 
 export async function getStoryRegistrationEffect(input: {
@@ -196,31 +186,59 @@ export async function reserveStoryRegistrationEffect<T>(input: {
   creatorWalletAddress: string
   primaryContentHash: string
   callDataHash: string
+  durableRequestJson: string | null
   now: string
-}): Promise<{ kind: "execute"; operationId: string } | { kind: "confirmed"; result: T }> {
+}): Promise<
+  | {
+      kind: "execute"
+      operationId: string
+      registrationKind: RegistrationKind
+      chainId: number
+      signerAddress: string
+      callDataHash: string
+      durableRequestJson: string
+    }
+  | { kind: "confirmed"; result: T }
+> {
   const key = effectKey(input.communityId, input.assetId)
   const operationId = `sro_${crypto.randomUUID()}`
+  let existing = await loadEffectOrNull(input.client, key)
+  if (!existing && !input.durableRequestJson) {
+    throw new Error("story_registration_durable_request_required")
+  }
   const inserted = await input.client.execute({
     sql: `
       INSERT OR IGNORE INTO story_registration_effects (
         story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
         registration_kind, chain_id, signer_address, creator_wallet_address,
-        primary_content_hash, call_data_hash, status, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'executing', ?12, ?12)
+        primary_content_hash, call_data_hash, durable_request_json, status, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'executing', ?13, ?13)
     `,
     args: [
       makeId("sre"), input.communityId, input.assetId, key, operationId,
       input.registrationKind, input.chainId, input.signerAddress, input.creatorWalletAddress,
-      input.primaryContentHash, input.callDataHash, input.now,
+      input.primaryContentHash, input.callDataHash, input.durableRequestJson, input.now,
     ],
   })
-  if ((inserted.rowsAffected ?? 0) > 0) return { kind: "execute", operationId }
+  if ((inserted.rowsAffected ?? 0) > 0) {
+    return {
+      kind: "execute",
+      operationId,
+      registrationKind: input.registrationKind,
+      chainId: input.chainId,
+      signerAddress: input.signerAddress,
+      callDataHash: input.callDataHash,
+      durableRequestJson: input.durableRequestJson!,
+    }
+  }
 
-  let existing = await loadEffect(input.client, key)
-  assertSameRequest(existing, input)
+  existing = await loadEffect(input.client, key)
   if (existing.status === "confirmed") {
     if (!existing.resultJson) throw new Error("story_registration_effect_confirmed_without_result")
     return { kind: "confirmed", result: JSON.parse(existing.resultJson) as T }
+  }
+  if (!existing.durableRequestJson) {
+    throw new Error("story_registration_legacy_request_reconciliation_required")
   }
   if (existing.status === "failed_prebroadcast") {
     const claimed = await input.client.execute({
@@ -232,7 +250,17 @@ export async function reserveStoryRegistrationEffect<T>(input: {
       `,
       args: [key, operationId, input.now, existing.operationId],
     })
-    if ((claimed.rowsAffected ?? 0) > 0) return { kind: "execute", operationId }
+    if ((claimed.rowsAffected ?? 0) > 0) {
+      return {
+        kind: "execute",
+        operationId,
+        registrationKind: existing.registrationKind,
+        chainId: existing.chainId,
+        signerAddress: existing.signerAddress,
+        callDataHash: existing.callDataHash,
+        durableRequestJson: existing.durableRequestJson,
+      }
+    }
     existing = await loadEffect(input.client, key)
     if (existing.status === "confirmed" && existing.resultJson) {
       return { kind: "confirmed", result: JSON.parse(existing.resultJson) as T }

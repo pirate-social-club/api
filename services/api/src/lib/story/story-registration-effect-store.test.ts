@@ -22,6 +22,12 @@ const REQUEST = {
   creatorWalletAddress: "0x1111111111111111111111111111111111111111",
   primaryContentHash: `0x${"22".repeat(32)}`,
   callDataHash: `0x${"44".repeat(32)}`,
+  durableRequestJson: JSON.stringify({
+    version: 1,
+    creatorWalletAddress: "0x1111111111111111111111111111111111111111",
+    royaltyShares: [{ recipient: "0xaaaa", percentage: 60 }, { recipient: "0xbbbb", percentage: 40 }],
+    metadata: { createdAt: "2026-07-15T10:00:00.000Z", title: "Durable title" },
+  }),
 }
 
 let client: ReturnType<typeof createClient>
@@ -33,6 +39,7 @@ beforeEach(async () => {
   for (const migrationName of [
     "1129_story_registration_effects.sql",
     "1130_story_registration_effect_request_identity.sql",
+    "1139_story_registration_durable_request.sql",
   ]) {
     const migration = await readFile(
       new URL(`../../../test-fixtures/db/community-template/migrations/${migrationName}`, import.meta.url),
@@ -253,14 +260,84 @@ describe("Story registration effect journal", () => {
     })).resolves.toMatchObject({ status: "executing", providerTxRef: null })
   })
 
-  test("rejects reuse when any transaction-shaping input changes", async () => {
-    await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+  test("replays the first durable request instead of comparing recomputed retry inputs", async () => {
+    const first = await reserveStoryRegistrationEffect({ client, ...REQUEST, now: "2026-07-15T10:00:00.000Z" })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: false,
+      errorCode: "prebroadcast",
+      now: "2026-07-15T10:00:00.500Z",
+    })
 
     await expect(reserveStoryRegistrationEffect({
       client,
       ...REQUEST,
+      creatorWalletAddress: "0x2222222222222222222222222222222222222222",
       callDataHash: `0x${"55".repeat(32)}`,
+      durableRequestJson: JSON.stringify({
+        metadata: { title: "Durable title", createdAt: "2026-07-15T10:00:01.000Z" },
+        royaltyShares: [{ recipient: "0xbbbb", percentage: 40 }, { recipient: "0xaaaa", percentage: 60 }],
+        creatorWalletAddress: "0x2222222222222222222222222222222222222222",
+        version: 1,
+      }),
       now: "2026-07-15T10:00:01.000Z",
-    })).rejects.toThrow("story_registration_effect_request_conflict")
+    })).resolves.toMatchObject({
+      kind: "execute",
+      durableRequestJson: REQUEST.durableRequestJson,
+    })
+  })
+
+  test("fails closed for an unconfirmed legacy row without a durable request", async () => {
+    await client.execute({
+      sql: `
+        INSERT INTO story_registration_effects (
+          story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
+          registration_kind, chain_id, signer_address, creator_wallet_address,
+          primary_content_hash, call_data_hash, status, created_at, updated_at
+        ) VALUES ('sre_legacy', ?1, ?2, ?3, 'sro_legacy', 'original', 1315, ?4, ?5, ?6, ?7,
+          'failed_prebroadcast', ?8, ?8)
+      `,
+      args: [
+        COMMUNITY_ID, ASSET_ID, `story_registration:${COMMUNITY_ID}:${ASSET_ID}`,
+        REQUEST.signerAddress, REQUEST.creatorWalletAddress, REQUEST.primaryContentHash,
+        REQUEST.callDataHash, "2026-07-15T10:00:00.000Z",
+      ],
+    })
+
+    await expect(reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      now: "2026-07-15T10:00:01.000Z",
+    })).rejects.toThrow("story_registration_legacy_request_reconciliation_required")
+  })
+
+  test("still replays a confirmed legacy result without inventing a request", async () => {
+    const result = { storyIpId: "0xabc" }
+    await client.execute({
+      sql: `
+        INSERT INTO story_registration_effects (
+          story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
+          registration_kind, chain_id, signer_address, creator_wallet_address,
+          primary_content_hash, call_data_hash, status, result_json, created_at, updated_at, confirmed_at
+        ) VALUES ('sre_legacy_confirmed', ?1, ?2, ?3, 'sro_legacy_confirmed', 'original', 1315,
+          ?4, ?5, ?6, ?7, 'confirmed', ?8, ?9, ?9, ?9)
+      `,
+      args: [
+        COMMUNITY_ID, ASSET_ID, `story_registration:${COMMUNITY_ID}:${ASSET_ID}`,
+        REQUEST.signerAddress, REQUEST.creatorWalletAddress, REQUEST.primaryContentHash,
+        REQUEST.callDataHash, JSON.stringify(result), "2026-07-15T10:00:00.000Z",
+      ],
+    })
+
+    await expect(reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      durableRequestJson: null,
+      now: "2026-07-15T10:00:01.000Z",
+    })).resolves.toEqual({ kind: "confirmed", result })
   })
 })
