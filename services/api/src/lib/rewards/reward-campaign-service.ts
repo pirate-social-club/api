@@ -49,6 +49,35 @@ const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consum
 const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
 const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
 const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
+const ONE_LIVE = "one_live"
+
+export const REWARD_SONG_SLOT_ACQUIRE_SQL = `
+  INSERT INTO reward_song_slots (
+    community_id, post_id, holder_campaign_id, reserved_until, created_at, updated_at
+  )
+  SELECT ?1, ?2, ?3, ?4, ?5, ?5
+  WHERE NOT EXISTS (
+    SELECT 1 FROM reward_campaigns c
+    WHERE c.community_id = ?1 AND c.post_id = ?2
+      AND c.reward_campaign_id <> ?3
+      AND c.status IN ('scheduled', 'active', 'paused', 'operational_hold')
+  )
+  ON CONFLICT (community_id, post_id) DO UPDATE SET
+    holder_campaign_id = excluded.holder_campaign_id,
+    reserved_until = excluded.reserved_until,
+    updated_at = excluded.updated_at
+  WHERE (
+    reward_song_slots.reserved_until <= ?5
+    OR reward_song_slots.holder_campaign_id = excluded.holder_campaign_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM reward_campaigns c
+    WHERE c.community_id = excluded.community_id AND c.post_id = excluded.post_id
+      AND c.reward_campaign_id <> excluded.holder_campaign_id
+      AND c.status IN ('scheduled', 'active', 'paused', 'operational_hold')
+  )
+  RETURNING holder_campaign_id
+`
 
 export type RewardCampaignTarget = {
   communityId: string
@@ -631,6 +660,15 @@ export async function createRewardCampaignFundingQuote(input: {
       throw conflictError("Funding quote exceeds the campaign's unfunded budget")
     }
     const sender = await resolveFundingSender(tx, input.userId)
+    const communityId = requiredString(campaign, "community_id")
+    const postId = requiredString(campaign, "post_id")
+    const slot = queryResultRow(await executeFirst(tx, {
+      sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
+      args: [communityId, postId, input.campaignId, expiresAt, now],
+    }))
+    if (!slot || requiredString(slot, "holder_campaign_id") !== input.campaignId) {
+      throw codedConflictError(ONE_LIVE, "Another reward campaign currently holds the funding slot for this song")
+    }
     const fundingId = makeId("rcf")
     await tx.execute({
       sql: `

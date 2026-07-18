@@ -18,6 +18,7 @@ import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./rew
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
+import { REWARD_SONG_SLOT_ACQUIRE_SQL } from "./reward-campaign-service"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -39,6 +40,10 @@ const SCORE_TERMS_MIGRATION_URL = new URL(
 )
 const PAYOUT_EFFECTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0132_control_plane_reward_payout_effects.sql",
+  import.meta.url,
+)
+const SONG_SLOTS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0147_control_plane_reward_song_slots.sql",
   import.meta.url,
 )
 const NOW = "2026-07-10T12:00:00.000Z"
@@ -116,6 +121,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
 
     const db = connect(TEST_DB, 1)
     await db.unsafe(`
+      CREATE TABLE communities (
+        community_id TEXT PRIMARY KEY
+      );
       CREATE TABLE users (
         user_id TEXT PRIMARY KEY,
         verification_capabilities_json TEXT NOT NULL
@@ -217,6 +225,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(SONG_SLOTS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
@@ -273,6 +282,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         },
       })],
     )
+    await db.unsafe(`INSERT INTO communities VALUES ('cmt_reward_pg')`)
     await db.unsafe(
       `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4)`,
       ["idn_reward_pg", "usr_reward_pg", "stable-nullifier", NOW],
@@ -440,6 +450,48 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe("DELETE FROM reward_campaigns WHERE post_id = $1", [postId])
     await db.end()
   }
+
+  test("concurrent funding-slot acquisition admits one holder and self-releases by time", async () => {
+    await withProductionPostgresClient(async (client) => {
+      await client.execute({
+        sql: `
+          INSERT INTO reward_campaigns (
+            reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+            community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+            status, eligible_activity, min_score_bps, daily_reward_cents,
+            milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+            budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+            refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+          ) VALUES
+            ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
+              'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
+              100, 0, 0, 0, 0, 0, 2, 'slot-a', ?1, ?2, ?1),
+            ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
+              'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
+              100, 0, 0, 0, 0, 0, 2, 'slot-b', ?1, ?2, ?1)
+        `,
+        args: [NOW, "2026-07-11T12:00:00.000Z"],
+      })
+      const expiresAt = "2026-07-10T12:15:00.000Z"
+      const acquire = (campaignId: string, now = NOW) => client.execute({
+        sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
+        args: ["cmt_reward_pg", "pst_slot_pg", campaignId, expiresAt, now],
+      })
+      const attempts = await Promise.all([acquire("rcp_slot_a_pg"), acquire("rcp_slot_b_pg")])
+      expect(attempts.reduce((count, result) => count + result.rows.length, 0)).toBe(1)
+      const held = await client.execute("SELECT holder_campaign_id FROM reward_song_slots WHERE post_id = 'pst_slot_pg'")
+      const holder = String(held.rows[0]?.holder_campaign_id)
+      const other = holder === "rcp_slot_a_pg" ? "rcp_slot_b_pg" : "rcp_slot_a_pg"
+
+      await client.execute({ sql: "UPDATE reward_campaigns SET status = 'active' WHERE reward_campaign_id = ?1", args: [holder] })
+      const blockedByLive = await acquire(other, "2026-07-10T12:16:00.000Z")
+      expect(blockedByLive.rows).toHaveLength(0)
+
+      await client.execute({ sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1", args: [holder] })
+      const takeover = await acquire(other, "2026-07-10T12:16:00.000Z")
+      expect(takeover.rows).toEqual([{ holder_campaign_id: other }])
+    })
+  })
 
   test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
     await withProductionPostgresClient(async (client) => {
