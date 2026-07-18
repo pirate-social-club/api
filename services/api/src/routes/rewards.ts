@@ -181,7 +181,9 @@ rewards.get("/reward_campaign_capabilities", (c) => {
   // Never throws: when the surface is dark or misconfigured this reports
   // enabled=false so the client hides the entry point instead of offering an
   // action the API would refuse.
-  return c.json(getRewardCampaignCapabilities(c.env), 200, { "cache-control": "no-store" })
+  const postId = c.req.query("post_id")?.trim()
+  if (!postId) throw badRequestError("post_id is required")
+  return c.json(getRewardCampaignCapabilities(c.env, postId), 200, { "cache-control": "no-store" })
 })
 
 rewards.post("/reward_campaigns", async (c) => {

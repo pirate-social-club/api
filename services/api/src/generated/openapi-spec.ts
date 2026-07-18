@@ -6800,6 +6800,17 @@ const spec = {
           "Rewards"
         ],
         "summary": "Get live campaign-creation guardrails",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -16402,6 +16413,7 @@ const spec = {
         "additionalProperties": false,
         "required": [
           "enabled",
+          "post_eligible",
           "min_budget_cents",
           "max_budget_cents",
           "max_reward_cents",
@@ -16414,6 +16426,9 @@ const spec = {
         ],
         "properties": {
           "enabled": {
+            "type": "boolean"
+          },
+          "post_eligible": {
             "type": "boolean"
           },
           "min_budget_cents": {
@@ -21519,6 +21534,7 @@ const spec = {
           "confirming",
           "confirmed",
           "failed",
+          "refund_pending",
           "refunded"
         ]
       },
