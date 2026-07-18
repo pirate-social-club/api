@@ -2,22 +2,46 @@ import type { ReadClient } from "../../sql-client"
 import type { CommunityMembershipProjectionRepository } from "../db-community-repository"
 import { nowIso } from "../../helpers"
 import { getMembershipGatePolicy } from "./gate-policy-store"
-import { flattenGatePolicyAtoms } from "./gate-summary"
 import { setCommunityFollowActive } from "./follow-store"
 import { syncCommunityFollowProjection } from "./projection-service"
+import type { GateExpression, GatePolicy } from "./gate-types"
 import type { CommunityMembershipRow } from "./membership-state-store"
 
 /**
- * A community whose entire membership gate is proof-of-work admits non-member
- * interactions: every gated write already carries its own single-use,
- * action-scoped ALTCHA proof, so joining first would prove nothing more.
- * Communities with identity/asset atoms anywhere in the policy (including
- * OR-trees that PoW alone could satisfy) still require membership — their
- * owners chose a verification gate, and reinterpreting it is out of scope.
+ * True when a proof-of-work proof ALONE satisfies the expression: an `or`
+ * passes if any branch does, an `and` only if every branch does.
  */
-export async function isPowOnlyGatedCommunity(client: ReadClient, communityId: string): Promise<boolean> {
-  const atoms = flattenGatePolicyAtoms(await getMembershipGatePolicy(client, communityId))
-  return atoms.length > 0 && atoms.every((atom) => atom.type === "altcha_pow")
+function isSatisfiedByPowAlone(expression: GateExpression): boolean {
+  if (expression.op === "gate") {
+    return expression.gate.type === "altcha_pow"
+  }
+  if (expression.children.length === 0) {
+    return false
+  }
+  return expression.op === "or"
+    ? expression.children.some(isSatisfiedByPowAlone)
+    : expression.children.every(isSatisfiedByPowAlone)
+}
+
+/**
+ * Membership is ceremony wherever proof-of-work alone already satisfies the
+ * membership gate: every gated write carries its own single-use, action-scoped
+ * ALTCHA proof, so a joined and a non-joined actor prove exactly the same
+ * thing. That covers `or(altcha_pow, wallet_score, unique_human)` as much as a
+ * bare `altcha_pow` — a gate anyone can clear with a browser check is already
+ * open, and forcing a join in front of it adds friction, not safety.
+ *
+ * Identity remains the way to become a CITIZEN: satisfying the gate through
+ * wallet score or a document/human check still joins, with members-only
+ * visibility and roles intact. Clearing it with proof-of-work instead only
+ * earns a follow (see followCommunityAfterParticipation).
+ */
+export function isPowSatisfiableGatePolicy(policy: GatePolicy | null): boolean {
+  return policy != null && isSatisfiedByPowAlone(policy.expression)
+}
+
+export async function isPowSatisfiableGatedCommunity(client: ReadClient, communityId: string): Promise<boolean> {
+  return isPowSatisfiableGatePolicy(await getMembershipGatePolicy(client, communityId))
 }
 
 export async function allowsNonMemberPowParticipation(input: {
@@ -28,7 +52,7 @@ export async function allowsNonMemberPowParticipation(input: {
   if (input.membership.membership_status === "banned") {
     return false
   }
-  return isPowOnlyGatedCommunity(input.client, input.communityId)
+  return isPowSatisfiableGatedCommunity(input.client, input.communityId)
 }
 
 export type ParticipationFollowRepository = Pick<
