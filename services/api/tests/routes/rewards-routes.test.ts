@@ -838,7 +838,33 @@ describe("rewards routes", () => {
     // transfer cannot be proven timely and is held for an operator refund — fail closed.
     expect(verificationCalls).toBe(3)
 
-    for (const [reason, hex] of [["wrong_transfer_recipient", "e"], ["wrong_transfer_amount", "f"]] as const) {
+    const wrongAmount = await quote(10000, "wrong-amount-custody")
+    let custodyVerificationCalls = 0
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
+      custodyVerificationCalls += 1
+      return {
+        kind: "custody_mismatch",
+        reason: "wrong_transfer_amount",
+        senderAddress: expected.senderAddress,
+        txRef: fundingTxRef,
+        observedAmountAtomic: "90000000",
+      }
+    })
+    const wrongAmountResponse = await confirm(wrongAmount.id, "f")
+    expect(wrongAmountResponse.status).toBe(200)
+    expect(await json(wrongAmountResponse)).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "wrong_transfer_amount",
+    })
+    expect(await json(await confirm(wrongAmount.id, "f"))).toMatchObject({ status: "refund_pending" })
+    expect(custodyVerificationCalls).toBe(1)
+    const custodyEffect = await ctx.client.execute({
+      sql: "SELECT status, received_amount_atomic FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [wrongAmount.id],
+    })
+    expect(custodyEffect.rows).toEqual([{ status: "refund_pending", received_amount_atomic: "90000000" }])
+
+    for (const [reason, hex] of [["wrong_transfer_recipient", "e"]] as const) {
       const rejected = await quote(10000, `rejected-${reason}`)
       let rejectedVerificationCalls = 0
       setBookingPaymentVerifierForTests(async () => {
@@ -854,7 +880,11 @@ describe("rewards routes", () => {
     const finalCampaign = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(finalCampaign)).toMatchObject({ status: "funding_quoted", funded_cents: 40000 })
+    expect(await json(finalCampaign)).toMatchObject({
+      status: "funding_quoted",
+      funded_cents: 40000,
+      refunded_cents: 0,
+    })
     const reconciliation = await ctx.client.execute({
       sql: `
         SELECT stored_funded_cents, computed_funded_cents, counters_match
