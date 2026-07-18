@@ -18,6 +18,8 @@ on:
     secrets:
       AUTH_UPSTREAM_JWT_SHARED_SECRET:
         required: false
+      PIRATE_ADMIN_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       api_sha:
@@ -53,6 +55,7 @@ jobs:
       AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
       AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
       AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
       E2E_API_BASE_URL: https://api-staging.pirate.sc
       E2E_BASE_URL: https://staging.pirate.sc
       E2E_LIVE_STAGING: "true"
@@ -97,15 +100,15 @@ jobs:
         working-directory: web
         run: scripts/check-deployments.sh --scope staging --expected-api-sha "$API_SHA" --retry-for 120
 
-      - name: Fetch staging auth secret when the caller did not provide it
-        if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == ''
+      - name: Fetch staging auth and admin secrets when the caller did not provide them
+        if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_TOKEN == ''
         working-directory: core
         env:
           INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
           INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
           INFISICAL_ENV: staging
           INFISICAL_SECRET_PATH: /services/api
-          SECRET_NAMES: AUTH_UPSTREAM_JWT_SHARED_SECRET
+          SECRET_NAMES: AUTH_UPSTREAM_JWT_SHARED_SECRET PIRATE_ADMIN_TOKEN
         run: scripts/ci/fetch-infisical-secrets.sh
 
       - name: Verify required contract inventory
@@ -115,6 +118,7 @@ jobs:
           set -euo pipefail
           titles=(
             "exposes stable gate identity and authoritative outcomes in live join eligibility"
+            "binds a per-name Courtyard claim rule in live handle quotes"
             "follows a real staging community and persists after reload"
             "uploads a public video through direct multipart in a real browser"
             "creates and quotes a global booking hold on staging"
@@ -143,6 +147,11 @@ jobs:
         timeout-minutes: 10
         working-directory: web
         run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "exposes stable gate identity and authoritative outcomes in live join eligibility"
+
+      - name: Verify per-name Courtyard claim contract
+        timeout-minutes: 10
+        working-directory: web
+        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "binds a per-name Courtyard claim rule in live handle quotes"
 
       - name: Verify community follow contract
         timeout-minutes: 10
