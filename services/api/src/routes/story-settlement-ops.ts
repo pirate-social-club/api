@@ -6,6 +6,7 @@ import { badRequestError, notFoundError } from "../lib/errors"
 import {
   authenticateOperatorCredential,
   requireOperatorScope,
+  STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
 } from "../lib/operator-credential-auth"
 import type { OperatorActorContext } from "../lib/operator-credential-auth"
@@ -91,6 +92,20 @@ async function operator(c: Context<StorySettlementOpsEnv>) {
   return actor
 }
 
+async function feeReplacementOperator(c: Context<StorySettlementOpsEnv>) {
+  const actor = await (testAuthenticator ?? authenticateOperatorCredential)({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(actor, STORY_SETTLEMENT_FEE_REPLACE_SCOPE)
+  return actor
+}
+
+function positiveUint(name: string, value: unknown): bigint {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw badRequestError(`${name}_must_be_positive_decimal`)
+  return BigInt(value)
+}
+
 function coordinator(c: Context<StorySettlementOpsEnv>) {
   const binding = c.env.STORY_SETTLEMENT_WALLET_COORDINATOR
   if (!binding) throw badRequestError("story_settlement_coordinator_binding_missing")
@@ -143,6 +158,56 @@ storySettlementOps.post("/nonce-repairs", async (c) => {
     planRef: plan.planRef,
   }))
   return c.json({ plan }, 202)
+})
+
+storySettlementOps.post("/fee-replacements", async (c) => {
+  const actor = await feeReplacementOperator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const clientReference = reference(body.authorization_ref)
+  const replacement = await coordinator(c).requestFeeReplacement({
+    planRef: bytes32("plan_ref", body.plan_ref),
+    stepRef: bytes32("step_ref", body.step_ref),
+    expectedVersion: positiveVersion(body.expected_version),
+    expectedActiveCandidateHash: bytes32("expected_active_candidate_hash", body.expected_active_candidate_hash),
+    maxFeePerGas: positiveUint("max_fee_per_gas", body.max_fee_per_gas),
+    maxPriorityFeePerGas: positiveUint("max_priority_fee_per_gas", body.max_priority_fee_per_gas),
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
+  })
+  console.warn(JSON.stringify({
+    message: "Story settlement fee replacement requested by operator",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: clientReference,
+    planRef: replacement.planRef,
+    stepRef: replacement.stepRef,
+    candidateRef: replacement.candidateRef,
+    generation: replacement.generation,
+    transactionHash: replacement.transactionHash,
+  }))
+  return c.json({ replacement }, 202)
+})
+
+storySettlementOps.post("/fee-replacement-inspections", async (c) => {
+  const actor = await feeReplacementOperator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const planRef = bytes32("plan_ref", body.plan_ref)
+  const stepRef = bytes32("step_ref", body.step_ref)
+  const authorizationRef = reference(body.authorization_ref)
+  const candidates = await coordinator(c).inspectFeeReplacementCandidates(planRef, stepRef)
+  console.info(JSON.stringify({
+    message: "Story settlement fee replacement candidates inspected",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    planRef,
+    stepRef,
+    candidateCount: candidates.length,
+  }))
+  return c.json({ candidates }, 200)
 })
 
 storySettlementOps.post("/nonce-repair-drills", async (c) => {

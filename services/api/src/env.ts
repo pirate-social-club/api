@@ -286,6 +286,9 @@ export type Env = {
   STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
   STORY_COORDINATOR_GAS_LIMIT_MAX?: string
   STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS?: string
+  // Minimum per-field EIP-1559 replacement bump. Replacement signing fails
+  // closed when absent or below the reviewed 10% Aeneid floor.
+  STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS?: string
   STORY_COORDINATOR_FINALITY_CONFIRMATIONS?: string
   STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK?: string
   STORY_COORDINATOR_BACKLOG_ALERT_MS?: string

@@ -40,6 +40,9 @@ const PLAN_REF_PARAMS = parseAbiParameters(
 const REPAIR_REF_PARAMS = parseAbiParameters(
   "string domain, bytes32 planRef, bytes32 stepRef, uint256 nonce, string reasonCode, string authorizationRef",
 )
+const FEE_REPLACEMENT_REF_PARAMS = parseAbiParameters(
+  "string domain, bytes32 stepRef, bytes32 parentCandidateRef, uint32 generation, uint256 maxFeePerGas, uint256 maxPriorityFeePerGas, string authorizationRef",
+)
 
 export type StorySettlementCoordinatorStepInput = Omit<
   StorySettlementCallIdentityInput,
@@ -84,6 +87,47 @@ export interface AbandonedNonceRepairRequest {
   expectedVersion: number
   reasonCode: "operator_cancelled" | "terminal_configuration" | "rights_hold"
   authorizationRef: string
+}
+
+export interface StorySettlementFeeReplacementRequest {
+  planRef: Hex
+  stepRef: Hex
+  expectedVersion: number
+  expectedActiveCandidateHash: Hex
+  maxFeePerGas: bigint
+  maxPriorityFeePerGas: bigint
+  operatorCredentialId: string
+  operatorActorId: string
+  authorizationRef: string
+}
+
+export interface StorySettlementFeeReplacementResult {
+  planRef: Hex
+  stepRef: Hex
+  candidateRef: Hex
+  generation: number
+  transactionHash: Hex
+  state: TransactionCandidateState
+}
+
+export interface StorySettlementTransactionCandidateEvidence {
+  candidateRef: Hex
+  generation: number
+  kind: "original" | "fee_replacement"
+  parentCandidateRef: Hex | null
+  active: boolean
+  version: number
+  state: TransactionCandidateState
+  nonce: number
+  maxFeePerGas: string
+  maxPriorityFeePerGas: string
+  gasLimit: string
+  signedTransaction: Hex
+  transactionHash: Hex
+  receipt: { status: "success" | "reverted"; blockNumber: string; blockHash: Hex } | null
+  authorizationRef: string | null
+  operatorCredentialId: string | null
+  operatorActorId: string | null
 }
 
 export interface ArmNonceRepairDrillRequest {
@@ -163,6 +207,32 @@ export interface StorySettlementCoordinatorHealth {
 interface SignerDomain { chainId: number; signerAddress: Address }
 type PlanState = StorySettlementPlanResult["state"]
 type RepairState = "requested" | "prepared" | "broadcast" | "confirmed" | "reverted" | "replaced" | "reconciliation_required"
+type TransactionCandidateState = "prepared" | "broadcast" | "mined" | "confirmed" | "reverted" | "superseded" | "reconciliation_required"
+
+interface TransactionCandidateRow {
+  candidate_ref: Hex
+  step_ref: Hex
+  generation: number
+  kind: "original" | "fee_replacement"
+  parent_candidate_ref: Hex | null
+  is_active: boolean
+  version: number
+  nonce: number
+  max_fee_per_gas: string
+  max_priority_fee_per_gas: string
+  gas_limit: string
+  signed_transaction: Hex
+  transaction_hash: Hex
+  state: TransactionCandidateState
+  receipt_status: "success" | "reverted" | null
+  block_number: string | null
+  block_hash: Hex | null
+  authorization_ref: string | null
+  operator_credential_id: string | null
+  operator_actor_id: string | null
+  created_at: number
+  updated_at: number
+}
 
 interface StepRow {
   step_ref: Hex
@@ -340,6 +410,25 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
         to_community_id TEXT NOT NULL, authorization_ref TEXT NOT NULL, created_at INTEGER NOT NULL,
         FOREIGN KEY(arm_ref) REFERENCES nonce_repair_drill_arms(arm_ref)
       )`)
+      this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS story_settlement_transaction_candidates (
+        candidate_ref TEXT PRIMARY KEY, step_ref TEXT NOT NULL, generation INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('original','fee_replacement')),
+        parent_candidate_ref TEXT, is_active INTEGER NOT NULL CHECK (is_active IN (0,1)),
+        version INTEGER NOT NULL,
+        nonce INTEGER NOT NULL, max_fee_per_gas TEXT NOT NULL,
+        max_priority_fee_per_gas TEXT NOT NULL, gas_limit TEXT NOT NULL,
+        signed_transaction TEXT NOT NULL, transaction_hash TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL CHECK (state IN ('prepared','broadcast','mined','confirmed','reverted','superseded','reconciliation_required')),
+        receipt_status TEXT, block_number TEXT, block_hash TEXT,
+        authorization_ref TEXT, operator_credential_id TEXT, operator_actor_id TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(step_ref,generation),
+        FOREIGN KEY(step_ref) REFERENCES steps(step_ref),
+        FOREIGN KEY(parent_candidate_ref) REFERENCES story_settlement_transaction_candidates(candidate_ref)
+      )`)
+      this.ctx.storage.sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS one_active_story_settlement_candidate ON story_settlement_transaction_candidates(step_ref) WHERE is_active=1",
+      )
       this.ctx.storage.sql.exec("INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at) VALUES (1, ?1)", Date.now())
       const migration2Applied = this.ctx.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id=2",
@@ -674,6 +763,203 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     return this.result(this.readPlan(request.planRef)!)
   }
 
+  async requestFeeReplacement(
+    request: StorySettlementFeeReplacementRequest,
+  ): Promise<StorySettlementFeeReplacementResult> {
+    if (this.env.ENVIRONMENT !== "staging" && this.env.ENVIRONMENT !== "test") {
+      throw conflictError("Story settlement fee replacement is staging-only until the Aeneid drill passes")
+    }
+    if (this.env.STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED === "true") {
+      throw conflictError("Story settlement admission must be disabled before fee replacement")
+    }
+    assertBytes32("plan_ref", request.planRef)
+    assertBytes32("step_ref", request.stepRef)
+    assertBytes32("expected_active_candidate_hash", request.expectedActiveCandidateHash)
+    const authorizationRef = exactId("authorization_ref", request.authorizationRef)
+    const operatorCredentialId = exactId("operator_credential_id", request.operatorCredentialId)
+    const operatorActorId = exactId("operator_actor_id", request.operatorActorId)
+    const initial = this.readStep(request.stepRef)
+    if (!initial || initial.plan_ref !== request.planRef) throw conflictError("Story settlement step not found")
+    if (initial.version !== request.expectedVersion) {
+      const idempotent = this.findFeeReplacementCandidate(
+        initial.step_ref,
+        request.expectedActiveCandidateHash,
+        request.maxFeePerGas,
+        request.maxPriorityFeePerGas,
+        authorizationRef,
+      )
+      if (idempotent) return this.candidateResult(initial.plan_ref, idempotent)
+      throw conflictError("Story settlement step version conflict")
+    }
+    if (!["prepared", "broadcast", "mined", "reconciliation_required"].includes(initial.state)) {
+      throw conflictError("Story settlement step has no active broadcast candidate")
+    }
+    if (initial.repair_state && ["requested", "prepared", "broadcast", "reconciliation_required"].includes(initial.repair_state)) {
+      throw conflictError("Story settlement step has an unresolved nonce repair")
+    }
+    const original = this.ensureOriginalCandidate(initial)
+    let active = this.readActiveCandidate(initial.step_ref) ?? original
+
+    const idempotent = this.findFeeReplacementCandidate(
+      initial.step_ref,
+      request.expectedActiveCandidateHash,
+      request.maxFeePerGas,
+      request.maxPriorityFeePerGas,
+      authorizationRef,
+    )
+    if (idempotent) return this.candidateResult(initial.plan_ref, idempotent)
+    if (active.transaction_hash !== request.expectedActiveCandidateHash) {
+      throw conflictError("Story settlement active candidate hash conflict")
+    }
+    const activeVersion = active.version
+
+    this.assertReplacementFees(active, request.maxFeePerGas, request.maxPriorityFeePerGas)
+    const plan = this.readPlan(initial.plan_ref)!
+    const domain = this.domain(plan)
+    const before = await chain().observeTransaction(this.env, {
+      ...domain,
+      transactionHash: active.transaction_hash,
+      finalityPolicyVersion: plan.finality_policy_version,
+    })
+    if (before.kind !== "pending") throw conflictError("Story settlement active candidate is not positively pending")
+
+    const generation = active.generation + 1
+    const candidateRef = keccak256(encodeAbiParameters(FEE_REPLACEMENT_REF_PARAMS, [
+      "story-settlement-fee-replacement-v1",
+      initial.step_ref,
+      active.candidate_ref,
+      generation,
+      request.maxFeePerGas,
+      request.maxPriorityFeePerGas,
+      authorizationRef,
+    ]))
+    const gas = {
+      maxFeePerGas: request.maxFeePerGas,
+      maxPriorityFeePerGas: request.maxPriorityFeePerGas,
+      gasLimit: BigInt(active.gas_limit),
+    }
+    const signedTransaction = await chain().signTransaction(this.env, {
+      ...domain,
+      nonce: active.nonce,
+      target: initial.target,
+      value: BigInt(initial.native_value),
+      calldata: initial.calldata,
+      gas,
+    })
+    if (!isHex(signedTransaction, { strict: true }) || size(signedTransaction) === 0) {
+      throw new Error("replacement_signer_returned_invalid_transaction_bytes")
+    }
+    await this.assertSignedTransaction(signedTransaction, {
+      ...domain,
+      nonce: active.nonce,
+      target: initial.target,
+      value: BigInt(initial.native_value),
+      calldata: initial.calldata,
+      gas,
+    })
+    const transactionHash = keccak256(signedTransaction)
+
+    // The nonce may have been consumed while the signer was awaited. Never
+    // persist a new broadcast candidate unless the parent is still pending.
+    const after = await chain().observeTransaction(this.env, {
+      ...domain,
+      transactionHash: active.transaction_hash,
+      finalityPolicyVersion: plan.finality_policy_version,
+    })
+    if (after.kind !== "pending") throw conflictError("Story settlement active candidate changed while signing")
+
+    const inserted = this.ctx.storage.transactionSync(() => {
+      const currentStep = this.readStep(initial.step_ref)
+      if (!currentStep || currentStep.version !== request.expectedVersion) {
+        throw conflictError("Story settlement step version conflict")
+      }
+      active = this.readActiveCandidate(initial.step_ref) ?? this.ensureOriginalCandidate(currentStep)
+      if (active.version !== activeVersion) {
+        throw conflictError("Story settlement active candidate version conflict")
+      }
+      if (active.candidate_ref !== original.candidate_ref && active.transaction_hash !== request.expectedActiveCandidateHash) {
+        throw conflictError("Story settlement active candidate changed while signing")
+      }
+      if (active.transaction_hash !== request.expectedActiveCandidateHash) {
+        throw conflictError("Story settlement active candidate hash conflict")
+      }
+      const duplicate = this.readCandidate(candidateRef)
+      if (duplicate) return duplicate
+      this.ctx.storage.sql.exec(
+        `UPDATE story_settlement_transaction_candidates SET is_active=0,version=version+1,updated_at=?2
+         WHERE candidate_ref=?1 AND is_active=1 AND version=?3`,
+        active.candidate_ref, Date.now(), active.version,
+      )
+      const now = Date.now()
+      this.ctx.storage.sql.exec(
+        `INSERT INTO story_settlement_transaction_candidates (
+          candidate_ref,step_ref,generation,kind,parent_candidate_ref,is_active,version,nonce,
+          max_fee_per_gas,max_priority_fee_per_gas,gas_limit,signed_transaction,transaction_hash,
+          state,authorization_ref,operator_credential_id,operator_actor_id,created_at,updated_at
+        ) VALUES (?1,?2,?3,'fee_replacement',?4,1,1,?5,?6,?7,?8,?9,?10,'prepared',?11,?12,?13,?14,?14)`,
+        candidateRef, initial.step_ref, generation, active.candidate_ref, active.nonce,
+        request.maxFeePerGas.toString(), request.maxPriorityFeePerGas.toString(), active.gas_limit,
+        signedTransaction, transactionHash, authorizationRef, operatorCredentialId, operatorActorId, now,
+      )
+      const fenced = this.ctx.storage.sql.exec(
+        `UPDATE steps SET version=version+1,next_attempt_at=?2,updated_at=?2
+         WHERE step_ref=?1 AND version=?3 RETURNING step_ref`,
+        initial.step_ref, now, request.expectedVersion,
+      ).toArray()
+      if (fenced.length !== 1) throw conflictError("Story settlement step version conflict")
+      this.touchPlan(initial.plan_ref)
+      return this.readCandidate(candidateRef)!
+    })
+    console.warn(JSON.stringify({
+      message: "Story settlement fee replacement journaled",
+      planRef: initial.plan_ref,
+      stepRef: initial.step_ref,
+      candidateRef: inserted.candidate_ref,
+      parentCandidateRef: inserted.parent_candidate_ref,
+      generation: inserted.generation,
+      transactionHash: inserted.transaction_hash,
+      authorizationRef,
+    }))
+    await this.ensureAlarm(Date.now())
+    return this.candidateResult(initial.plan_ref, inserted)
+  }
+
+  inspectFeeReplacementCandidates(planRef: Hex, stepRefValue: Hex): StorySettlementTransactionCandidateEvidence[] {
+    assertBytes32("plan_ref", planRef)
+    assertBytes32("step_ref", stepRefValue)
+    const step = this.readStep(stepRefValue)
+    if (!step || step.plan_ref !== planRef) throw conflictError("Story settlement step not found")
+    if (!step.signed_transaction || !step.transaction_hash) {
+      throw conflictError("Story settlement step has no importable signed candidate")
+    }
+    this.ensureOriginalCandidate(step)
+    return this.readCandidates(stepRefValue).map((candidate) => ({
+      candidateRef: candidate.candidate_ref,
+      generation: candidate.generation,
+      kind: candidate.kind,
+      parentCandidateRef: candidate.parent_candidate_ref,
+      active: candidate.is_active,
+      version: candidate.version,
+      state: candidate.state,
+      nonce: candidate.nonce,
+      maxFeePerGas: candidate.max_fee_per_gas,
+      maxPriorityFeePerGas: candidate.max_priority_fee_per_gas,
+      gasLimit: candidate.gas_limit,
+      signedTransaction: candidate.signed_transaction,
+      transactionHash: candidate.transaction_hash,
+      receipt: candidate.receipt_status && candidate.block_number && candidate.block_hash
+        ? {
+          status: candidate.receipt_status,
+          blockNumber: candidate.block_number,
+          blockHash: candidate.block_hash,
+        }
+        : null,
+      authorizationRef: candidate.authorization_ref,
+      operatorCredentialId: candidate.operator_credential_id,
+      operatorActorId: candidate.operator_actor_id,
+    }))
+  }
+
   async alarm(): Promise<void> {
     const repair = this.nextRepair()
     if (repair) {
@@ -896,6 +1182,7 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
 
   private async broadcastStep(step: StepRow): Promise<void> {
     if (!step.signed_transaction || !step.transaction_hash) throw new Error("prepared_step_missing_signed_evidence")
+    const original = this.ensureOriginalCandidate(step)
     const plan = this.readPlan(step.plan_ref)!
     await chain().broadcastExactTransaction(this.env, { ...this.domain(plan), signedTransaction: step.signed_transaction })
     await chain().fault?.("after_broadcast_before_persist")
@@ -903,9 +1190,27 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     if (current.state !== "prepared") return
     const next = this.transition(current, { expectedVersion: current.version, to: "broadcast" })
     this.writeTransition(current, next, { next_attempt_at: Date.now() + RECONCILE_DELAY_MS, last_error_code: null })
+    this.ctx.storage.sql.exec(
+      "UPDATE story_settlement_transaction_candidates SET state='broadcast',version=version+1,updated_at=?2 WHERE candidate_ref=?1 AND state='prepared'",
+      original.candidate_ref, Date.now(),
+    )
   }
 
   private async reconcileStep(step: StepRow): Promise<void> {
+    this.ensureOriginalCandidate(step)
+    const candidates = this.readCandidates(step.step_ref)
+    if (candidates.length === 1 && candidates[0]!.generation === 0) {
+      await this.reconcileSingleCandidateStep(step)
+      this.syncOriginalCandidate(this.readStep(step.step_ref)!)
+      return
+    }
+    await this.reconcileCandidateChain(step, candidates)
+  }
+
+  // Keep the overwhelmingly common generation-zero path behaviorally
+  // identical to the pre-candidate coordinator. Candidate bookkeeping is
+  // synchronized only after this routine returns.
+  private async reconcileSingleCandidateStep(step: StepRow): Promise<void> {
     if (!step.transaction_hash || !step.signed_transaction || step.nonce == null) throw new Error("journaled_step_missing_chain_evidence")
     const plan = this.readPlan(step.plan_ref)!
     const domain = this.domain(plan)
@@ -973,6 +1278,199 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     }
     const to = current.state === "mined" ? "mined" : "mined"
     this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to, receipt }), { next_attempt_at: Date.now() + RECONCILE_DELAY_MS })
+  }
+
+  private async reconcileCandidateChain(step: StepRow, candidates: TransactionCandidateRow[]): Promise<void> {
+    if (step.nonce == null) throw new Error("journaled_step_missing_nonce")
+    const plan = this.readPlan(step.plan_ref)!
+    const domain = this.domain(plan)
+    const active = candidates.find((candidate) => candidate.is_active)
+    if (!active) throw new Error("story_settlement_active_candidate_missing")
+
+    const observations: Array<{ candidate: TransactionCandidateRow; observation: StoryTransactionObservation }> = []
+    for (const candidate of candidates.filter((item) => !["confirmed", "reverted", "superseded"].includes(item.state))) {
+      const observation = await chain().observeTransaction(this.env, {
+        ...domain,
+        transactionHash: candidate.transaction_hash,
+        finalityPolicyVersion: plan.finality_policy_version,
+      })
+      observations.push({ candidate, observation })
+    }
+    await chain().fault?.("after_receipt_before_persist")
+    // A concurrent operator request increments the step version when it
+    // installs a new active tip. Discard observations taken against the old
+    // candidate set and let the next alarm reconcile the complete chain.
+    if (this.readStep(step.step_ref)?.version !== step.version) return
+
+    const mined = observations.filter((item) => item.observation.kind === "mined") as Array<{
+      candidate: TransactionCandidateRow
+      observation: Extract<StoryTransactionObservation, { kind: "mined" }>
+    }>
+    if (mined.length > 1) {
+      this.ctx.storage.sql.exec(
+        "UPDATE story_settlement_transaction_candidates SET state='reconciliation_required',version=version+1,updated_at=?2 WHERE step_ref=?1 AND state NOT IN ('confirmed','reverted','superseded')",
+        step.step_ref, Date.now(),
+      )
+      const current = this.readStep(step.step_ref)!
+      if (current.state !== "reconciliation_required") {
+        this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "reconciliation_required" }), {
+          last_error_code: "multiple_candidate_receipts_observed",
+        })
+      }
+      return
+    }
+    if (mined.length === 1) {
+      const winner = mined[0]!
+      const priorReceiptChanged = winner.candidate.block_hash && (
+        winner.candidate.receipt_status !== winner.observation.status
+        || winner.candidate.block_number !== winner.observation.blockNumber.toString()
+        || winner.candidate.block_hash !== winner.observation.blockHash
+      )
+      if (priorReceiptChanged) {
+        this.ctx.storage.sql.exec(
+          "UPDATE story_settlement_transaction_candidates SET state='reconciliation_required',version=version+1,updated_at=?2 WHERE candidate_ref=?1",
+          winner.candidate.candidate_ref, Date.now(),
+        )
+        const current = this.readStep(step.step_ref)!
+        if (current.state !== "reconciliation_required") {
+          this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "reconciliation_required" }), {
+            last_error_code: "candidate_mined_block_identity_changed",
+          })
+        }
+        return
+      }
+      const receipt = {
+        status: winner.observation.status,
+        blockNumber: winner.observation.blockNumber,
+        blockHash: winner.observation.blockHash,
+      } as const
+      const currentBeforeWinner = this.readStep(step.step_ref)!
+      if (currentBeforeWinner.receipt_status && (
+        currentBeforeWinner.receipt_status !== receipt.status
+        || currentBeforeWinner.block_number !== receipt.blockNumber.toString()
+        || currentBeforeWinner.block_hash !== receipt.blockHash
+      )) {
+        this.ctx.storage.sql.exec(
+          "UPDATE story_settlement_transaction_candidates SET state='reconciliation_required',version=version+1,updated_at=?2 WHERE step_ref=?1 AND state NOT IN ('confirmed','reverted','superseded')",
+          step.step_ref, Date.now(),
+        )
+        if (currentBeforeWinner.state !== "reconciliation_required") {
+          this.writeTransition(currentBeforeWinner, this.transition(currentBeforeWinner, {
+            expectedVersion: currentBeforeWinner.version,
+            to: "reconciliation_required",
+          }), { last_error_code: "candidate_winner_block_identity_changed" })
+        }
+        return
+      }
+      const candidateState: TransactionCandidateState = winner.observation.status === "reverted"
+        ? "reverted" : winner.observation.final ? "confirmed" : "mined"
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          `UPDATE story_settlement_transaction_candidates SET is_active=0,version=version+1,
+           state=CASE WHEN ?3 IN ('confirmed','reverted') THEN 'superseded' ELSE state END,updated_at=?4
+           WHERE step_ref=?1 AND candidate_ref!=?2`,
+          step.step_ref, winner.candidate.candidate_ref, candidateState, Date.now(),
+        )
+        this.ctx.storage.sql.exec(
+          `UPDATE story_settlement_transaction_candidates SET state=?2,is_active=1,version=version+1,receipt_status=?3,
+           block_number=?4,block_hash=?5,updated_at=?6 WHERE candidate_ref=?1`,
+          winner.candidate.candidate_ref, candidateState, winner.observation.status,
+          winner.observation.blockNumber.toString(), winner.observation.blockHash, Date.now(),
+        )
+      })
+      let current = this.readStep(step.step_ref)!
+      if (winner.observation.status === "reverted") {
+        this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "reverted", receipt }), {
+          last_error_code: "transaction_reverted",
+        })
+        this.refreshPlan(plan.plan_ref)
+        return
+      }
+      if (current.state !== "mined") {
+        current = this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "mined", receipt }), {
+          next_attempt_at: Date.now() + RECONCILE_DELAY_MS,
+        })
+      }
+      if (winner.observation.final) {
+        this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "confirmed", receipt }), {
+          next_attempt_at: null,
+          last_error_code: null,
+        })
+        this.refreshPlan(plan.plan_ref)
+      }
+      return
+    }
+
+    const activeObservation = observations.find((item) => item.candidate.candidate_ref === active.candidate_ref)?.observation
+    if (active.state === "prepared") {
+      await chain().broadcastExactTransaction(this.env, { ...domain, signedTransaction: active.signed_transaction })
+      this.ctx.storage.sql.exec(
+        "UPDATE story_settlement_transaction_candidates SET state='broadcast',version=version+1,updated_at=?2 WHERE candidate_ref=?1 AND state='prepared'",
+        active.candidate_ref, Date.now(),
+      )
+      this.ctx.storage.sql.exec(
+        "UPDATE steps SET next_attempt_at=?2,updated_at=?3 WHERE step_ref=?1",
+        step.step_ref, Date.now() + RECONCILE_DELAY_MS, Date.now(),
+      )
+      return
+    }
+    if (activeObservation?.kind === "pending") {
+      this.ctx.storage.sql.exec(
+        "UPDATE story_settlement_transaction_candidates SET state='broadcast',version=version+1,updated_at=?2 WHERE candidate_ref=?1",
+        active.candidate_ref, Date.now(),
+      )
+      this.ctx.storage.sql.exec(
+        "UPDATE steps SET next_attempt_at=?2,updated_at=?3 WHERE step_ref=?1",
+        step.step_ref, Date.now() + RECONCILE_DELAY_MS, Date.now(),
+      )
+      return
+    }
+
+    const latestNonce = await chain().latestNonce(this.env, domain)
+    if (latestNonce > step.nonce) {
+      this.ctx.storage.sql.exec(
+        "UPDATE story_settlement_transaction_candidates SET state='reconciliation_required',version=version+1,updated_at=?2 WHERE step_ref=?1 AND state NOT IN ('confirmed','reverted','superseded')",
+        step.step_ref, Date.now(),
+      )
+      const current = this.readStep(step.step_ref)!
+      if (current.state !== "reconciliation_required") {
+        this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "reconciliation_required" }), {
+          last_error_code: "nonce_consumed_by_unknown_candidate",
+        })
+      }
+      return
+    }
+    await chain().broadcastExactTransaction(this.env, { ...domain, signedTransaction: active.signed_transaction })
+    this.ctx.storage.sql.exec(
+      "UPDATE story_settlement_transaction_candidates SET state='broadcast',version=version+1,updated_at=?2 WHERE candidate_ref=?1",
+      active.candidate_ref, Date.now(),
+    )
+    const current = this.readStep(step.step_ref)!
+    if (current.state === "mined" || current.state === "reconciliation_required") {
+      this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "broadcast" }), {
+        next_attempt_at: Date.now() + RECONCILE_DELAY_MS,
+      })
+    } else {
+      this.ctx.storage.sql.exec(
+        "UPDATE steps SET next_attempt_at=?2,updated_at=?3 WHERE step_ref=?1",
+        step.step_ref, Date.now() + RECONCILE_DELAY_MS, Date.now(),
+      )
+    }
+  }
+
+  private syncOriginalCandidate(step: StepRow): void {
+    const original = this.readCandidates(step.step_ref).find((candidate) => candidate.generation === 0)
+    if (!original) return
+    const state: TransactionCandidateState = step.state === "prepared"
+      ? "prepared" : step.state === "broadcast" ? "broadcast"
+        : step.state === "mined" ? "mined" : step.state === "confirmed" ? "confirmed"
+          : step.state === "reverted" ? "reverted" : step.state === "reconciliation_required"
+            ? "reconciliation_required" : original.state
+    this.ctx.storage.sql.exec(
+      `UPDATE story_settlement_transaction_candidates SET state=?2,version=version+1,receipt_status=?3,
+       block_number=?4,block_hash=?5,updated_at=?6 WHERE candidate_ref=?1`,
+      original.candidate_ref, state, step.receipt_status, step.block_number, step.block_hash, Date.now(),
+    )
   }
 
   private async advanceRepair(step: StepRow): Promise<void> {
@@ -1192,6 +1690,104 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     }
   }
 
+  private assertReplacementFees(
+    active: TransactionCandidateRow,
+    maxFeePerGas: bigint,
+    maxPriorityFeePerGas: bigint,
+  ): void {
+    const bumpBps = Number(this.env.STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS)
+    if (!Number.isSafeInteger(bumpBps) || bumpBps < 1_000 || bumpBps > 10_000) {
+      throw new Error("story_settlement_replacement_bump_policy_invalid")
+    }
+    const maxFeeCap = BigInt(String(this.env.STORY_COORDINATOR_MAX_FEE_PER_GAS_WEI || "0"))
+    const priorityCap = BigInt(String(this.env.STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI || "0"))
+    if (maxFeeCap <= 0n || priorityCap <= 0n || priorityCap > maxFeeCap) {
+      throw new Error("story_settlement_replacement_fee_caps_invalid")
+    }
+    if (maxFeePerGas <= 0n || maxPriorityFeePerGas <= 0n || maxPriorityFeePerGas > maxFeePerGas) {
+      throw badRequestError("story_settlement_replacement_fees_invalid")
+    }
+    const minimum = (value: bigint): bigint => {
+      const increment = (value * BigInt(bumpBps) + 9_999n) / 10_000n
+      return value + (increment > 0n ? increment : 1n)
+    }
+    if (maxFeePerGas < minimum(BigInt(active.max_fee_per_gas))) {
+      throw badRequestError("story_settlement_replacement_max_fee_bump_too_small")
+    }
+    if (maxPriorityFeePerGas < minimum(BigInt(active.max_priority_fee_per_gas))) {
+      throw badRequestError("story_settlement_replacement_priority_fee_bump_too_small")
+    }
+    if (maxFeePerGas > maxFeeCap || maxPriorityFeePerGas > priorityCap) {
+      throw badRequestError("story_settlement_replacement_fee_cap_exceeded")
+    }
+  }
+
+  private ensureOriginalCandidate(step: StepRow): TransactionCandidateRow {
+    const existing = this.readCandidates(step.step_ref).find((candidate) => candidate.generation === 0)
+    if (existing) return existing
+    if (!step.signed_transaction || !step.transaction_hash || step.nonce == null
+      || !step.max_fee_per_gas || !step.max_priority_fee_per_gas || !step.gas_limit) {
+      throw conflictError("Story settlement step has no importable signed candidate")
+    }
+    if (keccak256(step.signed_transaction) !== step.transaction_hash) {
+      throw conflictError("Story settlement original candidate evidence is unverifiable")
+    }
+    const candidateRef = keccak256(encodeAbiParameters(
+      parseAbiParameters("string domain, bytes32 stepRef, bytes32 transactionHash"),
+      ["story-settlement-original-candidate-v1", step.step_ref, step.transaction_hash],
+    ))
+    this.ctx.storage.transactionSync(() => {
+      if (this.readCandidates(step.step_ref).some((candidate) => candidate.generation === 0)) return
+      const now = Date.now()
+      const state: TransactionCandidateState = step.state === "prepared"
+        ? "prepared"
+        : step.state === "mined" ? "mined"
+          : step.state === "confirmed" ? "confirmed"
+            : step.state === "reverted" ? "reverted"
+              : step.state === "reconciliation_required" ? "reconciliation_required" : "broadcast"
+      this.ctx.storage.sql.exec(
+        `INSERT INTO story_settlement_transaction_candidates (
+          candidate_ref,step_ref,generation,kind,parent_candidate_ref,is_active,version,nonce,
+          max_fee_per_gas,max_priority_fee_per_gas,gas_limit,signed_transaction,transaction_hash,
+          state,receipt_status,block_number,block_hash,authorization_ref,
+          operator_credential_id,operator_actor_id,created_at,updated_at
+        ) VALUES (?1,?2,0,'original',NULL,1,1,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,NULL,NULL,NULL,?13,?13)`,
+        candidateRef, step.step_ref, step.nonce, step.max_fee_per_gas, step.max_priority_fee_per_gas,
+        step.gas_limit, step.signed_transaction, step.transaction_hash, state,
+        step.receipt_status, step.block_number, step.block_hash, now,
+      )
+    })
+    return this.readCandidate(candidateRef)!
+  }
+
+  private findFeeReplacementCandidate(
+    stepRefValue: Hex,
+    parentHash: Hex,
+    maxFeePerGas: bigint,
+    maxPriorityFeePerGas: bigint,
+    authorizationRef: string,
+  ): TransactionCandidateRow | null {
+    return this.readCandidates(stepRefValue).find((candidate) => {
+      if (candidate.kind !== "fee_replacement" || !candidate.parent_candidate_ref) return false
+      const parent = this.readCandidate(candidate.parent_candidate_ref)
+      return parent?.transaction_hash === parentHash
+        && candidate.max_fee_per_gas === maxFeePerGas.toString()
+        && candidate.max_priority_fee_per_gas === maxPriorityFeePerGas.toString()
+        && candidate.authorization_ref === authorizationRef
+    }) ?? null
+  }
+
+  private candidateResult(planRef: Hex, candidate: TransactionCandidateRow): StorySettlementFeeReplacementResult {
+    return {
+      planRef,
+      stepRef: candidate.step_ref,
+      candidateRef: candidate.candidate_ref,
+      generation: candidate.generation,
+      transactionHash: candidate.transaction_hash,
+      state: candidate.state,
+    }
+  }
+
   private async assertSignedTransaction(
     signedTransaction: Hex,
     expected: SignerDomain & {
@@ -1232,6 +1828,56 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       version: Number(row.version),
       drill_abandon_after_reserve: Number(row.drill_abandon_after_reserve ?? 0) === 1,
     } : null
+  }
+
+  private readCandidate(candidateRef: Hex): TransactionCandidateRow | null {
+    const row = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT * FROM story_settlement_transaction_candidates WHERE candidate_ref=?1",
+      candidateRef,
+    ).toArray()[0]
+    return row ? this.decodeCandidate(row) : null
+  }
+
+  private readActiveCandidate(stepRefValue: Hex): TransactionCandidateRow | null {
+    const row = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT * FROM story_settlement_transaction_candidates WHERE step_ref=?1 AND is_active=1 LIMIT 1",
+      stepRefValue,
+    ).toArray()[0]
+    return row ? this.decodeCandidate(row) : null
+  }
+
+  private readCandidates(stepRefValue: Hex): TransactionCandidateRow[] {
+    return this.ctx.storage.sql.exec<Record<string, string | number | null>>(
+      "SELECT * FROM story_settlement_transaction_candidates WHERE step_ref=?1 ORDER BY generation",
+      stepRefValue,
+    ).toArray().map((row) => this.decodeCandidate(row))
+  }
+
+  private decodeCandidate(row: Record<string, string | number | null>): TransactionCandidateRow {
+    return {
+      candidate_ref: String(row.candidate_ref) as Hex,
+      step_ref: String(row.step_ref) as Hex,
+      generation: Number(row.generation),
+      kind: String(row.kind) as "original" | "fee_replacement",
+      parent_candidate_ref: row.parent_candidate_ref == null ? null : String(row.parent_candidate_ref) as Hex,
+      is_active: Number(row.is_active) === 1,
+      version: Number(row.version),
+      nonce: Number(row.nonce),
+      max_fee_per_gas: String(row.max_fee_per_gas),
+      max_priority_fee_per_gas: String(row.max_priority_fee_per_gas),
+      gas_limit: String(row.gas_limit),
+      signed_transaction: String(row.signed_transaction) as Hex,
+      transaction_hash: String(row.transaction_hash) as Hex,
+      state: String(row.state) as TransactionCandidateState,
+      receipt_status: row.receipt_status == null ? null : String(row.receipt_status) as "success" | "reverted",
+      block_number: row.block_number == null ? null : String(row.block_number),
+      block_hash: row.block_hash == null ? null : String(row.block_hash) as Hex,
+      authorization_ref: row.authorization_ref == null ? null : String(row.authorization_ref),
+      operator_credential_id: row.operator_credential_id == null ? null : String(row.operator_credential_id),
+      operator_actor_id: row.operator_actor_id == null ? null : String(row.operator_actor_id),
+      created_at: Number(row.created_at),
+      updated_at: Number(row.updated_at),
+    }
   }
 
   private readStep(stepRefValue: Hex): StepRow | null {
@@ -1300,19 +1946,31 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
       planRef: plan.plan_ref,
       state: plan.state,
       version: plan.version,
-      steps: this.readSteps(plan.plan_ref).map((step) => ({
-        stepRef: step.step_ref,
-        callIdentity: step.call_identity,
-        ordinal: step.ordinal,
-        state: step.state,
-        version: step.version,
-        nonce: step.nonce,
-        transactionHash: step.transaction_hash,
-        receipt: this.snapshot(step).receipt,
-        attemptCount: step.attempt_count,
-        repairState: step.repair_state,
-        lastErrorCode: step.last_error_code,
-      })),
+      steps: this.readSteps(plan.plan_ref).map((step) => {
+        const candidates = this.readCandidates(step.step_ref)
+        const authoritative = candidates.find((candidate) => ["confirmed", "reverted", "mined"].includes(candidate.state))
+          ?? candidates.find((candidate) => candidate.is_active)
+        const candidateReceipt = authoritative?.receipt_status && authoritative.block_number && authoritative.block_hash
+          ? {
+            status: authoritative.receipt_status,
+            blockNumber: BigInt(authoritative.block_number),
+            blockHash: authoritative.block_hash,
+          }
+          : null
+        return {
+          stepRef: step.step_ref,
+          callIdentity: step.call_identity,
+          ordinal: step.ordinal,
+          state: step.state,
+          version: step.version,
+          nonce: step.nonce,
+          transactionHash: authoritative?.transaction_hash ?? step.transaction_hash,
+          receipt: candidateReceipt ?? this.snapshot(step).receipt,
+          attemptCount: step.attempt_count,
+          repairState: step.repair_state,
+          lastErrorCode: step.last_error_code,
+        }
+      }),
     }
   }
 }

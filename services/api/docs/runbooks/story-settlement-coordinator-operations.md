@@ -117,8 +117,8 @@ community that is deliberately absent from active-community cron enumeration.
 
 ## Manual fee replacement
 
-Implementation is gated by `../story-settlement-manual-fee-replacement-design.md`. Until the linked
-multi-candidate journal and scoped action are deployed and staging-proven, stop here; do not replace
+Implementation is governed by `../story-settlement-manual-fee-replacement-design.md`. The runtime
+route remains unproven until its Aeneid drill is recorded; do not use it outside staging or replace
 transactions with a wallet CLI or direct signer access.
 
 V1 does not create automatic replacements. Use this only for a journaled
@@ -131,13 +131,19 @@ nonce is still occupied by that exact hash.
 3. Choose reviewed fees within the incident-specific treasury ceiling. The
    replacement must preserve signer, chain, nonce, target, value, calldata,
    gas limit, call identity, and plan/step identity. Only fee fields may change.
-4. Use a purpose-built audited replacement action that persists the new signed
-   bytes and replacement hash before broadcasting, while retaining the old
-   hash. Until that action exists, do not replace manually with `cast`, a
-   wallet, or the legacy cancel script.
+4. With a credential carrying only `story:settlement:fee-replace`, POST the plan, step, expected
+   version, expected active hash, decimal max fee, decimal priority fee, and incident reference to
+   `/operator/story-settlement/fee-replacements`. The coordinator independently enforces the
+   versioned rounded-up minimum bump on both fee fields and the deployed caps. `202` means the exact
+   signed candidate is durable; the alarm owns broadcast.
 5. Track both hashes. Confirm exactly one canonical success. Any conflicting
    receipt or nonce consumption moves the step to reconciliation-required and
    pages an operator; it never authorizes another signature.
+6. Inspect the complete immutable chain with scoped POST
+   `/operator/story-settlement/fee-replacement-inspections`. A later bump must name the current active
+   tip and creates one linear child generation; it never branches or forgets prior hashes.
+
+Until the Aeneid drill closes review, do not use the action against an organic incident.
 
 ## Signer rotation
 
