@@ -25,13 +25,22 @@ async function zeroShareProjectionEnv(parentIpId: string): Promise<Env> {
   try {
     await client.execute(`
       CREATE TABLE story_registered_asset_projections (
+        community_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        source_post_status TEXT NOT NULL,
+        license_preset TEXT,
         story_ip_id TEXT NOT NULL,
         story_license_terms_id TEXT,
         commercial_rev_share_pct INTEGER
       )
     `)
     await client.execute({
-      sql: `INSERT INTO story_registered_asset_projections (story_ip_id, story_license_terms_id, commercial_rev_share_pct) VALUES (?1, '17', 0)`,
+      sql: `
+        INSERT INTO story_registered_asset_projections (
+          community_id, asset_id, source_post_status, license_preset,
+          story_ip_id, story_license_terms_id, commercial_rev_share_pct
+        ) VALUES ('cmt_source', 'ast_source', 'published', 'commercial-remix', ?1, '17', 0)
+      `,
       args: [parentIpId],
     })
   } finally {
@@ -40,7 +49,7 @@ async function zeroShareProjectionEnv(parentIpId: string): Promise<Env> {
   return { CONTROL_PLANE_DATABASE_URL: `file:${databasePath}` } as Env
 }
 
-test("rejects a direct Story ref to a known zero-share parent", async () => {
+test("rejects direct Story refs that are not globally eligible", async () => {
   const parentIpId = "0x1111111111111111111111111111111111111111"
   const env = await zeroShareProjectionEnv(parentIpId)
   const unusedShardClient = { execute: async () => { throw new Error("shard lookup should not run") } }
@@ -50,14 +59,14 @@ test("rejects a direct Story ref to a known zero-share parent", async () => {
     client: unusedShardClient,
     communityId: "cmt_zero_share",
     upstreamAssetRefs: [`story:ip:${parentIpId}#licenseTermsId=17`],
-  })).rejects.toThrow("positive commercial revenue share")
+  })).rejects.toThrow("no longer eligible")
 
   await expect(assertDerivativeParentRevenueShare({
     env,
     client: unusedShardClient,
     communityId: "cmt_zero_share",
     upstreamAssetRefs: [`story:ip:${parentIpId}#licenseTermsId=18`],
-  })).resolves.toBeUndefined()
+  })).rejects.toThrow("no longer eligible")
 })
 
 test("filters known zero-share parents while preserving unknown historical parents", async () => {

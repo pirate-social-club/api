@@ -1704,14 +1704,6 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     }
     expect(originalPost.asset).toBeTruthy()
 
-    const deleteOriginalPost = await requestJson(
-      `http://pirate.test/communities/${communityId}/posts/${originalPost.id}/delete`,
-      {},
-      ctx.env,
-      author.accessToken,
-    )
-    expect(deleteOriginalPost.status).toBe(200)
-
     setStoryRoyaltyRegistrarForTests(async () => {
       registrarCallsAfterOriginal += 1
       return {

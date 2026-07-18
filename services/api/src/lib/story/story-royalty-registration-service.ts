@@ -28,6 +28,11 @@ import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-alloc
 import { getControlPlaneClient } from "../runtime-deps"
 import { assertDerivativeParentRevenueShare } from "../communities/commerce/derivative-parent-revenue-share"
 import {
+  findEligibleStoryParentProjectionByRef,
+  resolveEligibleStoryParentProjectionByAssetId,
+} from "../communities/commerce/derivative-source-projection"
+import { badRequestError } from "../errors"
+import {
   findUploadedSongArtifactByStorageRef,
   isSongArtifactUploadContentHashServerVerified,
 } from "../song-artifacts/song-artifact-repository"
@@ -618,6 +623,7 @@ function parseDirectStoryParentRef(ref: string): ResolvedDerivativeParent | null
 }
 
 export async function resolveStoryRoyaltyDerivativeParents(input: {
+  env: Env
   client: StoryRoyaltyClient
   communityId: string
   upstreamAssetRefs: string[] | null
@@ -629,25 +635,48 @@ export async function resolveStoryRoyaltyDerivativeParents(input: {
   for (const ref of refs) {
     const direct = parseDirectStoryParentRef(ref)
     if (direct) {
-      resolved.push(direct)
+      const projected = await findEligibleStoryParentProjectionByRef({
+        env: input.env,
+        storyIpId: direct.ipId,
+        storyLicenseTermsId: direct.licenseTermsId.toString(),
+      })
+      if (!projected) throw badRequestError("Selected derivative source is no longer eligible")
+      resolved.push({
+        ipId: projected.storyIpId as `0x${string}`,
+        licenseTermsId: BigInt(projected.storyLicenseTermsId),
+      })
       continue
     }
 
     const localAssetId = ref.startsWith("story:asset:") ? ref.slice("story:asset:".length) : ref
     const decodedAssetId = decodePublicAssetId(localAssetId)
     if (!decodedAssetId.startsWith("ast_")) {
-      return null
+      throw badRequestError("Selected derivative source is no longer eligible")
     }
     const asset = await getAssetRow(input.client, input.communityId, decodedAssetId)
-    if (!asset?.story_ip_id?.trim() || !asset.story_license_terms_id?.trim()) {
-      return null
+    if (asset?.story_ip_id?.trim() && asset.story_license_terms_id?.trim()) {
+      if (!/^\d+$/.test(asset.story_license_terms_id)) {
+        throw badRequestError("Selected derivative source is no longer eligible")
+      }
+      resolved.push({
+        ipId: asset.story_ip_id as `0x${string}`,
+        licenseTermsId: BigInt(asset.story_license_terms_id),
+      })
+      continue
     }
-    if (!/^\d+$/.test(asset.story_license_terms_id)) {
-      return null
+    const projected = await resolveEligibleStoryParentProjectionByAssetId({
+      env: input.env,
+      assetId: decodedAssetId,
+    })
+    if (projected.status === "ambiguous") {
+      throw badRequestError("Selected derivative source is ambiguous; select it again")
+    }
+    if (projected.status !== "resolved") {
+      throw badRequestError("Selected derivative source is no longer eligible")
     }
     resolved.push({
-      ipId: asset.story_ip_id as `0x${string}`,
-      licenseTermsId: BigInt(asset.story_license_terms_id),
+      ipId: projected.parent.storyIpId as `0x${string}`,
+      licenseTermsId: BigInt(projected.parent.storyLicenseTermsId),
     })
   }
 
@@ -829,6 +858,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       upstreamAssetRefs: input.upstreamAssetRefs,
     })
     derivativeParents = await resolveStoryRoyaltyDerivativeParents({
+      env: input.env,
       client: input.client,
       communityId: input.communityId,
       upstreamAssetRefs: input.upstreamAssetRefs,
