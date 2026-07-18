@@ -90,6 +90,7 @@ import { realChain as operatorRealChain } from "./lib/communities/bookings/opera
 import type { Env } from "./env"
 import publicReadApp from "./routes/public-read-app"
 import { apiErrorHandler } from "./routes/api-error-handler"
+import { authenticateAdminTokenOnly } from "./lib/auth-middleware"
 import {
   REQUEST_ID_HEADER,
   requestCorrelationMiddleware,
@@ -332,6 +333,13 @@ app.route("/", verification)
 app.post("/__debug/ops-alert", async (c) => {
   if (c.env.ENVIRONMENT === "production") {
     return c.json({ error: "not_found" }, 404)
+  }
+  const admin = authenticateAdminTokenOnly({
+    env: c.env,
+    token: c.req.header("x-admin-token"),
+  })
+  if (!admin) {
+    return c.json({ error: "unauthorized" }, 401)
   }
   const delivered = await captureScheduledWarning(
     c.env,
@@ -592,7 +600,7 @@ async function reconcileScheduledRoyaltyAllocationVerifications(env: Env): Promi
       maxCommunities: 100,
       maxAssetsPerCommunity: 10,
     })
-    if (summary.checked > 0 || summary.failed > 0 || summary.failed_communities.length > 0) {
+    if (summary.checked > 0 || summary.projection_synced > 0 || summary.failed > 0 || summary.failed_communities.length > 0) {
       console.info("[royalty-allocations] reconciled verification", JSON.stringify(summary))
     }
   } catch (error) {

@@ -8,12 +8,9 @@ import {
   type OpsAlertDeliveryEvidenceStore,
 } from "./delivery-evidence"
 import { bucketStartMs } from "./emit"
+import { opsAlertBucketMs, opsAlertDedupeTtlSeconds } from "./policy"
 import { sendOpsAlerts } from "./sink"
 import type { OpsAlert, OpsAlertSeverity } from "./types"
-
-const DEFAULT_BUCKET_MS = 60 * 60 * 1000
-const DEFAULT_LOW_SEVERITY_BUCKET_MS = 24 * 60 * 60 * 1000
-const MIN_DEDUPE_TTL_SECONDS = 3 * 60 * 60
 
 export type ScheduledAlertDeliveryResult = {
   delivered: boolean
@@ -29,11 +26,6 @@ export function setScheduledAlertEvidenceStoreForTests(
   store: OpsAlertDeliveryEvidenceStore | null | undefined,
 ): void {
   testEvidenceStore = store
-}
-
-function intFromEnv(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
 function errorMessage(error: unknown): string {
@@ -86,17 +78,6 @@ function communityIdsFromExtra(extra: Record<string, unknown> | undefined): stri
   return [...ids].sort()
 }
 
-function bucketMsForScheduledAlert(env: Env, alert: OpsAlert): number {
-  if (alert.severity === "low") {
-    return intFromEnv(env.OPS_ALERT_LOW_BUCKET_MS, DEFAULT_LOW_SEVERITY_BUCKET_MS)
-  }
-  return intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)
-}
-
-function ttlSecondsForBucket(bucketMs: number): number {
-  return Math.max(MIN_DEDUPE_TTL_SECONDS, Math.ceil((bucketMs * 2) / 1000))
-}
-
 function evidenceStore(env: Env): OpsAlertDeliveryEvidenceStore | null {
   if (testEvidenceStore !== undefined) return testEvidenceStore
   const databaseUrl = String(env.CONTROL_PLANE_DATABASE_URL || "").trim()
@@ -107,9 +88,9 @@ function evidenceStore(env: Env): OpsAlertDeliveryEvidenceStore | null {
 
 async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<ScheduledAlertDeliveryResult> {
   const kv = env.OPS_ALERT_DEDUPE
-  const bucketMs = bucketMsForScheduledAlert(env, alert)
+  const bucketMs = opsAlertBucketMs(env, alert.severity)
   const bucket = bucketStartMs(Date.now(), bucketMs)
-  const deduper = kv ? new KvAlertDeduper(kv, ttlSecondsForBucket(bucketMs)) : null
+  const deduper = kv ? new KvAlertDeduper(kv, opsAlertDedupeTtlSeconds(bucketMs)) : null
   if (deduper && await deduper.hasSent(alert.key, bucket)) {
     return {
       delivered: true,

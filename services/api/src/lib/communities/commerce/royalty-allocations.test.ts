@@ -20,6 +20,7 @@ import {
 } from "./royalty-allocations"
 import {
   listPendingStoryRoyaltyAllocationProjectionCommunities,
+  listVerifiedUnsyncedStoryRoyaltyAllocationAssets,
   loadStoryRoyaltyAllocationProjectionRows,
   syncStoryRoyaltyAllocationProjectionForAsset,
 } from "./royalty-allocation-projection"
@@ -731,6 +732,48 @@ describe("loadStoryRoyaltyAllocationProjectionRows", () => {
       args: ["ast_sync_retry"],
     })
     expect(Number(asset.rows[0].royalty_allocation_projection_synced)).toBe(1)
+  })
+
+  test("targets verified assets whose control-plane projection still needs retrying", async () => {
+    const communityClient = freshDb()
+    await createTables(communityClient)
+    const fingerprint = await fingerprintForRequest(split(), AENEID)
+    for (const assetId of ["ast_synced", "ast_unsynced"]) {
+      await persistAssetWithAllocations({
+        client: appClient(communityClient),
+        assetInsert: assetInsertFor(assetId, fingerprint),
+        allocationStatements: buildAllocationInsertStatements(buildAllocationRows({
+          assetId,
+          communityId: "com_1",
+          creatorUserId: "usr_author",
+          allocations: split(),
+          fingerprint,
+          creator: snapshot,
+          chainId: AENEID,
+          now: "2026-01-01T00:00:00Z",
+          newId: () => crypto.randomUUID(),
+        })),
+      })
+    }
+    await communityClient.execute({
+      sql: `
+        UPDATE assets
+        SET story_ip_id = '0x1111111111111111111111111111111111111111',
+            royalty_allocation_status = 'verified',
+            royalty_allocation_projection_synced = CASE WHEN asset_id = 'ast_synced' THEN 1 ELSE 0 END,
+            updated_at = CASE WHEN asset_id = 'ast_unsynced' THEN '2026-01-02T00:00:00Z' ELSE '2026-01-03T00:00:00Z' END
+        WHERE asset_id IN ('ast_synced', 'ast_unsynced')
+      `,
+      args: [],
+    })
+
+    await expect(listVerifiedUnsyncedStoryRoyaltyAllocationAssets({
+      client: appClient(communityClient),
+      limit: 10,
+    })).resolves.toEqual([{
+      communityId: "com_1",
+      assetId: "ast_unsynced",
+    }])
   })
 
   test("targets distinct pending communities from the control-plane projection", async () => {

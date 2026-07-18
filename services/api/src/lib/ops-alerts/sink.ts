@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { logPipelineError, logPipelineInfo } from "../observability/pipeline-log"
+import { opsAlertGuidance } from "./guidance"
 import type { OpsAlert } from "./types"
 
 const OPS_ALERT_WEBHOOK_TIMEOUT_MS = 5_000
@@ -122,6 +123,7 @@ function alertText(input: {
   buildSha: string | null
 }): string {
   const { alert, environment, timestamp, buildSha } = input
+  const guidance = opsAlertGuidance(alert)
   const lines = [
     `[${alert.severity.toUpperCase()}][${environment}] ${alert.title}`,
     `Count: ${alert.count}`,
@@ -129,6 +131,9 @@ function alertText(input: {
     `Time: ${timestamp}`,
     ...(buildSha ? [`Deploy: ${buildSha}`] : []),
     `Key: ${alert.key}`,
+    `Owner: ${guidance.owner}`,
+    ...(guidance.runbookUrl ? [`Runbook: ${guidance.runbookUrl}`] : []),
+    `Recommended action: ${guidance.recommendedAction}`,
   ]
   const details = alertDetailsLines(alert)
   if (details.length > 0) {
@@ -140,6 +145,13 @@ function alertText(input: {
 export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAlertSendResult> {
   if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none", providerMessageId: null }
   const environment = env.ENVIRONMENT || "development"
+  if (environment === "development") {
+    logPipelineInfo("[ops-alerts] development alert kept in logs", {
+      count: alerts.length,
+      keys: alerts.map((alert) => alert.key),
+    })
+    return { delivered: true, sent: 0, sink: "log", providerMessageId: null }
+  }
   const timestamp = new Date().toISOString()
   const buildSha = shortSha(env.BUILD_GIT_SHA)
   const text = alerts
