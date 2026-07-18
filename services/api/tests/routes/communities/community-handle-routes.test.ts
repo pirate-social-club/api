@@ -149,6 +149,34 @@ async function updateLocalNamespaceHandlePolicySettings(input: {
   }
 }
 
+async function updateLocalNamespaceClaimGateExpression(input: {
+  communityDbRoot: string
+  communityId: string
+  expressionJson: string
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE namespace_handle_claim_gate_policies
+        SET expression_json = ?2,
+            updated_at = ?3
+        WHERE namespace_handle_policy_id = (
+          SELECT namespace_handle_policy_id
+          FROM namespace_handle_policies
+          WHERE community_id = ?1
+          LIMIT 1
+        )
+      `,
+      args: [input.communityId, input.expressionJson, new Date().toISOString()],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function markLocalCommunityMemberLeft(input: {
   communityDbRoot: string
   communityId: string
@@ -1024,10 +1052,24 @@ describe("community handle routes", () => {
       version: 1,
       expression: {
         op: "gate",
-        gate: { gate_id: "legacy_0", type: "unique_human", provider: "very" },
+        gate: { gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/), type: "unique_human", provider: "very" },
       },
     })
     expect(policy.eligibility_timing).toBe("claim_time")
+
+    // Historical/raw storage could bypass request validation. The claim read path
+    // must repair identity-only defects rather than turning every quote into a 500.
+    await updateLocalNamespaceClaimGateExpression({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      expressionJson: JSON.stringify({
+        version: 1,
+        expression: {
+          op: "gate",
+          gate: { gate_id: "not valid!", type: "unique_human", provider: "very" },
+        },
+      }),
+    })
 
     const quoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,

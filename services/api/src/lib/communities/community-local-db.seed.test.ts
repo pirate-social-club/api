@@ -61,7 +61,7 @@ describe("buildCommunitySeedStatements", () => {
     expect(policyInsert).toBeDefined()
     expect(JSON.parse(String(policyInsert!.args?.[1]))).toEqual({
       version: 1,
-      expression: { op: "gate", gate: { gate_id: "legacy_0", type: "altcha_pow" } },
+      expression: { op: "gate", gate: { gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/), type: "altcha_pow" } },
     })
   })
 })
