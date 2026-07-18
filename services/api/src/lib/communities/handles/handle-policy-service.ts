@@ -15,6 +15,14 @@ import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from
 import { requireCommunityOwner } from "../commerce/access"
 import { validateGatePolicy } from "../membership/gate-policy-validation"
 import type { GatePolicy } from "../membership/gate-types"
+import {
+  type LabelClaimRuleRow,
+  type ValidatedLabelClaimRule,
+  assertNoLabelPlaceholder,
+  listNamespaceLabelClaimRules,
+  serializeLabelClaimRules,
+  validateLabelClaimRulesInput,
+} from "./handle-label-claim-rules"
 
 export type HandlePricingModel = NonNullable<CommunityHandleQuote["pricing_model"]>
 export type HandleCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
@@ -116,8 +124,14 @@ export function withHandlePrefix(prefix: string, value: string): string {
   return value.startsWith(`${prefix}_`) ? value : `${prefix}_${value}`
 }
 
-export function serializeHandlePolicy(row: NamespacePolicyRow): CommunityHandlePolicy {
+export function serializeHandlePolicy(
+  row: NamespacePolicyRow,
+  labelClaimRules?: LabelClaimRuleRow[],
+): CommunityHandlePolicy {
   return {
+    ...(labelClaimRules
+      ? { label_claim_rules: serializeLabelClaimRules(labelClaimRules, withHandlePrefix) }
+      : {}),
     id: withHandlePrefix("nhp", row.namespace_handle_policy_id),
     object: "community_handle_policy",
     community: withHandlePrefix("com", row.community_id),
@@ -308,6 +322,7 @@ export async function updateCommunityHandlePolicy(input: {
     const submittedExpression = "claim_gate_expression" in input.body
       ? input.body.claim_gate_expression == null ? null : validateGatePolicy(input.body.claim_gate_expression)
       : parseClaimGateExpression(current.claim_gate_expression_json)
+    if (submittedExpression) assertNoLabelPlaceholder(submittedExpression)
     if (nextClaimGateMode === "explicit" && !submittedExpression) {
       throw badRequestError("claim_gate_expression is required when claim_gate_mode is explicit")
     }
@@ -317,6 +332,10 @@ export async function updateCommunityHandlePolicy(input: {
     const nextExpressionRef = submittedExpression
       ? current.claim_gate_expression_ref ?? makeId("hcgp")
       : null
+    const submittedLabelClaimRules: ValidatedLabelClaimRule[] | null =
+      "label_claim_rules" in input.body && input.body.label_claim_rules != null
+        ? validateLabelClaimRulesInput(input.body.label_claim_rules)
+        : null
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
@@ -378,6 +397,32 @@ export async function updateCommunityHandlePolicy(input: {
           args: [current.namespace_handle_policy_id],
         })
       }
+      if (submittedLabelClaimRules) {
+        await tx.execute({
+          sql: `DELETE FROM namespace_handle_label_claim_rules WHERE namespace_handle_policy_id = ?1`,
+          args: [current.namespace_handle_policy_id],
+        })
+        for (const [position, rule] of submittedLabelClaimRules.entries()) {
+          await tx.execute({
+            sql: `
+              INSERT INTO namespace_handle_label_claim_rules (
+                label_claim_rule_id, namespace_handle_policy_id, position,
+                selector_type, selector_labels_json, version, expression_json,
+                created_at, updated_at
+              ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?7)
+            `,
+            args: [
+              makeId("hlcr"),
+              current.namespace_handle_policy_id,
+              position,
+              rule.selector_type,
+              rule.selector_labels ? JSON.stringify(rule.selector_labels) : null,
+              JSON.stringify(rule.expression),
+              updatedAt,
+            ],
+          })
+        }
+      }
       await tx.commit()
     } catch (error) {
       await tx.rollback()
@@ -385,7 +430,8 @@ export async function updateCommunityHandlePolicy(input: {
     }
     const updated = await getNamespacePolicy(db.client, input.communityId, selector)
     if (!updated) throw internalError("Updated community handle policy row is missing")
-    return serializeHandlePolicy(updated)
+    const rules = await listNamespaceLabelClaimRules(db.client, updated.namespace_handle_policy_id)
+    return serializeHandlePolicy(updated, rules)
   } finally {
     db.close()
   }

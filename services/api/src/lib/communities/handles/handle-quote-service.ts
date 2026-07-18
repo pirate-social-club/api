@@ -7,11 +7,13 @@ import { openCommunityWriteClient } from "../community-read-access"
 import { getCommunityMoneyPolicy } from "../commerce/policy-service"
 import { evaluateNamespaceHandleClaimEligibility, requireHandleClaimAccess } from "./handle-access"
 import { expireStaleHandleQuotes } from "./handle-claim-validation"
+import { buildMembershipGateSummariesFromPolicy } from "../membership/gate-summary"
 import {
   type HandleCommunityRepository,
   getNamespacePolicy,
   normalizeCommunityHandleLabel,
   parseHandleClaimSettings,
+  withHandlePrefix,
 } from "./handle-policy-service"
 import {
   findTaprootProtocolOwnerWallet,
@@ -68,7 +70,17 @@ export async function quoteCommunityHandle(input: {
       userId: input.userId,
       userRepository: input.userRepository,
       policy,
+      labelNormalized: desired.labelNormalized,
     })
+    const claimGate: CommunityHandleQuote["claim_gate"] = gateEligibility.gate
+      ? {
+        source: gateEligibility.gate.source,
+        satisfied: gateEligibility.satisfied,
+        label_claim_rule: gateEligibility.gate.ruleId ? withHandlePrefix("hlcr", gateEligibility.gate.ruleId) : null,
+        expression: gateEligibility.gate.policy,
+        summaries: buildMembershipGateSummariesFromPolicy(gateEligibility.gate.policy),
+      }
+      : null
 
     assertHandleLabelLength(desired.labelNormalized, settings)
     const activeForUser = await getActiveHandleForUser(db.client, policy.namespace_id, input.userId)
@@ -153,6 +165,7 @@ export async function quoteCommunityHandle(input: {
         protocolIssuanceRequired: requiresProtocolIssuance,
         protocolIssuanceEligible,
         protocolIssuanceReason,
+        claimGate,
       })
     }
 
@@ -291,6 +304,7 @@ export async function quoteCommunityHandle(input: {
       protocolIssuanceRequired: requiresProtocolIssuance,
       protocolIssuanceEligible,
       protocolIssuanceReason,
+      claimGate,
     })
   } finally {
     db.close()

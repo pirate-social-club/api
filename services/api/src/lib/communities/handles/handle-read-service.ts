@@ -9,6 +9,7 @@ import { HttpError, badRequestError, eligibilityFailed, notFoundError } from "..
 import { openCommunityReadClient } from "../community-read-access"
 import { requireCommunityOwner } from "../commerce/access"
 import { requireHandleClaimAccess } from "./handle-access"
+import { listNamespaceLabelClaimRules } from "./handle-label-claim-rules"
 import {
   HANDLE_PROTOCOL_ISSUANCE_JOIN,
   HANDLE_PROTOCOL_ISSUANCE_SELECT,
@@ -129,7 +130,8 @@ export async function getCommunityHandlePolicy(input: {
     if (!policy) {
       throw eligibilityFailed("Community names are not available for this community")
     }
-    return serializeHandlePolicy(policy)
+    const labelClaimRules = await listNamespaceLabelClaimRules(db.client, policy.namespace_handle_policy_id)
+    return serializeHandlePolicy(policy, labelClaimRules)
   } finally {
     db.close()
   }

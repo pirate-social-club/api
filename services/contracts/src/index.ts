@@ -1363,6 +1363,7 @@ export type CommunityHandlePolicy = {
   claim_gate_expression_ref: string | null;
   claim_gate_expression: GatePolicy | null;
   eligibility_timing: "claim_time" | "continuous";
+  label_claim_rules?: Array<CommunityHandleLabelClaimRule>;
   settings: CommunityHandlePolicySettings;
   updated_at: number | null;
 };
@@ -1402,6 +1403,7 @@ export type CommunityHandleQuote = {
   eligible: boolean;
   availability: "available" | "taken" | "reserved" | "already_claimed_by_viewer" | "viewer_has_claim" | "namespace_unavailable";
   reason: string | null;
+  claim_gate?: CommunityHandleQuoteClaimGate | null;
   price_cents: number;
   currency: "USD";
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
@@ -1435,6 +1437,7 @@ export type UpdateCommunityHandlePolicyRequest = {
   claim_gate_mode?: "none" | "inherit_community" | "explicit";
   claim_gate_expression?: GatePolicy | null;
   eligibility_timing?: "claim_time" | "continuous";
+  label_claim_rules?: Array<CommunityHandleLabelClaimRuleInput>;
   settings?: CommunityHandlePolicySettings | null;
 };
 
@@ -3100,6 +3103,31 @@ type CommunityGraphicContentPolicy = {
   extreme_gore: CommunityModerationDecisionLevel;
   body_horror_disturbing: CommunityModerationDecisionLevel;
   animal_harm: CommunityModerationDecisionLevel;
+};
+
+type CommunityHandleLabelClaimRule = {
+  id: string;
+  position: number;
+  selector: CommunityHandleLabelClaimSelector;
+  claim_gate_expression: GatePolicy;
+};
+
+type CommunityHandleLabelClaimRuleInput = {
+  selector: CommunityHandleLabelClaimSelector;
+  claim_gate_expression: GatePolicy;
+};
+
+type CommunityHandleLabelClaimSelector = {
+  type: "exact" | "any";
+  labels?: Array<string> | null;
+};
+
+type CommunityHandleQuoteClaimGate = {
+  source: "namespace" | "label_rule";
+  satisfied: boolean;
+  label_claim_rule?: string | null;
+  expression?: GatePolicy | null;
+  summaries?: Array<MembershipGateSummary> | null;
 };
 
 type CommunityIdentifiedPersonMediaScope = "subject_only" | "subject_or_authorized" | "public_source_allowed";

@@ -134,6 +134,8 @@ export async function assertClaimQuoteStillClaimable(input: {
     throw eligibilityFailed("Community name claims are currently disabled")
   }
   const settings = parseHandleClaimSettings(policy.settings_json)
+  const labelNormalized = requiredString(input.quote, "label_normalized")
+  const labelDisplay = requiredString(input.quote, "label_display")
   await requireHandleClaimAccess({ client: input.executor, communityId: input.communityId, userId: input.userId })
   await requireNamespaceHandleClaimEligibility({
     env: input.env,
@@ -142,10 +144,9 @@ export async function assertClaimQuoteStillClaimable(input: {
     userId: input.userId,
     userRepository: input.userRepository,
     policy,
+    labelNormalized,
   })
 
-  const labelNormalized = requiredString(input.quote, "label_normalized")
-  const labelDisplay = requiredString(input.quote, "label_display")
   if (isReservedHandleLabel(labelNormalized, settings)) {
     const reason = "Desired label is reserved"
     throw eligibilityFailed(reason, handleAvailabilityDetails("reserved", reason))
