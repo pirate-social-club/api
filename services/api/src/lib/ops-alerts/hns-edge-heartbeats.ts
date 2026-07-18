@@ -10,6 +10,7 @@ export const HNS_EDGE_ROLES = [
   { host: "ns1-pirate-fluence", role: "hns-chain-observer" },
   { host: "ns1-pirate-fluence", role: "hns-authoritative-dns" },
   { host: "ns1-pirate-fluence", role: "spaces-verifier" },
+  { host: "ns1-pirate-fluence", role: "hns-state-backup" },
   { host: "ns2-pirate-fluence", role: "hns-secondary-dns" },
 ] as const
 
