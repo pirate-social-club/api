@@ -1118,6 +1118,185 @@ describe("community handle routes", () => {
     })
   })
 
+  test("per-label claim rules gate specific labels and bind {label} into inventory facets", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-label-rule-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const humanExpression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: { type: "unique_human" as const, provider: "very" as const },
+      },
+    }
+    const boundInventoryExpression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: {
+          type: "erc721_inventory_match" as const,
+          provider: "courtyard" as const,
+          chain_namespace: "eip155:137" as const,
+          contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          min_quantity: 1,
+          match: { category: "trading_card", subject: "{label}" },
+        },
+      },
+    }
+
+    const strayPlaceholderResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: {
+            version: 1,
+            expression: { op: "gate", gate: { type: "nationality", allowed: ["{label}"] } },
+          },
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    // Gate-expression validation rejects the placeholder as an invalid country code
+    // (403 eligibility_failed is the gate-validation convention).
+    expect(strayPlaceholderResponse.status).toBe(403)
+
+    const invalidLabelResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["Not A Label"] },
+          claim_gate_expression: humanExpression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidLabelResponse.status).toBe(400)
+
+    const updateResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [
+          { selector: { type: "exact", labels: ["charizard"] }, claim_gate_expression: humanExpression },
+          { selector: { type: "any" }, claim_gate_expression: boundInventoryExpression },
+        ],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(updateResponse.status).toBe(200)
+    const policy = await json(updateResponse) as {
+      claim_gate_mode: string
+      label_claim_rules: Array<{
+        id: string
+        position: number
+        selector: { type: string; labels: string[] | null }
+        claim_gate_expression: unknown
+      }>
+    }
+    expect(policy.claim_gate_mode).toBe("none")
+    expect(policy.label_claim_rules).toHaveLength(2)
+    expect(policy.label_claim_rules[0]?.id.startsWith("hlcr_")).toBe(true)
+    expect(policy.label_claim_rules[0]?.position).toBe(0)
+    expect(policy.label_claim_rules[0]?.selector).toEqual({ type: "exact", labels: ["charizard"] })
+    expect(policy.label_claim_rules[1]?.selector).toEqual({ type: "any", labels: null })
+
+    // First-match order: "charizard" hits the exact unique_human rule, not the any-rule.
+    const gatedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "charizard" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(gatedQuoteResponse.status).toBe(200)
+    const gatedQuote = await json(gatedQuoteResponse) as {
+      id: string
+      eligible: boolean
+      reason: string | null
+      claim_gate: {
+        source: string
+        satisfied: boolean
+        label_claim_rule: string | null
+        expression: { expression: { gate?: { type?: string } } }
+        summaries: Array<{ gate_type: string }>
+      } | null
+    }
+    expect(gatedQuote.eligible).toBe(false)
+    expect(gatedQuote.reason).toBe("This name has additional eligibility requirements that are not satisfied")
+    expect(gatedQuote.claim_gate?.source).toBe("label_rule")
+    expect(gatedQuote.claim_gate?.satisfied).toBe(false)
+    expect(gatedQuote.claim_gate?.label_claim_rule?.startsWith("hlcr_")).toBe(true)
+    expect(gatedQuote.claim_gate?.expression.expression.gate?.type).toBe("unique_human")
+    expect(gatedQuote.claim_gate?.summaries.map((summary) => summary.gate_type)).toEqual(["unique_human"])
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: gatedQuote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(403)
+    expect(await json(claimResponse)).toMatchObject({
+      code: "eligibility_failed",
+      details: { claim_gate_source: "label_rule" },
+    })
+
+    // The any-rule binds {label} into the inventory facet: the resolved expression
+    // quoted for "gengar" carries subject "gengar", and evaluation fails closed
+    // while the inventory provider is unreachable in tests.
+    const boundQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "gengar" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(boundQuoteResponse.status).toBe(200)
+    const boundQuote = await json(boundQuoteResponse) as {
+      eligible: boolean
+      reason: string | null
+      claim_gate: {
+        source: string
+        expression: { expression: { gate?: { match?: Record<string, unknown> } } }
+      } | null
+    }
+    expect(boundQuote.eligible).toBe(false)
+    expect(boundQuote.claim_gate?.source).toBe("label_rule")
+    expect(boundQuote.claim_gate?.expression.expression.gate?.match).toEqual({
+      category: "trading_card",
+      subject: "gengar",
+    })
+
+    // Clearing the rules restores the open namespace default.
+    const clearResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { label_claim_rules: [] },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(clearResponse.status).toBe(200)
+    expect((await json(clearResponse) as { label_claim_rules: unknown[] }).label_claim_rules).toEqual([])
+
+    const openQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "charizard" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(openQuoteResponse.status).toBe(200)
+    const openQuote = await json(openQuoteResponse) as { eligible: boolean; claim_gate: unknown }
+    expect(openQuote.eligible).toBe(true)
+    expect(openQuote.claim_gate).toBeNull()
+  })
+
   test("paid quote reserves the label before funding and consumes the reservation on claim", async () => {
     let quoteRateLimitCalls = 0
     let claimRateLimitCalls = 0
