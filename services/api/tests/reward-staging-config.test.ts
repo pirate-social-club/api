@@ -37,10 +37,10 @@ describe("staging reward money-loop configuration", () => {
     expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
   })
 
-  test("limits the production pilot to Arkansas Blues with earning and payouts dark", () => {
+  test("keeps production reward creation, earning, and payouts dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
     expect(vars).toMatchObject({
-      REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_CAMPAIGNS_ENABLED: "false",
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "false",
       REWARDS_PAYOUTS_ENABLED: "false",
