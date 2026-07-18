@@ -9,15 +9,41 @@ ALTER TABLE reward_campaign_funding_effects
         'quoted', 'confirming', 'confirmed', 'failed', 'refund_pending', 'refunded'
     ));
 
-ALTER TABLE reward_campaign_funding_effects
-    DROP CONSTRAINT reward_campaign_funding_effects_received_amount_atomic_check;
+-- 0134 declared the received_amount_atomic and confirmed_at checks as anonymous
+-- table-level constraints, so live databases carry Postgres auto-generated names
+-- (reward_campaign_funding_effects_check / _check1), not the conventional column
+-- names. Drop them by definition instead of by assumed name.
+DO $$
+DECLARE
+    found_name TEXT;
+BEGIN
+    SELECT conname INTO found_name
+    FROM pg_constraint
+    WHERE conrelid = 'reward_campaign_funding_effects'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) LIKE '%received_amount_atomic IS NULL%';
+    IF found_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE reward_campaign_funding_effects DROP CONSTRAINT %I', found_name);
+    END IF;
+END $$;
 
 ALTER TABLE reward_campaign_funding_effects
     ADD CONSTRAINT reward_campaign_funding_effects_received_amount_atomic_check
     CHECK (received_amount_atomic IS NULL OR status IN ('confirmed', 'refund_pending', 'refunded'));
 
-ALTER TABLE reward_campaign_funding_effects
-    DROP CONSTRAINT reward_campaign_funding_effects_confirmed_at_check;
+DO $$
+DECLARE
+    found_name TEXT;
+BEGIN
+    SELECT conname INTO found_name
+    FROM pg_constraint
+    WHERE conrelid = 'reward_campaign_funding_effects'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) LIKE '%confirmed_at IS NULL%';
+    IF found_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE reward_campaign_funding_effects DROP CONSTRAINT %I', found_name);
+    END IF;
+END $$;
 
 ALTER TABLE reward_campaign_funding_effects
     ADD CONSTRAINT reward_campaign_funding_effects_confirmed_at_check
