@@ -62,7 +62,7 @@ From `services/api`, inject the Infisical value into the provisioning process. T
 ```bash
 printf '\n' | rtk infisical user switch >/dev/null
 rtk infisical run --project-config-dir ../../../core --env staging --path /services/api -- \
-  rtk bun run provision:reward-settlement-signer -- sync-worker-secret \
+  rtk env INFISICAL_ENVIRONMENT=staging bun run provision:reward-settlement-signer -- sync-worker-secret \
     --environment staging \
     --expected-address 0x...
 ```
@@ -78,7 +78,7 @@ For production, use the production Infisical environment and the explicit confir
 ```bash
 printf '\n' | rtk infisical user switch >/dev/null
 rtk infisical run --project-config-dir ../../../core --env prod --path /services/api -- \
-  rtk bun run provision:reward-settlement-signer -- sync-worker-secret \
+  rtk env INFISICAL_ENVIRONMENT=prod bun run provision:reward-settlement-signer -- sync-worker-secret \
     --environment production \
     --expected-address 0x... \
     --confirm-production

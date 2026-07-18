@@ -54,7 +54,7 @@ async function syncWorkerSecret(input: {
 }): Promise<void> {
   const environment = assertRewardSettlementSyncTarget({
     environment: input.environment,
-    infisicalEnvironment: process.env.ENVIRONMENT,
+    infisicalEnvironment: process.env.INFISICAL_ENVIRONMENT,
     confirmProduction: input.confirmProduction,
   })
   const address = assertRewardSettlementAddress({ privateKey: input.key, expectedAddress: input.expectedAddress })
