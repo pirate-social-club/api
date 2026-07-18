@@ -571,6 +571,37 @@ describe("StorySettlementWalletCoordinatorDO (real workerd + SQLite)", () => {
     expect(state.broadcasts).toEqual([prepared!.signed_transaction])
   })
 
+  it("recovers a transient generation-zero candidate mirror write failure", async () => {
+    const stub = freshStub()
+    const state = harness({ faultOnce: "after_prepared_persisted" })
+    await injectChain(stub, state)
+    const admitted = await stub.admit(plan())
+    await runDurableObjectAlarm(stub)
+    const [prepared] = await storedSteps(stub)
+    expect(prepared).toMatchObject({ state: "prepared", nonce: 7 })
+    expect(await storedCandidates(stub)).toEqual([])
+
+    await runInDurableObject(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec(`CREATE TRIGGER fail_original_candidate_once
+        BEFORE INSERT ON story_settlement_transaction_candidates
+        BEGIN SELECT RAISE(FAIL, 'injected candidate mirror write failure'); END`)
+    })
+    await stub.reconcile(admitted.planRef)
+    await forceAlarm(stub)
+    expect((await stub.lookup(admitted.planRef))!.steps[0]).toMatchObject({ state: "prepared" })
+    expect(state.broadcasts).toEqual([])
+
+    await runInDurableObject(stub, (_instance, durableState) => {
+      durableState.storage.sql.exec("DROP TRIGGER fail_original_candidate_once")
+    })
+    await stub.reconcile(admitted.planRef)
+    await forceAlarm(stub)
+    expect((await stub.lookup(admitted.planRef))!.steps[0]).toMatchObject({ state: "broadcast" })
+    expect(state.signed).toHaveLength(1)
+    expect(state.broadcasts).toEqual([prepared!.signed_transaction])
+    expect(await storedCandidates(stub)).toHaveLength(1)
+  })
+
   it("rebroadcasts exact persisted bytes after a crash following send", async () => {
     const stub = freshStub()
     const state = harness({ faultOnce: "after_broadcast_before_persist" })
