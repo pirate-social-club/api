@@ -575,6 +575,56 @@ describe("rewards routes", () => {
     expect(await json(paused)).toMatchObject({ status: "paused", funded_cents: 100000 })
   })
 
+  test("reserves a song funding slot until quote expiry and lets the holder re-quote", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-slot-owner")
+    const firstBooster = await exchangeJwt(ctx.env, "reward-slot-first")
+    const secondBooster = await exchangeJwt(ctx.env, "reward-slot-second")
+    await seedCampaignSong(ctx, owner.userId)
+    await addWallet(ctx, firstBooster.userId, new Date().toISOString())
+    await addWallet(ctx, secondBooster.userId, new Date().toISOString(), "0x3000000000000000000000000000000000000003")
+
+    const createCampaign = async (accessToken: string, key: string) => {
+      const response = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(accessToken), "content-type": "application/json" },
+        body: JSON.stringify(campaignBody({ idempotency_key: key })),
+      }, ctx.env)
+      expect(response.status).toBe(201)
+      return await json(response) as { id: string }
+    }
+    const firstCampaign = await createCampaign(firstBooster.accessToken, "reward-slot-campaign-first")
+    const secondCampaign = await createCampaign(secondBooster.accessToken, "reward-slot-campaign-second")
+    const quoteCampaign = (accessToken: string, campaignId: string, amountCents: number, key: string) => app.request(
+      `http://pirate.test/reward_campaigns/${campaignId}/funding_quotes`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: amountCents, idempotency_key: key }),
+      },
+      ctx.env,
+    )
+
+    const firstQuote = await quoteCampaign(firstBooster.accessToken, firstCampaign.id, 40_000, "reward-slot-quote-first")
+    expect(firstQuote.status).toBe(201)
+    const holderRequote = await quoteCampaign(firstBooster.accessToken, firstCampaign.id, 10_000, "reward-slot-quote-refresh")
+    expect(holderRequote.status).toBe(201)
+
+    const blocked = await quoteCampaign(secondBooster.accessToken, secondCampaign.id, 100_000, "reward-slot-quote-second")
+    expect(blocked.status).toBe(409)
+    expect(await json(blocked)).toMatchObject({ code: "one_live" })
+
+    await ctx.client.execute({
+      sql: "UPDATE reward_song_slots SET reserved_until = '2020-01-01T00:00:00.000Z' WHERE holder_campaign_id = ?1",
+      args: [firstCampaign.id],
+    })
+    const takeover = await quoteCampaign(secondBooster.accessToken, secondCampaign.id, 100_000, "reward-slot-quote-second")
+    expect(takeover.status).toBe(201)
+    const slot = await ctx.client.execute("SELECT holder_campaign_id FROM reward_song_slots")
+    expect(slot.rows).toEqual([{ holder_campaign_id: secondCampaign.id }])
+  })
+
   test("a transfer broadcast before expiry still funds the campaign when confirmation is resumed after expiry", async () => {
     // The money-stranding case. A wallet broadcasts valid USDC, the confirm request is lost, the
     // quote lapses, and the client resumes with the SAME hash on reload. Refusing on wall-clock
