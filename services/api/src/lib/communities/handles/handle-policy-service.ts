@@ -336,6 +336,17 @@ export async function updateCommunityHandlePolicy(input: {
       "label_claim_rules" in input.body && input.body.label_claim_rules != null
         ? validateLabelClaimRulesInput(input.body.label_claim_rules)
         : null
+    const existingLabelClaimRules = submittedLabelClaimRules
+      ? await listNamespaceLabelClaimRules(db.client, current.namespace_handle_policy_id)
+      : []
+    if (submittedLabelClaimRules) {
+      const existingRuleIds = new Set(existingLabelClaimRules.map((rule) => rule.label_claim_rule_id))
+      for (const rule of submittedLabelClaimRules) {
+        if (rule.label_claim_rule_id && !existingRuleIds.has(rule.label_claim_rule_id)) {
+          throw badRequestError("label_claim_rules id does not belong to this namespace policy")
+        }
+      }
+    }
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")
     try {
@@ -398,11 +409,19 @@ export async function updateCommunityHandlePolicy(input: {
         })
       }
       if (submittedLabelClaimRules) {
+        // Move existing rows out of the unique position range before applying the
+        // replacement. Retained ids are updated back into their requested slots;
+        // rows left in the temporary range are the removed rules.
         await tx.execute({
-          sql: `DELETE FROM namespace_handle_label_claim_rules WHERE namespace_handle_policy_id = ?1`,
+          sql: `
+            UPDATE namespace_handle_label_claim_rules
+            SET position = position + 1000
+            WHERE namespace_handle_policy_id = ?1
+          `,
           args: [current.namespace_handle_policy_id],
         })
         for (const [position, rule] of submittedLabelClaimRules.entries()) {
+          const ruleId = rule.label_claim_rule_id ?? makeId("hlcr").slice("hlcr_".length)
           await tx.execute({
             sql: `
               INSERT INTO namespace_handle_label_claim_rules (
@@ -410,9 +429,16 @@ export async function updateCommunityHandlePolicy(input: {
                 selector_type, selector_labels_json, version, expression_json,
                 created_at, updated_at
               ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?7)
+              ON CONFLICT(label_claim_rule_id) DO UPDATE SET
+                position = excluded.position,
+                selector_type = excluded.selector_type,
+                selector_labels_json = excluded.selector_labels_json,
+                version = excluded.version,
+                expression_json = excluded.expression_json,
+                updated_at = excluded.updated_at
             `,
             args: [
-              makeId("hlcr"),
+              ruleId,
               current.namespace_handle_policy_id,
               position,
               rule.selector_type,
@@ -422,6 +448,13 @@ export async function updateCommunityHandlePolicy(input: {
             ],
           })
         }
+        await tx.execute({
+          sql: `
+            DELETE FROM namespace_handle_label_claim_rules
+            WHERE namespace_handle_policy_id = ?1 AND position >= 1000
+          `,
+          args: [current.namespace_handle_policy_id],
+        })
       }
       await tx.commit()
     } catch (error) {

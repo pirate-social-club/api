@@ -1210,6 +1210,45 @@ describe("community handle routes", () => {
     expect(policy.label_claim_rules[0]?.selector).toEqual({ type: "exact", labels: ["charizard"] })
     expect(policy.label_claim_rules[1]?.selector).toEqual({ type: "any", labels: null })
 
+    const stableIds = policy.label_claim_rules.map((rule) => rule.id)
+    const stableUpdateResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [
+          {
+            id: stableIds[0],
+            selector: { type: "exact", labels: ["charizard", "charmeleon"] },
+            claim_gate_expression: humanExpression,
+          },
+          {
+            id: stableIds[1],
+            selector: { type: "any" },
+            claim_gate_expression: boundInventoryExpression,
+          },
+        ],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(stableUpdateResponse.status).toBe(200)
+    const stablePolicy = await json(stableUpdateResponse) as typeof policy
+    expect(stablePolicy.label_claim_rules.map((rule) => rule.id)).toEqual(stableIds)
+    expect(stablePolicy.label_claim_rules[0]?.selector.labels).toEqual(["charizard", "charmeleon"])
+
+    const unknownRuleResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          id: `hlcr_${"0".repeat(32)}`,
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: humanExpression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(unknownRuleResponse.status).toBe(400)
+
     // First-match order: "charizard" hits the exact unique_human rule, not the any-rule.
     const gatedQuoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
@@ -1235,6 +1274,7 @@ describe("community handle routes", () => {
     expect(gatedQuote.claim_gate?.source).toBe("label_rule")
     expect(gatedQuote.claim_gate?.satisfied).toBe(false)
     expect(gatedQuote.claim_gate?.label_claim_rule?.startsWith("hlcr_")).toBe(true)
+    expect(gatedQuote.claim_gate?.label_claim_rule).toBe(stableIds[0])
     expect(gatedQuote.claim_gate?.expression.expression.gate?.type).toBe("unique_human")
     expect(gatedQuote.claim_gate?.summaries.map((summary) => summary.gate_type)).toEqual(["unique_human"])
 
