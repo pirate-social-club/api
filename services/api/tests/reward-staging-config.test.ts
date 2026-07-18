@@ -46,15 +46,15 @@ describe("staging reward money-loop configuration", () => {
     expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
   })
 
-  test("keeps production reward creation, earning, and payouts dark", () => {
+  test("enables the coordinated production pilot while keeping legacy accrual dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
     expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
-      REWARDS_CAMPAIGNS_ENABLED: "false",
-      REWARDS_REFUNDS_ENABLED: "false",
+      REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_READS_ENABLED: "true",
-      REWARDS_ACCRUAL_ENABLED: "false",
-      REWARDS_PAYOUTS_ENABLED: "false",
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
       REWARDS_IDENTITY_PROVIDER: "very",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
