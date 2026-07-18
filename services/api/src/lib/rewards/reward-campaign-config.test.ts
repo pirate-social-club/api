@@ -7,6 +7,8 @@ import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_CAMPAIGNS_ENABLED: "true",
+    REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_PAYOUTS_ENABLED: "true",
     REWARDS_CAMPAIGN_CHAIN_ID: "84532",
     REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
     REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
@@ -35,6 +37,17 @@ describe("reward campaign config", () => {
       minBudgetCents: 1000,
       maxBudgetCents: 1000000,
     })
+  })
+
+  test("rejects campaigns unless accrual and payouts are enabled together", () => {
+    for (const env of [
+      configuredEnv({ REWARDS_ACCRUAL_ENABLED: "false" }),
+      configuredEnv({ REWARDS_PAYOUTS_ENABLED: "false" }),
+      configuredEnv({ REWARDS_ACCRUAL_ENABLED: undefined }),
+      configuredEnv({ REWARDS_PAYOUTS_ENABLED: undefined }),
+    ]) {
+      expect(() => resolveRewardCampaignConfig(env)).toThrow(HttpError)
+    }
   })
 
   test("parses an optional post creation allowlist", () => {

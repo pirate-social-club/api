@@ -55,6 +55,8 @@ describe("rewards routes", () => {
   function campaignEnv(): Partial<Parameters<typeof createRouteTestContext>[0]> {
     return {
       REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",

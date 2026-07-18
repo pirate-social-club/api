@@ -51,6 +51,8 @@ const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
   REWARDS_IDENTITY_PROVIDER: "self",
   REWARDS_CAMPAIGNS_ENABLED: "true",
+  REWARDS_ACCRUAL_ENABLED: "true",
+  REWARDS_PAYOUTS_ENABLED: "true",
   REWARDS_CAMPAIGN_ALERT_OWNER: "reward-operator",
   REWARDS_CAMPAIGN_ALERT_DESTINATION: "ops@example.test",
   OPS_ALERT_WEBHOOK_URL: "https://ops.example.test/reward-alerts",
