@@ -7,11 +7,13 @@ import { SQL } from "bun"
 export const BOOKING_SETTLEMENT_RESOLVE_SCOPE = "bookings:settlement:resolve"
 export const REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE = "rewards:campaign-incidents:resolve"
 export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
+export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
 
 export const ALLOWED_SCOPES = new Set([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
+  STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
 ])
 
 export function normalizeOperatorDatabaseUrl(value: string): string {
@@ -23,6 +25,7 @@ export function normalizeOperatorDatabaseUrl(value: string): string {
 const BOOKING_CREDENTIAL_ENV_NAME = "PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL"
 const REWARD_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_CAMPAIGN_OPERATOR_CREDENTIAL"
 const STORY_SETTLEMENT_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL"
+const STORY_SETTLEMENT_FEE_REPLACE_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_FEE_REPLACE_OPERATOR_CREDENTIAL"
 
 type Mode = "issue" | "rotate" | "revoke"
 
@@ -82,6 +85,9 @@ export function credentialEnvNameForScopes(scopes: string[], explicitName = ""):
   }
   if (uniqueScopes.length === 1 && uniqueScopes[0] === STORY_SETTLEMENT_REPAIR_SCOPE) {
     return STORY_SETTLEMENT_CREDENTIAL_ENV_NAME
+  }
+  if (uniqueScopes.length === 1 && uniqueScopes[0] === STORY_SETTLEMENT_FEE_REPLACE_SCOPE) {
+    return STORY_SETTLEMENT_FEE_REPLACE_CREDENTIAL_ENV_NAME
   }
   throw new Error("multi-scope credentials require --credential-env-name")
 }
