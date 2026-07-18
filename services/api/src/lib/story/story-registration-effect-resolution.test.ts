@@ -61,6 +61,7 @@ const effect: StoryRegistrationEffect = {
   creatorWalletAddress: "0x3333333333333333333333333333333333333333",
   primaryContentHash: `0x${"44".repeat(32)}`,
   callDataHash: `0x${"55".repeat(32)}`,
+  durableRequestJson: JSON.stringify({ version: 1 }),
   status: "reconciliation_required",
   providerTxRef: TX_HASH,
   errorCode: "story_registration_post_broadcast_error",

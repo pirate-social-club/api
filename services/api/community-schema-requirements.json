@@ -36,7 +36,8 @@
     "1135_namespace_handle_claim_gates.sql",
     "1136_community_handle_label_reservations.sql",
     "1137_community_handle_payment_reservation_cap.sql",
-    "1138_namespace_handle_label_claim_rules.sql"
+    "1138_namespace_handle_label_claim_rules.sql",
+    "1139_story_registration_durable_request.sql"
   ],
   "features": {},
   "deferred": {}
