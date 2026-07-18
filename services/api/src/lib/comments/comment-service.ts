@@ -16,6 +16,11 @@ import {
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import {
+  allowsNonMemberPowParticipation,
+  followCommunityAfterParticipation,
+  type ParticipationFollowRepository,
+} from "../communities/membership/open-participation"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -61,6 +66,7 @@ export {
 type CommentServiceCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
+  & ParticipationFollowRepository
   & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
   & CommunityCommentProjectionRepository
 
@@ -530,6 +536,23 @@ export async function createComment(input: {
         })
       }
 
+      if (
+        membership != null
+        && !canAccessCommunity(membership)
+        && await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: input.communityId,
+          membership,
+        })
+      ) {
+        await followCommunityAfterParticipation({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId: input.communityId,
+          userId: input.userId,
+        })
+      }
+
       return createdComment
     } catch (error) {
       await safeRollback(tx, "[comments] rollback failed while creating comment")
@@ -559,8 +582,24 @@ export async function castCommentVote(input: {
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
+    let nonMemberPowVoter = false
     if (!input.bypassVoterAccessChecks) {
-      await requireMemberAccess(db.client, projection.community_id, input.userId)
+      const membership = await getCommunityMembershipState(db.client, projection.community_id, input.userId)
+      if (!canAccessCommunity(membership)) {
+        // PoW-only communities admit non-member votes: the action gate below
+        // demands a vote-scoped ALTCHA proof, which is all joining would prove.
+        nonMemberPowVoter = await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: projection.community_id,
+          membership,
+        })
+        if (!nonMemberPowVoter) {
+          throw membershipRequired("Join this community to comment", {
+            reason: "membership_required",
+            community_id: projection.community_id,
+          })
+        }
+      }
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,
@@ -590,6 +629,14 @@ export async function castCommentVote(input: {
         now: nowIso(),
       })
       await tx.commit()
+      if (nonMemberPowVoter) {
+        await followCommunityAfterParticipation({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId: projection.community_id,
+          userId: input.userId,
+        })
+      }
       return result
     } catch (error) {
       await safeRollback(tx, "[comments] rollback failed while casting comment vote")
