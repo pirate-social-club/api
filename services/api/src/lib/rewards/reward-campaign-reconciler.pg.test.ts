@@ -454,26 +454,29 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
   }
 
   test("concurrent funding-slot acquisition admits one holder and self-releases by time", async () => {
+    // Commit the campaign fixtures on a dedicated connection before racing pooled
+    // acquisition statements. Otherwise a newly opened pool connection can observe
+    // the slot insert before it observes the campaign seed and trip the slot FK.
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, min_score_bps, daily_reward_cents,
+        milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+      ) VALUES
+        ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
+          'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
+          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1, $2, $1),
+        ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
+          'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
+          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1, $2, $1)
+    `, [NOW, "2026-07-11T12:00:00.000Z"])
+    await seed.end()
+
     await withProductionPostgresClient(async (client) => {
-      await client.execute({
-        sql: `
-          INSERT INTO reward_campaigns (
-            reward_campaign_id, rewarder_user_id, creation_idempotency_key,
-            community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
-            status, eligible_activity, min_score_bps, daily_reward_cents,
-            milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
-            budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
-            refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
-          ) VALUES
-            ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
-              'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-              100, 0, 0, 0, 0, 0, 2, 'slot-a', ?1, ?2, ?1),
-            ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
-              'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-              100, 0, 0, 0, 0, 0, 2, 'slot-b', ?1, ?2, ?1)
-        `,
-        args: [NOW, "2026-07-11T12:00:00.000Z"],
-      })
       const expiresAt = "2026-07-10T12:15:00.000Z"
       const acquire = (campaignId: string, now = NOW) => client.execute({
         sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
