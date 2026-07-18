@@ -1650,6 +1650,11 @@
       "database_id": "ee09b5e8-7a59-4a2a-bc02-cb89e1f3f8a1"
     },
     {
+      "binding": "DB_CMTY_0345",
+      "database_name": "community-d1-pool-0345-staging",
+      "database_id": "2e35e882-4bab-477b-a70e-4d4a97b41f94"
+    },
+    {
       "binding": "DB_CMTY_0245",
       "database_name": "community-d1-pool-0245-staging",
       "database_id": "e04654d9-5dce-4cf4-ac31-9e19dc88a1ac"

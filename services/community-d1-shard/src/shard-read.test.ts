@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import {
   assertCommunityBinding,
+  orderTablesForDrop,
   QUARANTINE_WINDOW_MS,
   POOL_CACHE_TTL_MS,
   POOL_CACHE_SHORT_TTL_MS,
@@ -920,7 +921,7 @@ function resetCommunityFake(tableNames: string[]) {
       const s: any = {
         async all() {
           if (/sqlite_master/.test(sql)) {
-            return { results: tableNames.map((name) => ({ name })), success: true }
+            return { results: tableNames.map((name) => ({ name, sql: `CREATE TABLE ${name} (id TEXT)` })), success: true }
           }
           return { results: [], success: true }
         },
@@ -1095,6 +1096,22 @@ describe("communityD1Reset (step 5)", () => {
 })
 
 describe("communityD1Decommission", () => {
+  test("orders foreign-key children before their parents", () => {
+    expect(orderTablesForDrop([
+      { name: "community_jobs", sql: "CREATE TABLE community_jobs (id TEXT PRIMARY KEY)" },
+      { name: "post_publish_requests", sql: "CREATE TABLE post_publish_requests (job_id TEXT REFERENCES community_jobs(id))" },
+      { name: "post_publish_attempts", sql: "CREATE TABLE post_publish_attempts (request_id TEXT REFERENCES post_publish_requests(id))" },
+    ])).toEqual(["post_publish_attempts", "post_publish_requests", "community_jobs"])
+  })
+
+  test("keeps self references and mutual cycles deterministic", () => {
+    expect(orderTablesForDrop([
+      { name: "tree", sql: "CREATE TABLE tree (parent_id TEXT REFERENCES tree(id))" },
+      { name: "a", sql: "CREATE TABLE a (b_id TEXT REFERENCES b(id))" },
+      { name: "b", sql: "CREATE TABLE b (a_id TEXT REFERENCES a(id))" },
+    ])).toEqual(["tree", "a", "b"])
+  })
+
   function loadedRows(): FakePoolRow[] {
     return [{
       binding_name: "DB_CMTY_1",
@@ -1157,9 +1174,9 @@ describe("communityD1Decommission", () => {
     })
     expect(result).toEqual({ ok: true, value: { tablesDropped: 3, released: true } })
     expect((community as any).dropped).toEqual([
-      'DROP TABLE IF EXISTS "schema_migrations"',
-      'DROP TABLE IF EXISTS "posts"',
       'DROP TABLE IF EXISTS "comments"',
+      'DROP TABLE IF EXISTS "posts"',
+      'DROP TABLE IF EXISTS "schema_migrations"',
     ])
     expect(rows[0]?.community_id).toBeNull()
     expect(rows[0]?.released_at).toBe("t2")
