@@ -15,8 +15,8 @@ const apiBase = String(process.env.PIRATE_API_BASE_URL ?? "https://api-staging.p
 if (new URL(apiBase).hostname !== "api-staging.pirate.sc") {
   throw new Error(`refusing non-staging API origin: ${apiBase}`)
 }
-const adminToken = String(process.env.ADMIN_API_TOKEN ?? "").trim()
-if (!adminToken) throw new Error("ADMIN_API_TOKEN is required")
+const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? process.env.ADMIN_API_TOKEN ?? "").trim()
+if (!adminToken) throw new Error("PIRATE_ADMIN_TOKEN (or legacy ADMIN_API_TOKEN) is required")
 
 const response = await fetch(`${apiBase}/admin/debug/staging-d1/reclaim`, {
   method: "POST",
