@@ -129,7 +129,7 @@ jobs:
             test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
           done
           mobile_titles=(
-            "joins before a PoW-gated vote, then requests an action-bound proof"
+            "votes in a PoW-only community without joining, using an action-bound proof"
             "comments on a public thread without joining first"
             "keeps public-thread commenting available while membership is unknown"
           )
@@ -175,7 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           titles=(
-            "joins before a PoW-gated vote, then requests an action-bound proof"
+            "votes in a PoW-only community without joining, using an action-bound proof"
             "comments on a public thread without joining first"
             "keeps public-thread commenting available while membership is unknown"
           )
