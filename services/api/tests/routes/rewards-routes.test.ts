@@ -300,11 +300,11 @@ describe("rewards routes", () => {
     await addWallet(ctx, session.userId, new Date().toISOString())
     await seedCampaignSong(ctx, session.userId)
 
-    const capabilities = await app.request("http://pirate.test/reward_campaign_capabilities", {
+    const capabilities = await app.request("http://pirate.test/reward_campaign_capabilities?post_id=pst_reward_campaign_song", {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
     expect(capabilities.status).toBe(200)
-    expect(await json(capabilities)).toMatchObject({ enabled: false })
+    expect(await json(capabilities)).toMatchObject({ enabled: false, post_eligible: false })
 
     const create = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
@@ -321,6 +321,38 @@ describe("rewards routes", () => {
     expect(quote.status).toBe(502)
     const rows = await ctx.client.execute("SELECT COUNT(*) AS count FROM reward_campaign_funding_effects")
     expect(Number(rows.rows[0]?.count)).toBe(0)
+  })
+
+  test("reports post-specific campaign eligibility from the configured allowlist", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      REWARDS_CAMPAIGN_POST_ALLOWLIST: "pst_reward_campaign_song",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-post-eligibility")
+
+    const allowed = await app.request(
+      "http://pirate.test/reward_campaign_capabilities?post_id=pst_reward_campaign_song",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(allowed.status).toBe(200)
+    expect(await json(allowed)).toMatchObject({ enabled: true, post_eligible: true })
+
+    const blocked = await app.request(
+      "http://pirate.test/reward_campaign_capabilities?post_id=pst_other_song",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(blocked.status).toBe(200)
+    expect(await json(blocked)).toMatchObject({ enabled: true, post_eligible: false })
+
+    const missing = await app.request(
+      "http://pirate.test/reward_campaign_capabilities",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(missing.status).toBe(400)
   })
 
   test("creates, quotes, uniquely verifies, and activates a fully funded campaign", async () => {

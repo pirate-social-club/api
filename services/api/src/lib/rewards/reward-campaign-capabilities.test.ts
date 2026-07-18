@@ -17,6 +17,7 @@ const enabledEnv = {
   REWARDS_CAMPAIGN_MAX_REWARD_CENTS: "100",
   REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "86400",
   REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "7776000",
+  REWARDS_CAMPAIGN_POST_ALLOWLIST: "pst_allowed",
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: "0x7000000000000000000000000000000000000000000000000000000000000007",
   PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
@@ -27,8 +28,9 @@ const enabledEnv = {
 
 describe("getRewardCampaignCapabilities", () => {
   test("reports the live guardrails when campaigns are enabled", () => {
-    const capabilities = getRewardCampaignCapabilities(enabledEnv)
+    const capabilities = getRewardCampaignCapabilities(enabledEnv, "pst_allowed")
     expect(capabilities.enabled).toBe(true)
+    expect(capabilities.post_eligible).toBe(true)
     expect(capabilities.min_budget_cents).toBe(100)
     expect(capabilities.max_budget_cents).toBe(10_000)
     expect(capabilities.max_reward_cents).toBe(100)
@@ -39,7 +41,7 @@ describe("getRewardCampaignCapabilities", () => {
   test("never exposes the campaign RPC URL or the treasury address", () => {
     // The RPC URL may carry a provider credential, and the scoped funding quote
     // is the only place a treasury address should ever appear.
-    const serialized = JSON.stringify(getRewardCampaignCapabilities(enabledEnv))
+    const serialized = JSON.stringify(getRewardCampaignCapabilities(enabledEnv, "pst_allowed"))
     expect(serialized).not.toContain("sepolia.base.org")
     expect(serialized).not.toContain("0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6")
     expect(serialized).not.toContain("rpc")
@@ -47,7 +49,7 @@ describe("getRewardCampaignCapabilities", () => {
   })
 
   test("the pilot duration is 30 days and sits inside the configured guardrails", () => {
-    const capabilities = getRewardCampaignCapabilities(enabledEnv)
+    const capabilities = getRewardCampaignCapabilities(enabledEnv, "pst_allowed")
     expect(capabilities.default_duration_seconds).toBe(30 * 24 * 60 * 60)
     expect(capabilities.default_duration_seconds).toBeGreaterThanOrEqual(capabilities.min_duration_seconds)
     expect(capabilities.default_duration_seconds).toBeLessThanOrEqual(capabilities.max_duration_seconds)
@@ -58,7 +60,7 @@ describe("getRewardCampaignCapabilities", () => {
     const capabilities = getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "604800",
-    } as unknown as Env)
+    } as unknown as Env, "pst_allowed")
     expect(capabilities.default_duration_seconds).toBe(604_800)
     expect(capabilities.default_duration_seconds).toBeLessThanOrEqual(capabilities.max_duration_seconds)
   })
@@ -67,15 +69,16 @@ describe("getRewardCampaignCapabilities", () => {
     const capabilities = getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "5184000",
-    } as unknown as Env)
+    } as unknown as Env, "pst_allowed")
     expect(capabilities.default_duration_seconds).toBe(5_184_000)
     expect(capabilities.default_duration_seconds).toBeGreaterThanOrEqual(capabilities.min_duration_seconds)
   })
 
   test("reports disabled with zeroed guardrails when campaigns are dark", () => {
     // Production state today: no reward configuration at all.
-    const capabilities = getRewardCampaignCapabilities({} as Env)
+    const capabilities = getRewardCampaignCapabilities({} as Env, "pst_allowed")
     expect(capabilities.enabled).toBe(false)
+    expect(capabilities.post_eligible).toBe(false)
     expect(capabilities.max_budget_cents).toBe(0)
     expect(capabilities.chain_id).toBe(0)
     expect(capabilities.eligible_activities).toEqual([])
@@ -86,7 +89,7 @@ describe("getRewardCampaignCapabilities", () => {
     const capabilities = getRewardCampaignCapabilities({
       REWARDS_CAMPAIGNS_ENABLED: "true",
       REWARDS_CAMPAIGN_RPC_URL: "not-a-url",
-    } as unknown as Env)
+    } as unknown as Env, "pst_allowed")
     expect(capabilities.enabled).toBe(false)
   })
 
@@ -94,6 +97,21 @@ describe("getRewardCampaignCapabilities", () => {
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
-    } as unknown as Env).enabled).toBe(false)
+    } as unknown as Env, "pst_allowed").enabled).toBe(false)
+  })
+
+  test("keeps global readiness enabled while marking a non-allowlisted post ineligible", () => {
+    const capabilities = getRewardCampaignCapabilities(enabledEnv, "pst_other")
+    expect(capabilities.enabled).toBe(true)
+    expect(capabilities.post_eligible).toBe(false)
+  })
+
+  test("marks every post eligible when no allowlist is configured", () => {
+    const capabilities = getRewardCampaignCapabilities({
+      ...enabledEnv,
+      REWARDS_CAMPAIGN_POST_ALLOWLIST: undefined,
+    } as unknown as Env, "pst_other")
+    expect(capabilities.enabled).toBe(true)
+    expect(capabilities.post_eligible).toBe(true)
   })
 })

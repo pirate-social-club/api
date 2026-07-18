@@ -2803,6 +2803,7 @@ export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
 export type RewardCampaignCapabilities = {
   enabled: boolean;
+  post_eligible: boolean;
   min_budget_cents: number;
   max_budget_cents: number;
   max_reward_cents: number;

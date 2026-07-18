@@ -4,6 +4,7 @@ import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settl
 
 export type RewardCampaignCapabilities = {
   enabled: boolean
+  post_eligible: boolean
   min_budget_cents: number
   max_budget_cents: number
   max_reward_cents: number
@@ -26,6 +27,7 @@ const PILOT_DURATION_SECONDS = 30 * 24 * 60 * 60
 
 const DISABLED: RewardCampaignCapabilities = {
   enabled: false,
+  post_eligible: false,
   min_budget_cents: 0,
   max_budget_cents: 0,
   max_reward_cents: 0,
@@ -37,7 +39,7 @@ const DISABLED: RewardCampaignCapabilities = {
   token_address: "",
 }
 
-export function getRewardCampaignCapabilities(env: Env): RewardCampaignCapabilities {
+export function getRewardCampaignCapabilities(env: Env, postId: string): RewardCampaignCapabilities {
   let config: ReturnType<typeof resolveRewardCampaignConfig>
   try {
     config = resolveRewardCampaignConfig(env)
@@ -55,6 +57,7 @@ export function getRewardCampaignCapabilities(env: Env): RewardCampaignCapabilit
 
   return {
     enabled: true,
+    post_eligible: config.postAllowlist == null || config.postAllowlist.has(postId),
     min_budget_cents: config.minBudgetCents,
     max_budget_cents: config.maxBudgetCents,
     max_reward_cents: config.maxRewardCents,
