@@ -24,6 +24,7 @@ export type LabelClaimRuleRow = {
 }
 
 export type ValidatedLabelClaimRule = {
+  label_claim_rule_id: string | null
   selector_type: "exact" | "any"
   selector_labels: string[] | null
   expression: GatePolicy
@@ -107,7 +108,16 @@ export function validateLabelClaimRulesInput(input: unknown): ValidatedLabelClai
   if (input.length > MAX_LABEL_CLAIM_RULES) {
     throw badRequestError(`label_claim_rules supports at most ${MAX_LABEL_CLAIM_RULES} rules`)
   }
-  return input.map((raw) => validateLabelClaimRuleInput(raw))
+  const rules = input.map((raw) => validateLabelClaimRuleInput(raw))
+  const seenIds = new Set<string>()
+  for (const rule of rules) {
+    if (!rule.label_claim_rule_id) continue
+    if (seenIds.has(rule.label_claim_rule_id)) {
+      throw badRequestError("label_claim_rules ids must be unique")
+    }
+    seenIds.add(rule.label_claim_rule_id)
+  }
+  return rules
 }
 
 /** Namespace-level claim gate expressions never run substitution, so the placeholder is banned there outright. */
@@ -144,6 +154,7 @@ function validateLabelClaimRuleInput(raw: unknown): ValidatedLabelClaimRule {
     throw badRequestError("label_claim_rules entries must be objects")
   }
   const rule = raw as Record<string, unknown>
+  const labelClaimRuleId = parseWritableRuleId(rule.id)
   const selector = rule.selector
   if (!selector || typeof selector !== "object" || Array.isArray(selector)) {
     throw badRequestError("label_claim_rules entries require a selector object")
@@ -178,7 +189,20 @@ function validateLabelClaimRuleInput(raw: unknown): ValidatedLabelClaimRule {
   }
   const expression = validateGatePolicy(rule.claim_gate_expression)
   assertPlaceholderPositions(expression)
-  return { selector_type: selectorType, selector_labels: labels, expression }
+  return {
+    label_claim_rule_id: labelClaimRuleId,
+    selector_type: selectorType,
+    selector_labels: labels,
+    expression,
+  }
+}
+
+function parseWritableRuleId(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value !== "string" || !/^hlcr_[a-f0-9]{32}$/u.test(value)) {
+    throw badRequestError("label_claim_rules id must be a valid hlcr id")
+  }
+  return value.slice("hlcr_".length)
 }
 
 function assertSelectorType(value: unknown): "exact" | "any" {

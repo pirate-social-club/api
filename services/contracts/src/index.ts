@@ -3113,6 +3113,7 @@ type CommunityHandleLabelClaimRule = {
 };
 
 type CommunityHandleLabelClaimRuleInput = {
+  id?: string;
   selector: CommunityHandleLabelClaimSelector;
   claim_gate_expression: GatePolicy;
 };
