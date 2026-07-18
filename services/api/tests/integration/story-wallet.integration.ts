@@ -248,6 +248,42 @@ describe("StorySettlementWalletCoordinatorDO (real workerd + SQLite)", () => {
     expect((await storedCandidates(stub)).filter((candidate) => candidate.step_ref === admitted.steps[1]!.stepRef)).toEqual([])
   })
 
+  it("keeps the operator CAS version stable across positive-pending polls", async () => {
+    const stub = freshStub()
+    const state = harness()
+    await injectChain(stub, state)
+    const admitted = await stub.admit(plan())
+    await runDurableObjectAlarm(stub)
+    const original = (await stub.lookup(admitted.planRef))!.steps[0]!
+
+    await runInDurableObject(stub, (instance, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE steps SET next_attempt_at=?2 WHERE step_ref=?1",
+        original.stepRef,
+        Date.now() - 1,
+      )
+      return instance.alarm()
+    })
+
+    const afterPendingPoll = (await stub.lookup(admitted.planRef))!.steps[0]!
+    expect(afterPendingPoll).toMatchObject({
+      state: "broadcast",
+      version: original.version,
+      transactionHash: original.transactionHash,
+    })
+    const replacement = await stub.requestFeeReplacement({
+      ...FEE_REPLACEMENT_OPERATOR,
+      planRef: admitted.planRef,
+      stepRef: original.stepRef,
+      expectedVersion: original.version,
+      expectedActiveCandidateHash: original.transactionHash!,
+      maxFeePerGas: 110n,
+      maxPriorityFeePerGas: 3n,
+      authorizationRef: "operator:fee-replace:stable-pending-cas",
+    })
+    expect(replacement).toMatchObject({ generation: 1, state: "prepared" })
+  })
+
   it("enforces rounded per-field bumps and supports a linear pending supersession chain", async () => {
     const stub = freshStub()
     const state = harness()
