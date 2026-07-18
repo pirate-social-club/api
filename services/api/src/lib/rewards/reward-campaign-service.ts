@@ -713,6 +713,53 @@ function normalizeTxHash(value: string): string {
   return txHash
 }
 
+async function markFundingRefundPending(input: {
+  tx: Transaction
+  campaignId: string
+  fundingId: string
+  receivedAmountAtomic: string
+  senderAddress: string
+  blockNumber?: number
+  blockHash?: string
+  reason: string
+  now: string
+}): Promise<FundingRow> {
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaign_funding_effects
+      SET status = 'refund_pending', received_amount_atomic = ?2,
+          sender_address = ?3, confirmed_at = ?4, confirmed_block_number = ?5,
+          confirmed_block_hash = ?6, failure_reason = ?7, updated_at = ?4
+      WHERE reward_campaign_funding_effect_id = ?1
+    `,
+    args: [
+      input.fundingId, input.receivedAmountAtomic, input.senderAddress, input.now,
+      input.blockNumber ?? null, input.blockHash ?? null, input.reason,
+    ],
+  })
+  // Custody refunds never entered campaign inventory. Keep funded/refunded campaign counters
+  // untouched; campaign.refunded_cents is reserved for future refunds of funded inventory.
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaigns
+      SET status = CASE
+            WHEN EXISTS (
+              SELECT 1 FROM reward_campaign_funding_effects
+              WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+            ) THEN 'funding_quoted'
+            WHEN funded_cents > 0 THEN 'funding_quoted'
+            ELSE 'draft'
+          END,
+          updated_at = ?2
+      WHERE reward_campaign_id = ?1
+    `,
+    args: [input.campaignId, input.now],
+  })
+  const refundPending = await selectFunding(input.tx, input.fundingId)
+  if (!refundPending) throw new Error("refund-pending reward funding effect disappeared")
+  return refundPending
+}
+
 export async function confirmRewardCampaignFunding(input: {
   env: Env
   client: Client
@@ -876,6 +923,19 @@ export async function confirmRewardCampaignFunding(input: {
         "Funding quote transaction changed during confirmation",
       )
     }
+    if (verification.kind === "custody_mismatch") {
+      return fundingResource(await markFundingRefundPending({
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        receivedAmountAtomic: verification.observedAmountAtomic,
+        senderAddress: verification.senderAddress,
+        blockNumber: verification.blockNumber,
+        blockHash: verification.blockHash,
+        reason: verification.reason,
+        now,
+      }))
+    }
     if (verification.kind === "rejected") {
       await tx.execute({
         sql: `UPDATE reward_campaign_funding_effects SET status = 'failed', failure_reason = ?2, failed_at = ?3, updated_at = ?3 WHERE reward_campaign_funding_effect_id = ?1`,
@@ -918,39 +978,17 @@ export async function confirmRewardCampaignFunding(input: {
           }))
         : null
       if (!slot || requiredString(slot, "holder_campaign_id") !== input.campaignId) {
-        await tx.execute({
-          sql: `
-            UPDATE reward_campaign_funding_effects
-            SET status = 'refund_pending', received_amount_atomic = expected_amount_atomic,
-                sender_address = ?2, confirmed_at = ?3, confirmed_block_number = ?4,
-                confirmed_block_hash = ?5,
-                failure_reason = 'funding_confirmed_after_quote_expiry', updated_at = ?3
-            WHERE reward_campaign_funding_effect_id = ?1
-          `,
-          args: [
-            input.fundingId, verification.senderAddress, now,
-            verification.blockNumber ?? null, verification.blockHash ?? null,
-          ],
-        })
-        await tx.execute({
-          sql: `
-            UPDATE reward_campaigns
-            SET status = CASE
-                  WHEN EXISTS (
-                    SELECT 1 FROM reward_campaign_funding_effects
-                    WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
-                  ) THEN 'funding_quoted'
-                  WHEN funded_cents > 0 THEN 'funding_quoted'
-                  ELSE 'draft'
-                END,
-                updated_at = ?2
-            WHERE reward_campaign_id = ?1
-          `,
-          args: [input.campaignId, now],
-        })
-        const refundPending = await selectFunding(tx, input.fundingId)
-        if (!refundPending) throw new Error("refund-pending reward funding effect disappeared")
-        return fundingResource(refundPending)
+        return fundingResource(await markFundingRefundPending({
+          tx,
+          campaignId: input.campaignId,
+          fundingId: input.fundingId,
+          receivedAmountAtomic: requiredString(effect, "expected_amount_atomic"),
+          senderAddress: verification.senderAddress,
+          blockNumber: verification.blockNumber,
+          blockHash: verification.blockHash,
+          reason: "funding_confirmed_after_quote_expiry",
+          now,
+        }))
       }
     }
     const amount = integer(rowValue(effect, "expected_amount_cents"))

@@ -137,7 +137,12 @@ export function setGlobalBookingPaymentVerifierForTests(verifier: PaymentVerifie
 async function verifyPayment(input: Parameters<PaymentVerifier>[0]): Promise<BookingPaymentVerification> {
   if (paymentVerifierForTests) return paymentVerifierForTests(input);
   const mod = await import("../communities/commerce/funding-proof-service");
-  return mod.classifyBookingPaymentReceipt(input);
+  const result = await mod.classifyBookingPaymentReceipt(input);
+  // Bookings retain their existing terminal rejection semantics. Reward campaigns opt into
+  // custody/refund handling because their treasury refund executor owns that worklist.
+  return result.kind === "custody_mismatch"
+    ? { kind: "rejected", reason: "no_matching_transfer" }
+    : result;
 }
 
 async function resolveWalletAttachmentAddress(input: {
