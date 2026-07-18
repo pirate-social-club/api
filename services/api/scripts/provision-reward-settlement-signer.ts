@@ -6,6 +6,7 @@ import {
   REWARD_SETTLEMENT_PRIVATE_KEY_ENV,
   REWARD_SETTLEMENT_PRIVATE_KEY_SECRET,
   assertRewardSettlementAddress,
+  assertRewardSettlementSyncTarget,
   deriveRewardSettlementAddress,
 } from "./_lib/reward-settlement-signer-provisioning"
 
@@ -15,6 +16,7 @@ function usage(exitCode = 1): never {
   console.error(`Usage:
   bun scripts/provision-reward-settlement-signer.ts derive-address
   bun scripts/provision-reward-settlement-signer.ts sync-worker-secret --expected-address 0x... --environment staging
+  bun scripts/provision-reward-settlement-signer.ts sync-worker-secret --expected-address 0x... --environment production --confirm-production
 
 The private key must be injected through ${REWARD_SETTLEMENT_PRIVATE_KEY_ENV}; never pass it as an argument.
 sync-worker-secret validates the derived address, then streams the key to Wrangler over stdin.`)
@@ -48,15 +50,17 @@ async function syncWorkerSecret(input: {
   key: string
   expectedAddress: string
   environment: string
+  confirmProduction: boolean
 }): Promise<void> {
-  if (input.environment !== "staging") throw new Error("reward_settlement_signer_sync_is_staging_only")
-  if (String(process.env.ENVIRONMENT ?? "").trim().toLowerCase() !== "staging") {
-    throw new Error("infisical_environment_must_be_staging")
-  }
+  const environment = assertRewardSettlementSyncTarget({
+    environment: input.environment,
+    infisicalEnvironment: process.env.ENVIRONMENT,
+    confirmProduction: input.confirmProduction,
+  })
   const address = assertRewardSettlementAddress({ privateKey: input.key, expectedAddress: input.expectedAddress })
   const child = spawn("bunx", [
     "wrangler", "secret", "put", REWARD_SETTLEMENT_PRIVATE_KEY_SECRET,
-    "--env", input.environment, "--config", "wrangler.jsonc",
+    "--env", environment, "--config", "wrangler.jsonc",
   ], {
     cwd: import.meta.dir.replace(/\/scripts$/, ""),
     env: wranglerEnvironment(),
@@ -68,7 +72,7 @@ async function syncWorkerSecret(input: {
     child.once("exit", (code) => resolve(code ?? 1))
   })
   if (exitCode !== 0) throw new Error(`wrangler_secret_put_failed_${exitCode}`)
-  console.log(`reward_settlement_worker_secret_synced environment=${input.environment} address=${address}`)
+  console.log(`reward_settlement_worker_secret_synced environment=${environment} address=${address}`)
 }
 
 const argv = process.argv.slice(2)
@@ -82,7 +86,12 @@ if (mode === "derive-address") {
   const expectedAddress = flagValue(argv, "--expected-address")
   const environment = flagValue(argv, "--environment")
   if (!expectedAddress || !environment) usage()
-  await syncWorkerSecret({ key, expectedAddress, environment })
+  await syncWorkerSecret({
+    key,
+    expectedAddress,
+    environment,
+    confirmProduction: argv.includes("--confirm-production"),
+  })
 } else {
   usage()
 }
