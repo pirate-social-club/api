@@ -60,6 +60,20 @@ function centsToAtomic(amountCents: number): bigint {
   if (!Number.isInteger(amountCents) || amountCents <= 0) throw badRequestError("Booking settlement amount must be positive")
   return BigInt(amountCents) * 10_000n
 }
+function transferAmount(input: { amountCents?: number; amountAtomic?: string }): bigint {
+  if (input.amountAtomic != null) {
+    if (input.amountCents != null) throw badRequestError("Operator transfer amount is ambiguous")
+    try {
+      const amount = BigInt(input.amountAtomic)
+      if (amount <= 0n || amount.toString() !== input.amountAtomic) throw new Error("invalid")
+      return amount
+    } catch {
+      throw badRequestError("Operator transfer atomic amount must be a positive canonical integer")
+    }
+  }
+  if (input.amountCents == null) throw badRequestError("Operator transfer amount is missing")
+  return centsToAtomic(input.amountCents)
+}
 
 export const realChain: ChainPrimitives = {
   pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "pending") },
@@ -74,7 +88,7 @@ export const realChain: ChainPrimitives = {
     const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
     const usdc = new Contract(c.usdc, ERC20_ABI, signer)
     const to = checksumRecipient(input.to)
-    const amount = centsToAtomic(input.amountCents)
+    const amount = transferAmount(input)
     // The amount math assumes 6 decimals — verify the token actually is, so a misconfigured token
     // address can never transfer the wrong order of magnitude.
     if (Number(await usdc.decimals()) !== 6) throw badRequestError("Booking settlement token must be USDC with 6 decimals")

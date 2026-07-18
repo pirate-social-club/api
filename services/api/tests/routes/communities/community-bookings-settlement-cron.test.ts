@@ -29,7 +29,7 @@ function installCoordinator() {
   const settleReqs: Array<{ effectKind: string; amountCents: number; recipientAddress: string }> = []
   const state = { settle: "confirmed" as OperatorSettleState, confirm: "confirmed" as OperatorSettleState }
   setBookingSettlementCoordinatorForTests({
-    settle: async (req: OperatorSettleRequest) => { settleReqs.push({ effectKind: req.effectKind, amountCents: req.amountCents, recipientAddress: req.recipientAddress }); return settleResult(state.settle, `0x${req.effectKind}`) },
+    settle: async (req: OperatorSettleRequest) => { settleReqs.push({ effectKind: req.effectKind, amountCents: Number(req.amountCents), recipientAddress: req.recipientAddress }); return settleResult(state.settle, `0x${req.effectKind}`) },
     confirm: async (_req, h) => settleResult(state.confirm, h),
     reconcile: async () => settleResult(state.settle, "0xrec"),
   })

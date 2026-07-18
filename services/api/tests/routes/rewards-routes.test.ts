@@ -7,6 +7,10 @@ import {
 } from "../../src/lib/rewards/reward-cashout-service"
 import { setPrivyAccessProofVerifierForTests } from "../../src/lib/auth/privy-auth"
 import { setBookingPaymentVerifierForTests } from "../../src/lib/communities/commerce/funding-proof-service"
+import {
+  reconcileRewardFundingRefunds,
+  setRewardFundingRefundCoordinatorForTests,
+} from "../../src/lib/rewards/reward-funding-refund-reconciler"
 import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
 import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
@@ -22,6 +26,7 @@ beforeEach(() => {
   setRewardSettlementConfirmPollPlanForTests(null)
   setPrivyAccessProofVerifierForTests(null)
   setBookingPaymentVerifierForTests(null)
+  setRewardFundingRefundCoordinatorForTests(null)
   offerRateLimitAllows = true
   offerRateLimitCalls = 0
 })
@@ -31,6 +36,7 @@ afterEach(async () => {
   setRewardSettlementConfirmPollPlanForTests(null)
   setPrivyAccessProofVerifierForTests(null)
   setBookingPaymentVerifierForTests(null)
+  setRewardFundingRefundCoordinatorForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -777,7 +783,13 @@ describe("rewards routes", () => {
   })
 
   test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
-    const ctx = await createRouteTestContext(campaignEnv())
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      REWARDS_PAYOUTS_ENABLED: "true",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x2000000000000000000000000000000000000002",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://base-sepolia.example.test",
+    })
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-funding-adversarial")
     await addWallet(ctx, session.userId, new Date().toISOString())
@@ -863,6 +875,58 @@ describe("rewards routes", () => {
       args: [wrongAmount.id],
     })
     expect(custodyEffect.rows).toEqual([{ status: "refund_pending", received_amount_atomic: "90000000" }])
+
+    const awaitingFinality = await reconcileRewardFundingRefunds({
+      env: ctx.env,
+      client: ctx.client,
+      verify: async () => ({ kind: "pending", reason: "safe_block_pending" }),
+    })
+    expect(awaitingFinality).toMatchObject({
+      scanned: 2,
+      enqueued: 0,
+      confirmed: 0,
+      pending_finality: 2,
+      errors: 0,
+    })
+
+    let refundSequence = 0
+    setRewardFundingRefundCoordinatorForTests({
+      settle: async (request) => {
+        refundSequence += 1
+        expect(request).toMatchObject({
+          operatorKind: "rewards",
+          effectKind: "reward_funding_refund",
+          fundingEffectId: request.idempotencyKey,
+        })
+        return {
+          idempotencyKey: JSON.stringify(["reward_funding_refund", request.idempotencyKey]),
+          txHash: `0x${refundSequence.toString(16).padStart(64, "0")}`,
+          nonce: refundSequence,
+          state: "confirmed",
+        }
+      },
+    })
+    const refunded = await reconcileRewardFundingRefunds({
+      env: ctx.env,
+      client: ctx.client,
+      verify: async (expected, txHash) => ({
+        kind: "verified",
+        senderAddress: expected.senderAddress,
+        txRef: txHash,
+      }),
+    })
+    expect(refunded).toMatchObject({ scanned: 2, enqueued: 2, confirmed: 2, errors: 0 })
+    const refundEffects = await ctx.client.execute({
+      sql: `
+        SELECT status, received_amount_atomic, refund_tx_hash, refund_confirmed_at
+        FROM reward_campaign_funding_effects
+        WHERE reward_campaign_funding_effect_id IN (?1, ?2)
+        ORDER BY reward_campaign_funding_effect_id
+      `,
+      args: [expired.id, wrongAmount.id],
+    })
+    expect(refundEffects.rows).toHaveLength(2)
+    expect(refundEffects.rows.every((row) => row.status === "refunded" && row.refund_tx_hash && row.refund_confirmed_at)).toBe(true)
 
     for (const [reason, hex] of [["wrong_transfer_recipient", "e"]] as const) {
       const rejected = await quote(10000, `rejected-${reason}`)
