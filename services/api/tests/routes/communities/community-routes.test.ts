@@ -1115,13 +1115,13 @@ describe("community routes", () => {
         sql: `
           SELECT job_type, subject_id
           FROM community_jobs
-          WHERE subject_id = ?1
+          WHERE subject_id LIKE ?1
         `,
-        args: [`${communityCreateBody.community.id.replace(/^com_/, "")}:es`],
+        args: [`${communityCreateBody.community.id.replace(/^com_/, "")}:es:%`],
       })
       expect(jobs.rows).toHaveLength(1)
       expect(String(jobs.rows[0]?.job_type)).toBe("community_text_translation_materialize")
-      expect(String(jobs.rows[0]?.subject_id)).toBe(`${communityCreateBody.community.id.replace(/^com_/, "")}:es`)
+      expect(String(jobs.rows[0]?.subject_id).startsWith(`${communityCreateBody.community.id.replace(/^com_/, "")}:es:0x`)).toBe(true)
     } finally {
       localClient.close()
     }

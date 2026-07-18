@@ -1,6 +1,7 @@
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../localization/content-locale"
 import { logPipelineError, sanitizeLogText, summarizeUrl } from "../../observability/pipeline-log"
 import { getLinkEnrichmentByNormalizedUrl } from "../../posts/link-enrichment/repository"
+import { computeLinkSummaryTranslationSourceHash } from "../../posts/link-enrichment/translation-source-hash"
 import { upsertLinkEnrichmentUsage } from "../../posts/link-enrichment/repository-usages"
 import {
   listLinkSummaryFanoutUsages,
@@ -103,6 +104,10 @@ export async function enqueueSummaryTranslations(input: {
   )
   try {
     const record = await getLinkEnrichmentByNormalizedUrl(input.controlPlaneClient, input.normalizedUrl)
+    if (!record) {
+      return
+    }
+    const sourceHash = await computeLinkSummaryTranslationSourceHash(record)
     for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
       if (sameLanguageLocale("en", locale) && sameLanguageLocale(record?.source_language ?? "en", "en")) {
         continue
@@ -112,13 +117,15 @@ export async function enqueueSummaryTranslations(input: {
         communityId: input.handlerInput.job.community_id,
         jobType: "link_summary_translation_materialize",
         subjectType: "link_enrichment_translation",
-        subjectId: `${input.normalizedUrl}:${locale}`,
+        subjectId: `${input.normalizedUrl}:${locale}:${sourceHash}`,
         payloadJson: JSON.stringify({
           normalized_url: input.normalizedUrl,
           locale,
           post_id: input.payloadPostId,
+          source_hash: sourceHash,
         }),
         createdAt: input.now,
+        reuseTerminalFailure: true,
       })
     }
   } finally {

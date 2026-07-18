@@ -1978,7 +1978,7 @@ export type CommentListItem = {
   viewer_vote: -1 | 1 | null;
   viewer_can_delete?: boolean;
   resolved_locale: string;
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked";
   machine_translated: boolean;
   translated_body?: string | null;
   source_hash: string;
@@ -2447,7 +2447,7 @@ export type LocalizedPostResponse = {
   age_gate_viewer_state?: "proof_required" | "verified_allowed" | null;
   viewer_reaction_kinds: Array<"like">;
   resolved_locale: string;
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked";
   machine_translated: boolean;
   translated_body?: string | null;
   translated_title?: string | null;
@@ -3345,7 +3345,7 @@ type CommunityTextLocalization = {
 
 type CommunityTextLocalizationItem = {
   field_key: string;
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked";
   machine_translated: boolean;
   translated_value?: string | null;
   source_hash: string;

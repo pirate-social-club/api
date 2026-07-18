@@ -14,7 +14,7 @@ export async function computeTextSourceHash(value: string | null | undefined): P
   return `0x${await sha256Hex(JSON.stringify(payload))}`
 }
 
-export async function computePostSourceHash(post: Post): Promise<string> {
+export async function computePostSourceHash(post: Pick<Post, "title" | "body" | "caption">): Promise<string> {
   const payload = {
     title: canonicalizeString(post.title),
     body: canonicalizeString(post.body),
@@ -24,6 +24,6 @@ export async function computePostSourceHash(post: Post): Promise<string> {
   return `0x${await sha256Hex(JSON.stringify(payload))}`
 }
 
-export async function computeCommentSourceHash(comment: Comment): Promise<string> {
+export async function computeCommentSourceHash(comment: Pick<Comment, "body">): Promise<string> {
   return computeTextSourceHash(comment.body)
 }

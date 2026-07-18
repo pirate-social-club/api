@@ -133,7 +133,7 @@ export async function requestContentTranslation(input: {
   }
 
   const model = firstTrimmedEnv(input.env.OPENROUTER_TRANSLATION_MODEL)
-    || "google/gemini-2.5-flash-lite-preview-09-2025"
+    || "google/gemini-2.5-flash-lite"
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
   const initialMaxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)

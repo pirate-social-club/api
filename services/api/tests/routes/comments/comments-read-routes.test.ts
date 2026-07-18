@@ -186,7 +186,7 @@ describe("comment read routes", () => {
       communityId: community.communityId,
       jobType: "comment_translation_materialize",
     })
-    expect(translationJobs.some((job) => job.subject_id === `${replyBody.id.replace(/^cmt_/, "")}:nl`)).toBe(true)
+    expect(translationJobs.some((job) => job.subject_id.startsWith(`${replyBody.id.replace(/^cmt_/, "")}:nl:0x`))).toBe(true)
   })
 
   test("public comment read endpoints return localized projections without auth", async () => {
