@@ -1,4 +1,5 @@
 import {
+  FetchRequest,
   JsonRpcProvider,
   Transaction,
   Wallet,
@@ -58,10 +59,17 @@ export function setStorySettlementProviderFactoryForTests(
 }
 
 function provider(env: Env): StorySettlementProvider {
-  const rpcUrl = resolveStoryRpcUrl(env)
+  const overrideUrl = String(env.STORY_COORDINATOR_RPC_URL || "").trim()
+  const authToken = String(env.STORY_COORDINATOR_RPC_AUTH_TOKEN || "").trim()
+  if (Boolean(overrideUrl) !== Boolean(authToken)) {
+    throw badRequestError("story_coordinator_rpc_override_incomplete")
+  }
+  const rpcUrl = overrideUrl || resolveStoryRpcUrl(env)
   const chainId = resolveStoryChainId(env)
+  const request = new FetchRequest(rpcUrl)
+  if (authToken) request.setHeader("authorization", `Bearer ${authToken}`)
   return testProviderFactory?.(rpcUrl, chainId)
-    ?? new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true })
+    ?? new JsonRpcProvider(request, chainId, { staticNetwork: true })
 }
 
 function exactPolicyVersion(actual: string, configured: string | undefined, name: string): void {

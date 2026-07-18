@@ -56,6 +56,32 @@ function fakeProvider(overrides: Partial<StorySettlementProvider> = {}): StorySe
 afterEach(() => setStorySettlementProviderFactoryForTests(null))
 
 describe("Story settlement production chain primitives", () => {
+  test("uses the coordinator-only RPC override without changing the Story runtime RPC", async () => {
+    const urls: string[] = []
+    setStorySettlementProviderFactoryForTests((rpcUrl) => {
+      urls.push(rpcUrl)
+      return fakeProvider()
+    })
+    await storySettlementRealChain.pendingNonce(env({
+      STORY_RPC_URL: "https://registration.example",
+      STORY_COORDINATOR_RPC_URL: "https://coordinator.example",
+      STORY_COORDINATOR_RPC_AUTH_TOKEN: "test-only-token",
+    }), {
+      chainId: 1315,
+      signerAddress: ADDRESS,
+    })
+    expect(urls).toEqual(["https://coordinator.example"])
+  })
+
+  test("fails closed on a partial coordinator RPC override", async () => {
+    await expect(storySettlementRealChain.pendingNonce(env({
+      STORY_COORDINATOR_RPC_URL: "https://coordinator.example",
+    }), {
+      chainId: 1315,
+      signerAddress: ADDRESS,
+    })).rejects.toThrow("story_coordinator_rpc_override_incomplete")
+  })
+
   test("signs the exact coordinator domain with the exclusive key", async () => {
     setStorySettlementProviderFactoryForTests(() => fakeProvider())
     const signed = await storySettlementRealChain.signTransaction(env(), {
