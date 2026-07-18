@@ -1002,7 +1002,7 @@ const handler: ExportedHandler<Env> = {
       }),
     )
     ctx.waitUntil(
-      checkScheduledD1PoolCapacity(env).catch((error) => {
+      withRequestControlPlaneClients(() => checkScheduledD1PoolCapacity(env)).catch((error) => {
         console.error("[scheduled] community D1 pool capacity watchdog crashed (fail-soft)", error)
       }),
     )

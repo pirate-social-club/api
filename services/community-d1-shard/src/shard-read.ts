@@ -648,6 +648,46 @@ function quoteSqlIdentifier(name: string): string {
   return `"${name.replaceAll('"', '""')}"`
 }
 
+type SqliteTableDefinition = { name: string; sql: string }
+
+/** Order child tables before the parents named by their FOREIGN KEY clauses. */
+export function orderTablesForDrop(definitions: SqliteTableDefinition[]): string[] {
+  const names = new Set(definitions.map((definition) => definition.name))
+  const references = new Map<string, Set<string>>()
+  const referencePattern = /\bREFERENCES\s+(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))/giu
+  for (const definition of definitions) {
+    const parents = new Set<string>()
+    for (const match of definition.sql.matchAll(referencePattern)) {
+      const parent = match[1] ?? match[2] ?? match[3] ?? match[4]
+      if (parent && parent !== definition.name && names.has(parent)) parents.add(parent)
+    }
+    references.set(definition.name, parents)
+  }
+
+  const remaining = new Set(names)
+  const ordered: string[] = []
+  while (remaining.size > 0) {
+    const referencedParents = new Set<string>()
+    for (const child of remaining) {
+      for (const parent of references.get(child) ?? []) {
+        if (remaining.has(parent)) referencedParents.add(parent)
+      }
+    }
+    const leaves = [...remaining].filter((name) => !referencedParents.has(name)).sort()
+    if (leaves.length === 0) {
+      // Mutual cycles have no child-first order. The surrounding batch enables
+      // deferred FK checks, so deterministic ordering is the safest fallback.
+      ordered.push(...[...remaining].sort())
+      break
+    }
+    for (const leaf of leaves) {
+      ordered.push(leaf)
+      remaining.delete(leaf)
+    }
+  }
+  return ordered
+}
+
 /** Admin: read a single pool row (reconciler introspection — keys off last_loaded_at). */
 export async function runShardGetPoolRow(
   env: ShardEnv,
@@ -818,10 +858,14 @@ export async function runShardDecommission(
 
   const db = resolveD1(env, input.bindingName)
   if ("ok" in db) return db
-  const tables = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
-  const tableNames = (tables.results ?? [])
-    .map((row) => String((row as { name: unknown }).name))
-    .filter((name) => !name.startsWith("sqlite_") && !name.startsWith("_cf_"))
+  const tables = await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'").all()
+  const definitions = (tables.results ?? [])
+    .map((row) => ({
+      name: String((row as { name: unknown }).name),
+      sql: String((row as { sql?: unknown }).sql ?? ""),
+    }))
+    .filter(({ name }) => !name.startsWith("sqlite_") && !name.startsWith("_cf_"))
+  const tableNames = orderTablesForDrop(definitions)
   if (tableNames.length > 0) {
     await db.batch([
       db.prepare("PRAGMA defer_foreign_keys = ON"),
