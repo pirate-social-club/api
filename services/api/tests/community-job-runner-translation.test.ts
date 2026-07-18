@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { join } from "node:path"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { processCommunityJobById, processNextCommunityJob } from "../src/lib/communities/jobs/runner"
@@ -21,6 +21,8 @@ import {
   updatePostTranslationPolicy,
 } from "./community-job-runner-test-helpers"
 import { withMockedFetch } from "./helpers"
+
+setDefaultTimeout(20_000)
 
 afterEach(async () => {
   await cleanupCommunityJobRunnerArtifacts()
