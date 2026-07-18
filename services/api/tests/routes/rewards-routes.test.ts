@@ -57,11 +57,17 @@ describe("rewards routes", () => {
       REWARDS_CAMPAIGNS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
-      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
       REWARDS_CAMPAIGN_RPC_URL: "https://base-sepolia.example.test",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: "0x7000000000000000000000000000000000000000000000000000000000000007",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://base-sepolia.example.test",
+      PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "true",
       REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
       REWARDS_CAMPAIGN_MIN_BUDGET_CENTS: "1000",
       REWARDS_CAMPAIGN_MAX_BUDGET_CENTS: "1000000",
@@ -284,6 +290,39 @@ describe("rewards routes", () => {
     expect(Number(rows.rows[0]?.count)).toBe(0)
   })
 
+  test("does not advertise or quote campaign funding without a usable settlement signer", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-unready-signer")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const capabilities = await app.request("http://pirate.test/reward_campaign_capabilities", {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(capabilities.status).toBe(200)
+    expect(await json(capabilities)).toMatchObject({ enabled: false })
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "unready-signer-campaign" })),
+    }, ctx.env)
+    expect(create.status).toBe(201)
+    const campaign = await json(create) as { id: string }
+    const quote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "unready-signer-quote" }),
+    }, ctx.env)
+    expect(quote.status).toBe(502)
+    const rows = await ctx.client.execute("SELECT COUNT(*) AS count FROM reward_campaign_funding_effects")
+    expect(Number(rows.rows[0]?.count)).toBe(0)
+  })
+
   test("creates, quotes, uniquely verifies, and activates a fully funded campaign", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
@@ -371,7 +410,7 @@ describe("rewards routes", () => {
     expect(quote).toMatchObject({
       amount_atomic: "1000000000",
       sender_address: "0x1000000000000000000000000000000000000001",
-      treasury_address: "0x2000000000000000000000000000000000000002",
+      treasury_address: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
       status: "quoted",
     })
 
@@ -787,10 +826,6 @@ describe("rewards routes", () => {
   test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
     const ctx = await createRouteTestContext({
       ...campaignEnv(),
-      REWARDS_PAYOUTS_ENABLED: "true",
-      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x2000000000000000000000000000000000000002",
-      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
-      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://base-sepolia.example.test",
     })
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-funding-adversarial")
@@ -879,7 +914,12 @@ describe("rewards routes", () => {
     expect(custodyEffect.rows).toEqual([{ status: "refund_pending", received_amount_atomic: "90000000" }])
 
     const awaitingFinality = await reconcileRewardFundingRefunds({
-      env: ctx.env,
+      env: {
+        ...ctx.env,
+        REWARDS_CAMPAIGNS_ENABLED: "false",
+        REWARDS_PAYOUTS_ENABLED: "false",
+        REWARDS_REFUNDS_ENABLED: "true",
+      },
       client: ctx.client,
       verify: async () => ({ kind: "pending", reason: "safe_block_pending" }),
     })

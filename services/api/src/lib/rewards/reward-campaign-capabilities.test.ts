@@ -9,7 +9,7 @@ const enabledEnv = {
   REWARDS_PAYOUTS_ENABLED: "true",
   REWARDS_CAMPAIGN_CHAIN_ID: "84532",
   REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x053228674F055FBb94d1B8118638F61a4a6ee512",
+  REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
   REWARDS_CAMPAIGN_RPC_URL: "https://sepolia.base.org",
   REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
   REWARDS_CAMPAIGN_MIN_BUDGET_CENTS: "100",
@@ -17,6 +17,12 @@ const enabledEnv = {
   REWARDS_CAMPAIGN_MAX_REWARD_CENTS: "100",
   REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "86400",
   REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "7776000",
+  PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
+  PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: "0x7000000000000000000000000000000000000000000000000000000000000007",
+  PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
+  PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+  PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
 } as unknown as Env
 
 describe("getRewardCampaignCapabilities", () => {
@@ -35,7 +41,7 @@ describe("getRewardCampaignCapabilities", () => {
     // is the only place a treasury address should ever appear.
     const serialized = JSON.stringify(getRewardCampaignCapabilities(enabledEnv))
     expect(serialized).not.toContain("sepolia.base.org")
-    expect(serialized).not.toContain("0x053228674F055FBb94d1B8118638F61a4a6ee512")
+    expect(serialized).not.toContain("0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6")
     expect(serialized).not.toContain("rpc")
     expect(serialized).not.toContain("treasury")
   })
@@ -82,5 +88,12 @@ describe("getRewardCampaignCapabilities", () => {
       REWARDS_CAMPAIGN_RPC_URL: "not-a-url",
     } as unknown as Env)
     expect(capabilities.enabled).toBe(false)
+  })
+
+  test("reports disabled when campaign custody is not settlement-ready", () => {
+    expect(getRewardCampaignCapabilities({
+      ...enabledEnv,
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
+    } as unknown as Env).enabled).toBe(false)
   })
 })

@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
+import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 
 export type RewardCampaignCapabilities = {
   enabled: boolean
@@ -46,6 +47,11 @@ export function getRewardCampaignCapabilities(env: Env): RewardCampaignCapabilit
     return DISABLED
   }
   if (!config.enabled) return DISABLED
+  try {
+    assertRewardCampaignSettlementReadiness(env)
+  } catch {
+    return DISABLED
+  }
 
   return {
     enabled: true,

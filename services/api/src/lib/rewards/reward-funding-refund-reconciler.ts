@@ -10,11 +10,13 @@ import {
   type OperatorSigningCoordinatorDO,
 } from "../communities/bookings/operator-signing-coordinator-do"
 import {
-  assertRewardsCampaignTreasuryMatchesSettlementOperator,
   resolveRewardsSettlementChainId,
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
-import { resolveRewardCampaignConfig } from "./reward-campaign-config"
+import {
+  assertRewardCampaignSettlementReadiness,
+  rewardFundingRefundsEnabled,
+} from "./reward-campaign-settlement-readiness"
 
 type RefundCoordinator = {
   settle(req: OperatorSettleRequest): Promise<OperatorSettleResult>
@@ -23,10 +25,6 @@ type RefundCoordinator = {
 let coordinatorForTests: RefundCoordinator | null = null
 export function setRewardFundingRefundCoordinatorForTests(value: RefundCoordinator | null): void {
   coordinatorForTests = value
-}
-
-function literalTrue(value: string | undefined): boolean {
-  return String(value ?? "").trim().toLowerCase() === "true"
 }
 
 function coordinator(env: Env): RefundCoordinator {
@@ -116,14 +114,13 @@ export async function reconcileRewardFundingRefunds(input: {
     senderAddress: string
   }, txHash: string, rpcUrl: string) => Promise<BookingPaymentVerification>
 }): Promise<RewardFundingRefundSummary> {
-  const campaigns = resolveRewardCampaignConfig(input.env)
-  const enabled = campaigns.enabled && literalTrue(input.env.REWARDS_PAYOUTS_ENABLED)
+  const enabled = rewardFundingRefundsEnabled(input.env)
   const summary: RewardFundingRefundSummary = {
     enabled, scanned: 0, enqueued: 0, confirmed: 0,
     pending_finality: 0, rejected_finality: 0, errors: 0,
   }
   if (!enabled) return summary
-  assertRewardsCampaignTreasuryMatchesSettlementOperator(input.env)
+  const campaigns = assertRewardCampaignSettlementReadiness(input.env)
   const now = input.now ?? new Date().toISOString()
   const rows = (await input.client.execute({
     sql: `

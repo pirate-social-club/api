@@ -21,6 +21,7 @@ describe("staging reward money-loop configuration", () => {
     expect(vars).toMatchObject({
       REWARDS_READS_ENABLED: "true",
       REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_IDENTITY_PROVIDER: "very",
@@ -50,6 +51,7 @@ describe("staging reward money-loop configuration", () => {
     expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
       REWARDS_CAMPAIGNS_ENABLED: "false",
+      REWARDS_REFUNDS_ENABLED: "false",
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "false",
       REWARDS_PAYOUTS_ENABLED: "false",

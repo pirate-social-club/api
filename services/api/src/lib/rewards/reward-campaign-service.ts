@@ -18,6 +18,7 @@ import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
+import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
 import {
   KARAOKE_MIN_MEASURED_LINES,
@@ -618,6 +619,7 @@ export async function createRewardCampaignFundingQuote(input: {
 }): Promise<RewardCampaignFundingQuote> {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
+  assertRewardCampaignSettlementReadiness(input.env)
   const amountCents = cents(input.amountCents, "amount_cents", false)
   const idempotencyKey = nonEmpty(input.idempotencyKey, "idempotency_key")
   const now = input.now ?? nowIso()

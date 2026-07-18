@@ -18,6 +18,11 @@ export type RewardCampaignConfig = {
   postAllowlist: ReadonlySet<string> | null
 }
 
+export type RewardCampaignAssetConfig = Pick<
+  RewardCampaignConfig,
+  "chainId" | "tokenAddress" | "treasuryAddress" | "rpcUrl"
+>
+
 const CAMPAIGN_ENV_KEYS = [
   "REWARDS_CAMPAIGN_CHAIN_ID",
   "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS",
@@ -53,6 +58,23 @@ function address(env: Env, key: Extract<CampaignEnvKey, "REWARDS_CAMPAIGN_USDC_T
   }
 }
 
+export function resolveRewardCampaignAssetConfig(env: Env): RewardCampaignAssetConfig {
+  const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
+  if (!/^https:\/\//i.test(rpcUrl)) {
+    throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
+  }
+  const config = {
+    chainId: positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID"),
+    tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
+    treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
+    rpcUrl,
+  }
+  if (![8453, 84532].includes(config.chainId)) {
+    throw providerUnavailable("Reward campaign chain is not supported", { chain_id: config.chainId }, false)
+  }
+  return config
+}
+
 export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
   if (!enabled(env.REWARDS_CAMPAIGNS_ENABLED)) {
     return {
@@ -82,17 +104,11 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
     )
   }
 
-  const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
-  if (!/^https:\/\//i.test(rpcUrl)) {
-    throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
-  }
+  const asset = resolveRewardCampaignAssetConfig(env)
 
   const config: RewardCampaignConfig = {
     enabled: true,
-    chainId: positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID"),
-    tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
-    treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
-    rpcUrl,
+    ...asset,
     quoteTtlSeconds: positiveInteger(env, "REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS"),
     minBudgetCents: positiveInteger(env, "REWARDS_CAMPAIGN_MIN_BUDGET_CENTS"),
     maxBudgetCents: positiveInteger(env, "REWARDS_CAMPAIGN_MAX_BUDGET_CENTS"),
@@ -108,8 +124,7 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
     })(),
   }
   if (
-    ![8453, 84532].includes(config.chainId)
-    || config.minBudgetCents > config.maxBudgetCents
+    config.minBudgetCents > config.maxBudgetCents
     || config.minDurationSeconds > config.maxDurationSeconds
     || config.quoteTtlSeconds > 86_400
   ) {
