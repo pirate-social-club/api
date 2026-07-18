@@ -398,6 +398,31 @@ describe("story royalty registration service", () => {
           createdAt: "2026-07-18T00:00:00.000Z",
         },
       })
+      await upsertStoryRegisteredAssetProjection({
+        env,
+        projection: {
+          communityId: "cmt_story_source",
+          assetId: "ast_inconsistent_legacy_parent",
+          displayTitle: "Inconsistent legacy parent",
+          creatorUserId: "usr_source_artist",
+          assetKind: "song_audio",
+          licensePreset: "non-commercial",
+          commercialRevSharePct: 10,
+          storyIpId: "0x3434343434343434343434343434343434343434",
+          storyLicenseTermsId: "1894",
+          sourcePostId: "pst_inconsistent_legacy_parent",
+          sourcePostStatus: "published",
+          sourceUpdatedAt: "2026-07-18T00:00:00.000Z",
+          createdAt: "2026-07-18T00:00:00.000Z",
+        },
+      })
+
+      await expect(listStoryRegisteredAssetProjectionRows({
+        env,
+        kind: "song",
+        query: "Inconsistent legacy parent",
+        limit: 25,
+      })).resolves.toEqual([])
 
       const db = await openCommunityDb(env, buildRepository(), destinationCommunityId)
       try {
@@ -414,6 +439,13 @@ describe("story royalty registration service", () => {
           communityId: destinationCommunityId,
           upstreamAssetRefs: [`story:ip:${parentIpId}#licenseTermsId=1894`],
         })).resolves.toEqual([{ ipId: parentIpId, licenseTermsId: 1894n }])
+
+        await expect(resolveStoryRoyaltyDerivativeParents({
+          env,
+          client: db.client,
+          communityId: destinationCommunityId,
+          upstreamAssetRefs: ["story:ip:0x3434343434343434343434343434343434343434#licenseTermsId=1894"],
+        })).rejects.toMatchObject({ status: 400 })
       } finally {
         db.close()
       }

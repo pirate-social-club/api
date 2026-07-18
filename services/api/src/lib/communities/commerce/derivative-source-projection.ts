@@ -42,6 +42,16 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
 
+const ELIGIBLE_STORY_PARENT_FILTERS = [
+  "source_post_status = 'published'",
+  "license_preset = 'commercial-remix'",
+  "commercial_rev_share_pct > 0",
+  "story_ip_id IS NOT NULL",
+  "story_ip_id != ''",
+  "story_license_terms_id IS NOT NULL",
+  "story_license_terms_id != ''",
+] as const
+
 function derivativeSourceLikePattern(value: string): string {
   return `%${escapeLikePattern(value.slice(0, 48).toLowerCase())}%`
 }
@@ -132,14 +142,7 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   limit: number
 }): Promise<DerivativeSourceRow[]> {
   const client = getControlPlaneClient(input.env)
-  const filters = [
-    "source_post_status = 'published'",
-    "story_ip_id IS NOT NULL",
-    "story_ip_id != ''",
-    "story_license_terms_id IS NOT NULL",
-    "story_license_terms_id != ''",
-    "commercial_rev_share_pct > 0",
-  ]
+  const filters: string[] = [...ELIGIBLE_STORY_PARENT_FILTERS]
   const args: Array<string | number> = []
   let nextArg = 1
   const assetKind = assetKindForDerivativeSourceKind(input.kind)
@@ -193,16 +196,6 @@ function eligibleStoryParentFromRow(row: Record<string, unknown>): EligibleStory
   }
 }
 
-const ELIGIBLE_STORY_PARENT_FILTERS = `
-  source_post_status = 'published'
-  AND license_preset = 'commercial-remix'
-  AND commercial_rev_share_pct > 0
-  AND story_ip_id IS NOT NULL
-  AND story_ip_id != ''
-  AND story_license_terms_id IS NOT NULL
-  AND story_license_terms_id != ''
-`
-
 export async function findEligibleStoryParentProjectionByRef(input: {
   env: Env
   storyIpId: string
@@ -213,7 +206,7 @@ export async function findEligibleStoryParentProjectionByRef(input: {
     sql: `
       SELECT community_id, asset_id, story_ip_id, story_license_terms_id
       FROM story_registered_asset_projections
-      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS}
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS.join("\n        AND ")}
         AND LOWER(story_ip_id) = ?1
         AND story_license_terms_id = ?2
       LIMIT 1
@@ -232,7 +225,7 @@ export async function resolveEligibleStoryParentProjectionByAssetId(input: {
     sql: `
       SELECT community_id, asset_id, story_ip_id, story_license_terms_id
       FROM story_registered_asset_projections
-      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS}
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS.join("\n        AND ")}
         AND asset_id = ?1
       ORDER BY updated_at DESC, community_id ASC
       LIMIT 2
