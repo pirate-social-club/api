@@ -52,10 +52,11 @@ describe("HNS edge heartbeat dead-man", () => {
       expect(first.stale).toEqual([
         "ns1-pirate-fluence:hns-authoritative-dns",
         "ns1-pirate-fluence:spaces-verifier",
+        "ns1-pirate-fluence:hns-state-backup",
         "ns2-pirate-fluence:hns-secondary-dns",
       ])
       expect(second.stale).toEqual(first.stale)
-      expect(deliveries).toBe(3)
+      expect(deliveries).toBe(4)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -77,6 +78,13 @@ describe("HNS edge heartbeat dead-man", () => {
     expect(isExpectedHnsEdgeRole({
       host: "ns1-pirate-fluence",
       role: "spaces-verifier",
+    })).toBe(true)
+  })
+
+  it("accepts the successful state-backup role on ns1", () => {
+    expect(isExpectedHnsEdgeRole({
+      host: "ns1-pirate-fluence",
+      role: "hns-state-backup",
     })).toBe(true)
   })
 })
