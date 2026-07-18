@@ -181,4 +181,52 @@ describe("requestContentTranslation", () => {
       })).rejects.toThrow("invalid translated_body")
     })
   })
+
+  test("rejects translated outcomes with a missing translation for populated source fields", async () => {
+    await withMockedOpenRouterContent({
+      source_language: "ja",
+      target_locale: "en",
+      outcome: "translated",
+      translated_title: "Hello",
+      translated_body: "   ",
+      translated_caption: null,
+    }, async () => {
+      await expect(requestContentTranslation({
+        env,
+        sourceLanguage: "ja",
+        targetLocale: "en",
+        sourceText: {
+          title: "こんにちは",
+          body: "こんにちは世界",
+          caption: null,
+        },
+      })).rejects.toThrow("translated_body is required for translated outcome")
+    })
+  })
+
+  test("allows null translated fields when the corresponding source fields are empty", async () => {
+    await withMockedOpenRouterContent({
+      source_language: "ja",
+      target_locale: "en",
+      outcome: "translated",
+      translated_title: null,
+      translated_body: "Hello world",
+      translated_caption: null,
+    }, async () => {
+      const result = await requestContentTranslation({
+        env,
+        sourceLanguage: "ja",
+        targetLocale: "en",
+        sourceText: {
+          title: null,
+          body: "こんにちは世界",
+          caption: " ",
+        },
+      })
+
+      expect(result.translatedTitle).toBeNull()
+      expect(result.translatedBody).toBe("Hello world")
+      expect(result.translatedCaption).toBeNull()
+    })
+  })
 })

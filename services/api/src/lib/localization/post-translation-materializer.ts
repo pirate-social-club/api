@@ -5,7 +5,7 @@ import type { Post } from "../../types"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
-import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
+import { getContentTranslation, isUsableContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
 
 function hasTranslatablePostContent(post: Post): boolean {
   return Boolean(String(post.title ?? "").trim() || String(post.body ?? "").trim() || String(post.caption ?? "").trim())
@@ -50,21 +50,11 @@ function getTranslatableMarketEmbeds(post: Post): Array<{
 }
 
 function translationNeedsRefresh(post: Post, translation: ContentTranslationRecord): boolean {
-  if (translation.outcome !== "translated") {
-    return false
-  }
-
-  if (String(post.title ?? "").trim() && !String(translation.translated_title ?? "").trim()) {
-    return true
-  }
-  if (String(post.body ?? "").trim() && !String(translation.translated_body ?? "").trim()) {
-    return true
-  }
-  if (String(post.caption ?? "").trim() && !String(translation.translated_caption ?? "").trim()) {
-    return true
-  }
-
-  return false
+  return !isUsableContentTranslation(translation, {
+    title: post.title,
+    body: post.body,
+    caption: post.caption,
+  })
 }
 
 async function materializeMarketEmbedTranslations(input: {
@@ -93,8 +83,8 @@ async function materializeMarketEmbedTranslations(input: {
         locale: input.locale,
         sourceHash,
       })
-      if (existing && String(existing.translated_body ?? "").trim()) {
-        translatedCount += 1
+      if (isUsableContentTranslation(existing, { body: field.text })) {
+        translatedCount += existing.outcome === "translated" ? 1 : 0
         continue
       }
 

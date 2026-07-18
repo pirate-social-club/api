@@ -17,7 +17,7 @@ import {
 import { DEFAULT_CONTENT_LOCALE, detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { computeTextSourceHash } from "./content-source-hash"
-import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
+import { getContentTranslation, isUsableContentTranslation, upsertContentTranslation } from "./content-translation-store"
 
 type CommunityTextField = {
   field_key: string
@@ -27,13 +27,6 @@ type CommunityTextField = {
 type CommunityTextMaterializePayload = {
   locale?: string | null
   source_hash?: string | null
-}
-
-function hasTranslatedBody(record: ContentTranslationRecord | null): boolean {
-  if (!record || record.outcome !== "translated") {
-    return false
-  }
-  return Boolean(String(record.translated_body ?? "").trim())
 }
 
 function collectCommunityFields(community: Community): CommunityTextField[] {
@@ -250,7 +243,7 @@ async function buildCommunityTextLocalizationInternal(input: {
       sourceHash: meta.source_hash,
     })
 
-    if (!cached) {
+    if (!isUsableContentTranslation(cached, { body: field.source_text })) {
       items.push({
         ...item,
         translation_state: "pending",
@@ -411,7 +404,7 @@ export async function materializeCommunityTextTranslations(input: {
       locale: resolvedLocale,
       sourceHash: meta.source_hash,
     })
-    if (existing && (existing.outcome === "same_language" || hasTranslatedBody(existing))) {
+    if (isUsableContentTranslation(existing, { body: field.source_text })) {
       translatedCount += existing.outcome === "translated" ? 1 : 0
       continue
     }
