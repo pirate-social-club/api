@@ -360,6 +360,94 @@ describe("debug pipeline routes", () => {
     expect(response.status).toBe(404)
   })
 
+  test("POST /admin/debug/staging-d1/reclaim finalizes after the legacy binding table is dropped", async () => {
+    const decommissionCalls: unknown[] = []
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "staging",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+      SHARD_ADMIN_TOKEN: "test-shard-admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Decommission: async (input: unknown) => {
+          decommissionCalls.push(input)
+          return { ok: true, value: { tablesDropped: 3, released: true } }
+        },
+      } as unknown as NonNullable<Env["COMMUNITY_D1_SHARD"]>,
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "staging-reclaim-owner")
+    const communityId = "cmt_staging_reclaim_smoke"
+    const now = "2026-07-18T00:00:00.000Z"
+
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, description, membership_mode,
+          status, provisioning_state, transfer_state, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'request', 'archived', 'active', 'none', ?5, ?5)
+      `,
+      args: [
+        communityId,
+        session.userId,
+        "D1 Provisioning Smoke route regression",
+        "Manual staging smoke community for the D1 provisioning seam.",
+        now,
+      ],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO community_database_routing (
+          community_id, provisioning_state, shard_worker_id, binding_name, region,
+          migrated_at, decommissioned_at, last_error_at, last_error_message, created_at, updated_at
+        ) VALUES (?1, 'ready', 'community-d1-shard-staging', 'DB_CMTY_TEST', 'eeur', ?2, NULL, NULL, NULL, ?2, ?2)
+      `,
+      args: [communityId, now],
+    })
+    const legacyTable = await ctx.client.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'community_database_bindings'",
+    )
+    expect(legacyTable.rows).toHaveLength(0)
+
+    const response = await app.request(
+      "http://pirate.test/admin/debug/staging-d1/reclaim",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        body: JSON.stringify({
+          community_ids: [communityId],
+          confirmation: "RECLAIM STAGING SMOKE COMMUNITIES",
+          apply: true,
+        }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect(await json(response)).toMatchObject({
+      ok: true,
+      dry_run: false,
+      reclaimed: 1,
+      failed: 0,
+      results: [{ community_id: communityId, binding_name: "DB_CMTY_TEST", ok: true }],
+    })
+    expect(decommissionCalls).toHaveLength(1)
+    expect(decommissionCalls[0]).toMatchObject({
+      adminToken: "test-shard-admin-token",
+      communityId,
+      bindingName: "DB_CMTY_TEST",
+    })
+    const stored = await ctx.client.execute({
+      sql: `
+        SELECT c.status, r.provisioning_state, r.decommissioned_at
+        FROM communities c
+        JOIN community_database_routing r ON r.community_id = c.community_id
+        WHERE c.community_id = ?1
+      `,
+      args: [communityId],
+    })
+    expect(stored.rows[0]?.status).toBe("deleted")
+    expect(stored.rows[0]?.provisioning_state).toBe("decommissioned")
+    expect(stored.rows[0]?.decommissioned_at).toBeTruthy()
+  })
+
   test("POST /admin/debug/community-job/recycle queues a running community job", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
