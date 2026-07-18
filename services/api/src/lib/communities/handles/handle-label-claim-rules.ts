@@ -33,15 +33,25 @@ export async function listNamespaceLabelClaimRules(
   executor: DbExecutor,
   namespaceHandlePolicyId: string,
 ): Promise<LabelClaimRuleRow[]> {
-  const result = await executor.execute({
-    sql: `
-      SELECT label_claim_rule_id, position, selector_type, selector_labels_json, expression_json
-      FROM namespace_handle_label_claim_rules
-      WHERE namespace_handle_policy_id = ?1
-      ORDER BY position ASC
-    `,
-    args: [namespaceHandlePolicyId],
-  })
+  let result
+  try {
+    result = await executor.execute({
+      sql: `
+        SELECT label_claim_rule_id, position, selector_type, selector_labels_json, expression_json
+        FROM namespace_handle_label_claim_rules
+        WHERE namespace_handle_policy_id = ?1
+        ORDER BY position ASC
+      `,
+      args: [namespaceHandlePolicyId],
+    })
+  } catch (error) {
+    // A shard without migration 1138 cannot hold rules, so an absent table is
+    // exactly "no rules configured" — not a fail-open. This keeps handle quotes
+    // and claims working while the fleet migration rolls out (and on shards that
+    // cannot take migrations at all).
+    if (isMissingLabelClaimRuleTableError(error)) return []
+    throw error
+  }
   return result.rows.map((row) => ({
     label_claim_rule_id: requiredString(row, "label_claim_rule_id"),
     position: requiredNumber(row, "position"),
@@ -49,6 +59,11 @@ export async function listNamespaceLabelClaimRules(
     selector_labels_json: stringOrNull(rowValue(row, "selector_labels_json")),
     expression_json: requiredString(row, "expression_json"),
   }))
+}
+
+export function isMissingLabelClaimRuleTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("no such table") && message.includes("namespace_handle_label_claim_rules")
 }
 
 export function findMatchingLabelClaimRule(
