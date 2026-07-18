@@ -3345,7 +3345,7 @@ type CommunityTextLocalization = {
 
 type CommunityTextLocalizationItem = {
   field_key: string;
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked";
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked";
   machine_translated: boolean;
   translated_value?: string | null;
   source_hash: string;

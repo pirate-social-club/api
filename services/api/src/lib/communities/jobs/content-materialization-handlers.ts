@@ -3,6 +3,7 @@ import { internalError } from "../../errors"
 import { materializeCommentTranslation } from "../../localization/comment-translation-materializer"
 import {
   materializeCommunityTextTranslations,
+  computeCommunityTextSourceHash,
   parseCommunityTextMaterializePayload,
 } from "../../localization/community-localization-service"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
@@ -34,6 +35,7 @@ type CommentTranslationPayload = {
 
 type CommunityTextTranslationPayload = {
   locale?: string | null
+  source_hash?: string | null
 }
 
 function translationResultMutatedPublicRead(result: string | null): boolean {
@@ -96,7 +98,6 @@ export async function runPostLabelMaterialize(input: CommunityJobHandlerInput): 
       input.communityRepository,
       communityRow,
     )
-
     return await materializePostLabel({
       executor: db.client,
       env: input.env,
@@ -155,6 +156,9 @@ export async function runCommunityTextTranslationMaterialize(input: CommunityJob
       input.communityRepository,
       communityRow,
     )
+    if (payload?.source_hash && payload.source_hash !== await computeCommunityTextSourceHash(community)) {
+      return `community_text_translation_stale_source:${input.job.community_id}:${locale ?? "default"}`
+    }
     return await materializeCommunityTextTranslations({
       executor: db.client,
       env: input.env,

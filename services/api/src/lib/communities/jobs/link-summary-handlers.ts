@@ -5,6 +5,8 @@ import {
   translateAndStoreLinkSummary,
 } from "../../posts/link-enrichment/summary-service"
 import { getControlPlaneClient } from "../../runtime-deps"
+import { getLinkEnrichmentByNormalizedUrl } from "../../posts/link-enrichment/repository"
+import { computeLinkSummaryTranslationSourceHash } from "../../posts/link-enrichment/translation-source-hash"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import {
   enqueueSummaryTranslations,
@@ -23,6 +25,7 @@ type LinkSummaryTranslationMaterializePayload = {
   normalized_url?: string | null
   locale?: string | null
   post_id?: string | null
+  source_hash?: string | null
 }
 
 export async function runLinkSummaryMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -90,6 +93,12 @@ export async function runLinkSummaryTranslationMaterialize(input: CommunityJobHa
   }
 
   const controlPlaneClient = getControlPlaneClient(input.env)
+  if (payload?.source_hash) {
+    const record = await getLinkEnrichmentByNormalizedUrl(controlPlaneClient, normalizedUrl)
+    if (!record || payload.source_hash !== await computeLinkSummaryTranslationSourceHash(record)) {
+      return `link_summary_translation_stale_source:${normalizedUrl}:${locale}`
+    }
+  }
   const now = nowIso()
   const translated = await translateAndStoreLinkSummary({
     env: input.env,

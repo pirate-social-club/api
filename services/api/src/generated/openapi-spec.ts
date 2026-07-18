@@ -23296,6 +23296,7 @@ const spec = {
             "enum": [
               "ready",
               "pending",
+              "failed",
               "same_language",
               "policy_blocked"
             ]

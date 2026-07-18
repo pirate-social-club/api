@@ -6,6 +6,7 @@ import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../../l
 import { upsertLinkEnrichmentUsage } from "./repository-usages"
 import { buildLinkEnrichmentSnapshot } from "./snapshot"
 import type { LinkEnrichmentRecord } from "./types"
+import { computeLinkSummaryTranslationSourceHash } from "./translation-source-hash"
 
 async function materializeLinkEnrichmentSnapshot(input: {
   client: DbExecutor
@@ -75,6 +76,7 @@ async function enqueueLinkSummaryTranslationsIfNeeded(input: {
   if (!input.communityId || input.record.summary_status !== "ready") {
     return
   }
+  const sourceHash = await computeLinkSummaryTranslationSourceHash(input.record)
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
     if (sameLanguageLocale("en", locale) && sameLanguageLocale(input.record.source_language ?? "en", "en")) {
       continue
@@ -84,13 +86,15 @@ async function enqueueLinkSummaryTranslationsIfNeeded(input: {
       communityId: input.communityId,
       jobType: "link_summary_translation_materialize",
       subjectType: "link_enrichment_translation",
-      subjectId: `${input.record.normalized_url}:${locale}`,
+      subjectId: `${input.record.normalized_url}:${locale}:${sourceHash}`,
       payloadJson: JSON.stringify({
         normalized_url: input.record.normalized_url,
         locale,
         post_id: input.postId,
+        source_hash: sourceHash,
       }),
       createdAt: input.createdAt,
+      reuseTerminalFailure: true,
     })
   }
 }
