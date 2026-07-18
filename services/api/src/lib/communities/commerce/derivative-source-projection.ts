@@ -20,6 +20,18 @@ export type StoryRegisteredAssetProjection = {
   createdAt: string
 }
 
+export type EligibleStoryParentProjection = {
+  communityId: string
+  assetId: string
+  storyIpId: string
+  storyLicenseTermsId: string
+}
+
+export type EligibleStoryParentAssetResolution =
+  | { status: "resolved"; parent: EligibleStoryParentProjection }
+  | { status: "not_found" }
+  | { status: "ambiguous" }
+
 function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
   if (kind === "song") return "song_audio"
   if (kind === "video") return "video_file"
@@ -172,6 +184,66 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   }))
 }
 
+function eligibleStoryParentFromRow(row: Record<string, unknown>): EligibleStoryParentProjection {
+  return {
+    communityId: requiredString(row, "community_id"),
+    assetId: requiredString(row, "asset_id"),
+    storyIpId: requiredString(row, "story_ip_id"),
+    storyLicenseTermsId: requiredString(row, "story_license_terms_id"),
+  }
+}
+
+const ELIGIBLE_STORY_PARENT_FILTERS = `
+  source_post_status = 'published'
+  AND license_preset = 'commercial-remix'
+  AND commercial_rev_share_pct > 0
+  AND story_ip_id IS NOT NULL
+  AND story_ip_id != ''
+  AND story_license_terms_id IS NOT NULL
+  AND story_license_terms_id != ''
+`
+
+export async function findEligibleStoryParentProjectionByRef(input: {
+  env: Env
+  storyIpId: string
+  storyLicenseTermsId: string
+}): Promise<EligibleStoryParentProjection | null> {
+  const client = getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT community_id, asset_id, story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS}
+        AND LOWER(story_ip_id) = ?1
+        AND story_license_terms_id = ?2
+      LIMIT 1
+    `,
+    args: [input.storyIpId.trim().toLowerCase(), input.storyLicenseTermsId.trim()],
+  })
+  return result.rows[0] ? eligibleStoryParentFromRow(result.rows[0]) : null
+}
+
+export async function resolveEligibleStoryParentProjectionByAssetId(input: {
+  env: Env
+  assetId: string
+}): Promise<EligibleStoryParentAssetResolution> {
+  const client = getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT community_id, asset_id, story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS}
+        AND asset_id = ?1
+      ORDER BY updated_at DESC, community_id ASC
+      LIMIT 2
+    `,
+    args: [input.assetId],
+  })
+  if (result.rows.length === 0) return { status: "not_found" }
+  if (result.rows.length > 1) return { status: "ambiguous" }
+  return { status: "resolved", parent: eligibleStoryParentFromRow(result.rows[0]) }
+}
+
 export async function findZeroRevenueShareStoryParentIpIds(input: {
   env: Env
   storyIpIds: string[]
@@ -194,39 +266,4 @@ export async function findZeroRevenueShareStoryParentIpIds(input: {
     args: storyIpIds,
   })
   return new Set(result.rows.map((row) => requiredString(row, "story_ip_id").toLowerCase()))
-}
-
-export async function findZeroRevenueShareStoryParentRefs(input: {
-  env: Env
-  refs: Array<{ storyIpId: string; licenseTermsId: string }>
-}): Promise<Set<string>> {
-  const refs = Array.from(new Map(input.refs.map((ref) => {
-    const normalized = {
-      storyIpId: ref.storyIpId.trim().toLowerCase(),
-      licenseTermsId: ref.licenseTermsId.trim(),
-    }
-    return [`${normalized.storyIpId}:${normalized.licenseTermsId}`, normalized] as const
-  })).values()).filter((ref) => ref.storyIpId && ref.licenseTermsId)
-  if (refs.length === 0) return new Set()
-
-  const clauses: string[] = []
-  const args: string[] = []
-  for (const ref of refs) {
-    const nextArg = args.length + 1
-    clauses.push(`(LOWER(story_ip_id) = ?${nextArg} AND story_license_terms_id = ?${nextArg + 1})`)
-    args.push(ref.storyIpId, ref.licenseTermsId)
-  }
-  const client = getControlPlaneClient(input.env)
-  const result = await client.execute({
-    sql: `
-      SELECT story_ip_id, story_license_terms_id
-      FROM story_registered_asset_projections
-      WHERE (${clauses.join(" OR ")})
-        AND commercial_rev_share_pct <= 0
-    `,
-    args,
-  })
-  return new Set(result.rows.map((row) =>
-    `${requiredString(row, "story_ip_id").toLowerCase()}:${requiredString(row, "story_license_terms_id")}`
-  ))
 }

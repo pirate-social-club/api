@@ -28,7 +28,7 @@ import {
 } from "../../../src/lib/communities/commerce/public-wallet-proof"
 import { updateSongArtifactBundlePreview } from "../../../src/lib/song-artifacts/song-artifact-repository"
 import { getControlPlaneClient } from "../../../src/lib/runtime-deps"
-import { decodePublicAssetId } from "../../../src/lib/public-ids"
+import { decodePublicAssetId, decodePublicCommunityId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import {
   completeUniqueHumanVerification,
@@ -43,6 +43,7 @@ import {
 } from "./song-artifact-locked-test-helpers"
 import { setCommunityCommerceCharityPayoutExecutorForTests } from "../../../src/lib/communities/commerce/charity-payout-service"
 import { addCommunityMember } from "../communities/community-routes-test-helpers"
+import { upsertStoryRegisteredAssetProjection } from "../../../src/lib/communities/commerce/derivative-source-projection"
 
 let cleanup: (() => Promise<void>) | null = null
 let originalFetch: typeof fetch
@@ -3044,6 +3045,7 @@ describe("song artifact locked routes", () => {
       expect(input.rightsBasis).toBe("derivative")
       expect(input.upstreamAssetRefs).toEqual(expectedParentRefs)
       const resolvedParents = await resolveStoryRoyaltyDerivativeParents({
+        env: input.env,
         client: input.client,
         communityId: input.communityId,
         upstreamAssetRefs: input.upstreamAssetRefs,
@@ -3870,6 +3872,25 @@ describe("song artifact locked routes", () => {
     expect(previewRangeResponse.headers.get("accept-ranges")).toBe("bytes")
     expect(previewRangeResponse.headers.get("content-range")).toBe(`bytes 0-3/${previewBytes.byteLength}`)
     expect(new Uint8Array(await previewRangeResponse.arrayBuffer())).toEqual(previewBytes.slice(0, 4))
+
+    await upsertStoryRegisteredAssetProjection({
+      env: ctx.env,
+      projection: {
+        communityId: decodePublicCommunityId(communityId),
+        assetId: "ast_locked_video_parent_fixture",
+        displayTitle: "Locked video parent fixture",
+        creatorUserId: author.userId,
+        assetKind: "song_audio",
+        licensePreset: "commercial-remix",
+        commercialRevSharePct: 10,
+        storyIpId: "0x1111111111111111111111111111111111111111",
+        storyLicenseTermsId: "19",
+        sourcePostId: "pst_locked_video_parent_fixture",
+        sourcePostStatus: "published",
+        sourceUpdatedAt: "2026-07-18T00:00:00.000Z",
+        createdAt: "2026-07-18T00:00:00.000Z",
+      },
+    })
 
     const derivativeVideoBytes = new TextEncoder().encode("locked-derivative-video-bytes")
     const derivativeVideoUpload = await uploadSongArtifact({

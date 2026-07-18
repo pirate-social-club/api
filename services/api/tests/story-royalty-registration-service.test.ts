@@ -8,7 +8,10 @@ import { openCommunityDb } from "../src/lib/communities/community-db-factory"
 import { setLockedAssetDeliveryPreparerForTests } from "../src/lib/communities/commerce/asset-delivery"
 import { createSongAssetForPost, listCommunityDerivativeSources } from "../src/lib/communities/commerce/service"
 import { insertPostForTest as insertPost } from "./community-test-helpers"
-import { listStoryRegisteredAssetProjectionRows } from "../src/lib/communities/commerce/derivative-source-projection"
+import {
+  listStoryRegisteredAssetProjectionRows,
+  upsertStoryRegisteredAssetProjection,
+} from "../src/lib/communities/commerce/derivative-source-projection"
 import { createControlPlaneTestClient } from "./helpers"
 import {
   isStoryRoyaltyRegistrationConfigured,
@@ -341,6 +344,7 @@ describe("story royalty registration service", () => {
       })
 
       const resolved = await resolveStoryRoyaltyDerivativeParents({
+        env,
         client: db.client,
         communityId,
         upstreamAssetRefs: ["story:asset:ast_parent_story"],
@@ -354,6 +358,67 @@ describe("story royalty registration service", () => {
       ])
     } finally {
       db.close()
+    }
+  })
+
+  test("resolves a globally selected parent from another community", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-cross-community-parent-"))
+    cleanupPaths.push(rootDir)
+    const controlPlane = await createControlPlaneTestClient({ includeAllMigrations: true })
+    const env = {
+      ENVIRONMENT: "test",
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      CONTROL_PLANE_DATABASE_URL: `file:${controlPlane.databasePath}`,
+    } as Env
+    const destinationCommunityId = "cmt_story_destination"
+    const parentIpId = "0x1212121212121212121212121212121212121212"
+
+    try {
+      await seedControlPlaneCommunityForProjection({
+        client: controlPlane.client,
+        communityId: "cmt_story_source",
+        userId: "usr_source_artist",
+        now: "2026-07-18T00:00:00.000Z",
+      })
+      await upsertStoryRegisteredAssetProjection({
+        env,
+        projection: {
+          communityId: "cmt_story_source",
+          assetId: "ast_global_parent",
+          displayTitle: "Global parent song",
+          creatorUserId: "usr_source_artist",
+          assetKind: "song_audio",
+          licensePreset: "commercial-remix",
+          commercialRevSharePct: 10,
+          storyIpId: parentIpId,
+          storyLicenseTermsId: "1894",
+          sourcePostId: "pst_global_parent",
+          sourcePostStatus: "published",
+          sourceUpdatedAt: "2026-07-18T00:00:00.000Z",
+          createdAt: "2026-07-18T00:00:00.000Z",
+        },
+      })
+
+      const db = await openCommunityDb(env, buildRepository(), destinationCommunityId)
+      try {
+        await expect(resolveStoryRoyaltyDerivativeParents({
+          env,
+          client: db.client,
+          communityId: destinationCommunityId,
+          upstreamAssetRefs: ["story:asset:asset_ast_global_parent"],
+        })).resolves.toEqual([{ ipId: parentIpId, licenseTermsId: 1894n }])
+
+        await expect(resolveStoryRoyaltyDerivativeParents({
+          env,
+          client: db.client,
+          communityId: destinationCommunityId,
+          upstreamAssetRefs: [`story:ip:${parentIpId}#licenseTermsId=1894`],
+        })).resolves.toEqual([{ ipId: parentIpId, licenseTermsId: 1894n }])
+      } finally {
+        db.close()
+      }
+    } finally {
+      await controlPlane.cleanup()
     }
   })
 
@@ -1343,6 +1408,7 @@ describe("story royalty registration service", () => {
     setStoryRoyaltyRegistrarForTests(async (input) => {
       if (input.rightsBasis === "derivative") {
         const parents = await resolveStoryRoyaltyDerivativeParents({
+          env: input.env,
           client: input.client,
           communityId: input.communityId,
           upstreamAssetRefs: input.upstreamAssetRefs,
@@ -1524,6 +1590,7 @@ describe("story royalty registration service", () => {
     setStoryRoyaltyRegistrarForTests(async (input) => {
       if (input.assetId === "ast_chain_first_remix") {
         const parents = await resolveStoryRoyaltyDerivativeParents({
+          env: input.env,
           client: input.client,
           communityId: input.communityId,
           upstreamAssetRefs: input.upstreamAssetRefs,
@@ -1544,6 +1611,7 @@ describe("story royalty registration service", () => {
       }
       if (input.assetId === "ast_chain_second_remix") {
         const parents = await resolveStoryRoyaltyDerivativeParents({
+          env: input.env,
           client: input.client,
           communityId: input.communityId,
           upstreamAssetRefs: input.upstreamAssetRefs,
