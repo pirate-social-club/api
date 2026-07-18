@@ -6,6 +6,7 @@ import {
   parseCommunityTextMaterializePayload,
 } from "../../localization/community-localization-service"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
+import { computeCommentSourceHash, computePostSourceHash } from "../../localization/content-source-hash"
 import { getPostById } from "../../posts/community-post-query-store"
 import { materializePostLabel } from "../../posts/post-label-materializer"
 import { schedulePublicPostCachePurge } from "../../public-read-cache-invalidation"
@@ -17,6 +18,7 @@ import { parseJobPayload } from "./payload"
 type PostTranslationPayload = {
   post_id?: string
   locale?: string | null
+  source_hash?: string | null
 }
 
 type PostLabelPayload = {
@@ -27,6 +29,7 @@ type PostLabelPayload = {
 type CommentTranslationPayload = {
   comment_id?: string
   locale?: string | null
+  source_hash?: string | null
 }
 
 type CommunityTextTranslationPayload = {
@@ -50,6 +53,9 @@ export async function runPostTranslationMaterialize(input: CommunityJobHandlerIn
     const post = await getPostById(db.client, postId)
     if (!post) {
       throw internalError("Post is missing for translation materialize")
+    }
+    if (payload?.source_hash && payload.source_hash !== await computePostSourceHash(post)) {
+      return `post_translation_stale_source:${postId}:${locale ?? "default"}`
     }
     const result = await materializePostTranslation({
       executor: db.client,
@@ -111,6 +117,9 @@ export async function runCommentTranslationMaterialize(input: CommunityJobHandle
     const comment = await getCommentById(db.client, commentId)
     if (!comment) {
       throw internalError("Comment is missing for translation materialize")
+    }
+    if (payload?.source_hash && payload.source_hash !== await computeCommentSourceHash(comment)) {
+      return `comment_translation_stale_source:${commentId}:${locale ?? "default"}`
     }
     const result = await materializeCommentTranslation({
       executor: db.client,
