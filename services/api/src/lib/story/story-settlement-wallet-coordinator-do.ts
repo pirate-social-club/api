@@ -1223,7 +1223,15 @@ export class StorySettlementWalletCoordinatorDO extends DurableObject<Env> {
     const current = this.readStep(step.step_ref)!
     if (observation.kind === "pending") {
       if (current.state === "mined") this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "broadcast" }))
-      else if (current.state === "broadcast") this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "broadcast" }), { next_attempt_at: Date.now() + RECONCILE_DELAY_MS })
+      else if (current.state === "broadcast") {
+        // A positive pending observation is not new journal evidence. Keep the
+        // step version stable so an operator can use the inspected version as
+        // a CAS token even when request latency exceeds the reconcile cadence.
+        this.ctx.storage.sql.exec(
+          "UPDATE steps SET next_attempt_at=?2,updated_at=?3 WHERE step_ref=?1",
+          current.step_ref, Date.now() + RECONCILE_DELAY_MS, Date.now(),
+        )
+      }
       else if (current.state === "reconciliation_required") {
         this.writeTransition(current, this.transition(current, { expectedVersion: current.version, to: "broadcast" }), { next_attempt_at: Date.now() + RECONCILE_DELAY_MS })
       }
