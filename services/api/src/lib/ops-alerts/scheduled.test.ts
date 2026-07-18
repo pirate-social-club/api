@@ -56,7 +56,7 @@ describe("scheduled alert capture", () => {
     const sent: Array<{ text?: string }> = []
     const kv = new Map<string, string>()
     const env = {
-      ENVIRONMENT: "development",
+      ENVIRONMENT: "staging",
       OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
       OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
       OPS_ALERT_DEDUPE: {

@@ -6,14 +6,13 @@ import { KvAlertDeduper } from "./dedupe"
 import { buildOpsAlerts, dedupeOpsAlerts, markOpsAlertsSent } from "./emit"
 import { sendOpsAlerts } from "./sink"
 import { collectCommunityPublishAlertSignals } from "./signals"
-import type { CommunityPublishAlertSignals } from "./types"
+import type { CommunityPublishAlertSignals, OpsAlert } from "./types"
 import { getControlPlaneClient } from "../runtime-deps"
 import { listFundingReceiptsForRefundReview } from "../communities/commerce/observed-funding-receipts"
+import { opsAlertBucketMs, opsAlertDedupeTtlSeconds } from "./policy"
 
 const DEFAULT_MAX_COMMUNITIES = 100
 const DEFAULT_LOOKBACK_MS = 15 * 60 * 1000
-const DEFAULT_BUCKET_MS = 60 * 60 * 1000
-const DEDUPE_TTL_SECONDS = 3 * 60 * 60
 const SCAN_ROTATION_MS = 60 * 1000
 
 function intFromEnv(value: string | undefined, fallback: number): number {
@@ -112,8 +111,9 @@ export async function runOpsAlerts(input: {
   }
   if (alerts.length === 0) return
 
-  const bucketMs = intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)
-  const deduper = new KvAlertDeduper(kv, DEDUPE_TTL_SECONDS)
+  const bucketMs = (alert: OpsAlert) => opsAlertBucketMs(env, alert.severity)
+  const longestBucketMs = Math.max(...alerts.map(bucketMs))
+  const deduper = new KvAlertDeduper(kv, opsAlertDedupeTtlSeconds(longestBucketMs))
   const toSend = await dedupeOpsAlerts({ alerts, deduper, nowMs: input.nowMs, bucketMs })
   const delivery = await sendOpsAlerts(env, toSend)
   if (delivery.delivered) {

@@ -144,11 +144,12 @@ export async function dedupeOpsAlerts(input: {
   alerts: OpsAlert[]
   deduper: AlertDeduper
   nowMs: number
-  bucketMs: number
+  bucketMs: number | ((alert: OpsAlert) => number)
 }): Promise<OpsAlert[]> {
   const out: OpsAlert[] = []
-  const bucket = bucketStartMs(input.nowMs, input.bucketMs)
   for (const alert of input.alerts) {
+    const bucketMs = typeof input.bucketMs === "function" ? input.bucketMs(alert) : input.bucketMs
+    const bucket = bucketStartMs(input.nowMs, bucketMs)
     if (!(await input.deduper.hasSent(alert.key, bucket))) {
       out.push(alert)
     }
@@ -160,10 +161,11 @@ export async function markOpsAlertsSent(input: {
   alerts: OpsAlert[]
   deduper: AlertDeduper
   nowMs: number
-  bucketMs: number
+  bucketMs: number | ((alert: OpsAlert) => number)
 }): Promise<void> {
-  const bucket = bucketStartMs(input.nowMs, input.bucketMs)
   for (const alert of input.alerts) {
+    const bucketMs = typeof input.bucketMs === "function" ? input.bucketMs(alert) : input.bucketMs
+    const bucket = bucketStartMs(input.nowMs, bucketMs)
     await input.deduper.markSent(alert.key, bucket)
   }
 }

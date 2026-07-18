@@ -13,6 +13,52 @@ const alert: OpsAlert = {
 }
 
 describe("sendOpsAlerts", () => {
+  test("keeps development alerts in logs even when an email binding is configured", async () => {
+    let sends = 0
+    const result = await sendOpsAlerts({
+      ENVIRONMENT: "development",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async () => {
+          sends += 1
+          return { messageId: "should-not-send" }
+        },
+      },
+    } as unknown as Env, [alert])
+
+    expect(result).toEqual({
+      delivered: true,
+      sent: 0,
+      sink: "log",
+      providerMessageId: null,
+    })
+    expect(sends).toBe(0)
+  })
+
+  test("includes ownership and an actionable runbook for Story reconciliation", async () => {
+    const sent: Array<{ text?: string }> = []
+    await sendOpsAlerts({
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string }) => {
+          sent.push(message)
+          return { messageId: "message-story" }
+        },
+      },
+    } as unknown as Env, [{
+      ...alert,
+      key: "story_registration_reconciliation_required",
+      title: "Story registration effects require transaction reconciliation",
+    }])
+
+    expect(sent[0]?.text).toContain("Owner: Story operations")
+    expect(sent[0]?.text).toContain("Runbook: https://github.com/pirate-social-club/api/blob/main/services/api/docs/runbooks/story-registration-effect-resolution.md")
+    expect(sent[0]?.text).toContain("never infer no-broadcast")
+  })
+
   test("sends configured alerts through the email binding", async () => {
     const sent: unknown[] = []
     const env = {
