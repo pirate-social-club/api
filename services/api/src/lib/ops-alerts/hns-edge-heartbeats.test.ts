@@ -3,6 +3,7 @@ import type { Env } from "../../env"
 import {
   checkHnsEdgeHeartbeatFreshness,
   HNS_EDGE_HEARTBEAT_MAX_AGE_MS,
+  isExpectedHnsEdgeRole,
   recordHnsEdgeHeartbeat,
 } from "./hns-edge-heartbeats"
 
@@ -50,10 +51,11 @@ describe("HNS edge heartbeat dead-man", () => {
       const second = await checkHnsEdgeHeartbeatFreshness(env, now)
       expect(first.stale).toEqual([
         "ns1-pirate-fluence:hns-authoritative-dns",
+        "ns1-pirate-fluence:spaces-verifier",
         "ns2-pirate-fluence:hns-secondary-dns",
       ])
       expect(second.stale).toEqual(first.stale)
-      expect(deliveries).toBe(2)
+      expect(deliveries).toBe(3)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -69,5 +71,12 @@ describe("HNS edge heartbeat dead-man", () => {
     )
     const result = await checkHnsEdgeHeartbeatFreshness(env, now)
     expect(result.stale).toContain("ns1-pirate-fluence:hns-chain-observer")
+  })
+
+  it("accepts the verification-only Spaces role on ns1", () => {
+    expect(isExpectedHnsEdgeRole({
+      host: "ns1-pirate-fluence",
+      role: "spaces-verifier",
+    })).toBe(true)
   })
 })
