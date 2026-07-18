@@ -7,6 +7,7 @@ import {
   normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
+  STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
 } from "./operator-credentials"
 
 describe("operator credential issuance config", () => {
@@ -25,6 +26,12 @@ describe("operator credential issuance config", () => {
     expect(ALLOWED_SCOPES.has(STORY_SETTLEMENT_REPAIR_SCOPE)).toBe(true)
     expect(credentialEnvNameForScopes([STORY_SETTLEMENT_REPAIR_SCOPE]))
       .toBe("PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL")
+  })
+
+  test("uses an independently grantable Story fee-replacement credential", () => {
+    expect(ALLOWED_SCOPES.has(STORY_SETTLEMENT_FEE_REPLACE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([STORY_SETTLEMENT_FEE_REPLACE_SCOPE]))
+      .toBe("PIRATE_STORY_SETTLEMENT_FEE_REPLACE_OPERATOR_CREDENTIAL")
   })
 
   test("requires an explicit, valid name for a multi-scope credential", () => {
