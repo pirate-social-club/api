@@ -37,7 +37,7 @@ import {
  * Terminal (never retry the transfer):
  *   FUNDING_TRANSACTION_ALREADY_CONSUMED — the hash funded something else
  *   FUNDING_TRANSACTION_MISMATCH         — this quote is bound to a different hash
- *   FUNDING_QUOTE_EXPIRED                — the transfer was MINED after the quote lapsed
+ *   refund_pending status                — treasury received funds that cannot be applied
  * Recoverable (re-quote and start a new transfer):
  *   FUNDING_QUOTE_ALREADY_CLAIMED        — the quote is spent or refunded
  *
@@ -47,9 +47,12 @@ import {
  */
 const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consumed"
 const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
-const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
 const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
 const ONE_LIVE = "one_live"
+// Long enough for a Base Sepolia receipt/confirmation race, short enough that a
+// rewarder cannot revive an abandoned schedule hours later. A late acceptance
+// preserves the requested duration but starts a fresh effective window.
+export const LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS = 5 * 60
 
 export const REWARD_SONG_SLOT_ACQUIRE_SQL = `
   INSERT INTO reward_song_slots (
@@ -475,10 +478,11 @@ export async function createRewardCampaign(input: {
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
           status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents,
-          terms_version, terms_hash, starts_at, ends_at, created_at, updated_at
+          terms_version, terms_hash, starts_at, ends_at,
+          requested_starts_at, requested_ends_at, created_at, updated_at
         ) VALUES (
           ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9,
-          ?10, ?11, ?12, ?13, ?14, 2, ?15, ?16, ?17, ?18, ?18
+          ?10, ?11, ?12, ?13, ?14, 2, ?15, ?16, ?17, ?16, ?17, ?18, ?18
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
@@ -709,48 +713,6 @@ function normalizeTxHash(value: string): string {
   return txHash
 }
 
-/**
- * Marks a claimed funding effect failed and rolls the campaign back out of
- * `funding_confirming`, mirroring the rejected-verification path. Used when a transfer
- * verifies but was mined too late to honour: the money is real, so the effect must record
- * why it was refused rather than silently vanish.
- */
-async function failFundingEffect(
-  input: { client: Client; campaignId: string; fundingId: string },
-  reason: string,
-  now: string,
-  rowLocks: boolean,
-  txHash: string,
-): Promise<void> {
-  await withTransaction(input.client, "write", async (tx) => {
-    const effect = await selectFunding(tx, input.fundingId, rowLocks)
-    if (!effect) return
-    // Only fail the effect we actually claimed; never clobber a concurrently-settled one.
-    if (requiredString(effect, "status") !== "confirming") return
-    if (stringOrNull(rowValue(effect, "tx_hash")) !== txHash) return
-    await tx.execute({
-      sql: `UPDATE reward_campaign_funding_effects SET status = 'failed', failure_reason = ?2, failed_at = ?3, updated_at = ?3 WHERE reward_campaign_funding_effect_id = ?1`,
-      args: [input.fundingId, reason, now],
-    })
-    await tx.execute({
-      sql: `
-        UPDATE reward_campaigns
-        SET status = CASE
-              WHEN EXISTS (
-                SELECT 1 FROM reward_campaign_funding_effects
-                WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
-              ) THEN 'funding_quoted'
-              WHEN funded_cents > 0 THEN 'funding_quoted'
-              ELSE 'draft'
-            END,
-            updated_at = ?2
-        WHERE reward_campaign_id = ?1
-      `,
-      args: [input.campaignId, now],
-    })
-  })
-}
-
 export async function confirmRewardCampaignFunding(input: {
   env: Env
   client: Client
@@ -797,6 +759,15 @@ export async function confirmRewardCampaignFunding(input: {
         throw codedConflictError(
           FUNDING_TRANSACTION_MISMATCH,
           "Failed funding quote already claimed a different transaction",
+        )
+      }
+      return effect
+    }
+    if (status === "refund_pending") {
+      if (existingTx !== txHash) {
+        throw codedConflictError(
+          FUNDING_TRANSACTION_MISMATCH,
+          "Funding quote awaiting refund already claimed a different transaction",
         )
       }
       return effect
@@ -851,7 +822,9 @@ export async function confirmRewardCampaignFunding(input: {
     })
     return (await selectFunding(tx, input.fundingId)) ?? effect
   })
-  if (["confirmed", "failed"].includes(requiredString(claimed, "status"))) return fundingResource(claimed)
+  if (["confirmed", "failed", "refund_pending"].includes(requiredString(claimed, "status"))) {
+    return fundingResource(claimed)
+  }
 
   const expected = {
     chainId: integer(rowValue(claimed, "chain_id")),
@@ -879,34 +852,19 @@ export async function confirmRewardCampaignFunding(input: {
     return fundingResource(pending)
   }
 
-  // The transfer verified. Whether to honour it depends on WHEN it was mined, not on when the
-  // confirmation happened to arrive.
-  //
-  // While the quote is still live, a mined transfer is timely by construction (its block is in
-  // the past), so nothing needs checking. Once the quote has lapsed we honour it only on positive
-  // evidence that it was mined before expiry — which rescues the money-stranding case (wallet
-  // broadcasts, the confirm request is lost, the quote lapses, and the client resumes with the
-  // same hash) without letting a genuinely late transfer resurrect stale terms.
-  //
-  // Absent that evidence we fail closed: an unprovable transfer against a lapsed quote is
-  // refused rather than optimistically accepted.
-  if (verification.kind === "verified" && Date.parse(now) > Date.parse(requiredString(claimed, "expires_at"))) {
-    const expiresAtMs = Date.parse(requiredString(claimed, "expires_at"))
-    const minedAtMs = typeof verification.blockTimestamp === "number"
-      ? verification.blockTimestamp * 1000
-      : null
-    if (minedAtMs === null || minedAtMs > expiresAtMs) {
-      await failFundingEffect(input, "funding_confirmed_after_quote_expiry", now, rowLocks, txHash)
-      throw codedConflictError(
-        FUNDING_QUOTE_EXPIRED,
-        "The funding transfer was not proven to have been sent before this quote expired, so it was not applied to the campaign.",
-        {
-          mined_at: minedAtMs === null ? null : new Date(minedAtMs).toISOString(),
-          expires_at: requiredString(claimed, "expires_at"),
-        },
-      )
-    }
-  }
+  const expiresAtMs = Date.parse(requiredString(claimed, "expires_at"))
+  const confirmationAfterExpiry = Date.parse(now) > expiresAtMs
+  const minedAtMs = verification.kind === "verified" && typeof verification.blockTimestamp === "number"
+    ? verification.blockTimestamp * 1000
+    : null
+  const genuinelyLateDeposit = verification.kind === "verified"
+    && confirmationAfterExpiry
+    && (minedAtMs === null || minedAtMs > expiresAtMs)
+  const graceEndsAtMs = expiresAtMs + LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS * 1000
+  const lateDepositInsideGrace = genuinelyLateDeposit
+    && minedAtMs !== null
+    && minedAtMs <= graceEndsAtMs
+    && Date.parse(now) <= graceEndsAtMs
 
   return await withTransaction(input.client, "write", async (tx) => {
     const effect = await selectFunding(tx, input.fundingId, rowLocks)
@@ -946,13 +904,65 @@ export async function confirmRewardCampaignFunding(input: {
 
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
+    if (genuinelyLateDeposit) {
+      const slot = lateDepositInsideGrace
+        ? queryResultRow(await executeFirst(tx, {
+            sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
+            args: [
+              requiredString(campaign, "community_id"),
+              requiredString(campaign, "post_id"),
+              input.campaignId,
+              new Date(graceEndsAtMs).toISOString(),
+              now,
+            ],
+          }))
+        : null
+      if (!slot || requiredString(slot, "holder_campaign_id") !== input.campaignId) {
+        await tx.execute({
+          sql: `
+            UPDATE reward_campaign_funding_effects
+            SET status = 'refund_pending', received_amount_atomic = expected_amount_atomic,
+                sender_address = ?2, confirmed_at = ?3, confirmed_block_number = ?4,
+                confirmed_block_hash = ?5,
+                failure_reason = 'funding_confirmed_after_quote_expiry', updated_at = ?3
+            WHERE reward_campaign_funding_effect_id = ?1
+          `,
+          args: [
+            input.fundingId, verification.senderAddress, now,
+            verification.blockNumber ?? null, verification.blockHash ?? null,
+          ],
+        })
+        await tx.execute({
+          sql: `
+            UPDATE reward_campaigns
+            SET status = CASE
+                  WHEN EXISTS (
+                    SELECT 1 FROM reward_campaign_funding_effects
+                    WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+                  ) THEN 'funding_quoted'
+                  WHEN funded_cents > 0 THEN 'funding_quoted'
+                  ELSE 'draft'
+                END,
+                updated_at = ?2
+            WHERE reward_campaign_id = ?1
+          `,
+          args: [input.campaignId, now],
+        })
+        const refundPending = await selectFunding(tx, input.fundingId)
+        if (!refundPending) throw new Error("refund-pending reward funding effect disappeared")
+        return fundingResource(refundPending)
+      }
+    }
     const amount = integer(rowValue(effect, "expected_amount_cents"))
     const nextFunded = integer(rowValue(campaign, "funded_cents")) + amount
     const budget = integer(rowValue(campaign, "budget_cents"))
     if (nextFunded > budget) throw conflictError("Confirmed funding would exceed campaign budget")
-    const startMillis = Date.parse(requiredString(campaign, "starts_at"))
-    const endMillis = Date.parse(requiredString(campaign, "ends_at"))
     const nowMillis = Date.parse(now)
+    const requestedStartMillis = Date.parse(requiredString(campaign, "starts_at"))
+    const requestedEndMillis = Date.parse(requiredString(campaign, "ends_at"))
+    const campaignDurationMillis = requestedEndMillis - requestedStartMillis
+    const startMillis = genuinelyLateDeposit ? nowMillis : requestedStartMillis
+    const endMillis = genuinelyLateDeposit ? nowMillis + campaignDurationMillis : requestedEndMillis
     const ownerAllowsRewards = await thirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
@@ -985,12 +995,18 @@ export async function confirmRewardCampaignFunding(input: {
         sql: `
           UPDATE reward_campaigns
           SET funded_cents = ?2, status = ?3,
+              starts_at = CASE WHEN ?5 THEN ?6 ELSE starts_at END,
+              ends_at = CASE WHEN ?5 THEN ?7 ELSE ends_at END,
               activated_at = CASE WHEN ?3 = 'active' AND activated_at IS NULL THEN ?4 ELSE activated_at END,
               ended_at = CASE WHEN ?3 = 'ended' AND ended_at IS NULL THEN ?4 ELSE ended_at END,
               updated_at = ?4
           WHERE reward_campaign_id = ?1
         `,
-        args: [input.campaignId, nextFunded, nextStatus, now],
+        args: [
+          input.campaignId, nextFunded, nextStatus, now, genuinelyLateDeposit,
+          new Date(startMillis).toISOString(),
+          new Date(endMillis).toISOString(),
+        ],
       })
     } catch (error) {
       if (hasUniqueConstraintName(error, "reward_campaigns_one_live_per_song_post")) {

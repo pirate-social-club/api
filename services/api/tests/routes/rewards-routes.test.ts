@@ -608,6 +608,7 @@ describe("rewards routes", () => {
 
     const firstQuote = await quoteCampaign(firstBooster.accessToken, firstCampaign.id, 40_000, "reward-slot-quote-first")
     expect(firstQuote.status).toBe(201)
+    const firstFunding = await json(firstQuote) as { id: string }
     const holderRequote = await quoteCampaign(firstBooster.accessToken, firstCampaign.id, 10_000, "reward-slot-quote-refresh")
     expect(holderRequote.status).toBe(201)
 
@@ -623,6 +624,34 @@ describe("rewards routes", () => {
     expect(takeover.status).toBe(201)
     const slot = await ctx.client.execute("SELECT holder_campaign_id FROM reward_song_slots")
     expect(slot.rows).toEqual([{ holder_campaign_id: secondCampaign.id }])
+
+    const firstExpiresAt = new Date(Date.now() - 2 * 60 * 1000).toISOString()
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [firstFunding.id, firstExpiresAt],
+    })
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+      blockTimestamp: Math.floor(Date.parse(firstExpiresAt) / 1000) + 60,
+    }))
+    const displacedDeposit = await app.request(
+      `http://pirate.test/reward_campaigns/${firstCampaign.id}/funding_quotes/${firstFunding.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(firstBooster.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"a".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(displacedDeposit.status).toBe(200)
+    expect(await json(displacedDeposit)).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "funding_confirmed_after_quote_expiry",
+    })
+    expect((await ctx.client.execute("SELECT holder_campaign_id FROM reward_song_slots")).rows)
+      .toEqual([{ holder_campaign_id: secondCampaign.id }])
   })
 
   test("a transfer broadcast before expiry still funds the campaign when confirmation is resumed after expiry", async () => {
@@ -684,7 +713,7 @@ describe("rewards routes", () => {
     expect(await json(funded)).toMatchObject({ status: "active", funded_cents: 100000 })
   })
 
-  test("a transfer mined after expiry cannot revive stale campaign terms", async () => {
+  test("a narrowly late transfer re-acquires its slot and receives a fresh campaign window", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-funding-post-expiry")
@@ -703,7 +732,7 @@ describe("rewards routes", () => {
     }, ctx.env)
     const quote = await json(quoteResponse) as { id: string }
 
-    const expiresAt = "2020-01-01T00:00:00.000Z"
+    const expiresAt = new Date(Date.now() - 2 * 60 * 1000).toISOString()
     await ctx.client.execute({
       sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
       args: [quote.id, expiresAt],
@@ -718,7 +747,7 @@ describe("rewards routes", () => {
       blockTimestamp: minedAt,
     }))
 
-    const rejected = await app.request(
+    const accepted = await app.request(
       `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
       {
         method: "POST",
@@ -727,22 +756,24 @@ describe("rewards routes", () => {
       },
       ctx.env,
     )
-    expect(rejected.status).toBe(409)
-    expect(await json(rejected)).toMatchObject({ code: "funding_quote_expired" })
+    expect(accepted.status).toBe(200)
+    expect(await json(accepted)).toMatchObject({ status: "confirmed" })
 
-    // The campaign is not funded, and the effect records why the transfer was refused.
-    const unfunded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+    const funded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(unfunded)).toMatchObject({ funded_cents: 0 })
-    const effect = await ctx.client.execute({
-      sql: "SELECT status, failure_reason FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
-      args: [quote.id],
+    const fundedBody = await json(funded) as { status: string; funded_cents: number; starts_at: number; ends_at: number }
+    expect(fundedBody).toMatchObject({ status: "active", funded_cents: 100000 })
+    expect(fundedBody.starts_at).toBeGreaterThan(Math.floor(Date.now() / 1000) - 10)
+    const schedule = await ctx.client.execute({
+      sql: "SELECT requested_starts_at, requested_ends_at, starts_at, ends_at FROM reward_campaigns WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
     })
-    expect(effect.rows[0]).toMatchObject({
-      status: "failed",
-      failure_reason: "funding_confirmed_after_quote_expiry",
-    })
+    expect(schedule.rows[0]?.requested_starts_at).not.toBe(schedule.rows[0]?.starts_at)
+    expect(schedule.rows[0]?.requested_ends_at).not.toBe(schedule.rows[0]?.ends_at)
+    expect(fundedBody.ends_at - fundedBody.starts_at).toBe(
+      Math.floor((Date.parse(String(schedule.rows[0]?.requested_ends_at)) - Date.parse(String(schedule.rows[0]?.requested_starts_at))) / 1000),
+    )
   })
 
   test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
@@ -797,11 +828,14 @@ describe("rewards routes", () => {
       args: [expired.id],
     })
     const expiredConfirm = await confirm(expired.id, "d")
-    expect(expiredConfirm.status).toBe(409)
-    expect(await json(expiredConfirm)).toMatchObject({ code: "funding_quote_expired" })
+    expect(expiredConfirm.status).toBe(200)
+    expect(await json(expiredConfirm)).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "funding_confirmed_after_quote_expiry",
+    })
     // A lapsed quote is now verified rather than refused on wall-clock alone: only the chain can
     // say whether the transfer was mined in time. This stub reports no block timestamp, so the
-    // transfer cannot be proven timely and is refused — fail closed.
+    // transfer cannot be proven timely and is held for an operator refund — fail closed.
     expect(verificationCalls).toBe(3)
 
     for (const [reason, hex] of [["wrong_transfer_recipient", "e"], ["wrong_transfer_amount", "f"]] as const) {

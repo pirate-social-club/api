@@ -85,6 +85,23 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain(" ~ ")
   })
 
+  test("builds the local reward funding mirror with the refund-pending custody state", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_campaign_funding_effects (
+        status TEXT NOT NULL CHECK (status IN (
+          'quoted', 'confirming', 'confirmed', 'failed', 'refunded'
+        )),
+        received_amount_atomic TEXT,
+        confirmed_at TIMESTAMPTZ,
+        CHECK (received_amount_atomic IS NULL OR status IN ('confirmed', 'refunded')),
+        CHECK (confirmed_at IS NULL OR status IN ('confirmed', 'refunded'))
+      );
+    `)
+
+    expect(statement).toContain("'failed', 'refund_pending', 'refunded'")
+    expect(statement?.match(/'confirmed', 'refund_pending', 'refunded'/g)).toHaveLength(2)
+  })
+
   test("ignores comment-only migrations", () => {
     const sql = `
       -- Retired before runtime wiring.
