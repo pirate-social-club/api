@@ -23,6 +23,7 @@ import {
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
 import { decodePublicAssetId, decodePublicCommunityId, decodePublicJobId, decodePublicPostId } from "../lib/public-ids"
+import { isMissingRelationError } from "../lib/db-helpers"
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
 
@@ -123,16 +124,18 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
       results.push({ community_id: communityId, binding_name: bindingName, ok: false, error: reclaimed.code })
       continue
     }
-    await client.batch([
-      {
-        sql: "UPDATE communities SET status = 'deleted', updated_at = ?2 WHERE community_id = ?1",
-        args: [communityId, now],
-      },
-      {
+    try {
+      await client.execute({
         sql: "UPDATE community_database_bindings SET status = 'inactive', updated_at = ?2 WHERE community_id = ?1 AND status = 'active'",
         args: [communityId, now],
-      },
-    ], "write")
+      })
+    } catch (error) {
+      if (!isMissingRelationError(error, "community_database_bindings")) throw error
+    }
+    await client.execute({
+      sql: "UPDATE communities SET status = 'deleted', updated_at = ?2 WHERE community_id = ?1",
+      args: [communityId, now],
+    })
     results.push({
       community_id: communityId,
       binding_name: bindingName,
