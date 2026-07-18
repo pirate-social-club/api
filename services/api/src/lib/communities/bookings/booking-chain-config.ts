@@ -191,6 +191,14 @@ export function resolveRewardsSettlementOperatorAddress(env: Env): string {
   return resolveSettlementOperatorAddress(env, "rewards")
 }
 
+export function assertRewardsCampaignTreasuryMatchesSettlementOperator(env: Env): void {
+  const treasury = parseExpectedEvmAddress(env.REWARDS_CAMPAIGN_TREASURY_ADDRESS)
+  if (!treasury) throw badRequestError("REWARDS_CAMPAIGN_TREASURY_ADDRESS is invalid")
+  if (getAddress(treasury) !== resolveRewardsSettlementOperatorAddress(env)) {
+    throw badRequestError("Reward campaign treasury must match the rewards settlement operator")
+  }
+}
+
 export function assertDistinctBookingAndRewardsSignerDomains(env: Env): void {
   const hasBookingSigner = Boolean(
     String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS ?? "").trim()

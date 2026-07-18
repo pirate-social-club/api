@@ -10,7 +10,7 @@ const RETRY_MAX_DELAY_MS = 5 * 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export type OperatorKind = "booking" | "rewards"
-type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout"
+type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -30,9 +30,11 @@ export interface OperatorSettleRequest {
   bookingId?: string
   userId?: string
   payoutEffectId?: string
+  fundingEffectId?: string
   idempotencyKey?: string
   effectKind: OperatorEffectKind
-  amountCents: number
+  amountCents?: number
+  amountAtomic?: string
   recipientAddress: string
 }
 
@@ -59,7 +61,7 @@ export interface ChainPrimitives {
   pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   gasParams: (env: Env, operatorKind?: OperatorKind) => Promise<GasParams>
-  signVerifiedTransfer: (env: Env, input: { to: string; amountCents: number; nonce: number; gas: GasParams; operatorKind?: OperatorKind }) => Promise<{ signedTx: string; txHash: string }>
+  signVerifiedTransfer: (env: Env, input: { to: string; amountCents?: number; amountAtomic?: string; nonce: number; gas: GasParams; operatorKind?: OperatorKind }) => Promise<{ signedTx: string; txHash: string }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
 }
@@ -70,17 +72,30 @@ function normalizeRecipient(raw: string): string {
   // Lowercase for the DO's own storage/comparison (no ethers); the real signer re-checksums for the tx.
   return a.toLowerCase()
 }
+function normalizeAtomicAmount(raw: string | undefined): string | null {
+  if (raw == null) return null
+  try {
+    const amount = BigInt(raw)
+    if (amount <= 0n || amount.toString() !== raw) throw new Error("invalid")
+    return amount.toString()
+  } catch {
+    throw badRequestError("Operator settlement atomic amount must be a positive canonical integer")
+  }
+}
 function errMsg(e: unknown): string { return e instanceof Error ? e.message : String(e) }
 function requestOperatorKind(req: OperatorSettleRequest): OperatorKind {
-  return req.operatorKind ?? (req.effectKind === "reward_cashout" ? "rewards" : "booking")
+  return req.operatorKind ?? (req.effectKind === "reward_cashout" || req.effectKind === "reward_funding_refund" ? "rewards" : "booking")
 }
 function canonicalFields(req: OperatorSettleRequest): { communityId: string; bookingId: string; effectKind: OperatorEffectKind } {
   const kind = requestOperatorKind(req)
   if (kind === "rewards") {
-    if (req.effectKind !== "reward_cashout" || !req.userId || !req.payoutEffectId || !req.idempotencyKey) {
-      throw badRequestError("Rewards settlement request is missing user/payout/idempotency data")
+    if (req.effectKind === "reward_cashout" && req.userId && req.payoutEffectId && req.idempotencyKey) {
+      return { communityId: req.userId, bookingId: req.payoutEffectId, effectKind: req.effectKind }
     }
-    return { communityId: req.userId, bookingId: req.payoutEffectId, effectKind: req.effectKind }
+    if (req.effectKind === "reward_funding_refund" && req.fundingEffectId && req.idempotencyKey) {
+      return { communityId: "reward_funding", bookingId: req.fundingEffectId, effectKind: req.effectKind }
+    }
+    throw badRequestError("Rewards settlement request is missing effect identity or idempotency data")
   }
   if (!req.communityId || !req.bookingId || (req.effectKind !== "booking_payout" && req.effectKind !== "booking_refund")) {
     throw badRequestError("Operator settlement request is missing community/booking/effect kind")
@@ -107,6 +122,7 @@ interface EffectRow {
   booking_id: string
   effect_kind: string
   amount_cents: number
+  amount_atomic: string | null
   recipient_address: string
   signed_tx: string | null
   tx_hash: string | null
@@ -146,13 +162,19 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
           this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (2, ?1)", Date.now())
         })
       }
+      if (schemaVersion < 3) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN amount_atomic TEXT")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (3, ?1)", Date.now())
+        })
+      }
     })
   }
 
   async settle(req: OperatorSettleRequest): Promise<OperatorSettleResult> {
     const key = this.deriveKey(req)
     const recipient = normalizeRecipient(req.recipientAddress)
-    if (!Number.isInteger(req.amountCents) || req.amountCents <= 0) throw badRequestError("Booking settlement amount must be positive")
+    this.assertAmount(req)
 
     let row = this.read(key)
     if (row) this.assertImmutable(row, req, recipient)
@@ -226,11 +248,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       const now = Date.now()
       this.ctx.storage.sql.exec(
         `INSERT INTO effects (
-           idempotency_key, community_id, booking_id, effect_kind, amount_cents, recipient_address,
+           idempotency_key, community_id, booking_id, effect_kind, amount_cents, amount_atomic, recipient_address,
            signed_tx, tx_hash, nonce, state, version, claim_token, claim_expires_at,
            created_at, updated_at, attempt_count, next_attempt_at, last_error
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, 'reserving', 1, NULL, NULL, ?7, ?7, 0, NULL, NULL)`,
-        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents, recipient, now,
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, 'reserving', 1, NULL, NULL, ?8, ?8, 0, NULL, NULL)`,
+        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents ?? 0, normalizeAtomicAmount(req.amountAtomic), recipient, now,
       )
       return this.read(key)!
     })
@@ -308,6 +330,21 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         recipientAddress: row.recipient_address,
       }
     }
+    if (row.effect_kind === "reward_funding_refund") {
+      const parsed = JSON.parse(row.idempotency_key) as unknown
+      if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== "reward_funding_refund" || typeof parsed[1] !== "string") {
+        throw new Error("reward funding refund has invalid durable idempotency key")
+      }
+      if (!row.amount_atomic) throw new Error("reward funding refund is missing atomic amount")
+      return {
+        operatorKind: "rewards",
+        fundingEffectId: row.booking_id,
+        idempotencyKey: parsed[1],
+        effectKind: "reward_funding_refund",
+        amountAtomic: row.amount_atomic,
+        recipientAddress: row.recipient_address,
+      }
+    }
     return {
       operatorKind: "booking",
       communityId: row.community_id,
@@ -319,7 +356,19 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private operatorKind(row: EffectRow): OperatorKind {
-    return row.effect_kind === "reward_cashout" ? "rewards" : "booking"
+    return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund" ? "rewards" : "booking"
+  }
+
+  private assertAmount(req: OperatorSettleRequest): void {
+    if (req.effectKind === "reward_funding_refund") {
+      if (req.amountCents != null || normalizeAtomicAmount(req.amountAtomic) == null) {
+        throw badRequestError("Reward funding refund requires only an atomic amount")
+      }
+      return
+    }
+    if (!Number.isInteger(req.amountCents) || Number(req.amountCents) <= 0 || req.amountAtomic != null) {
+      throw badRequestError("Operator settlement requires only a positive cents amount")
+    }
   }
 
   private nextActive(): EffectRow | null {
@@ -395,7 +444,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     try {
       const operatorKind = requestOperatorKind(req)
       const gas = await chain().gasParams(this.env, operatorKind)
-      const signed = await chain().signVerifiedTransfer(this.env, { to: recipient, amountCents: req.amountCents, nonce: claimedRow.nonce!, gas, operatorKind })
+      const signed = await chain().signVerifiedTransfer(this.env, {
+        to: recipient,
+        amountCents: req.amountCents,
+        amountAtomic: req.amountAtomic,
+        nonce: claimedRow.nonce!,
+        gas,
+        operatorKind,
+      })
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
       const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, {
         signed_tx: signed.signedTx,
@@ -417,7 +473,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row.signed_tx || !row.tx_hash || row.nonce == null) throw new Error("prepared effect missing signed tx/nonce")
     const fromVersion = row.version
     try {
-      await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: row.effect_kind === "reward_cashout" ? "rewards" : "booking" })
+      await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: this.operatorKind(row) })
       return this.cas(row.idempotency_key, fromVersion, {
         state: "broadcast",
         next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
@@ -427,7 +483,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       const msg = errMsg(error).toLowerCase()
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
       if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
-      const liveness = await chain().txLiveness(this.env, row.tx_hash, row.effect_kind === "reward_cashout" ? "rewards" : "booking")
+      const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
       const next: OperatorSettleState = liveness === "success" || liveness === "pending" ? "broadcast" : (liveness === "failed" ? "failed_onchain" : "reconciliation_required")
       return this.cas(row.idempotency_key, fromVersion, {
         state: next,
@@ -440,7 +496,10 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const operatorKind = requestOperatorKind(req)
     if (operatorKind === "rewards") {
       canonicalFields(req)
-      return JSON.stringify(["reward_payout", req.idempotencyKey])
+      return JSON.stringify([
+        req.effectKind === "reward_funding_refund" ? "reward_funding_refund" : "reward_payout",
+        req.idempotencyKey,
+      ])
     }
     // Unambiguous encoding — a colon (or any char) inside an id cannot collide another effect.
     canonicalFields(req)
@@ -451,7 +510,8 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const fields = canonicalFields(req)
     if (
       existing.community_id !== fields.communityId || existing.booking_id !== fields.bookingId ||
-      existing.effect_kind !== fields.effectKind || existing.amount_cents !== req.amountCents ||
+      existing.effect_kind !== fields.effectKind || existing.amount_cents !== (req.amountCents ?? 0) ||
+      existing.amount_atomic !== normalizeAtomicAmount(req.amountAtomic) ||
       existing.recipient_address !== recipient
     ) {
       throw conflictError("Operator settlement idempotency key reused with different effect data")
@@ -492,6 +552,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return {
       idempotency_key: String(r.idempotency_key), community_id: String(r.community_id), booking_id: String(r.booking_id),
       effect_kind: String(r.effect_kind), amount_cents: Number(r.amount_cents), recipient_address: String(r.recipient_address),
+      amount_atomic: r.amount_atomic == null ? null : String(r.amount_atomic),
       signed_tx: r.signed_tx == null ? null : String(r.signed_tx), tx_hash: r.tx_hash == null ? null : String(r.tx_hash),
       nonce: r.nonce == null ? null : Number(r.nonce), state: String(r.state) as OperatorSettleState, version: Number(r.version),
       claim_token: r.claim_token == null ? null : String(r.claim_token), claim_expires_at: r.claim_expires_at == null ? null : Number(r.claim_expires_at),

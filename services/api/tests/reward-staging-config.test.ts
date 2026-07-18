@@ -18,7 +18,7 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_IDENTITY_PROVIDER: "very",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x053228674F055FBb94d1B8118638F61a4a6ee512",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x47FfE9baBf7b64636298185dBf63Db9561334956",
       REWARDS_CAMPAIGN_RPC_URL: "https://sepolia.base.org",
       PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x47FfE9baBf7b64636298185dBf63Db9561334956",
       PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
@@ -34,6 +34,7 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "3600",
       REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "7776000",
     })
+    expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
   })
 
   test("limits the production pilot to Arkansas Blues with earning and payouts dark", () => {

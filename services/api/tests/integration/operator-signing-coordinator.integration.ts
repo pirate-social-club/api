@@ -41,7 +41,7 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
 
 async function effects(stub: Stub): Promise<Array<Record<string, unknown>>> {
   return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql.exec("SELECT idempotency_key, nonce, tx_hash, state, version, attempt_count, next_attempt_at FROM effects ORDER BY nonce").toArray(),
+    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at FROM effects ORDER BY nonce").toArray(),
   )
 }
 
@@ -57,6 +57,18 @@ function rewardsReq(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRe
     idempotencyKey: "reward-cashout:test",
     effectKind: "reward_cashout",
     amountCents: 100,
+    recipientAddress: "0x0000000000000000000000000000000000000222",
+    ...over,
+  }
+}
+
+function rewardRefundReq(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRequest {
+  return {
+    operatorKind: "rewards",
+    fundingEffectId: "rcfe_refund",
+    idempotencyKey: "rcfe_refund",
+    effectKind: "reward_funding_refund",
+    amountAtomic: "12345678",
     recipientAddress: "0x0000000000000000000000000000000000000222",
     ...over,
   }
@@ -118,6 +130,24 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect((await effects(stub)).map((row) => row.state)).toEqual(["broadcast"])
 
     await expect(stub.settle(rewardsReq({ amountCents: 101 }))).rejects.toThrow()
+  })
+
+  it("refunds the exact atomic custody amount through the rewards nonce domain", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 31, latest: 31, liveness: {} })
+    const first = await stub.settle(rewardRefundReq())
+    expect(first.idempotencyKey).toBe(JSON.stringify(["reward_funding_refund", "rcfe_refund"]))
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      amount_cents: 0,
+      amount_atomic: "12345678",
+      nonce: 31,
+      state: "broadcast",
+    })
+    await expect(stub.settle(rewardRefundReq({ amountAtomic: "12345679" }))).rejects.toThrow()
+    await expect(stub.settle(rewardRefundReq({ amountCents: 123, amountAtomic: undefined }))).rejects.toThrow()
   })
 
   it("does not let polling bypass alarm retry backoff", async () => {

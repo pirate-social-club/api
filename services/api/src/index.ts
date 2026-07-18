@@ -66,6 +66,7 @@ import { runStorySettlementCoordinatorWatchdog } from "./lib/story/story-settlem
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
+import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
@@ -850,6 +851,31 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledRewardFundingRefunds(env: Env): Promise<void> {
+  try {
+    const summary = await reconcileRewardFundingRefunds({
+      env,
+      client: getControlPlaneClient(env),
+      limit: 25,
+    })
+    if (summary.enabled && (summary.scanned > 0 || summary.errors > 0 || summary.rejected_finality > 0)) {
+      console.info("[reward-funding-refunds] reconciled", JSON.stringify(summary))
+    }
+    if (summary.errors > 0 || summary.rejected_finality > 0) {
+      await captureScheduledWarning(
+        env,
+        "Reward funding refunds require operator attention",
+        "reward_funding_refund_reconciliation",
+        summary,
+        { urgency: "high" },
+      )
+    }
+  } catch (error) {
+    console.error("[reward-funding-refunds] reconciliation failed", error)
+    await captureScheduledError(env, error, "reward_funding_refund_reconciliation")
+  }
+}
+
 async function revalidateScheduledHnsNamespaces(env: Env): Promise<void> {
   try {
     const summary = await sweepHnsNamespaceRevalidations({
@@ -929,6 +955,7 @@ type ScheduledPriorityJobName =
   | "reconcile_booking_settlements"
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
+  | "reconcile_reward_funding_refunds"
   | "process_community_jobs"
   | "reconcile_purchase_settlements"
   | "reconcile_d1_provisioning"
@@ -943,6 +970,7 @@ export function scheduledPriorityJobNames(
     "reconcile_booking_settlements",
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
+    "reconcile_reward_funding_refunds",
     "process_community_jobs",
     "reconcile_purchase_settlements",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
@@ -999,15 +1027,16 @@ const handler: ExportedHandler<Env> = {
       reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
+      reconcile_reward_funding_refunds: () => reconcileScheduledRewardFundingRefunds(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two. The first five starts guarantee booking settlement,
-    // royalty verification, reward reconciliation, queued community delivery, and
-    // purchase settlement recovery each get a turn even if earlier money-path tasks
+    // Concurrency is two. The leading money-path jobs guarantee booking settlement,
+    // royalty verification, reward reconciliation, funding refunds, queued community
+    // delivery, and purchase settlement recovery each get a turn even if earlier tasks
     // run past the start deadline.
     // D1 remains ahead of the slower, latency-tolerant HNS revalidation and reward
     // monitor.
