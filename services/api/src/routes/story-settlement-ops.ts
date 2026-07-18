@@ -172,6 +172,8 @@ storySettlementOps.post("/fee-replacements", async (c) => {
     expectedActiveCandidateHash: bytes32("expected_active_candidate_hash", body.expected_active_candidate_hash),
     maxFeePerGas: positiveUint("max_fee_per_gas", body.max_fee_per_gas),
     maxPriorityFeePerGas: positiveUint("max_priority_fee_per_gas", body.max_priority_fee_per_gas),
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
     authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
   })
   console.warn(JSON.stringify({
@@ -186,6 +188,26 @@ storySettlementOps.post("/fee-replacements", async (c) => {
     transactionHash: replacement.transactionHash,
   }))
   return c.json({ replacement }, 202)
+})
+
+storySettlementOps.post("/fee-replacement-inspections", async (c) => {
+  const actor = await feeReplacementOperator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const planRef = bytes32("plan_ref", body.plan_ref)
+  const stepRef = bytes32("step_ref", body.step_ref)
+  const authorizationRef = reference(body.authorization_ref)
+  const candidates = await coordinator(c).inspectFeeReplacementCandidates(planRef, stepRef)
+  console.info(JSON.stringify({
+    message: "Story settlement fee replacement candidates inspected",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    planRef,
+    stepRef,
+    candidateCount: candidates.length,
+  }))
+  return c.json({ candidates }, 200)
 })
 
 storySettlementOps.post("/nonce-repair-drills", async (c) => {

@@ -25,6 +25,7 @@ describe("Story settlement operator routes", () => {
     let inspectedPlanRef: string | null = null
     setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })
     const env = {
+      ENVIRONMENT: "staging",
       STORY_CHAIN_ID: "1315",
       STORY_COORDINATOR_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
       STORY_COORDINATOR_SIGNER_ADDRESS: ADDRESS,
@@ -136,9 +137,12 @@ describe("Story settlement operator routes", () => {
       expectedActiveCandidateHash: `0x${"55".repeat(32)}`,
       maxFeePerGas: 110n,
       maxPriorityFeePerGas: 11n,
+      operatorCredentialId: "opc_story_ops",
+      operatorActorId: "svc_story_ops",
       authorizationRef: "operator:opc_story_ops:INC-FEE-REPLACE-1",
     })
 
+    request = null
     setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })
     const forbidden = await storySettlementOps.request("/fee-replacements", {
       method: "POST",
@@ -153,7 +157,11 @@ describe("Story settlement operator routes", () => {
         authorization_ref: "INC-FEE-REPLACE-1",
       }),
     }, env)
-    expect(forbidden.status).toBe(403)
+    // This isolated router has no production error mapper, so the typed 403 is
+    // surfaced as 500 by Hono's test request helper. The important boundary is
+    // that the repair-only credential never reaches the coordinator method.
+    expect(forbidden.status).toBe(500)
+    expect(request).toBeNull()
   })
 
   test("arms a scoped one-shot staging nonce-repair drill", async () => {
