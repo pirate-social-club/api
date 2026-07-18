@@ -29,6 +29,17 @@ const POW_OR_SCORE_POLICY = {
   },
 } as const
 
+const POW_AND_HUMAN_POLICY = {
+  version: 1,
+  expression: {
+    op: "and",
+    children: [
+      { op: "gate", gate: { type: "altcha_pow" } },
+      { op: "gate", gate: { type: "unique_human", provider: "self" } },
+    ],
+  },
+} as const
+
 const ALTCHA_ENV = {
   ALTCHA_HMAC_SECRET: "test-altcha-secret",
   ALTCHA_HMAC_KEY_SECRET: "test-altcha-key-secret",
@@ -242,7 +253,10 @@ describe("PoW-only open participation", () => {
     expect(state.followStatus).not.toBe("active")
   })
 
-  test("gates with non-PoW atoms still require membership to vote, even when PoW alone could satisfy the OR", async () => {
+  test("an OR gate that proof-of-work alone satisfies follows the voter instead of joining them", async () => {
+    // The dankmeme shape: or(wallet_score, unique_human, altcha_pow). Anyone
+    // can clear it with a browser check, so the gate is already open and a
+    // join step in front of it gates nothing.
     const ctx = await createRouteTestContext(ALTCHA_ENV)
     cleanup = ctx.cleanup
 
@@ -252,8 +266,8 @@ describe("PoW-only open participation", () => {
       `http://pirate.test/communities/${community.communityId}/posts`,
       {
         post_type: "text",
-        title: "Members only interactions",
-        body: "Verified OR merely-human, but joined either way.",
+        title: "Open interactions",
+        body: "Verified or merely-human, no join either way.",
         idempotency_key: "pow-or-post-1",
       },
       ctx.env,
@@ -263,6 +277,46 @@ describe("PoW-only open participation", () => {
     const postBody = await json(createdPost) as { id: string }
 
     const outsider = await exchangeJwt(ctx.env, "pow-or-outsider")
+    const altcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: outsider.userId,
+      scope: "vote",
+      action: `post:${postBody.id}:1`,
+    })
+    const vote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/vote`,
+      { value: 1, altcha },
+      ctx.env,
+      outsider.accessToken,
+    )
+    expect(vote.status).toBe(200)
+
+    const state = await fetchMembershipAndFollow(ctx.communityDbRoot, community.communityId, outsider.userId)
+    expect(state.membershipStatus).toBeNull()
+    expect(state.followStatus).toBe("active")
+  })
+
+  test("a gate requiring identity alongside proof-of-work still requires membership", async () => {
+    const ctx = await createRouteTestContext(ALTCHA_ENV)
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "pow-and-creator")
+    const community = await createCommunity(ctx.env, creator.accessToken, "PoW And Human Club", POW_AND_HUMAN_POLICY)
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Identity required",
+        body: "A browser check alone cannot satisfy this gate.",
+        idempotency_key: "pow-and-post-1",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+
+    const outsider = await exchangeJwt(ctx.env, "pow-and-outsider")
     const altcha = await solveTestAltchaPayload({
       env: ctx.env,
       actorUserId: outsider.userId,
