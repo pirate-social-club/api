@@ -311,6 +311,20 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         "source IN ('song_engagement_reconciler', 'reward_campaign_reconciler')",
       )
   }
+  if (normalized.startsWith("CREATE TABLE REWARD_CAMPAIGN_FUNDING_EFFECTS")) {
+    // PostgreSQL migration 0148 expands the custody-state constraints through
+    // ALTER TABLE, which SQLite cannot mirror. Build fresh local/test databases
+    // with the final enum and receipt invariants in the original CREATE TABLE.
+    sqliteCompat = sqliteCompat
+      .replace(
+        /'quoted',\s*'confirming',\s*'confirmed',\s*'failed',\s*'refunded'/i,
+        "'quoted', 'confirming', 'confirmed', 'failed', 'refund_pending', 'refunded'",
+      )
+      .replace(
+        /status\s+IN\s*\(\s*'confirmed',\s*'refunded'\s*\)/gi,
+        "status IN ('confirmed', 'refund_pending', 'refunded')",
+      )
+  }
   if (normalized.startsWith("CREATE TABLE COMMUNITY_DATABASE_ROUTING")) {
     // Migration 0124 drops the Turso `backend` column, but it does so inside a
     // Postgres DO block that this SQLite mirror skips — so the column survives here.

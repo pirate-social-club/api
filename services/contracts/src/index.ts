@@ -2876,7 +2876,7 @@ export type RewardCampaignCreateRequest = {
   idempotency_key: string;
 };
 
-export type RewardCampaignFundingStatus = "quoted" | "confirming" | "confirmed" | "failed" | "refunded";
+export type RewardCampaignFundingStatus = "quoted" | "confirming" | "confirmed" | "failed" | "refund_pending" | "refunded";
 
 export type RewardCampaignFundingQuote = {
   id: string;
