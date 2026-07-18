@@ -24,6 +24,7 @@ function env() {
   return {
     REWARDS_CAMPAIGNS_ENABLED: "true",
     REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_PAYOUTS_ENABLED: "true",
     REWARDS_IDENTITY_PROVIDER: "self",
     REWARDS_CAMPAIGN_CHAIN_ID: "84532",
     PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
@@ -109,7 +110,7 @@ describe("reward campaign reconciler", () => {
   test("fails closed unless campaign flags, identity provider, and alert ownership are configured", async () => {
     let listed = false
     const summary = await reconcileRewardCampaigns({
-      env: { ...env(), REWARDS_ACCRUAL_ENABLED: "false" } as never,
+      env: { ...env(), REWARDS_CAMPAIGNS_ENABLED: "false" } as never,
       communityRepository: {
         listActiveCommunities: async () => {
           listed = true

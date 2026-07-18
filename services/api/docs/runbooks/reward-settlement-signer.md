@@ -87,3 +87,12 @@ Afterward:
 2. Reconcile the campaign and payout ledger with the on-chain transaction hashes.
 3. Leave unused funds bounded or sweep them through an explicitly reviewed operator action.
 4. Do not enable production from this runbook.
+
+## Production enablement invariant
+
+Never enable campaign creation by itself. A production change that sets
+`REWARDS_CAMPAIGNS_ENABLED=true` must set both `REWARDS_ACCRUAL_ENABLED=true`
+and `REWARDS_PAYOUTS_ENABLED=true` in the same reviewed release. If either the
+accrual or payout rail is not ready, leave campaign creation disabled. The
+runtime configuration resolver and the checked-in environment test enforce the
+same implication: campaigns imply accrual and payouts.

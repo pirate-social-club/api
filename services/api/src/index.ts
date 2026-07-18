@@ -70,6 +70,7 @@ import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refu
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
+import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import {
   hnsNamespaceRevalidationAlertState,
@@ -744,6 +745,16 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
 async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
+    const solvency = await monitorRewardCampaignTreasurySolvency({ env, client })
+    if (solvency.configured) {
+      console.info("[reward-campaigns] treasury solvency", JSON.stringify({
+        treasury_address: solvency.treasuryAddress,
+        chain_id: solvency.chainId,
+        balance_atomic: solvency.balanceAtomic?.toString(),
+        liability_atomic: solvency.liability?.totalAtomic.toString(),
+        solvent: solvency.solvent,
+      }))
+    }
     const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
     if (!summary.enabled) return
     if (summary.liveness_stale) {

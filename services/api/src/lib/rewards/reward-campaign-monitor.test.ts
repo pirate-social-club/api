@@ -7,6 +7,8 @@ import { monitorRewardCampaigns, rewardCampaignAccountingAlertDetails } from "./
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_CAMPAIGNS_ENABLED: "true",
+    REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_PAYOUTS_ENABLED: "true",
     REWARDS_CAMPAIGN_CHAIN_ID: "84532",
     REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
     REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",

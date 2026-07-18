@@ -6,8 +6,16 @@ import { readWranglerVars } from "../scripts/_lib/dev-vars"
 const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
 
 describe("staging reward money-loop configuration", () => {
+  function expectCampaignEnablementIsCoordinated(vars: Record<string, string>): void {
+    if (vars.REWARDS_CAMPAIGNS_ENABLED !== "true") return
+    expect(vars.REWARDS_ACCRUAL_ENABLED).toBe("true")
+    expect(vars.REWARDS_PAYOUTS_ENABLED).toBe("true")
+  }
+
   test("arms the complete campaign money loop while keeping legacy accrual dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "staging")
+
+    expectCampaignEnablementIsCoordinated(vars)
 
     expect(vars.REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED).toBe("false")
     expect(vars).toMatchObject({
@@ -39,6 +47,7 @@ describe("staging reward money-loop configuration", () => {
 
   test("keeps production reward creation, earning, and payouts dark", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
+    expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
       REWARDS_CAMPAIGNS_ENABLED: "false",
       REWARDS_READS_ENABLED: "true",

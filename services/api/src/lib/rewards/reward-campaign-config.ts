@@ -71,6 +71,17 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
     }
   }
 
+  if (!enabled(env.REWARDS_ACCRUAL_ENABLED) || !enabled(env.REWARDS_PAYOUTS_ENABLED)) {
+    throw providerUnavailable(
+      "Reward campaigns require reward accrual and payouts to be enabled",
+      {
+        rewards_accrual_enabled: enabled(env.REWARDS_ACCRUAL_ENABLED),
+        rewards_payouts_enabled: enabled(env.REWARDS_PAYOUTS_ENABLED),
+      },
+      false,
+    )
+  }
+
   const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
   if (!/^https:\/\//i.test(rpcUrl)) {
     throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
