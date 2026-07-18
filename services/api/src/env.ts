@@ -199,6 +199,10 @@ export type Env = {
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
   STORY_RPC_FALLBACK_URLS?: string
+  // Optional coordinator-only RPC endpoint. Registration and all other Story
+  // traffic continue to use STORY_RPC_URL.
+  STORY_COORDINATOR_RPC_URL?: string
+  STORY_COORDINATOR_RPC_AUTH_TOKEN?: string
   STORY_ASSET_PUBLISH_COORDINATOR_CONTRACT?: string
   STORY_COMPOSITE_READ_CONDITION_ADDRESS?: string
   STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS?: string

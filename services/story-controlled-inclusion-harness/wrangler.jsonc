@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "story-controlled-inclusion-harness",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DRILLS",
+        "class_name": "ControlledInclusionDrill"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1_controlled_inclusion_drill",
+      "new_sqlite_classes": ["ControlledInclusionDrill"]
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "UPSTREAM_RPC_URL": "https://aeneid.storyrpc.io"
+  },
+  "env": {
+    "staging": {
+      "name": "story-controlled-inclusion-harness-staging",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DRILLS",
+            "class_name": "ControlledInclusionDrill"
+          }
+        ]
+      },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "UPSTREAM_RPC_URL": "https://aeneid.storyrpc.io"
+      }
+    }
+  }
+}

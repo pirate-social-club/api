@@ -1,0 +1,22 @@
+{
+  "name": "@pirate/story-controlled-inclusion-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test src",
+    "test:workerd": "vitest run --config vitest.config.ts",
+    "deploy:staging": "wrangler deploy --env staging"
+  },
+  "dependencies": {
+    "ethers": "^6.16.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@cloudflare/vitest-pool-workers": "0.8.71",
+    "typescript": "7.0.2",
+    "vitest": "3.2.6",
+    "wrangler": "^4.107.0"
+  }
+}
