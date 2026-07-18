@@ -846,12 +846,11 @@ export async function runShardDecommission(
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
   const poolRow = await pool
-    .prepare("SELECT community_id, released_at FROM d1_pool WHERE binding_name = ?1")
+    .prepare("SELECT community_id FROM d1_pool WHERE binding_name = ?1")
     .bind(input.bindingName)
     .first()
   const mappedCommunityId = String((poolRow as { community_id?: unknown } | null)?.community_id ?? "")
-  const releasedAt = String((poolRow as { released_at?: unknown } | null)?.released_at ?? "")
-  if (!poolRow || (mappedCommunityId !== input.communityId && !(mappedCommunityId === "" && releasedAt))) {
+  if (!poolRow || (mappedCommunityId !== input.communityId && mappedCommunityId !== "")) {
     return err(
       SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
       `refusing to decommission ${input.bindingName}: community mapping does not match`,
@@ -870,10 +869,10 @@ export async function runShardDecommission(
   const tableNames = orderTablesForDrop(definitions)
   // The target D1 and pool metadata are separate databases, and a Service RPC
   // response can be lost after both commits. Permit a retry to report success
-  // only when the row is already quarantined and the target is demonstrably
-  // empty. A free-but-never-released row and any non-empty target still fail
-  // closed, while a row mapped to another community was rejected above.
-  if (mappedCommunityId === "" && releasedAt) {
+  // only when the pool row has no current tenant and the target is demonstrably
+  // empty. This branch performs no shard mutation; any non-empty target still
+  // fails closed, while a row mapped to another community was rejected above.
+  if (mappedCommunityId === "") {
     if (tableNames.length > 0) {
       return err(
         SHARD_READ_ERROR.BINDING_NOT_EMPTY,
