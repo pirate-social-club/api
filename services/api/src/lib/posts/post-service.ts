@@ -33,6 +33,12 @@ import {
   requireMemberAccess,
 } from "./post-access"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import {
+  allowsNonMemberPowParticipation,
+  followCommunityAfterParticipation,
+  type ParticipationFollowRepository,
+} from "../communities/membership/open-participation"
 import {
   enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
@@ -46,7 +52,7 @@ import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-me
 import { processCommunityJobById } from "../communities/jobs/runner"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
-import { conflictError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
+import { conflictError, eligibilityFailed, internalError, notFoundError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
@@ -257,6 +263,7 @@ type PostServiceCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
+  & ParticipationFollowRepository
 
 async function enqueueLockedAssetDeliveryJobIfRequested(input: {
   env: Env
@@ -326,8 +333,22 @@ export async function createPost(input: {
   const db = await postCommunityWriteOpenerForRuntime(input.env, input.communityRepository, input.communityId)
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
+    let nonMemberPowAuthor = false
     if (!input.bypassAuthorAccessChecks) {
-      await requireMemberAccess(db.client, input.communityId, input.userId)
+      const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+      if (!canAccessCommunity(membership)) {
+        // PoW-only communities admit non-member posts: the action gate below
+        // demands a post-scoped ALTCHA proof, which is all joining would prove.
+        // Everything else keeps the 404 membership mask.
+        nonMemberPowAuthor = await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: input.communityId,
+          membership,
+        })
+        if (!nonMemberPowAuthor) {
+          throw notFoundError("Community not found")
+        }
+      }
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,
@@ -500,6 +521,15 @@ export async function createPost(input: {
     const post = await getPostById(db.client, draft.post_id)
     if (!post) {
       throw internalError("Post row is missing after insert")
+    }
+
+    if (nonMemberPowAuthor) {
+      await followCommunityAfterParticipation({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        communityId: input.communityId,
+        userId: input.userId,
+      })
     }
 
     if (input.body.publish_mode === "async") {
