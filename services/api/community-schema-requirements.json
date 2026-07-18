@@ -39,5 +39,9 @@
     "1138_namespace_handle_label_claim_rules.sql"
   ],
   "features": {},
-  "deferred": {}
+  "deferred": {
+    "1139_story_registration_durable_request.sql": {
+      "rationale": "Core prepares durable_request_json for persist-and-replay Story registration, but this API commit does not read or write that column. Require it when the durable registration runtime lands."
+    }
+  }
 }
