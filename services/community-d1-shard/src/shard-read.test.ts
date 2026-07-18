@@ -1158,6 +1158,45 @@ describe("communityD1Decommission", () => {
     expect((community as any).dropped).toHaveLength(0)
   })
 
+  test("finalizes an already released retry only when the target is empty", async () => {
+    const rows = loadedRows()
+    rows[0]!.community_id = null
+    rows[0]!.released_at = "t2"
+    const community = resetCommunityFake(["_cf_KV"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(rows) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      now: "t3",
+    })
+    expect(result).toEqual({ ok: true, value: { tablesDropped: 0, released: false } })
+  })
+
+  test("refuses an already released retry when the target is not empty", async () => {
+    const rows = loadedRows()
+    rows[0]!.community_id = null
+    rows[0]!.released_at = "t2"
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(rows) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      now: "t3",
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe("shard_binding_not_empty")
+  })
+
   test("drops a loaded staging database and quarantines its exact pool row", async () => {
     const rows = loadedRows()
     const community = resetCommunityFake(["_cf_KV", "schema_migrations", "posts", "comments"])
