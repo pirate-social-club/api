@@ -185,6 +185,19 @@ export type ShardAdminResetResponse = {
   tablesDropped: number
 }
 
+export type ShardAdminDecommissionRequest = {
+  adminToken: string
+  bindingName: string
+  communityId: string
+  /** ISO timestamp recorded as `released_at` after the database is emptied. */
+  now: string
+}
+
+export type ShardAdminDecommissionResponse = {
+  tablesDropped: number
+  released: boolean
+}
+
 export type ShardAdminReleaseRequest = {
   adminToken: string
   bindingName: string
@@ -212,6 +225,7 @@ export interface ShardAdminRpc {
   communityD1GetPoolRow(input: ShardAdminGetPoolRowRequest): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
   communityD1ListStaleUnloadedPoolRows(input: ShardAdminListStaleUnloadedPoolRowsRequest): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>>
   communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>>
+  communityD1Decommission(input: ShardAdminDecommissionRequest): Promise<ShardResult<ShardAdminDecommissionResponse>>
   communityD1Release(input: ShardAdminReleaseRequest): Promise<ShardResult<ShardAdminReleaseResponse>>
   communityD1PoolStats(input: ShardAdminPoolStatsRequest): Promise<ShardResult<ShardAdminPoolStatsResponse>>
 }

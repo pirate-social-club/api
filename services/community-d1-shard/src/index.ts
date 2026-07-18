@@ -1,6 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers"
 import type {
   ShardAdminGetPoolRowRequest,
+  ShardAdminDecommissionRequest,
+  ShardAdminDecommissionResponse,
   ShardAdminGetPoolRowResponse,
   ShardAdminListStaleUnloadedPoolRowsRequest,
   ShardAdminListStaleUnloadedPoolRowsResponse,
@@ -25,6 +27,7 @@ import {
   runShardBatch,
   runShardBind,
   runShardGetPoolRow,
+  runShardDecommission,
   runShardListStaleUnloadedPoolRows,
   runShardLoadSnapshot,
   runShardPoolStats,
@@ -121,6 +124,12 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
 
   communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>> {
     return runShardReset(this.env, input)
+  }
+
+  communityD1Decommission(
+    input: ShardAdminDecommissionRequest,
+  ): Promise<ShardResult<ShardAdminDecommissionResponse>> {
+    return runShardDecommission(this.env, input)
   }
 
   communityD1Release(

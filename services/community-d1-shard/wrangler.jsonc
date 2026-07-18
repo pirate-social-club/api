@@ -20,7 +20,8 @@
     "COMMUNITY_D1_BINDING_MAP_JSON": "{\"cmt_a43c487541154b358837c726b98aea2e\":\"DB_CMTY_PILOT\",\"cmt_541911f4cd9145398b7fa79ddc0542fe\":\"DB_CMTY_FIXTURE\"}",
     // This shard's own worker id. Returned in communityD1Bind responses so the
     // API can populate community_database_routing.shard_worker_id.
-    "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-staging"
+    "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-staging",
+    "STAGING_RECLAIM_ENABLED": "true"
   },
   "d1_databases": [
     {

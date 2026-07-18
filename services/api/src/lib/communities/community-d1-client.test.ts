@@ -45,6 +45,10 @@ function fakeShard() {
       calls.push({ m: "communityD1Reset", input })
       return { ok: true as const, value: { tablesDropped: 0 } }
     },
+    communityD1Decommission: async (input: any) => {
+      calls.push({ m: "communityD1Decommission", input })
+      return { ok: true as const, value: { tablesDropped: 0, released: true } }
+    },
     communityD1Release: async (input: any) => {
       calls.push({ m: "communityD1Release", input })
       return { ok: true as const, value: { released: true } }

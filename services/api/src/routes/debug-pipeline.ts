@@ -26,6 +26,13 @@ import { decodePublicAssetId, decodePublicCommunityId, decodePublicJobId, decode
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
 
+const STAGING_RECLAIM_CONFIRMATION = "RECLAIM STAGING SMOKE COMMUNITIES"
+const STAGING_SMOKE_DESCRIPTIONS = new Set([
+  "Ephemeral staging smoke community for the create/provisioning path.",
+  "Ephemeral staging smoke community for the song-submit path.",
+  "Manual staging smoke community for the D1 provisioning seam.",
+])
+
 function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
   const admin = authenticateAdminTokenOnly({
     env: c.env,
@@ -36,6 +43,115 @@ function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
   }
   return admin
 }
+
+function isRecognizedStagingSmoke(row: { display_name?: unknown; description?: unknown }): boolean {
+  const displayName = String(row.display_name ?? "")
+  const description = String(row.description ?? "")
+  return STAGING_SMOKE_DESCRIPTIONS.has(description)
+    || /^(Community Create CI Smoke|D1 Provisioning Smoke|Song Submit CI Smoke)\b/u.test(displayName)
+}
+
+debugPipeline.post("/staging-d1/reclaim", async (c) => {
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+  if (!c.env.COMMUNITY_D1_SHARD || !c.env.SHARD_ADMIN_TOKEN) {
+    return c.json({ error: "staging_reclaim_not_configured" }, 503)
+  }
+
+  const body = await c.req.json().catch(() => null) as {
+    community_ids?: unknown
+    confirmation?: unknown
+    apply?: unknown
+  } | null
+  const apply = body?.apply === true
+  const communityIds = Array.isArray(body?.community_ids)
+    ? [...new Set(body.community_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))]
+    : []
+  if ((apply && body?.confirmation !== STAGING_RECLAIM_CONFIRMATION) || communityIds.length === 0 || communityIds.length > 50) {
+    return c.json({
+      error: "invalid_reclaim_request",
+      required_confirmation: STAGING_RECLAIM_CONFIRMATION,
+      max_community_ids: 50,
+    }, 400)
+  }
+
+  const client = getControlPlaneClient(c.env)
+  const results: Array<Record<string, unknown>> = []
+  for (const communityId of communityIds) {
+    const selected = await client.execute({
+      sql: `
+        SELECT c.community_id, c.display_name, c.description, c.status,
+               r.binding_name, r.provisioning_state, r.decommissioned_at
+        FROM communities c
+        INNER JOIN community_database_routing r ON r.community_id = c.community_id
+        WHERE c.community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    })
+    const row = selected.rows?.[0] as Record<string, unknown> | undefined
+    if (!row) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_found" })
+      continue
+    }
+    if (!isRecognizedStagingSmoke(row) || !["archived", "deleted"].includes(String(row.status))) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_archived_smoke" })
+      continue
+    }
+    const bindingName = String(row.binding_name ?? "")
+    if (!apply) {
+      results.push({ community_id: communityId, binding_name: bindingName, ok: true, would_reclaim: true })
+      continue
+    }
+    const now = new Date().toISOString()
+    await client.execute({
+      sql: `
+        UPDATE community_database_routing
+        SET provisioning_state = 'decommissioned', decommissioned_at = COALESCE(decommissioned_at, ?2),
+            updated_at = ?2
+        WHERE community_id = ?1 AND binding_name = ?3
+      `,
+      args: [communityId, now, bindingName],
+    })
+    const reclaimed = await c.env.COMMUNITY_D1_SHARD.communityD1Decommission({
+      adminToken: c.env.SHARD_ADMIN_TOKEN,
+      communityId,
+      bindingName,
+      now,
+    })
+    if (!reclaimed.ok) {
+      results.push({ community_id: communityId, binding_name: bindingName, ok: false, error: reclaimed.code })
+      continue
+    }
+    await client.batch([
+      {
+        sql: "UPDATE communities SET status = 'deleted', updated_at = ?2 WHERE community_id = ?1",
+        args: [communityId, now],
+      },
+      {
+        sql: "UPDATE community_database_bindings SET status = 'inactive', updated_at = ?2 WHERE community_id = ?1 AND status = 'active'",
+        args: [communityId, now],
+      },
+    ], "write")
+    results.push({
+      community_id: communityId,
+      binding_name: bindingName,
+      ok: true,
+      tables_dropped: reclaimed.value.tablesDropped,
+      released: reclaimed.value.released,
+    })
+  }
+
+  const failed = results.filter((result) => result.ok !== true).length
+  return c.json({
+    ok: failed === 0,
+    dry_run: !apply,
+    reclaimed: apply ? results.length - failed : 0,
+    eligible: results.filter((result) => result.ok === true).length,
+    failed,
+    results,
+  }, failed > 0 ? 409 : 200)
+})
 
 debugPipeline.get("/post-pipeline", async (c) => {
   if (!requireDebugAdmin(c)) {
