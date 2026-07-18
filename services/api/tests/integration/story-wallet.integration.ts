@@ -27,6 +27,7 @@ interface ChainHarness {
   pendingNonce: number
   latestNonce: number
   observation: StoryTransactionObservation
+  observations?: Map<Hex, StoryTransactionObservation>
   signed: Hex[]
   broadcasts: Hex[]
   signInputs: Array<{
@@ -69,7 +70,7 @@ async function injectChain(stub: Stub, harness: ChainHarness): Promise<void> {
         return signed
       },
       broadcastExactTransaction: async (_env, input) => { harness.broadcasts.push(input.signedTransaction) },
-      observeTransaction: async () => harness.observation,
+      observeTransaction: async (_env, input) => harness.observations?.get(input.transactionHash) ?? harness.observation,
       fault: async (point) => {
         if (harness.faultOnce === point) {
           harness.faultOnce = undefined
@@ -129,6 +130,15 @@ async function storedSteps(stub: Stub): Promise<Array<Record<string, unknown>>> 
   ).toArray())
 }
 
+async function storedCandidates(stub: Stub): Promise<Array<Record<string, unknown>>> {
+  return runInDurableObject(stub, (_instance, state) => state.storage.sql.exec(
+    `SELECT candidate_ref,generation,kind,parent_candidate_ref,is_active,state,nonce,
+     max_fee_per_gas,max_priority_fee_per_gas,signed_transaction,transaction_hash,
+     receipt_status,block_number,block_hash,authorization_ref
+     FROM story_settlement_transaction_candidates ORDER BY generation`,
+  ).toArray())
+}
+
 async function forceAlarm(stub: Stub): Promise<void> {
   await runInDurableObject(stub, (instance) => instance.alarm())
 }
@@ -180,6 +190,134 @@ describe("StorySettlementWalletCoordinatorDO (real workerd + SQLite)", () => {
     await runDurableObjectAlarm(stub)
     result = (await stub.lookup(admitted.planRef))!
     expect(result.steps.map((step) => [step.state, step.nonce])).toEqual([["confirmed", 7], ["broadcast", 8]])
+  })
+
+  it("keeps generation-zero-only reconciliation behavior unchanged", async () => {
+    const stub = freshStub()
+    const state = harness()
+    await injectChain(stub, state)
+    const admitted = await stub.admit(plan())
+    await runDurableObjectAlarm(stub)
+    const before = (await stub.lookup(admitted.planRef))!.steps[0]!
+    const [original] = await storedCandidates(stub)
+    expect(original).toMatchObject({
+      generation: 0,
+      kind: "original",
+      is_active: 1,
+      state: "broadcast",
+      nonce: 7,
+      transaction_hash: before.transactionHash,
+    })
+
+    state.observation = { kind: "mined", status: "success", blockNumber: 10n, blockHash: BLOCK_A, final: true }
+    await injectChain(stub, state)
+    await stub.reconcile(admitted.planRef)
+    await forceAlarm(stub)
+    expect((await stub.lookup(admitted.planRef))!.steps[0]).toMatchObject({
+      state: "confirmed",
+      transactionHash: before.transactionHash,
+      receipt: { status: "success", blockNumber: 10n, blockHash: BLOCK_A },
+    })
+    expect(state.broadcasts).toEqual([original!.signed_transaction])
+  })
+
+  it("rejects replacement before an original signed candidate exists", async () => {
+    const stub = freshStub()
+    await injectChain(stub, harness())
+    const admitted = await stub.admit(plan())
+    await expect(stub.requestFeeReplacement({
+      planRef: admitted.planRef,
+      stepRef: admitted.steps[0]!.stepRef,
+      expectedVersion: admitted.steps[0]!.version,
+      expectedActiveCandidateHash: `0x${"55".repeat(32)}`,
+      maxFeePerGas: 110n,
+      maxPriorityFeePerGas: 3n,
+      authorizationRef: "operator:fee-replace:unsigned",
+    })).rejects.toThrow("no active broadcast candidate")
+    expect(await storedCandidates(stub)).toEqual([])
+  })
+
+  it("enforces rounded per-field bumps and supports a linear pending supersession chain", async () => {
+    const stub = freshStub()
+    const state = harness()
+    await injectChain(stub, state)
+    const admitted = await stub.admit(plan())
+    await runDurableObjectAlarm(stub)
+    const originalStep = (await stub.lookup(admitted.planRef))!.steps[0]!
+
+    await expect(stub.requestFeeReplacement({
+      planRef: admitted.planRef,
+      stepRef: originalStep.stepRef,
+      expectedVersion: originalStep.version,
+      expectedActiveCandidateHash: originalStep.transactionHash!,
+      maxFeePerGas: 109n,
+      maxPriorityFeePerGas: 2n,
+      authorizationRef: "operator:fee-replace:underpriced",
+    })).rejects.toThrow("max_fee_bump_too_small")
+    expect(state.signed).toHaveLength(1)
+
+    const first = await stub.requestFeeReplacement({
+      planRef: admitted.planRef,
+      stepRef: originalStep.stepRef,
+      expectedVersion: originalStep.version,
+      expectedActiveCandidateHash: originalStep.transactionHash!,
+      maxFeePerGas: 110n,
+      maxPriorityFeePerGas: 3n,
+      authorizationRef: "operator:fee-replace:generation-1",
+    })
+    expect(first).toMatchObject({ generation: 1, state: "prepared" })
+    await forceAlarm(stub)
+    expect(state.broadcasts.at(-1)).toBe((await storedCandidates(stub))[1]!.signed_transaction)
+
+    const currentStep = (await stub.lookup(admitted.planRef))!.steps[0]!
+    const second = await stub.requestFeeReplacement({
+      planRef: admitted.planRef,
+      stepRef: currentStep.stepRef,
+      expectedVersion: currentStep.version,
+      expectedActiveCandidateHash: first.transactionHash,
+      maxFeePerGas: 121n,
+      maxPriorityFeePerGas: 4n,
+      authorizationRef: "operator:fee-replace:generation-2",
+    })
+    expect(second).toMatchObject({ generation: 2, state: "prepared" })
+    const candidates = await storedCandidates(stub)
+    expect(candidates.map((candidate) => [candidate.generation, candidate.parent_candidate_ref, candidate.is_active])).toEqual([
+      [0, null, 0],
+      [1, candidates[0]!.candidate_ref, 0],
+      [2, candidates[1]!.candidate_ref, 1],
+    ])
+  })
+
+  it("follows the nonce-consuming replacement hash and supersedes every sibling", async () => {
+    const stub = freshStub()
+    const state = harness()
+    await injectChain(stub, state)
+    const admitted = await stub.admit(plan())
+    await runDurableObjectAlarm(stub)
+    const original = (await stub.lookup(admitted.planRef))!.steps[0]!
+    const replacement = await stub.requestFeeReplacement({
+      planRef: admitted.planRef,
+      stepRef: original.stepRef,
+      expectedVersion: original.version,
+      expectedActiveCandidateHash: original.transactionHash!,
+      maxFeePerGas: 110n,
+      maxPriorityFeePerGas: 3n,
+      authorizationRef: "operator:fee-replace:winner",
+    })
+    await forceAlarm(stub)
+    state.observations = new Map([
+      [original.transactionHash!, { kind: "absent" }],
+      [replacement.transactionHash, { kind: "mined", status: "success", blockNumber: 42n, blockHash: BLOCK_B, final: true }],
+    ])
+    await injectChain(stub, state)
+    await stub.reconcile(admitted.planRef)
+    await forceAlarm(stub)
+    expect((await stub.lookup(admitted.planRef))!.steps[0]).toMatchObject({
+      state: "confirmed",
+      transactionHash: replacement.transactionHash,
+      receipt: { status: "success", blockNumber: 42n, blockHash: BLOCK_B },
+    })
+    expect((await storedCandidates(stub)).map((candidate) => candidate.state)).toEqual(["superseded", "confirmed"])
   })
 
   it("rejects a caller-supplied call identity that does not match exact call bytes", async () => {

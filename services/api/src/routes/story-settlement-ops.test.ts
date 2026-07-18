@@ -9,12 +9,12 @@ const ADDRESS = new Wallet(PRIVATE_KEY).address
 const PLAN_REF = `0x${"11".repeat(32)}`
 const STEP_REF = `0x${"22".repeat(32)}`
 
-function actor() {
+function actor(scope: "story:settlement:repair" | "story:settlement:fee-replace" = "story:settlement:repair") {
   return {
     authType: "operator_credential" as const,
     operatorCredentialId: "opc_story_ops",
     operatorActorId: "svc_story_ops",
-    scopes: ["story:settlement:repair" as const],
+    scopes: [scope],
   }
 }
 
@@ -90,6 +90,70 @@ describe("Story settlement operator routes", () => {
       reasonCode: "rights_hold",
       authorizationRef: "operator:opc_story_ops:INC-2026-0716",
     })
+  })
+
+  test("uses an independent scope and decimal fee fields for replacement", async () => {
+    let request: Record<string, unknown> | null = null
+    setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor("story:settlement:fee-replace") })
+    const env = {
+      STORY_CHAIN_ID: "1315",
+      STORY_COORDINATOR_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
+      STORY_COORDINATOR_SIGNER_ADDRESS: ADDRESS,
+      STORY_SETTLEMENT_WALLET_COORDINATOR: {
+        getByName: () => ({
+          requestFeeReplacement: async (input: Record<string, unknown>) => {
+            request = input
+            return {
+              planRef: PLAN_REF,
+              stepRef: STEP_REF,
+              candidateRef: `0x${"33".repeat(32)}`,
+              generation: 1,
+              transactionHash: `0x${"44".repeat(32)}`,
+              state: "prepared",
+            }
+          },
+        }),
+      },
+    } as unknown as Env
+    const response = await storySettlementOps.request("/fee-replacements", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        plan_ref: PLAN_REF,
+        step_ref: STEP_REF,
+        expected_version: 3,
+        expected_active_candidate_hash: `0x${"55".repeat(32)}`,
+        max_fee_per_gas: "110",
+        max_priority_fee_per_gas: "11",
+        authorization_ref: "INC-FEE-REPLACE-1",
+      }),
+    }, env)
+    expect(response.status).toBe(202)
+    expect(request).toEqual({
+      planRef: PLAN_REF,
+      stepRef: STEP_REF,
+      expectedVersion: 3,
+      expectedActiveCandidateHash: `0x${"55".repeat(32)}`,
+      maxFeePerGas: 110n,
+      maxPriorityFeePerGas: 11n,
+      authorizationRef: "operator:opc_story_ops:INC-FEE-REPLACE-1",
+    })
+
+    setStorySettlementOpsDependenciesForTests({ authenticate: async () => actor() })
+    const forbidden = await storySettlementOps.request("/fee-replacements", {
+      method: "POST",
+      headers: { authorization: "Operator ignored", "content-type": "application/json" },
+      body: JSON.stringify({
+        plan_ref: PLAN_REF,
+        step_ref: STEP_REF,
+        expected_version: 3,
+        expected_active_candidate_hash: `0x${"55".repeat(32)}`,
+        max_fee_per_gas: "110",
+        max_priority_fee_per_gas: "11",
+        authorization_ref: "INC-FEE-REPLACE-1",
+      }),
+    }, env)
+    expect(forbidden.status).toBe(403)
   })
 
   test("arms a scoped one-shot staging nonce-repair drill", async () => {
