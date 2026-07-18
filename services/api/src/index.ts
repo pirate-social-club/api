@@ -742,7 +742,7 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
   }
 }
 
-async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
+async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
     const solvency = await monitorRewardCampaignTreasurySolvency({ env, client })
@@ -755,6 +755,15 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
         solvent: solvency.solvent,
       }))
     }
+  } catch (error) {
+    console.error("[reward-campaigns] treasury solvency monitor failed", error)
+    await captureScheduledError(env, error, "reward_campaign_treasury_solvency_monitor")
+  }
+}
+
+async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
+  try {
+    const client = getControlPlaneClient(env)
     const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
     if (!summary.enabled) return
     if (summary.liveness_stale) {
@@ -956,7 +965,7 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // delivery must retain its liveness guarantee even when all three money paths run
 // past the batch start deadline; otherwise credits or queued preview/publish jobs
 // can remain unclaimed indefinitely.
-const SCHEDULED_MINIMUM_PRIORITY_STARTS = 5
+const SCHEDULED_MINIMUM_PRIORITY_STARTS = 6
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
@@ -967,6 +976,7 @@ type ScheduledPriorityJobName =
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
   | "reconcile_reward_funding_refunds"
+  | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
   | "reconcile_purchase_settlements"
   | "reconcile_d1_provisioning"
@@ -982,6 +992,7 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
+    "monitor_reward_campaign_treasury_solvency",
     "process_community_jobs",
     "reconcile_purchase_settlements",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
@@ -1039,6 +1050,7 @@ const handler: ExportedHandler<Env> = {
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       reconcile_reward_funding_refunds: () => reconcileScheduledRewardFundingRefunds(env),
+      monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
@@ -1046,9 +1058,9 @@ const handler: ExportedHandler<Env> = {
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
     // Concurrency is two. The leading money-path jobs guarantee booking settlement,
-    // royalty verification, reward reconciliation, funding refunds, queued community
-    // delivery, and purchase settlement recovery each get a turn even if earlier tasks
-    // run past the start deadline.
+    // royalty verification, reward reconciliation, funding refunds, treasury solvency,
+    // and queued community delivery each get a turn even if earlier tasks run past the
+    // start deadline. Purchase settlement recovery remains the next priority task.
     // D1 remains ahead of the slower, latency-tolerant HNS revalidation and reward
     // monitor.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
