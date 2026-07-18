@@ -22,19 +22,26 @@ This is not an arbitrary transaction endpoint, a fresh business effect, or an au
    final, reverted, or non-canonical observations reject the request.
 3. Signer, chain, nonce, target, value, calldata, and gas limit are copied from the durable original
    journal. The request cannot supply them.
-4. Both replacement fee fields strictly exceed the active candidate, priority fee never exceeds max
-   fee, and both remain within the deployed policy caps.
+4. Both replacement fee fields meet a versioned minimum replacement bump over the active candidate,
+   priority fee never exceeds max fee, and both remain within the deployed policy caps. Validation
+   applies the bump independently to `maxFeePerGas` and `maxPriorityFeePerGas`, rounds upward, and
+   rejects before signing. The Aeneid policy must be no lower than the deployed node's transaction
+   pool price-bump rule; v1 uses at least 10 percent unless node evidence requires more.
 5. Signed replacement bytes are parsed, signer-recovered, field-checked, hashed, and durably inserted
    before any broadcast.
 6. Every candidate hash remains durable. Updating a single `transaction_hash` field and forgetting the
    original is prohibited because either candidate may win the nonce.
 7. Broadcast and reconciliation use only exact persisted bytes. No retry path signs again.
-8. At most one non-terminal replacement generation exists for a step. A later generation requires a
-   new operator authorization after the prior generation is terminal.
-9. Finalization follows the first canonical successful candidate to reach the plan's persisted
-   finality policy. A successful sibling is then classified `superseded`; it is never broadcast again.
-10. A reverted winning candidate fails the business step. The coordinator never creates another
-    generation automatically.
+8. Candidates form one linear supersession chain. A new operator-authorized generation may replace
+   only the current active chain tip, including a still-pending replacement, and must satisfy the
+   minimum bump and caps relative to that tip. Independent branches and automatic generations are
+   prohibited. Older pending hashes remain observable evidence but are no longer broadcast-active.
+9. The authoritative winner is whichever known candidate hash canonically consumes the nonce,
+   regardless of generation or receipt status. A successful final winner confirms the business step;
+   every sibling is then classified `superseded` and is never broadcast again.
+10. `mined` includes both successful and reverted receipts. A reverted nonce-consuming winner fails
+    the business step and supersedes every sibling. The coordinator never creates another generation
+    automatically.
 11. The shard mirror reports the actual winning transaction hash and receipt, while retaining the
     original and replacement hashes in coordinator evidence.
 12. Every request records the operator credential, actor, incident/authorization reference, old and
@@ -56,9 +63,14 @@ Add `story_settlement_transaction_candidates` inside the wallet-scoped Durable O
 
 The existing step row remains the business-call identity and ordering record. Add
 `winning_candidate_ref` only after a candidate is canonical and final. Plan/step results derive the
-reported transaction hash and receipt from that winner. Existing coordinator objects receive an
-idempotent migration that imports their current signed bytes/hash as generation zero `original`
-candidates; import must verify `hash == keccak256(bytes)` and must never synthesize missing evidence.
+reported transaction hash and receipt from that winner.
+
+Existing coordinator objects use **lazy import-on-read**, not a big-bang data migration. On the first
+candidate-aware access to a signed step, the coordinator transactionally verifies
+`hash == keccak256(bytes)` and inserts the immutable generation-zero `original` candidate before the
+caller may proceed. Concurrent accesses converge through the candidate uniqueness constraints. The
+new reconciler never assumes that a separate deployment or background migration has already copied
+in-flight evidence, and it never synthesizes missing bytes or hashes.
 
 If legacy evidence cannot be verified, the step enters `reconciliation_required` and replacement is
 blocked pending incident review.
@@ -75,9 +87,11 @@ The scoped operator route accepts only:
 The coordinator then:
 
 1. verifies operator scope and exact version/hash fencing;
-2. verifies no unresolved nonce repair or replacement exists;
+2. verifies no unresolved nonce repair exists and the expected candidate is the current active chain
+   tip;
 3. observes the active candidate as pending and checks the signer pending nonce still includes it;
-4. validates strict fee increase and deployed caps;
+4. validates the versioned minimum bump independently for both fee fields, rounding upward, and the
+   deployed caps;
 5. signs using fields copied from the journal;
 6. independently parses and verifies the signed bytes;
 7. inserts the `prepared` candidate and audit evidence transactionally;
@@ -90,13 +104,12 @@ not assume the newest candidate wins.
 
 | Evidence | Action |
 | --- | --- |
-| Both hashes pending | wait; do not create another generation |
-| Original mined, replacement pending/absent | stop replacement broadcast, reconcile original to finality |
-| Replacement mined, original pending/absent | stop original rebroadcast, reconcile replacement to finality |
-| One successful and final | set winner, confirm business step, supersede siblings |
-| Winning candidate reverted | mark candidate and business step reverted; page |
-| Both absent and nonce unused | exact-byte rebroadcast newest prepared/broadcast candidate only |
-| Both absent and nonce consumed | `reconciliation_required`; never guess the winner |
+| Multiple known hashes pending | wait, or permit a separately authorized bounded replacement of the active chain tip |
+| Any known candidate mined successfully | stop every candidate broadcast and reconcile that nonce-consuming hash to finality |
+| Any known candidate mined reverted | stop every candidate broadcast; that hash is authoritative, fail the business step, and page |
+| Successful winner final | set winner, confirm business step, supersede every sibling |
+| All candidates absent and nonce unused | exact-byte rebroadcast the active chain tip only |
+| All candidates absent and nonce consumed | `reconciliation_required`; never guess the winner |
 | Block identity changes before finality | `reconciliation_required`, retain both observations, page |
 | RPC ambiguity | retain current states and retry observation; never sign |
 
@@ -104,14 +117,17 @@ not assume the newest candidate wins.
 
 - request rejects every state except positively pending;
 - request fields cannot alter business-call fields or gas limit;
-- fee monotonicity and policy caps;
+- fee monotonicity, independent rounded-up minimum bump on both fields, and policy caps;
 - signed-byte parsing/recovered signer/hash equality;
 - crash after sign before persist causes no broadcast;
 - crash after persist before broadcast resumes with exact bytes;
 - crash after broadcast before state write re-observes both hashes;
-- original wins, replacement wins, replacement reverts, and nonce consumed by unknown hash;
+- original wins, any replacement generation wins or reverts, and nonce consumed by unknown hash;
 - original mines during replacement signing;
 - duplicate request and concurrent operators yield one generation;
+- a pending replacement can be superseded by a higher bounded generation without branching;
+- stale-parent, underpriced-bump, and cap-exceeding requests fail before signing;
+- existing signed steps are imported lazily and atomically; unverifiable legacy evidence fails closed;
 - mirror exposes the actual winner;
 - alarm eviction at every boundary;
 - route auth/scope/audit logging;
