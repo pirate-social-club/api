@@ -15,6 +15,7 @@ const MAX_GATE_POLICY_DEPTH = 4
 const MAX_GATE_POLICY_ATOMS = 20
 const DOCUMENT_PROOF_PROVIDERS: DocumentProofProvider[] = ["self", "zkpassport"]
 const GATE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+const POSITIONAL_LEGACY_GATE_ID_PATTERN = /^legacy_\d+(?:_\d+)*(?:_repair\d+)?$/
 
 export function validateGatePolicy(input: unknown): GatePolicy {
   return validateGatePolicyInternal(input, "strict")
@@ -22,8 +23,9 @@ export function validateGatePolicy(input: unknown): GatePolicy {
 
 /**
  * Validates a policy while repairing only atom identity defects that may have
- * entered through historical/raw storage paths. Valid explicit ids always win,
- * including legacy_* ids already exposed to clients.
+ * entered through historical/raw storage paths. Valid, non-positional explicit
+ * ids always win. Historical legacy_<tree-path> ids are internal round-trip
+ * keys, so they are upgraded to content-derived ids on read.
  */
 export function normalizeStoredGatePolicy(input: unknown): GatePolicy {
   return validateGatePolicyInternal(input, "repair_identity")
@@ -54,7 +56,76 @@ function validateGatePolicyInternal(input: unknown, identityMode: "strict" | "re
   if (atomCount.value === 0) {
     throw eligibilityFailed("gate_policy requires at least one gate")
   }
-  return { version: 1, expression }
+  return { version: 1, expression: normalizeGateExpressionIdentities(expression) }
+}
+
+/**
+ * The API owns atom identity. A content id is based on the already-validated,
+ * normalized atom config, never on raw input spelling or tree position.
+ * Identical atoms are legal; deterministic occurrence suffixes distinguish
+ * them without making unrelated insertions renumber the group.
+ */
+function normalizeGateExpressionIdentities(expression: GateExpression): GateExpression {
+  const reservedIds = new Set<string>()
+  visitGateAtoms(expression, (atom) => {
+    if (atom.gate_id && !POSITIONAL_LEGACY_GATE_ID_PATTERN.test(atom.gate_id)) {
+      reservedIds.add(atom.gate_id)
+    }
+  })
+
+  const usedIds = new Set<string>()
+  const contentOccurrences = new Map<string, number>()
+  const normalize = (node: GateExpression): GateExpression => {
+    if (node.op === "gate") {
+      const currentId = node.gate.gate_id
+      if (currentId && !POSITIONAL_LEGACY_GATE_ID_PATTERN.test(currentId) && !usedIds.has(currentId)) {
+        usedIds.add(currentId)
+        return node
+      }
+
+      const { gate_id: _ignoredGateId, ...config } = node.gate
+      const base = `gate_content_${hashCanonicalGateConfig(stableJson(config))}`
+      let occurrence = (contentOccurrences.get(base) ?? 0) + 1
+      let candidate = occurrence === 1 ? base : `${base}_${occurrence}`
+      while (usedIds.has(candidate) || reservedIds.has(candidate)) {
+        occurrence += 1
+        candidate = `${base}_${occurrence}`
+      }
+      contentOccurrences.set(base, occurrence)
+      usedIds.add(candidate)
+      return { op: "gate", gate: { ...node.gate, gate_id: candidate } }
+    }
+    return { op: node.op, children: node.children.map(normalize) }
+  }
+  return normalize(expression)
+}
+
+function visitGateAtoms(expression: GateExpression, visit: (atom: GateAtom) => void): void {
+  if (expression.op === "gate") {
+    visit(expression.gate)
+    return
+  }
+  expression.children.forEach((child) => visitGateAtoms(child, visit))
+}
+
+function stableJson(value: unknown): string {
+  if (value == null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`
+}
+
+function hashCanonicalGateConfig(value: string): string {
+  const prime = 0x100000001b3n
+  const hash = (offset: bigint): string => {
+    let result = offset
+    for (let index = 0; index < value.length; index += 1) {
+      result ^= BigInt(value.charCodeAt(index))
+      result = BigInt.asUintN(64, result * prime)
+    }
+    return result.toString(16).padStart(16, "0")
+  }
+  return `${hash(0xcbf29ce484222325n)}${hash(0x84222325cbf29ce4n)}`
 }
 
 function collectValidExplicitGateIds(input: unknown): Set<string> {

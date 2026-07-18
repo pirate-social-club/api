@@ -120,7 +120,7 @@ describe("evaluateMembershipGatePolicy", () => {
         accepted_providers: ["zkpassport", "self"],
         allowed: ["US"],
       }))).toEqual(atomGate({
-        gate_id: "legacy_0",
+        gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/),
         type: "nationality",
         provider: "self",
         accepted_providers: ["self", "zkpassport"],
@@ -140,7 +140,7 @@ describe("evaluateMembershipGatePolicy", () => {
         asset_id: " EIP155:1/SLIP44:60 ",
         min_amount_atomic: "1000000000000000000",
       }))).toEqual(atomGate({
-        gate_id: "legacy_0",
+        gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/),
         type: "asset_balance",
         asset_id: "eip155:1/slip44:60",
         min_amount_atomic: "1000000000000000000",
@@ -176,7 +176,7 @@ describe("evaluateMembershipGatePolicy", () => {
       })
       if (policy.expression.op !== "and") throw new Error("expected and policy")
       expect(policy.expression.children[0]).toMatchObject({ gate: { gate_id: "stable-age" } })
-      expect(policy.expression.children[1]).toMatchObject({ gate: { gate_id: "legacy_0_1" } })
+      expect(policy.expression.children[1]).toMatchObject({ gate: { gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/) } })
 
       expect(() => validateGatePolicy(andPolicy(
         { gate_id: "duplicate", type: "unique_human", provider: "self" },
@@ -189,7 +189,7 @@ describe("evaluateMembershipGatePolicy", () => {
       }))).toThrow("gate atom gate_id must be 1 to 64 ASCII letters")
     })
 
-    test("repairs stored identity defects without rewriting valid explicit ids", () => {
+    test("repairs stored identity defects and upgrades positional ids without rewriting explicit ids", () => {
       const policy = normalizeStoredGatePolicy({
         version: 1,
         expression: {
@@ -204,14 +204,64 @@ describe("evaluateMembershipGatePolicy", () => {
         },
       })
       if (policy.expression.op !== "and") throw new Error("expected and policy")
-      expect(policy.expression.children.map((child) => child.op === "gate" ? child.gate.gate_id : null)).toEqual([
-        "legacy_0_1",
-        "legacy_0_1_repair1",
-        "duplicate",
-        "legacy_0_3",
-        "legacy_0_4",
-      ])
+      const ids = policy.expression.children.map((child) => child.op === "gate" ? child.gate.gate_id : null)
+      expect(ids[0]).toMatch(/^gate_content_[a-f0-9]{32}$/)
+      expect(ids[1]).toMatch(/^gate_content_[a-f0-9]{32}$/)
+      expect(ids[2]).toBe("duplicate")
+      expect(ids[3]).toMatch(/^gate_content_[a-f0-9]{32}_2$/)
+      expect(ids[4]).toMatch(/^gate_content_[a-f0-9]{32}_3$/)
+      expect(new Set(ids).size).toBe(ids.length)
       expect(() => validateGatePolicy(policy)).not.toThrow()
+    })
+
+    test("derives stable content identities across unrelated insertion and reordering", () => {
+      const human = { type: "unique_human" as const, provider: "self" as const }
+      const pow = { type: "altcha_pow" as const }
+      const original = validateGatePolicy(andPolicy(human, pow))
+      const reordered = validateGatePolicy(andPolicy(
+        { type: "wallet_score", provider: "passport", minimum_score: 20 },
+        pow,
+        human,
+      ))
+      if (original.expression.op !== "and" || reordered.expression.op !== "and") throw new Error("expected and policies")
+      const idByType = (policy: typeof original) => {
+        if (policy.expression.op !== "and") throw new Error("expected and policy")
+        return new Map(policy.expression.children.map((child) => {
+          if (child.op !== "gate") throw new Error("expected gate")
+          return [child.gate.type, child.gate.gate_id]
+        }))
+      }
+      expect(idByType(reordered).get("unique_human")).toBe(idByType(original).get("unique_human"))
+      expect(idByType(reordered).get("altcha_pow")).toBe(idByType(original).get("altcha_pow"))
+    })
+
+    test("allows identical atoms with deterministic occurrence identities", () => {
+      const input = andPolicy(
+        { type: "altcha_pow" },
+        { type: "altcha_pow" },
+        { type: "altcha_pow" },
+      )
+      const first = normalizeStoredGatePolicy(input)
+      const second = normalizeStoredGatePolicy(first)
+      if (first.expression.op !== "and") throw new Error("expected and policy")
+      const ids = first.expression.children.map((child) => child.op === "gate" ? child.gate.gate_id : null)
+      expect(ids[0]).toMatch(/^gate_content_[a-f0-9]{32}$/)
+      expect(ids[1]).toBe(`${ids[0]}_2`)
+      expect(ids[2]).toBe(`${ids[0]}_3`)
+      expect(second).toEqual(first)
+    })
+
+    test("reserves an explicit content-shaped id before deriving repair ids", () => {
+      const derived = validateGatePolicy(atomGate({ type: "altcha_pow" }))
+      if (derived.expression.op !== "gate") throw new Error("expected gate")
+      const reserved = derived.expression.gate.gate_id
+      const policy = normalizeStoredGatePolicy(andPolicy(
+        { type: "altcha_pow" },
+        { gate_id: reserved, type: "unique_human", provider: "self" },
+      ))
+      if (policy.expression.op !== "and") throw new Error("expected and policy")
+      expect(policy.expression.children[0]).toMatchObject({ gate: { gate_id: `${reserved}_2` } })
+      expect(policy.expression.children[1]).toMatchObject({ gate: { gate_id: reserved } })
     })
 
     test("copies stable identity and authoritative outcome to summaries and trace leaves", async () => {

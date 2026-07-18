@@ -6,7 +6,7 @@ import type { Client } from "../../sql-client"
 import { evaluateMembershipGatePolicy } from "../membership/gate-policy-evaluation"
 import { getMembershipGatePolicy } from "../membership/gate-policy-store"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
-import { validateGatePolicy } from "../membership/gate-policy-validation"
+import { normalizeStoredGatePolicy } from "../membership/gate-policy-validation"
 import type { GatePolicyEvaluation } from "../membership/gate-types"
 import type { NamespacePolicyRow } from "./handle-policy-service"
 
@@ -88,7 +88,7 @@ export async function requireNamespaceHandleClaimEligibility(
 function parseExplicitClaimGatePolicy(policy: NamespacePolicyRow) {
   if (!policy.claim_gate_expression_json?.trim()) return null
   try {
-    return validateGatePolicy(JSON.parse(policy.claim_gate_expression_json))
+    return normalizeStoredGatePolicy(JSON.parse(policy.claim_gate_expression_json))
   } catch {
     throw internalError("Community handle claim gate expression is malformed")
   }
