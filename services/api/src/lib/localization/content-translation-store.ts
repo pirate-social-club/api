@@ -2,6 +2,7 @@ import type { DbExecutor } from "../db-helpers"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
+import { hasUsableTranslatedContentFields, type ContentTranslationFields } from "./content-translation-validation"
 
 export type LocalizedContentType = "post" | "comment" | "community_text"
 export type ContentTranslationOutcome = "translated" | "same_language"
@@ -23,6 +24,19 @@ export type ContentTranslationRecord = {
   provider_result_json: string | null
   created_at: string
   updated_at: string
+}
+
+export function isUsableContentTranslation(
+  record: ContentTranslationRecord | null,
+  sourceText: ContentTranslationFields,
+): record is ContentTranslationRecord {
+  if (!record) return false
+  if (record.outcome === "same_language") return true
+  return hasUsableTranslatedContentFields(sourceText, {
+    translatedTitle: record.translated_title,
+    translatedBody: record.translated_body,
+    translatedCaption: record.translated_caption,
+  })
 }
 
 function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
