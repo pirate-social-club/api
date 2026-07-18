@@ -383,7 +383,7 @@ describe("posts routes", () => {
       communityId: community.communityId,
       jobType: "post_translation_materialize",
     })
-    expect(translationJobs.some((job) => job.subject === `${rawPostId}:nl`)).toBe(true)
+    expect(translationJobs.some((job) => job.subject.startsWith(`${rawPostId}:nl:0x`))).toBe(true)
   })
 
   test("POST /posts/:postId/vote records a member vote with proof-of-work", async () => {
