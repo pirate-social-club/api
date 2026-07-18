@@ -64,6 +64,9 @@ function provider(env: Env): StorySettlementProvider {
   if (Boolean(overrideUrl) !== Boolean(authToken)) {
     throw badRequestError("story_coordinator_rpc_override_incomplete")
   }
+  if (overrideUrl && String(env.ENVIRONMENT || "").trim().toLowerCase() === "production") {
+    throw badRequestError("story_coordinator_rpc_override_forbidden_in_production")
+  }
   const rpcUrl = overrideUrl || resolveStoryRpcUrl(env)
   const chainId = resolveStoryChainId(env)
   const request = new FetchRequest(rpcUrl)

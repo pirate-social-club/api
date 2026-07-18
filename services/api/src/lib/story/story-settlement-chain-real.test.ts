@@ -56,6 +56,22 @@ function fakeProvider(overrides: Partial<StorySettlementProvider> = {}): StorySe
 afterEach(() => setStorySettlementProviderFactoryForTests(null))
 
 describe("Story settlement production chain primitives", () => {
+  test("keeps the ordinary no-override path on the configured Story RPC", async () => {
+    const urls: string[] = []
+    setStorySettlementProviderFactoryForTests((rpcUrl) => {
+      urls.push(rpcUrl)
+      return fakeProvider()
+    })
+    await storySettlementRealChain.pendingNonce(env({
+      ENVIRONMENT: "production",
+      STORY_RPC_URL: "https://ordinary-story.example",
+    }), {
+      chainId: 1315,
+      signerAddress: ADDRESS,
+    })
+    expect(urls).toEqual(["https://ordinary-story.example"])
+  })
+
   test("uses the coordinator-only RPC override without changing the Story runtime RPC", async () => {
     const urls: string[] = []
     setStorySettlementProviderFactoryForTests((rpcUrl) => {
@@ -80,6 +96,17 @@ describe("Story settlement production chain primitives", () => {
       chainId: 1315,
       signerAddress: ADDRESS,
     })).rejects.toThrow("story_coordinator_rpc_override_incomplete")
+  })
+
+  test("forbids every coordinator RPC override in production", async () => {
+    await expect(storySettlementRealChain.pendingNonce(env({
+      ENVIRONMENT: "production",
+      STORY_COORDINATOR_RPC_URL: "https://coordinator.example",
+      STORY_COORDINATOR_RPC_AUTH_TOKEN: "test-only-token",
+    }), {
+      chainId: 1315,
+      signerAddress: ADDRESS,
+    })).rejects.toThrow("story_coordinator_rpc_override_forbidden_in_production")
   })
 
   test("signs the exact coordinator domain with the exclusive key", async () => {
