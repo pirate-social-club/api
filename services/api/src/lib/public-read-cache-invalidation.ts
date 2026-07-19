@@ -22,6 +22,14 @@ type PublicPostCachePurgeInput = {
   fetcher?: typeof fetch
 }
 
+type PublicCommunityCachePurgeInput = {
+  env: Env
+  communityId: string
+  waitUntil?: WaitUntil
+  captureException?: CaptureException
+  fetcher?: typeof fetch
+}
+
 export function publicPostCacheTags(input: {
   communityId?: string | null
   postId: string
@@ -31,6 +39,10 @@ export function publicPostCacheTags(input: {
     tags.push(`community:${publicCommunityId(input.communityId)}`)
   }
   return tags
+}
+
+export function publicCommunityCacheTags(communityId: string): string[] {
+  return [`community:${publicCommunityId(communityId)}`]
 }
 
 function cloudflareCachePurgeConfig(env: Env): { zoneId: string; token: string } | null {
@@ -85,14 +97,14 @@ export async function purgePublicReadCacheTags(input: {
 async function capturePublicReadCachePurgeFailure(input: {
   env: Env
   error: unknown
-  postId: string
+  postId?: string | null
   communityId?: string | null
   tags: string[]
   captureException?: CaptureException
   fetcher?: typeof fetch
 }): Promise<void> {
-  console.error("[public-read-cache] failed to purge public post cache tags", {
-    post_id: input.postId,
+  console.error("[public-read-cache] failed to purge public read cache tags", {
+    post_id: input.postId ?? null,
     community_id: input.communityId ?? null,
     tags: input.tags,
     error: input.error instanceof Error ? input.error.message : String(input.error),
@@ -119,7 +131,7 @@ async function capturePublicReadCachePurgeFailure(input: {
         operation: "purge",
       },
       extra: {
-        post_id: input.postId,
+        post_id: input.postId ?? null,
         community_id: input.communityId ?? null,
         cache_tags: input.tags,
       },
@@ -142,7 +154,7 @@ async function sendSentryPurgeFailureEvent(input: {
   dsn: string
   environment: string
   error: unknown
-  postId: string
+  postId?: string | null
   communityId?: string | null
   tags: string[]
   fetcher?: typeof fetch
@@ -170,7 +182,7 @@ async function sendSentryPurgeFailureEvent(input: {
         operation: "purge",
       },
       extra: {
-        post_id: input.postId,
+        post_id: input.postId ?? null,
         community_id: input.communityId ?? null,
         cache_tags: input.tags,
       },
@@ -203,7 +215,7 @@ async function sendSentryPurgeFailureEvent(input: {
 async function sendPublicReadCachePurgeFailureOpsAlert(input: {
   env: Env
   error: unknown
-  postId: string
+  postId?: string | null
   communityId?: string | null
   tags: string[]
 }): Promise<void> {
@@ -214,7 +226,7 @@ async function sendPublicReadCachePurgeFailureOpsAlert(input: {
     count: 1,
     community_ids: input.communityId ? [input.communityId] : [],
     details: {
-      post_id: input.postId,
+      post_id: input.postId ?? null,
       community_id: input.communityId ?? null,
       cache_tags: input.tags,
       error: input.error instanceof Error ? input.error.message : String(input.error),
@@ -249,17 +261,34 @@ function sentryEnvelopeEndpoint(dsn: string): string | null {
 
 export function schedulePublicPostCachePurge(input: PublicPostCachePurgeInput): Promise<void> {
   const tags = publicPostCacheTags(input)
+  return schedulePublicReadCachePurge({ ...input, tags })
+}
+
+export function schedulePublicCommunityCachePurge(input: PublicCommunityCachePurgeInput): Promise<void> {
+  const tags = publicCommunityCacheTags(input.communityId)
+  return schedulePublicReadCachePurge({ ...input, tags })
+}
+
+function schedulePublicReadCachePurge(input: {
+  env: Env
+  tags: string[]
+  postId?: string | null
+  communityId?: string | null
+  waitUntil?: WaitUntil
+  captureException?: CaptureException
+  fetcher?: typeof fetch
+}): Promise<void> {
   const task = purgePublicReadCacheTags({
     env: input.env,
-    tags,
+    tags: input.tags,
     fetcher: input.fetcher,
   }).catch(async (error) => {
     await capturePublicReadCachePurgeFailure({
       env: input.env,
       error,
-      postId: input.postId,
+      postId: input.postId ?? null,
       communityId: input.communityId,
-      tags,
+      tags: input.tags,
       captureException: input.captureException,
       fetcher: input.fetcher,
     })
