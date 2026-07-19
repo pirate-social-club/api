@@ -2,8 +2,10 @@ import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import type { Env } from "../src/env"
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
 import { openCommunityDb } from "../src/lib/communities/community-db-factory"
-import { getControlPlaneClient } from "../src/lib/runtime-deps"
+import { getControlPlaneClient, withRequestControlPlaneClients } from "../src/lib/runtime-deps"
 import { decodePublicCommunityId } from "../src/lib/public-ids"
+import { findUploadedSongArtifactByStorageRef } from "../src/lib/song-artifacts/song-artifact-upload-repository"
+import { fetchSongArtifactBytes } from "../src/lib/song-artifacts/song-artifact-storage"
 
 type BundlePresentation = {
   title: string | null
@@ -22,6 +24,8 @@ type BackfillStats = {
   updatedPosts: number
   missingBundles: number
   unchangedPosts: number
+  durationsProbed: number
+  durationProbeFailures: number
 }
 
 function readArg(name: string): string | null {
@@ -59,6 +63,40 @@ function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
 }
 
+export function parseFfprobeDurationMs(output: string): number | null {
+  try {
+    const parsed = JSON.parse(output) as { format?: { duration?: unknown } }
+    const seconds = Number(parsed.format?.duration)
+    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null
+  } catch {
+    return null
+  }
+}
+
+async function probeAudioDurationMs(bytes: Uint8Array): Promise<number | null> {
+  const process = Bun.spawn([
+    "ffprobe",
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "json",
+    "pipe:0",
+  ], {
+    stdin: new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer]),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const timeout = setTimeout(() => process.kill(), 30_000)
+  try {
+    const [exitCode, stdout] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+    ])
+    return exitCode === 0 ? parseFfprobeDurationMs(stdout) : null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function listCandidatePosts(client: Awaited<ReturnType<typeof openCommunityDb>>["client"]): Promise<CandidatePost[]> {
   const result = await client.execute({
     sql: `
@@ -90,9 +128,11 @@ async function listCandidatePosts(client: Awaited<ReturnType<typeof openCommunit
 async function getBundlePresentation(input: {
   communityId: string
   songArtifactBundleId: string
+  dryRun: boolean
   env: Env
-}): Promise<BundlePresentation | null> {
-  const row = (await getControlPlaneClient(input.env).execute({
+}): Promise<(BundlePresentation & { durationProbed: boolean; durationProbeFailed: boolean }) | null> {
+  const client = getControlPlaneClient(input.env)
+  const row = (await client.execute({
     sql: `
       SELECT cover_art_json, primary_audio_json
            , title
@@ -110,10 +150,55 @@ async function getBundlePresentation(input: {
 
   const coverArt = parseJsonObject(row.cover_art_json)
   const primaryAudio = parseJsonObject(row.primary_audio_json)
+  let durationMs = numberValue(primaryAudio?.duration_ms)
+  let durationProbed = false
+  let durationProbeFailed = false
+  if (durationMs === null) {
+    try {
+      const storageRef = stringValue(primaryAudio?.storage_ref)
+      const upload = storageRef
+        ? await findUploadedSongArtifactByStorageRef({
+            client,
+            communityId: input.communityId,
+            storageRef,
+            artifactKind: "primary_audio",
+          })
+        : null
+      if (upload?.storage_object_key) {
+        const response = await fetchSongArtifactBytes({
+          env: input.env,
+          objectKey: upload.storage_object_key,
+        })
+        durationMs = await probeAudioDurationMs(new Uint8Array(await response.arrayBuffer()))
+      }
+    } catch (error) {
+      console.warn(`${input.communityId}/${input.songArtifactBundleId}: duration probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    durationProbed = durationMs !== null
+    durationProbeFailed = durationMs === null
+    if (durationMs !== null && !input.dryRun && primaryAudio) {
+      await client.execute({
+        sql: `
+          UPDATE song_artifact_bundles
+          SET primary_audio_json = ?3,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE community_id = ?1
+            AND song_artifact_bundle_id = ?2
+        `,
+        args: [
+          input.communityId,
+          input.songArtifactBundleId,
+          JSON.stringify({ ...primaryAudio, duration_ms: durationMs }),
+        ],
+      })
+    }
+  }
   return {
     title: stringValue(row.title),
     coverArtRef: stringValue(coverArt?.storage_ref),
-    durationMs: numberValue(primaryAudio?.duration_ms),
+    durationMs,
+    durationProbed,
+    durationProbeFailed,
   }
 }
 
@@ -129,17 +214,22 @@ async function backfillCommunity(input: {
     let updatedPosts = 0
     let missingBundles = 0
     let unchangedPosts = 0
+    let durationsProbed = 0
+    let durationProbeFailures = 0
 
     for (const candidate of candidates) {
       const presentation = await getBundlePresentation({
         communityId: input.communityId,
         songArtifactBundleId: candidate.song_artifact_bundle_id,
+        dryRun: input.dryRun,
         env: input.env,
       })
       if (!presentation) {
         missingBundles += 1
         continue
       }
+      if (presentation.durationProbed) durationsProbed += 1
+      if (presentation.durationProbeFailed) durationProbeFailures += 1
       if (!presentation.title && !presentation.coverArtRef && presentation.durationMs === null) {
         unchangedPosts += 1
         continue
@@ -165,17 +255,15 @@ async function backfillCommunity(input: {
       updatedPosts,
       missingBundles,
       unchangedPosts,
+      durationsProbed,
+      durationProbeFailures,
     }
   } finally {
     db.close()
   }
 }
 
-async function main(): Promise<void> {
-  const env = {
-    ...readDevVarsFromCwd(),
-    ...process.env,
-  } as unknown as Env
+async function run(env: Env): Promise<void> {
   const dryRun = !hasFlag("--execute")
   const communityArg = readArg("--community-id")
   const repository = getCommunityRepository(env)
@@ -188,6 +276,8 @@ async function main(): Promise<void> {
     updatedPosts: 0,
     missingBundles: 0,
     unchangedPosts: 0,
+    durationsProbed: 0,
+    durationProbeFailures: 0,
   }
 
   for (const community of communities) {
@@ -203,11 +293,21 @@ async function main(): Promise<void> {
     stats.updatedPosts += communityStats.updatedPosts
     stats.missingBundles += communityStats.missingBundles
     stats.unchangedPosts += communityStats.unchangedPosts
-    console.log(`${communityId}: candidates=${communityStats.candidatePosts} ${dryRun ? "would_update" : "updated"}=${communityStats.updatedPosts} missing_bundles=${communityStats.missingBundles} unchanged=${communityStats.unchangedPosts}`)
+    stats.durationsProbed += communityStats.durationsProbed
+    stats.durationProbeFailures += communityStats.durationProbeFailures
+    console.log(`${communityId}: candidates=${communityStats.candidatePosts} ${dryRun ? "would_update" : "updated"}=${communityStats.updatedPosts} durations_probed=${communityStats.durationsProbed} duration_probe_failures=${communityStats.durationProbeFailures} missing_bundles=${communityStats.missingBundles} unchanged=${communityStats.unchangedPosts}`)
   }
 
   await repository.close?.()
-  console.log(`summary: mode=${dryRun ? "dry-run" : "execute"} communities=${stats.communities} candidates=${stats.candidatePosts} ${dryRun ? "would_update" : "updated"}=${stats.updatedPosts} missing_bundles=${stats.missingBundles} unchanged=${stats.unchangedPosts}`)
+  console.log(`summary: mode=${dryRun ? "dry-run" : "execute"} communities=${stats.communities} candidates=${stats.candidatePosts} ${dryRun ? "would_update" : "updated"}=${stats.updatedPosts} durations_probed=${stats.durationsProbed} duration_probe_failures=${stats.durationProbeFailures} missing_bundles=${stats.missingBundles} unchanged=${stats.unchangedPosts}`)
+}
+
+async function main(): Promise<void> {
+  const env = {
+    ...readDevVarsFromCwd(),
+    ...process.env,
+  } as unknown as Env
+  await withRequestControlPlaneClients(() => run(env))
 }
 
 main().catch((error: unknown) => {

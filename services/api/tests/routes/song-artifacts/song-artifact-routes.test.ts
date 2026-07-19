@@ -1073,6 +1073,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       {
         primary_audio: {
           song_artifact_upload: uploadIntentBody.id,
+          duration_ms: 198_765,
         },
         cover_art: {
           song_artifact_upload: coverUploadIntentBody.id,
@@ -1097,6 +1098,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       media_refs: Array<{
         storage_ref: string
         mime_type: string
+        duration_ms?: number | null
         decentralized_storage?: {
           provider?: string
           cid?: string
@@ -1104,6 +1106,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
         } | null
       }>
       primary_audio: {
+        duration_ms?: number | null
         decentralized_storage?: {
           provider?: string
           cid?: string
@@ -1118,6 +1121,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     expect(bundleBody.status).toBe("ready")
     expect(bundleBody.media_refs).toHaveLength(1)
     expect(bundleBody.media_refs[0]?.storage_ref).toBe(uploadIntentBody.storage_ref)
+    expect(bundleBody.media_refs[0]?.duration_ms).toBe(198_765)
     expect(bundleBody.media_refs[0]?.decentralized_storage).toEqual({
       provider: "filebase_ipfs",
       cid: "bafytestsongartifactcid",
@@ -1128,6 +1132,7 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       cid: "bafytestsongartifactcid",
       gateway_url: "https://dweb.link/ipfs/bafytestsongartifactcid",
     })
+    expect(bundleBody.primary_audio.duration_ms).toBe(198_765)
     expect(bundleBody.cover_art?.storage_ref).toBe(coverUploadIntentBody.storage_ref)
     expect(bundleBody.moderation_status).toBe("completed")
     expect(bundleBody.alignment_status).toBe("completed")

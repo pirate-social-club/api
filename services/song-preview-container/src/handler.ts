@@ -155,10 +155,12 @@ export async function handleSongPreviewContainerRequest(
     return proxyToSongPreviewContainer(new Request(new URL("/health", request.url), request), env);
   }
 
-  if (url.pathname === "/preview" || url.pathname === "/extract-audio-sample") {
+  if (url.pathname === "/preview" || url.pathname === "/extract-audio-sample" || url.pathname === "/duration") {
     const routeEvent = url.pathname === "/preview"
       ? "song_preview.container.preview"
-      : "song_preview.container.extract_audio_sample";
+      : url.pathname === "/duration"
+        ? "song_preview.container.duration"
+        : "song_preview.container.extract_audio_sample";
     if (request.method !== "POST") {
       return jsonResponse({ code: "method_not_allowed", message: "Method not allowed" }, 405);
     }
