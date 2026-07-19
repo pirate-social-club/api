@@ -169,6 +169,53 @@ describe("PoW-only open participation", () => {
     expect(state.followStatus).toBe("active")
   })
 
+  test("a non-member vote does not reactivate an explicit unfollow", async () => {
+    const ctx = await createRouteTestContext(ALTCHA_ENV)
+    cleanup = ctx.cleanup
+    const { communityId, postId } = await createPowOnlyCommunityWithPost(ctx)
+    const outsider = await exchangeJwt(ctx.env, "pow-open-explicit-unfollow")
+
+    const firstAltcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: outsider.userId,
+      scope: "vote",
+      action: `post:${postId}:1`,
+    })
+    const firstVote = await requestJson(
+      `http://pirate.test/posts/${postId}/vote`,
+      { value: 1, altcha: firstAltcha },
+      ctx.env,
+      outsider.accessToken,
+    )
+    expect(firstVote.status).toBe(200)
+
+    const unfollow = await requestJson(
+      `http://pirate.test/communities/${communityId}/unfollow`,
+      {},
+      ctx.env,
+      outsider.accessToken,
+    )
+    expect(unfollow.status).toBe(200)
+
+    const secondAltcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: outsider.userId,
+      scope: "vote",
+      action: `post:${postId}:-1`,
+    })
+    const secondVote = await requestJson(
+      `http://pirate.test/posts/${postId}/vote`,
+      { value: -1, altcha: secondAltcha },
+      ctx.env,
+      outsider.accessToken,
+    )
+    expect(secondVote.status).toBe(200)
+
+    const state = await fetchMembershipAndFollow(ctx.communityDbRoot, communityId, outsider.userId)
+    expect(state.membershipStatus).toBeNull()
+    expect(state.followStatus).toBe("inactive")
+  })
+
   test("non-member comment succeeds with a proof and auto-follows without joining", async () => {
     const ctx = await createRouteTestContext(ALTCHA_ENV)
     cleanup = ctx.cleanup
