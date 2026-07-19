@@ -39,6 +39,7 @@ import {
 import {
   buildStoryRoyaltyMetadataPayloads,
   type StoryRoyaltyMetadataAccessMode,
+  type StoryRoyaltyMetadataMedia,
 } from "./story-royalty-metadata"
 import {
   confirmStoryRegistrationEffect,
@@ -50,6 +51,23 @@ type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
 type StoryRoyaltyAssetKind = "song_audio" | "video_file"
+
+export function buildStoryVideoMetadataMedia(input: {
+  post: Post
+  storageRef: string
+  mimeType: string | null
+  contentHash: string | null
+}): StoryRoyaltyMetadataMedia | null {
+  if (input.post.post_type !== "video") return null
+  const video = input.post.media_refs?.[0]
+  return {
+    mediaUrl: video?.storage_ref?.trim() || null,
+    verificationStorageRef: input.storageRef,
+    mediaType: input.mimeType ?? video?.mime_type?.trim() ?? null,
+    mediaHash: input.contentHash,
+    imageUrl: video?.poster_ref?.trim() || null,
+  }
+}
 
 export type StoryRoyaltyRegistrationResult = {
   storyIpId: string
@@ -192,6 +210,7 @@ let testRoyaltyRegistrar: ((input: {
   assetKind: StoryRoyaltyAssetKind
   accessMode: StoryRoyaltyMetadataAccessMode
   bundle: SongArtifactBundle | null
+  media?: StoryRoyaltyMetadataMedia | null
   primaryContentHash: `0x${string}`
   royaltyShares?: StoryRoyaltyShareRow[] | null
 }) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null = null
@@ -216,6 +235,7 @@ export function setStoryRoyaltyRegistrarForTests(
     assetKind: StoryRoyaltyAssetKind
     accessMode: StoryRoyaltyMetadataAccessMode
     bundle: SongArtifactBundle | null
+    media?: StoryRoyaltyMetadataMedia | null
     primaryContentHash: `0x${string}`
     royaltyShares?: StoryRoyaltyShareRow[] | null
   }) => Promise<StoryRoyaltyRegistrationTestResult | null>) | null,
@@ -693,6 +713,7 @@ async function buildStoryRoyaltyMetadata(input: {
   creatorWalletAddress: string
   accessMode: StoryRoyaltyMetadataAccessMode
   bundle: SongArtifactBundle | null
+  media?: StoryRoyaltyMetadataMedia | null
   primaryContentHash: `0x${string}`
   mediaHashVerified: boolean
   derivativeParentIpIds: string[] | null
@@ -713,6 +734,7 @@ async function buildStoryRoyaltyMetadata(input: {
     creatorWalletAddress: input.creatorWalletAddress,
     accessMode: input.accessMode,
     bundle: input.bundle,
+    media: input.media,
     primaryContentHash: input.primaryContentHash,
     mediaHashVerified: input.mediaHashVerified,
     derivativeParentIpIds: input.derivativeParentIpIds,
@@ -720,11 +742,10 @@ async function buildStoryRoyaltyMetadata(input: {
     createdAt,
   })
   if (
-    input.assetKind === "song_audio"
-    && input.accessMode === "public"
+    input.accessMode === "public"
     && (!("mediaUrl" in ipPayload) || !("mediaHash" in ipPayload) || !("mediaType" in ipPayload))
   ) {
-    console.warn("[story] public song canonical media metadata incomplete", {
+    console.warn("[story] public asset canonical media metadata incomplete", {
       community_id: input.communityId,
       asset_id: input.assetId,
       content_hash_server_verified: input.mediaHashVerified,
@@ -760,9 +781,11 @@ async function isStoryMediaHashServerVerified(input: {
   communityId: string
   assetKind: StoryRoyaltyAssetKind
   bundle: SongArtifactBundle | null
+  media?: StoryRoyaltyMetadataMedia | null
 }): Promise<boolean> {
-  if (input.assetKind !== "song_audio") return false
-  const storageRef = input.bundle?.primary_audio?.storage_ref?.trim()
+  const storageRef = input.media?.verificationStorageRef?.trim()
+    || input.media?.mediaUrl?.trim()
+    || input.bundle?.primary_audio?.storage_ref?.trim()
   if (!storageRef) return false
   try {
     const client = getControlPlaneClient(input.env)
@@ -770,7 +793,7 @@ async function isStoryMediaHashServerVerified(input: {
       client,
       communityId: input.communityId,
       storageRef,
-      artifactKind: "primary_audio",
+      artifactKind: input.assetKind === "video_file" ? "primary_video" : "primary_audio",
     })
     if (!upload) return false
     return await isSongArtifactUploadContentHashServerVerified({
@@ -802,6 +825,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   assetKind: StoryRoyaltyAssetKind
   accessMode: StoryRoyaltyMetadataAccessMode
   bundle: SongArtifactBundle | null
+  media?: StoryRoyaltyMetadataMedia | null
   primaryContentHash: `0x${string}`
   royaltyShares?: StoryRoyaltyShareRow[] | null
 }): Promise<StoryRoyaltyRegistrationResult | null> {
@@ -883,6 +907,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     communityId: input.communityId,
     assetKind: input.assetKind,
     bundle: input.bundle,
+    media: input.media,
   })
 
   const metadata = await buildStoryRoyaltyMetadata({
@@ -895,6 +920,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     creatorWalletAddress: input.creatorWalletAddress,
     accessMode: input.accessMode,
     bundle: input.bundle,
+    media: input.media,
     primaryContentHash: input.primaryContentHash,
     mediaHashVerified,
     derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,

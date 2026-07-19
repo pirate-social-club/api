@@ -9,10 +9,11 @@ import { getSongArtifactBundle } from "../../song-artifacts/song-artifact-reposi
 import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-upload-repository"
 import type { Client } from "../../sql-client"
 import {
+  buildStoryVideoMetadataMedia,
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
 } from "../../story/story-royalty-registration-service"
-import type { Asset, Env, SongArtifactUpload } from "../../../types"
+import type { Asset, Env, Post, SongArtifactBundle, SongArtifactUpload } from "../../../types"
 import { prepareLockedAssetDelivery } from "./asset-delivery"
 import { upsertStoryRegisteredAssetProjection } from "./derivative-source-projection"
 import {
@@ -47,6 +48,48 @@ import {
   shouldAttemptStoryRoyaltyRegistration,
   storyRegistrationFieldStateFromAsset,
 } from "./story-registration-state"
+
+export async function registerLockedStoryRoyalty(input: {
+  env: Env
+  client: Pick<Client, "execute">
+  communityId: string
+  asset: AssetRow
+  post: Post
+  bundle: SongArtifactBundle | null
+  creatorWalletAddress: string
+  resolvedPrimaryContentHash: `0x${string}`
+  effectiveLicensePreset: Parameters<typeof maybeRegisterStoryRoyaltyForAsset>[0]["licensePreset"]
+  effectiveCommercialRevSharePct: number | null
+  dependencies?: {
+    buildVideoMetadataMedia?: typeof buildStoryVideoMetadataMedia
+    registerStoryRoyalty?: typeof maybeRegisterStoryRoyaltyForAsset
+  }
+}) {
+  const buildVideoMetadataMedia = input.dependencies?.buildVideoMetadataMedia ?? buildStoryVideoMetadataMedia
+  const registerStoryRoyalty = input.dependencies?.registerStoryRoyalty ?? maybeRegisterStoryRoyaltyForAsset
+  return await registerStoryRoyalty({
+    env: input.env,
+    client: input.client,
+    communityId: input.communityId,
+    assetId: input.asset.asset_id,
+    creatorWalletAddress: input.creatorWalletAddress,
+    title: input.post.title ?? null,
+    rightsBasis: input.asset.rights_basis,
+    licensePreset: input.effectiveLicensePreset,
+    commercialRevSharePct: input.effectiveCommercialRevSharePct,
+    upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
+    assetKind: input.asset.asset_kind,
+    accessMode: input.asset.access_mode,
+    bundle: input.bundle,
+    media: buildVideoMetadataMedia({
+      post: input.post,
+      storageRef: input.asset.primary_content_ref,
+      mimeType: input.post.media_refs?.[0]?.mime_type ?? null,
+      contentHash: input.asset.primary_content_hash,
+    }),
+    primaryContentHash: input.resolvedPrimaryContentHash,
+  })
+}
 
 function hasRecoverableCompletedLockedDelivery(input: {
   asset: AssetRow
@@ -403,21 +446,17 @@ export async function prepareRequestedLockedAssetDelivery(input: {
             asset_id: asset.asset_id,
             rights_basis: asset.rights_basis,
           },
-          operation: () => maybeRegisterStoryRoyaltyForAsset({
+          operation: () => registerLockedStoryRoyalty({
             env: input.env,
             client: input.client,
             communityId: input.communityId,
-            assetId: asset.asset_id,
-            creatorWalletAddress,
-            title: post.title ?? null,
-            rightsBasis: asset.rights_basis,
-            licensePreset: storyRegistration.effectiveLicensePreset,
-            commercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
-            upstreamAssetRefs: post.upstream_asset_refs ?? null,
-            assetKind: asset.asset_kind,
-            accessMode: asset.access_mode,
+            asset,
+            post,
             bundle,
-            primaryContentHash: resolvedPrimaryContentHash,
+            creatorWalletAddress,
+            resolvedPrimaryContentHash,
+            effectiveLicensePreset: storyRegistration.effectiveLicensePreset,
+            effectiveCommercialRevSharePct: storyRegistration.effectiveCommercialRevSharePct,
           }),
         })
       : null
