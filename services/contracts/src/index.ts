@@ -851,6 +851,11 @@ export type Community = {
   created: number;
 };
 
+export type CommunityNamespaceAttachRequest = {
+  namespace_verification: string;
+  namespace_role?: "primary" | "mirror";
+};
+
 export type CommunityMoneyPolicy = {
   id: string;
   object: "community_money_policy";
@@ -4301,6 +4306,7 @@ export const apiRoutes = {
   communities: "/communities",
   communitiesAdminHealth: "/communities/admin/health",
   community: (communityId: string) => `/communities/${communityId}`,
+  communityNamespace: (communityId: string) => `/communities/${communityId}/namespace`,
   communityMoneyPolicy: (communityId: string) => `/communities/${communityId}/money-policy`,
   communityPricingPolicy: (communityId: string) => `/communities/${communityId}/pricing-policy`,
   communityListings: (communityId: string) => `/communities/${communityId}/listings`,

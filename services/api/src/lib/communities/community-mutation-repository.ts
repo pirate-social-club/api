@@ -43,14 +43,14 @@ export async function attachNamespaceToCommunity(
         await tx.rollback()
         return existing
       }
-      throw internalError("Namespace is already attached with a different community or role")
+      throw conflictError("Namespace is already attached with a different community or role")
     }
 
     if (input.namespaceRole === "primary" && existing.namespace_verification_id) {
-      throw internalError("Community already has a different primary namespace attached")
+      throw conflictError("Community already has a different primary namespace attached")
     }
     if (input.namespaceRole === "mirror" && !existing.namespace_verification_id) {
-      throw internalError("Community must have a primary namespace before attaching mirrors")
+      throw conflictError("Community must have a primary namespace before attaching mirrors")
     }
 
     await tx.execute({
