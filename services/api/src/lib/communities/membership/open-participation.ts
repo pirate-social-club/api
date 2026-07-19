@@ -2,7 +2,7 @@ import type { ReadClient } from "../../sql-client"
 import type { CommunityMembershipProjectionRepository } from "../db-community-repository"
 import { nowIso } from "../../helpers"
 import { getMembershipGatePolicy } from "./gate-policy-store"
-import { setCommunityFollowActive } from "./follow-store"
+import { getCommunityFollowStatus, setCommunityFollowActive } from "./follow-store"
 import { syncCommunityFollowProjection } from "./projection-service"
 import type { GateExpression, GatePolicy } from "./gate-types"
 import type { CommunityMembershipRow } from "./membership-state-store"
@@ -61,8 +61,15 @@ export type ParticipationFollowRepository = Pick<
 >
 
 /**
- * Interacting without joining still subscribes the actor to the community
+ * Interacting without joining subscribes the actor to the community
  * (Reddit-style): activate the follow after a successful non-member write.
+ *
+ * An explicit unfollow is honoured permanently. `status='inactive'` is only
+ * ever written by unfollowCommunity — the user's own unfollow route — so it
+ * is an unambiguous opt-out, and re-following on the next vote would make
+ * subscription a recurring condition of participating rather than a one-time
+ * consequence of it. Only a never-followed actor gets auto-followed.
+ *
  * Follow failures must never fail the interaction that triggered them.
  */
 export async function followCommunityAfterParticipation(input: {
@@ -75,6 +82,10 @@ export async function followCommunityAfterParticipation(input: {
     return
   }
   try {
+    const previousStatus = await getCommunityFollowStatus(input.client, input.communityId, input.userId)
+    if (previousStatus != null) {
+      return
+    }
     const now = nowIso()
     const result = await setCommunityFollowActive({
       client: input.client,
