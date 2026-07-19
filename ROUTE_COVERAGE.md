@@ -24,6 +24,7 @@ Mounted in `services/api/src/index.ts`:
 - `/admin/ops`
 - `/internal/hns-edge-alerts`
 - `/operator/story-settlement`
+- `/operator/song-duration-backfill`
 - `/community-media`
 - `/comments`
 - `/communities`
@@ -63,6 +64,7 @@ Mounted in `services/api/src/index.ts`:
 | `/admin/ops/wallets` | `src/routes/ops-wallets.ts` | `tests/routes/ops-wallets-routes.test.ts` | direct | Admin-only operator-wallet balance report (Story runtime signers + runtime funding watchdog wallets). |
 | `/internal/hns-edge-alerts` | `src/routes/hns-edge-alerts.ts` | `tests/routes/hns-edge-alerts.test.ts` | direct | Dedicated bearer-authenticated VPS alert ingress; covers authorization, payload validation, sink forwarding, and fail-closed delivery. |
 | `/operator/story-settlement/*` | `src/routes/story-settlement-ops.ts` | `src/routes/story-settlement-ops.test.ts` | direct | Scoped operator-credential routes for journaled abandoned-nonce repair and staging-only alert-sink probing. |
+| `/operator/song-duration-backfill/*` | `src/routes/song-duration-backfill-ops.ts` | `src/routes/song-duration-backfill-ops.test.ts` | direct/service | Operator-authenticated, cursor-batched, NULL-only song duration repair through the existing media container. |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
 | `/oauth/device_*` | `src/routes/oauth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Covers Freedom Desktop device authorization start, pending poll, user approval, access-token issuance, and refresh-token rotation. |
