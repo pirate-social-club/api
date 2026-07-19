@@ -20804,6 +20804,12 @@ const spec = {
         "properties": {
           "song_artifact_upload": {
             "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "nullable": true
           }
         }
       },

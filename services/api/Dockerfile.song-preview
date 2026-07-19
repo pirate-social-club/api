@@ -24,6 +24,7 @@ COPY api/src ./src
 ENV HOST=0.0.0.0
 ENV SONG_PREVIEW_PORT=8795
 ENV SONG_PREVIEW_FFMPEG_BIN=ffmpeg
+ENV SONG_DURATION_PROBE_VERSION=1
 EXPOSE 8795
 
 CMD ["bun", "run", "scripts/song-preview-service.ts"]

@@ -1,8 +1,12 @@
+import { spawn } from "bun"
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { generateSongPreviewForBundle } from "../src/lib/song-artifacts/song-artifact-preview-service"
 import { permanentPreviewFailure } from "../src/lib/song-artifacts/song-preview-failure"
 import { extractVideoAudioSampleForObject } from "../src/lib/song-artifacts/video-audio-sample"
+import { getSongArtifactBundle } from "../src/lib/song-artifacts/song-artifact-repository"
+import { findUploadedSongArtifactByStorageRef } from "../src/lib/song-artifacts/song-artifact-upload-repository"
+import { fetchSongArtifactBytes } from "../src/lib/song-artifacts/song-artifact-storage"
 import type { Env } from "../src/env"
 import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
 
@@ -159,6 +163,57 @@ async function handlePreview(request: Request, context: SongPreviewRequestContex
   })
 
   return jsonResponse({ storage_ref: storageRef })
+}
+
+async function probeDurationMs(bytes: Uint8Array): Promise<number | null> {
+  const process = spawn([
+    "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", "pipe:0",
+  ], { stdin: new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer]), stdout: "pipe", stderr: "pipe" })
+  const timeout = setTimeout(() => process.kill(), 30_000)
+  try {
+    const [exitCode, output] = await Promise.all([process.exited, new Response(process.stdout).text()])
+    if (exitCode !== 0) return null
+    const parsed = JSON.parse(output) as { format?: { duration?: unknown } }
+    const seconds = Number(parsed.format?.duration)
+    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function handleDuration(request: Request, context: SongPreviewRequestContext): Promise<Response> {
+  const sharedSecret = trimEnv("SONG_PREVIEW_SHARED_SECRET")
+  if (!sharedSecret || !constantTimeEqual(bearerToken(request), sharedSecret)) {
+    return jsonResponse(sharedSecret ? { code: "unauthorized", message: "Unauthorized" } : { code: "not_configured", message: "Song preview shared secret is not configured" }, sharedSecret ? 401 : 503)
+  }
+  const body = readSongPreviewRequestBody(await request.json().catch(() => null))
+  if (!body) return jsonResponse({ code: "bad_request", message: "Invalid duration request" }, 400)
+
+  const env = process.env as Env
+  const durationMs = await withStandaloneControlPlaneClient(env, async (client) => {
+    const bundle = await getSongArtifactBundle(client, body.community_id, body.song_artifact_bundle)
+    if (!bundle) return null
+    if (bundle.primary_audio.duration_ms && bundle.primary_audio.duration_ms > 0) {
+      return bundle.primary_audio.duration_ms
+    }
+    const upload = await findUploadedSongArtifactByStorageRef({
+      client,
+      communityId: body.community_id,
+      storageRef: bundle.primary_audio.storage_ref,
+      artifactKind: "primary_audio",
+    })
+    if (!upload?.storage_object_key) return null
+    const response = await fetchSongArtifactBytes({ env, objectKey: upload.storage_object_key })
+    return probeDurationMs(new Uint8Array(await response.arrayBuffer()))
+  })
+  logSongPreviewEvent("song_duration.probed", {
+    request_id: context.requestId,
+    community_id: body.community_id,
+    song_artifact_bundle: body.song_artifact_bundle,
+    duration_ms: durationMs,
+    latency_ms: Date.now() - context.startedAt,
+  })
+  return durationMs ? jsonResponse({ duration_ms: durationMs }) : jsonResponse({ code: "duration_unavailable", message: "Could not determine audio duration" }, 422)
 }
 
 type ExtractAudioSampleRequestBody = {
@@ -318,6 +373,13 @@ async function handleRequest(request: Request): Promise<Response> {
         message: error instanceof Error ? error.message : "Song preview generation failed",
       }, 502)
     })
+  }
+  if (request.method === "POST" && url.pathname === "/duration") {
+    const context = { requestId: makeRequestId(), startedAt: Date.now() }
+    return handleDuration(request, context).catch((error) => jsonResponse({
+      code: "duration_probe_failed",
+      message: error instanceof Error ? error.message : "Duration probe failed",
+    }, 502))
   }
   if (request.method === "POST" && url.pathname === "/extract-audio-sample") {
     const context = {

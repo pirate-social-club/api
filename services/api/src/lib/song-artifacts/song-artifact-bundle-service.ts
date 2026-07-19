@@ -233,7 +233,13 @@ export async function createSongArtifactBundle(input: {
         lyrics,
         preview_window: previewWindow,
       },
-      primaryAudio: descriptorFromUpload(input.env, primaryAudioUpload),
+      primaryAudio: {
+        ...descriptorFromUpload(input.env, primaryAudioUpload),
+        duration_ms: Number.isFinite(input.body.primary_audio.duration_ms)
+          && Number(input.body.primary_audio.duration_ms) > 0
+          ? Math.round(Number(input.body.primary_audio.duration_ms))
+          : null,
+      },
       coverArt: coverArtUpload ? imageDescriptorFromUpload(coverArtUpload) : null,
       previewAudio: null,
       canvasVideo: canvasVideoUpload ? videoDescriptorFromUpload(canvasVideoUpload) : null,

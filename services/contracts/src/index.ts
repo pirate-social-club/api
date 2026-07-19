@@ -4075,6 +4075,7 @@ type RoyaltyAllocationRequest = {
 
 type SongArtifactUploadRef = {
   song_artifact_upload: string;
+  duration_ms?: number | null;
 };
 
 type SongAudioArtifactDescriptor = {
