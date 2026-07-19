@@ -2,6 +2,8 @@ import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { ProfileRepository } from "../auth/repositories"
 import type { Client } from "../sql-client"
 import type { Asset, DerivativeSourceKind, LocalizedPostResponse, PostDerivativeSource } from "../../types"
+import type { Env } from "../../env"
+import { findStoryRegisteredAssetProjectionSources } from "../communities/commerce/derivative-source-projection"
 import {
   numberOrNull,
   requiredString,
@@ -27,6 +29,14 @@ type UpstreamSourceRow = {
   commercial_rev_share_pct: number | null
   story_ip_id: string | null
   story_license_terms_id: string | null
+}
+
+type UpstreamSourceHydrationDependencies = {
+  findStoryRegisteredAssetProjectionSources: typeof findStoryRegisteredAssetProjectionSources
+}
+
+const upstreamSourceHydrationDependencies: UpstreamSourceHydrationDependencies = {
+  findStoryRegisteredAssetProjectionSources,
 }
 
 function parseUpstreamRef(sourceRef: string): ParsedUpstreamRef {
@@ -64,7 +74,11 @@ function sourceRefForRow(row: Pick<UpstreamSourceRow, "story_ip_id" | "story_lic
   return `story:asset:${row.asset_id}`
 }
 
-function relationshipForSourceKind(kind: DerivativeSourceKind): PostDerivativeSource["relationship_type"] {
+function relationshipForSourceKind(
+  kind: DerivativeSourceKind,
+  consumerPostType: LocalizedPostResponse["post"]["post_type"],
+): PostDerivativeSource["relationship_type"] {
+  if (consumerPostType === "video" && kind === "song") return "references_song"
   return kind === "video" ? "references_video" : "remix_of"
 }
 
@@ -166,9 +180,10 @@ function fallbackSource(parsed: ParsedUpstreamRef): PostDerivativeSource | null 
 export async function hydrateDerivativeSourcesForResponses(input: {
   client: Client
   communityId: string
+  env?: Env | null
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
-}): Promise<void> {
+}, dependencies: UpstreamSourceHydrationDependencies = upstreamSourceHydrationDependencies): Promise<void> {
   const refs = Array.from(new Set(input.responses.flatMap((response) => response.post.upstream_asset_refs ?? [])))
     .map(parseUpstreamRef)
     .filter((ref) => ref.sourceRef.length > 0)
@@ -178,11 +193,28 @@ export async function hydrateDerivativeSourcesForResponses(input: {
     return
   }
 
-  const rows = await findUpstreamSourceRows({
+  const localRows = await findUpstreamSourceRows({
     client: input.client,
     communityId: input.communityId,
     refs,
   })
+  const unresolvedStoryRefs = refs.filter((ref): ref is Extract<ParsedUpstreamRef, { kind: "story_ip" }> =>
+    ref.kind === "story_ip" && !findRowForRef(ref, localRows)
+  )
+  const globalRows = unresolvedStoryRefs.length > 0 && input.env
+    ? await dependencies.findStoryRegisteredAssetProjectionSources({
+        env: input.env,
+        refs: unresolvedStoryRefs.map((ref) => ({
+          storyIp: ref.storyIp,
+          licenseTermsId: ref.licenseTermsId,
+        })),
+      })
+    : []
+  const localAssetKeys = new Set(localRows.map((row) => `${row.community_id}:${row.asset_id}`))
+  const rows: UpstreamSourceRow[] = [
+    ...localRows,
+    ...globalRows.filter((row) => !localAssetKeys.has(`${row.community_id}:${row.asset_id}`)),
+  ]
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
   const profilesByUserId = input.profileRepository
     ? new Map(await Promise.all(creatorUserIds.map(async (userId) => [
@@ -212,7 +244,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
         source_ref: sourceRefForRow(row),
         title: row.display_title?.trim() || "Untitled asset",
         kind,
-        relationship_type: relationshipForSourceKind(kind),
+        relationship_type: relationshipForSourceKind(kind, response.post.post_type),
         community: `com_${row.community_id}`,
         asset: `asset_${row.asset_id}`,
         source_post: `post_${row.source_post_id}`,

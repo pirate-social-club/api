@@ -220,6 +220,7 @@ export async function hydrateSongStreakSummariesForResponses(input: {
 export async function hydrateAndEnqueuePostReadResponses(input: {
   client: Client
   communityId: string
+  env?: Env | null
   responses: LocalizedPostResponse[]
   communityRepository?: PostReadResponseCommunityRepository | null
   profileRepository?: ProfileRepository | null
@@ -251,6 +252,7 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   await hydrateDerivativeSourcesForResponses({
     client: input.client,
     communityId: input.communityId,
+    env: input.env,
     responses: input.responses,
     profileRepository: input.profileRepository,
   })

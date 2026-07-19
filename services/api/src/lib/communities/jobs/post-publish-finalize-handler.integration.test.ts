@@ -13,6 +13,7 @@ type State = {
   assetCalls: number
   bundle: SongArtifactBundle
   consumed: number
+  derivativeSourceProjectionStatuses: string[]
   listingDraft: Record<string, unknown> | null
   markedFailed: Array<{ failureCode: string; retryable: boolean }>
   markedPublished: number
@@ -90,6 +91,7 @@ const state: State = {
   assetCalls: 0,
   bundle: readyBundle(),
   consumed: 0,
+  derivativeSourceProjectionStatuses: [],
   listingDraft: null,
   markedFailed: [],
   markedPublished: 0,
@@ -114,6 +116,7 @@ const client = {
 }
 
 const commerceShared = await import("../commerce/shared")
+const derivativeSourceProjection = await import("../commerce/derivative-source-projection")
 const { getListingRowByAssetId: getRealListingRowByAssetId } = await import("../commerce/queries")
 
 const postPublishFinalizeDependencies = {
@@ -251,6 +254,13 @@ mock.module("../commerce/service", () => ({
   }),
 }))
 
+mock.module("../commerce/derivative-source-projection", () => ({
+  ...derivativeSourceProjection,
+  updateStoryRegisteredAssetPostStatus: mock(async (input: { sourcePostStatus: string }) => {
+    state.derivativeSourceProjectionStatuses.push(input.sourcePostStatus)
+  }),
+}))
+
 mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
@@ -323,6 +333,7 @@ beforeEach(() => {
   state.assetCalls = 0
   state.bundle = readyBundle()
   state.consumed = 0
+  state.derivativeSourceProjectionStatuses = []
   state.listingDraft = null
   state.markedFailed = []
   state.markedPublished = 0
@@ -361,6 +372,7 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.markedPublished).toBe(1)
     expect(state.requestStatuses).toEqual(["running", "succeeded"])
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
       status: "published",
@@ -375,6 +387,7 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.assetCalls).toBe(0)
     expect(state.markedPublished).toBe(0)
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(state.requestStatuses).toEqual(["succeeded"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
@@ -559,6 +572,7 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.markedFailed).toEqual([])
     expect(state.requestStatuses).toEqual(["succeeded"])
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
       status: "published",

@@ -60,6 +60,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
     await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_songs",
+      env: {} as never,
       responses: [response],
       profileRepository: null,
     })
@@ -82,5 +83,48 @@ describe("hydrateDerivativeSourcesForResponses", () => {
         creator_display_name: null,
       },
     ])
+  })
+
+  test("hydrates a cross-community Story song and creator from the global projection", async () => {
+    const response = createResponse()
+    response.post.community_id = "cmt_videos"
+    response.post.post_type = "video"
+    const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
+
+    await hydrateDerivativeSourcesForResponses({
+      client,
+      communityId: "cmt_videos",
+      env: {} as never,
+      responses: [response],
+      profileRepository: {
+        getProfileByUserId: async () => ({
+          global_handle: { label: "artist.pirate" },
+          primary_public_handle: null,
+          display_name: "Artist",
+        }),
+      } as never,
+    }, {
+      findStoryRegisteredAssetProjectionSources: async () => [{
+        asset_id: "ast_original",
+        community_id: "cmt_songs",
+        source_post_id: "pst_original",
+        display_title: "Travel Guide",
+        creator_user_id: "usr_artist",
+        asset_kind: "song_audio",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        story_ip_id: "0x01C0D038e1BA42959b83A56e5A1c459594719297",
+        story_license_terms_id: "1894",
+      }],
+    })
+
+    expect(response.derivative_sources?.[0]).toMatchObject({
+      title: "Travel Guide",
+      relationship_type: "references_song",
+      community: "com_cmt_songs",
+      source_post: "post_pst_original",
+      creator_handle: "artist.pirate",
+      creator_display_name: "Artist",
+    })
   })
 })
