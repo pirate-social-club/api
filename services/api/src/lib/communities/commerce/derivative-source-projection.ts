@@ -20,6 +20,19 @@ export type StoryRegisteredAssetProjection = {
   createdAt: string
 }
 
+export type StoryRegisteredAssetProjectionSource = {
+  asset_id: string
+  community_id: string
+  source_post_id: string
+  display_title: string | null
+  creator_user_id: string
+  asset_kind: Asset["asset_kind"]
+  license_preset: Asset["license_preset"] | null
+  commercial_rev_share_pct: number | null
+  story_ip_id: string
+  story_license_terms_id: string
+}
+
 export type EligibleStoryParentProjection = {
   communityId: string
   assetId: string
@@ -214,6 +227,52 @@ export async function findEligibleStoryParentProjectionByRef(input: {
     args: [input.storyIpId.trim().toLowerCase(), input.storyLicenseTermsId.trim()],
   })
   return result.rows[0] ? eligibleStoryParentFromRow(result.rows[0]) : null
+}
+
+export async function findStoryRegisteredAssetProjectionSources(input: {
+  env: Env
+  refs: Array<{ storyIp: string; licenseTermsId: string }>
+}): Promise<StoryRegisteredAssetProjectionSource[]> {
+  const refs = Array.from(new Map(input.refs.map((ref) => [
+    `${ref.storyIp.trim().toLowerCase()}:${ref.licenseTermsId.trim()}`,
+    {
+      storyIp: ref.storyIp.trim(),
+      licenseTermsId: ref.licenseTermsId.trim(),
+    },
+  ] as const)).values()).filter((ref) => ref.storyIp && ref.licenseTermsId)
+  if (refs.length === 0) return []
+
+  const args: Array<string | number> = []
+  const clauses = refs.map((ref, index) => {
+    const offset = index * 2
+    args.push(ref.storyIp, ref.licenseTermsId)
+    return `(LOWER(story_ip_id) = LOWER(?${offset + 1}) AND story_license_terms_id = ?${offset + 2})`
+  })
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT asset_id, community_id, source_post_id, display_title, creator_user_id,
+             asset_kind, license_preset, commercial_rev_share_pct,
+             story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE source_post_status = 'published'
+        AND (${clauses.join(" OR ")})
+      ORDER BY updated_at DESC, asset_id DESC
+    `,
+    args,
+  })
+
+  return result.rows.map((row) => ({
+    asset_id: requiredString(row, "asset_id"),
+    community_id: requiredString(row, "community_id"),
+    source_post_id: requiredString(row, "source_post_id"),
+    display_title: stringOrNull(row, "display_title"),
+    creator_user_id: requiredString(row, "creator_user_id"),
+    asset_kind: requiredString(row, "asset_kind") as Asset["asset_kind"],
+    license_preset: stringOrNull(row, "license_preset") as Asset["license_preset"] | null,
+    commercial_rev_share_pct: numberOrNull(row, "commercial_rev_share_pct"),
+    story_ip_id: requiredString(row, "story_ip_id"),
+    story_license_terms_id: requiredString(row, "story_license_terms_id"),
+  }))
 }
 
 export async function resolveEligibleStoryParentProjectionByAssetId(input: {

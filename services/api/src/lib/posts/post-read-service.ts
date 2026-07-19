@@ -158,6 +158,7 @@ export async function getPost(input: {
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: db.communityId,
+      env: input.env,
       responses: [response],
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
@@ -235,6 +236,7 @@ export async function getPublicPostFromCommunityDb(input: {
   await hydrateAndEnqueuePostReadResponses({
     client: input.client,
     communityId: input.communityId,
+    env: input.env,
     responses: [response],
     communityRepository: input.communityRepository,
     profileRepository: input.profileRepository,
@@ -336,6 +338,7 @@ export async function listCommunityPosts(input: {
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: input.communityId,
+      env: input.env,
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
@@ -404,6 +407,7 @@ export async function listPendingCommunityPosts(input: {
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: input.communityId,
+      env: input.env,
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
@@ -473,6 +477,7 @@ export async function listCommunityEvents(input: {
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: input.communityId,
+      env: input.env,
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
@@ -531,6 +536,7 @@ export async function listPublicCommunityPosts(input: {
     await hydrateAndEnqueuePostReadResponses({
       client: db.client,
       communityId: input.communityId,
+      env: input.env,
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
