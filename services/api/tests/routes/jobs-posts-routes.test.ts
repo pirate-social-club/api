@@ -458,6 +458,44 @@ describe("posts routes", () => {
       unverifiedMember.accessToken,
     )
     expect(replayVote.status).toBe(403)
+
+    const missingClearProof = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/clear_vote`,
+      {},
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(missingClearProof.status).toBe(403)
+
+    const clearAltcha = await solveTestAltchaPayload({
+      env: ctx.env,
+      actorUserId: unverifiedMember.userId,
+      scope: "vote",
+      action: `post:${postBody.id}:clear`,
+    })
+    const clearedVote = await requestJson(
+      `http://pirate.test/posts/${postBody.id}/clear_vote`,
+      { altcha: clearAltcha },
+      ctx.env,
+      unverifiedMember.accessToken,
+    )
+    expect(clearedVote.status).toBe(200)
+    expect(await json(clearedVote)).toEqual({ post: postBody.id, value: null })
+
+    const fetchedPost = await app.request(
+      `http://pirate.test/posts/${postBody.id}`,
+      { headers: { authorization: `Bearer ${unverifiedMember.accessToken}` } },
+      ctx.env,
+    )
+    expect(fetchedPost.status).toBe(200)
+    const fetchedPostBody = await json(fetchedPost) as {
+      upvote_count: number
+      downvote_count: number
+      viewer_vote: number | null
+    }
+    expect(fetchedPostBody.upvote_count).toBe(0)
+    expect(fetchedPostBody.downvote_count).toBe(0)
+    expect(fetchedPostBody.viewer_vote).toBeNull()
   })
 
   test("GET /posts/:postId includes refreshed vote metrics for the post author", async () => {

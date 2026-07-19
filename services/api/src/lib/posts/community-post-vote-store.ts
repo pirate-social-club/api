@@ -28,3 +28,14 @@ export async function upsertPostVote(input: {
     value: input.value,
   }
 }
+
+export async function deletePostVote(input: {
+  client: Client
+  postId: string
+  userId: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `DELETE FROM post_votes WHERE post_id = ?1 AND user_id = ?2`,
+    args: [input.postId, input.userId],
+  })
+}

@@ -4,7 +4,7 @@ import { getProfileRepository, getUserRepository } from "../lib/auth/repositorie
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
-import { castPostVote, getPost } from "../lib/posts/post-service"
+import { castPostVote, clearPostVote, getPost } from "../lib/posts/post-service"
 import { resolveStudyTimezone } from "../lib/posts/post-study-service"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import { decodePublicPostId } from "../lib/public-ids"
@@ -78,6 +78,46 @@ posts.post("/:postId/vote", async (c) => {
         acting_user_id: actor.userId,
         value: result.value,
       },
+    })
+  }
+  return c.json(result, 200)
+})
+
+posts.post("/:postId/clear_vote", async (c) => {
+  const actor = c.get("actor")
+  const communityRepository = getCommunityRepository(c.env)
+  const body = await c.req.json<{ altcha?: string }>().catch(() => ({}))
+  const rawPostId = c.req.param("postId")
+  const postId = decodePublicPostId(rawPostId)
+  const result = await clearPostVote({
+    env: c.env,
+    userId: actor.userId,
+    postId,
+    bypassVoterAccessChecks: actor.authType === "admin",
+    altchaProof: readAltchaProof({
+      headerValue: c.req.header(ALTCHA_HEADER),
+      body,
+      scope: "vote",
+      action: `post:${rawPostId}:clear`,
+    }),
+    userRepository: getUserRepository(c.env),
+    communityRepository,
+  })
+  await trackApiEvent(c.env, c.req, {
+    eventName: "post_vote_cleared",
+    userId: actor.userId,
+    postId,
+  })
+  if (actor.authType === "admin") {
+    const projection = await communityRepository.getCommunityPostProjectionByPostId(postId)
+    await writeAuditEventForEnv(c.env, {
+      action: "community.admin_post_vote_cleared",
+      actorId: actor.adminOverride.adminActorId,
+      actorType: "operator",
+      communityId: projection?.community_id ?? null,
+      targetId: postId,
+      targetType: "post",
+      metadata: { acting_user_id: actor.userId },
     })
   }
   return c.json(result, 200)

@@ -27,7 +27,8 @@ Current route surface:
 - media routes
   `POST /profile-media`, `POST /community-media`
 - jobs and posts
-  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`, public post and comment read endpoints
+  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`,
+  `POST /posts/{post_id}/clear_vote`, public post and comment read endpoints
 - comments, feed, and notifications
   authenticated comment replies/context/vote/delete, `GET /feed/home`, and notification summary/task/feed read and mutation endpoints
 - agents

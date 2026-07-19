@@ -166,7 +166,7 @@ export {
   listCommunityPosts,
   listPublicCommunityPosts,
 } from "./post-read-service"
-export { castPostVote } from "./post-votes"
+export { castPostVote, clearPostVote } from "./post-votes"
 
 export async function syncRetriedPostProjection(input: {
   communityRepository: Pick<PostServiceCommunityRepository, "updateCommunityPostProjectionPayload" | "updateCommunityPostProjectionStatus">
