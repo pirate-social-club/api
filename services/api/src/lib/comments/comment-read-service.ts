@@ -349,7 +349,11 @@ export async function getCommentContext(input: {
         profileRepository,
       }),
     ])
-    await hydrateCommentAuthorPublicHandles([comment], profileRepository)
+    await hydrateCommentAuthorPublicHandles([comment], profileRepository, {
+      kind: "community",
+      client: db.client,
+      communityId: projection.community_id,
+    })
     await enqueueCommentTranslationOnReadIfNeeded({
       client: db.client,
       communityId: projection.community_id,

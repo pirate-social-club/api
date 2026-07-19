@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  publicCommunityCacheTags,
   publicPostCacheTags,
   purgePublicReadCacheTags,
+  schedulePublicCommunityCachePurge,
   schedulePublicPostCachePurge,
 } from "../src/lib/public-read-cache-invalidation"
 import type { Env } from "../src/env"
@@ -13,6 +15,32 @@ describe("public read cache invalidation", () => {
       communityId: "cmt_123",
       postId: "pst_456",
     })).toEqual(["post:post_pst_456", "community:com_cmt_123"])
+    expect(publicCommunityCacheTags("cmt_123")).toEqual(["community:com_cmt_123"])
+  })
+
+  test("schedules a community-wide purge for identity changes", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    let scheduled: Promise<void> | null = null
+    await schedulePublicCommunityCachePurge({
+      env: {
+        CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+      } satisfies Env,
+      communityId: "cmt_1",
+      waitUntil: (promise) => {
+        scheduled = promise
+      },
+      fetcher: (async (url, init) => {
+        calls.push({ url: String(url), init })
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }) as typeof fetch,
+    })
+    await scheduled
+
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      tags: ["community:com_cmt_1"],
+    })
   })
 
   test("skips Cloudflare purge when config is absent", async () => {

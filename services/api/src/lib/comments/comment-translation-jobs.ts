@@ -100,7 +100,11 @@ export async function localizeCommentItems(input: {
     locale: input.locale ?? null,
   })))
 
-  await hydrateCommentAuthorPublicHandles(localized, input.profileRepository)
+  await hydrateCommentAuthorPublicHandles(localized, input.profileRepository, {
+    kind: "community",
+    client: input.client,
+    communityId: input.communityId,
+  })
 
   await Promise.all(localized.map((item) => enqueueCommentTranslationOnReadIfNeeded({
     client: input.client,

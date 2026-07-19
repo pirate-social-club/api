@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   claimCommunityHandle,
@@ -29,6 +29,24 @@ import type {
 import { decodePublicNamespaceVerificationId } from "../lib/public-ids"
 import { badRequestError } from "../lib/errors"
 import { enforceRateLimit } from "../lib/rate-limit"
+import { schedulePublicCommunityCachePurge } from "../lib/public-read-cache-invalidation"
+
+function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
+  try {
+    const executionCtx = c.executionCtx
+    return (promise) => executionCtx.waitUntil(promise)
+  } catch {
+    return undefined
+  }
+}
+
+async function purgeCommunityHandleBylines(c: Context<AuthenticatedEnv>, communityId: string): Promise<void> {
+  await schedulePublicCommunityCachePurge({
+    env: c.env,
+    communityId,
+    waitUntil: getWaitUntil(c),
+  })
+}
 
 function namespaceVerificationSelector(value: string | undefined): string | null {
   const publicId = value?.trim() || null
@@ -149,6 +167,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       body,
       communityRepository,
     })
+    await purgeCommunityHandleBylines(c, communityId)
     return c.json(result, 200)
   })
 
@@ -169,6 +188,7 @@ export function registerCommunityHandleRoutes(communities: Hono<AuthenticatedEnv
       userRepository,
       communityRepository,
     })
+    await purgeCommunityHandleBylines(c, communityId)
     return c.json(result, 200)
   })
 }
