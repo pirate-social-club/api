@@ -22,7 +22,6 @@ import notifications from "./routes/notifications"
 import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
 import storySettlementOps from "./routes/story-settlement-ops"
-import songDurationBackfillOps from "./routes/song-duration-backfill-ops"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
 import publicAgents from "./routes/public-agents"
@@ -316,7 +315,6 @@ app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/operator/story-settlement", storySettlementOps)
-app.route("/operator/song-duration-backfill", songDurationBackfillOps)
 app.route("/posts", posts)
 app.route("/public-agents", publicAgents)
 app.route("/public-names", publicNames)
