@@ -21,7 +21,7 @@ import { ensureSongArtifactBundleAlignmentReasonColumn } from "./ensure-song-art
 import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "./ensure-song-artifact-bundle-genius-annotations-url-column"
 import { ensureSongArtifactBundleKaraokeRevisionColumn } from "./ensure-song-artifact-bundle-karaoke-revision-column"
 import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
-import { deriveKaraokeRevisionId } from "./karaoke-revision"
+import { deriveKaraokeRevisionId, resolveKaraokeRevisionId } from "./karaoke-revision"
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
 async function getSongArtifactUploadRow(
@@ -549,7 +549,16 @@ export async function getSongArtifactBundle(
   songArtifactBundleId: string,
 ): Promise<SongArtifactBundle | null> {
   const row = await getSongArtifactBundleRow(client, communityId, songArtifactBundleId)
-  return row ? serializeSongArtifactBundle(row) : null
+  if (!row) return null
+  const bundle = serializeSongArtifactBundle(row)
+  const karaokeRevisionId = await resolveKaraokeRevisionId({
+    instrumentalAudio: bundle.instrumental_audio,
+    karaokeRevisionId: bundle.karaoke_revision_id ?? null,
+    timedLyrics: bundle.timed_lyrics ?? null,
+  })
+  return karaokeRevisionId === bundle.karaoke_revision_id
+    ? bundle
+    : { ...bundle, karaoke_revision_id: karaokeRevisionId }
 }
 
 function escapeLikePattern(value: string): string {

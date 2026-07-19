@@ -794,7 +794,18 @@ export class KaraokeSessionRuntimeDO {
           );
           continue;
         }
-      } catch {
+        console.error("[karaoke] attempt finalization rejected", {
+          attemptId: row.attempt_id,
+          requestId: response.headers.get("x-request-id"),
+          sessionId: row.session_id,
+          status: response.status,
+        });
+      } catch (error) {
+        console.error("[karaoke] attempt finalization failed", {
+          attemptId: row.attempt_id,
+          error: error instanceof Error ? error.message : String(error),
+          sessionId: row.session_id,
+        });
         // Retry below.
       }
       const attempts = Number(row.attempts ?? 0) + 1;
