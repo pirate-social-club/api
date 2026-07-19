@@ -1,3 +1,4 @@
+import { spawn } from "bun"
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { generateSongPreviewForBundle } from "../src/lib/song-artifacts/song-artifact-preview-service"
@@ -165,7 +166,7 @@ async function handlePreview(request: Request, context: SongPreviewRequestContex
 }
 
 async function probeDurationMs(bytes: Uint8Array): Promise<number | null> {
-  const process = Bun.spawn([
+  const process = spawn([
     "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", "pipe:0",
   ], { stdin: new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer]), stdout: "pipe", stderr: "pipe" })
   const timeout = setTimeout(() => process.kill(), 30_000)

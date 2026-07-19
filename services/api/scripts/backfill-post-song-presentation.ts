@@ -1,3 +1,4 @@
+import { spawn } from "bun"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 import type { Env } from "../src/env"
 import { getCommunityRepository } from "../src/lib/communities/db-community-repository"
@@ -74,7 +75,7 @@ export function parseFfprobeDurationMs(output: string): number | null {
 }
 
 async function probeAudioDurationMs(bytes: Uint8Array): Promise<number | null> {
-  const process = Bun.spawn([
+  const process = spawn([
     "ffprobe",
     "-v", "error",
     "-show_entries", "format=duration",
