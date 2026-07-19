@@ -480,6 +480,15 @@ membership_mode: "request",
     )
     expect(primaryAttach.status).toBe(200)
 
+    const conflictingRoleAttach = await requestJson(
+      `http://pirate.test/communities/${communityId}/namespace`,
+      { namespace_verification: primaryVerification, namespace_role: "mirror" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(conflictingRoleAttach.status).toBe(409)
+    expect(await json(conflictingRoleAttach)).toMatchObject({ code: "conflict" })
+
     const mirrorAttach = await requestJson(
       `http://pirate.test/communities/${communityId}/namespace`,
       { namespace_verification: mirrorVerification, namespace_role: "mirror" },
