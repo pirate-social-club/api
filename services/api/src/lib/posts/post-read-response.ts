@@ -4,7 +4,10 @@ import type {
   CommunityReadRepository,
 } from "../communities/db-community-repository"
 import type { ProfileRepository } from "../auth/repositories"
-import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
+import {
+  hydratePublicHumanAuthorHandles,
+  type AuthorHandleSurface,
+} from "../identity/author-handle-hydration"
 import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
@@ -129,34 +132,13 @@ export async function buildLocalizedPostReadResponse(input: {
 export async function hydrateAuthorPublicHandlesForResponses(input: {
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
+  surface?: AuthorHandleSurface
 }): Promise<void> {
-  if (!input.profileRepository) return
-
-  const eligiblePosts = input.responses
-    .map((response) => response.post)
-    .filter((post): post is Post & { author_user_id: string } =>
-      post.identity_mode === "public"
-      && post.authorship_mode === "human_direct"
-      && Boolean(post.author_user_id))
-
-  const authorUserIds = [...new Set(eligiblePosts.map((post) => post.author_user_id))]
-  if (authorUserIds.length === 0) return
-
-  const profileRepository = input.profileRepository
-  const profilesByUserId = profileRepository.listProfilesByUserIds
-    ? await profileRepository.listProfilesByUserIds(authorUserIds).catch(() => new Map())
-    : new Map(await Promise.all(authorUserIds.map(async (userId): Promise<[
-        string,
-        Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>,
-      ]> => [
-        userId,
-        await profileRepository.getProfileByUserId(userId).catch(() => null),
-      ])))
-
-  for (const post of eligiblePosts) {
-    const profile = profilesByUserId.get(post.author_user_id) ?? null
-    post.author_public_handle = profile ? getProfilePublicHandleLabel(profile) : null
-  }
+  await hydratePublicHumanAuthorHandles({
+    authors: input.responses.map((response) => response.post),
+    profileRepository: input.profileRepository,
+    surface: input.surface,
+  })
 }
 
 export async function hydrateSongStreakSummariesForResponses(input: {
@@ -239,6 +221,7 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   await hydrateAuthorPublicHandlesForResponses({
     responses: input.responses,
     profileRepository: input.profileRepository,
+    surface: { kind: "community", client: input.client, communityId: input.communityId },
   })
 
   await hydrateSongStreakSummariesForResponses({
