@@ -350,6 +350,7 @@ describe("reward campaign reconciler", () => {
         maxCommunities: 5,
         maxCredits: 10,
         outboxBatchSize: 1,
+        now: reconcileNow,
       })
       expect(secondActivity).toMatchObject({
         ingested_qualifications: 1,
@@ -381,6 +382,7 @@ describe("reward campaign reconciler", () => {
         maxCommunities: 5,
         maxCredits: 10,
         outboxBatchSize: 1,
+        now: reconcileNow,
       })
       expect(replay).toMatchObject({ ingested_qualifications: 0, credited_events: 1, credited_cents: 40 })
 
@@ -391,6 +393,7 @@ describe("reward campaign reconciler", () => {
         maxCommunities: 5,
         maxCredits: 10,
         outboxBatchSize: 1,
+        now: reconcileNow,
       })
       expect(exhausted).toMatchObject({ ingested_qualifications: 0, credited_events: 0, credited_cents: 0 })
       const exhaustedCampaign = await ctx.client.execute(
