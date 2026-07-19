@@ -454,9 +454,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
   }
 
   test("concurrent funding-slot acquisition admits one holder and self-releases by time", async () => {
-    // Commit the campaign fixtures on a dedicated connection before racing pooled
-    // acquisition statements. Otherwise a newly opened pool connection can observe
-    // the slot insert before it observes the campaign seed and trip the slot FK.
+    // Seed on a dedicated connection and keep it alive through the pooled race.
+    // Bun 1.2 can close this connection before the committed rows are visible to
+    // newly opened pool connections, which intermittently trips the slot FK.
     const seed = connect(TEST_DB, 1)
     await seed.unsafe(`
       INSERT INTO reward_campaigns (
@@ -474,28 +474,30 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
           100, 0, 0, 0, 0, 0, 2, 'slot-b', $1, $2, $1)
     `, [NOW, "2026-07-11T12:00:00.000Z"])
-    await seed.end()
+    try {
+      await withProductionPostgresClient(async (client) => {
+        const expiresAt = "2026-07-10T12:15:00.000Z"
+        const acquire = (campaignId: string, now = NOW) => client.execute({
+          sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
+          args: ["cmt_reward_pg", "pst_slot_pg", campaignId, expiresAt, now],
+        })
+        const attempts = await Promise.all([acquire("rcp_slot_a_pg"), acquire("rcp_slot_b_pg")])
+        expect(attempts.reduce((count, result) => count + result.rows.length, 0)).toBe(1)
+        const held = await client.execute("SELECT holder_campaign_id FROM reward_song_slots WHERE post_id = 'pst_slot_pg'")
+        const holder = String(held.rows[0]?.holder_campaign_id)
+        const other = holder === "rcp_slot_a_pg" ? "rcp_slot_b_pg" : "rcp_slot_a_pg"
 
-    await withProductionPostgresClient(async (client) => {
-      const expiresAt = "2026-07-10T12:15:00.000Z"
-      const acquire = (campaignId: string, now = NOW) => client.execute({
-        sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
-        args: ["cmt_reward_pg", "pst_slot_pg", campaignId, expiresAt, now],
+        await client.execute({ sql: "UPDATE reward_campaigns SET status = 'active' WHERE reward_campaign_id = ?1", args: [holder] })
+        const blockedByLive = await acquire(other, "2026-07-10T12:16:00.000Z")
+        expect(blockedByLive.rows).toHaveLength(0)
+
+        await client.execute({ sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1", args: [holder] })
+        const takeover = await acquire(other, "2026-07-10T12:16:00.000Z")
+        expect(takeover.rows).toEqual([{ holder_campaign_id: other }])
       })
-      const attempts = await Promise.all([acquire("rcp_slot_a_pg"), acquire("rcp_slot_b_pg")])
-      expect(attempts.reduce((count, result) => count + result.rows.length, 0)).toBe(1)
-      const held = await client.execute("SELECT holder_campaign_id FROM reward_song_slots WHERE post_id = 'pst_slot_pg'")
-      const holder = String(held.rows[0]?.holder_campaign_id)
-      const other = holder === "rcp_slot_a_pg" ? "rcp_slot_b_pg" : "rcp_slot_a_pg"
-
-      await client.execute({ sql: "UPDATE reward_campaigns SET status = 'active' WHERE reward_campaign_id = ?1", args: [holder] })
-      const blockedByLive = await acquire(other, "2026-07-10T12:16:00.000Z")
-      expect(blockedByLive.rows).toHaveLength(0)
-
-      await client.execute({ sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1", args: [holder] })
-      const takeover = await acquire(other, "2026-07-10T12:16:00.000Z")
-      expect(takeover.rows).toEqual([{ holder_campaign_id: other }])
-    })
+    } finally {
+      await seed.end()
+    }
   })
 
   test("concurrent qualifications create exactly one credited reservation and ledger event", async () => {
