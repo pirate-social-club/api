@@ -139,7 +139,10 @@ function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSumma
 
   if ("accepted_providers" in atom && atom.accepted_providers?.length) {
     summary.accepted_providers = atom.accepted_providers as MembershipGateSummary["accepted_providers"]
-  } else if ("provider" in atom && (atom.provider === "self" || atom.provider === "very" || atom.provider === "passport")) {
+  } else if (
+    "provider" in atom
+    && (atom.provider === "self" || atom.provider === "zkpassport" || atom.provider === "very" || atom.provider === "passport")
+  ) {
     summary.accepted_providers = [atom.provider] as MembershipGateSummary["accepted_providers"]
   }
 

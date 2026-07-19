@@ -979,6 +979,40 @@ describe("community membership gate routes", () => {
     expect(previewBody.viewer_membership_status).toBe("member")
   })
 
+  test("preview preserves the provider for each unique-human gate", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "human-provider-preview-creator")
+    const created = await createMembershipGatedCommunityWithPolicy({
+      env: ctx.env,
+      creatorAccessToken: creator.accessToken,
+      displayName: "Human Provider Preview Club",
+      gatePolicy: orGatePolicy([
+        { type: "unique_human", provider: "self" },
+        { type: "unique_human", provider: "zkpassport" },
+        { type: "unique_human", provider: "very" },
+      ]),
+    })
+
+    const preview = await app.request(
+      `http://pirate.test/communities/${created.communityId}/preview`,
+      {
+        headers: { authorization: `Bearer ${creator.accessToken}` },
+      },
+      ctx.env,
+    )
+    expect(preview.status).toBe(200)
+    const previewBody = await json(preview) as {
+      membership_gate_summaries: Array<{ gate_type: string; accepted_providers?: string[] }>
+    }
+    expect(previewBody.membership_gate_summaries).toEqual([
+      expect.objectContaining({ gate_type: "unique_human", accepted_providers: ["self"] }),
+      expect.objectContaining({ gate_type: "unique_human", accepted_providers: ["zkpassport"] }),
+      expect.objectContaining({ gate_type: "unique_human", accepted_providers: ["very"] }),
+    ])
+  })
+
   test("join-eligibility returns verification_required when nationality is missing", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
