@@ -7,6 +7,7 @@ import { createCommunityListingInTransaction } from "../commerce/listing-service
 import { getListingRowByAssetId } from "../commerce/shared"
 import { createSongAssetForPost } from "../commerce/service"
 import { assertDerivativeParentRevenueShare } from "../commerce/derivative-parent-revenue-share"
+import { updateStoryRegisteredAssetPostStatus } from "../commerce/derivative-source-projection"
 import { mergeAnalysisState } from "../../posts/post-analysis"
 import { songRightsInvariantFailure } from "../../posts/song-rights-invariant"
 import { getPostById } from "../../posts/community-post-query-store"
@@ -223,6 +224,7 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
 async function convergePublishedPostProjection(input: {
   client: Parameters<typeof markPostPublishRequestStatus>[0]["client"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
+  env: CommunityJobHandlerInput["env"]
   post: Post
   now: string
 }): Promise<void> {
@@ -260,6 +262,14 @@ async function convergePublishedPostProjection(input: {
       createdAt: input.now,
     })
   }
+
+  await updateStoryRegisteredAssetPostStatus({
+    env: input.env,
+    communityId: input.post.community_id,
+    sourcePostId: input.post.post_id,
+    sourcePostStatus: "published",
+    updatedAt: input.now,
+  })
 
   // The saga row becomes terminal only after every derived projection is durable.
   // A retry can therefore always repair a crash between post publication and projection writes.
@@ -412,6 +422,7 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
           await convergePublishedPostProjection({
             client: db.client,
             communityRepository: input.communityRepository,
+            env: input.env,
             post: current,
             now,
           })
@@ -565,6 +576,7 @@ export async function runPostPublishFinalize(
       await convergePublishedPostProjection({
         client: db.client,
         communityRepository: input.communityRepository,
+        env: input.env,
         post,
         now: convergedAt,
       })
@@ -915,6 +927,7 @@ export async function runPostPublishFinalize(
     await convergePublishedPostProjection({
       client: db.client,
       communityRepository: input.communityRepository,
+      env: input.env,
       post: published,
       now: projectionUpdatedAt,
     })
