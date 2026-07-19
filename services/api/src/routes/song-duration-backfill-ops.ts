@@ -35,7 +35,7 @@ function duration(value: unknown): number | null {
 
 function durationServiceUrl(env: Env): string {
   const configured = trimEnv(env.SONG_PREVIEW_SERVICE_URL)
-  if (!configured) throw providerUnavailable("Song preview service URL is missing")
+  if (!configured) return "https://song-preview-service.internal/duration"
   const url = new URL(configured)
   url.pathname = "/duration"
   url.search = ""
@@ -45,11 +45,14 @@ function durationServiceUrl(env: Env): string {
 async function probeDuration(input: { env: Env; communityId: string; bundleId: string }): Promise<number | null> {
   const secret = trimEnv(input.env.SONG_PREVIEW_SHARED_SECRET)
   if (!secret) throw providerUnavailable("Song preview shared secret is missing")
-  const response = await fetch(durationServiceUrl(input.env), {
+  const request = new Request(durationServiceUrl(input.env), {
     method: "POST",
     headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
     body: JSON.stringify({ community_id: input.communityId, song_artifact_bundle: input.bundleId }),
   })
+  const response = input.env.SONG_PREVIEW_SERVICE
+    ? await input.env.SONG_PREVIEW_SERVICE.fetch(request)
+    : await fetch(request)
   if (!response.ok) return null
   const body = await response.json() as { duration_ms?: unknown }
   return duration(body.duration_ms)
