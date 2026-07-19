@@ -18,7 +18,7 @@ import type { UserRepository } from "../auth/repositories"
 import { publicPostId } from "../public-ids"
 import type { AltchaProofInput } from "../verification/altcha-provider"
 import { getPostById } from "./community-post-query-store"
-import { upsertPostVote } from "./community-post-vote-store"
+import { deletePostVote, upsertPostVote } from "./community-post-vote-store"
 import { syncPostProjectionMetrics } from "./post-projection-sync"
 
 type PostVoteCommunityRepository =
@@ -30,16 +30,20 @@ type PostVoteCommunityRepository =
     "getCommunityPostProjectionByPostId" | "updateCommunityPostProjectionMetrics"
   >
 
-export async function castPostVote(input: {
+type MutatePostVoteInput = {
   env: Env
   userId: string
   postId: string
-  value: -1 | 1
+  value: -1 | 1 | null
   bypassVoterAccessChecks?: boolean
   altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: PostVoteCommunityRepository
-}): Promise<{ post: string; value: -1 | 1 }> {
+}
+
+async function mutatePostVote<const Value extends -1 | 1 | null>(
+  input: Omit<MutatePostVoteInput, "value"> & { value: Value },
+): Promise<{ post: string; value: Value }> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
     throw notFoundError("Post not found")
@@ -87,21 +91,29 @@ export async function castPostVote(input: {
     }
 
     const now = nowIso()
-    const vote = await upsertPostVote({
-      client: db.client,
-      postId: input.postId,
-      communityId: projection.community_id,
-      userId: input.userId,
-      value: input.value,
-      now,
-    })
+    if (input.value === null) {
+      await deletePostVote({
+        client: db.client,
+        postId: input.postId,
+        userId: input.userId,
+      })
+    } else {
+      await upsertPostVote({
+        client: db.client,
+        postId: input.postId,
+        communityId: projection.community_id,
+        userId: input.userId,
+        value: input.value,
+        now,
+      })
+    }
     await syncPostProjectionMetrics({
       executor: db.client,
       communityRepository: input.communityRepository,
       postId: input.postId,
       updatedAt: now,
     })
-    if (nonMemberPowVoter) {
+    if (nonMemberPowVoter && input.value !== null) {
       await followCommunityAfterParticipation({
         client: db.client,
         communityRepository: input.communityRepository,
@@ -110,10 +122,22 @@ export async function castPostVote(input: {
       })
     }
     return {
-      post: publicPostId(vote.post_id),
-      value: vote.value,
+      post: publicPostId(input.postId),
+      value: input.value,
     }
   } finally {
     db.close()
   }
+}
+
+export function castPostVote(
+  input: Omit<MutatePostVoteInput, "value"> & { value: -1 | 1 },
+): Promise<{ post: string; value: -1 | 1 }> {
+  return mutatePostVote(input)
+}
+
+export function clearPostVote(
+  input: Omit<MutatePostVoteInput, "value">,
+): Promise<{ post: string; value: null }> {
+  return mutatePostVote({ ...input, value: null })
 }

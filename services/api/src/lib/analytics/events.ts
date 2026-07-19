@@ -37,6 +37,7 @@ export type AnalyticsEventName =
   | "post_created"
   | "comment_created"
   | "post_voted"
+  | "post_vote_cleared"
   | "comment_voted"
   | "thread_viewed"
   | "community_create_started"
