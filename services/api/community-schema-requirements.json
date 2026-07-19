@@ -22,6 +22,7 @@
     "1133 is positively attested by its namespace_role column, replacement indexes, and the absence of the dropped legacy index."
   ],
   "version": 1,
+  "canonical_schema": true,
   "unconditional": [
     "1124_community_job_checkpoints.sql",
     "1126_reward_qualification_outbox.sql",
