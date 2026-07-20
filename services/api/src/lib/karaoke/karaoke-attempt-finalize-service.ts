@@ -62,6 +62,13 @@ function requireString(value: unknown, field: string): string {
   return value.trim()
 }
 
+function requirePositiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new HttpError(400, "invalid_karaoke_finalize_payload", `${field} must be a positive integer`, false)
+  }
+  return value
+}
+
 function parseStoredScoringPolicy(json: string | null): { model: string; provider: string } {
   if (!json) {
     throw internalError("Karaoke session creation is missing scoring policy")
@@ -91,6 +98,7 @@ export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   attemptId: string
   completedAt: string
   completionReason: KaraokeAttemptCompletionReason
+  scoringVersion: number
   sessionId: string
   summary: KaraokeSessionSummary
 } {
@@ -110,6 +118,7 @@ export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
     attemptId: requireString(record.attempt_id, "attempt_id"),
     completedAt: requireIsoString(record.completed_at, "completed_at"),
     completionReason,
+    scoringVersion: requirePositiveInteger(record.scoring_version, "scoring_version"),
     sessionId: requireString(record.session_id, "session_id"),
     summary: record.summary,
   }
@@ -184,6 +193,7 @@ export async function finalizeKaraokeAttempt(input: {
         postId: creation.postId,
         scoringModel: scoringPolicy.model,
         scoringProvider: scoringPolicy.provider,
+        scoringVersion: input.payload.scoringVersion,
         sessionId: input.payload.sessionId,
         summary: input.payload.summary,
         userId: creation.subjectUserId,
