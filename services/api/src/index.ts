@@ -968,25 +968,27 @@ const SCHEDULED_JOB_CONCURRENCY = 2
 // under the 60s cron interval (no overlapping invocations stacking connections)
 // and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
 const SCHEDULED_BATCH_DEADLINE_MS = 30_000
-// Booking settlement and royalty verification occupy the first two concurrency
-// slots. Reward campaign reconciliation is also a money path, and community
-// delivery must retain its liveness guarantee even when all three money paths run
-// past the batch start deadline; otherwise credits or queued preview/publish jobs
-// can remain unclaimed indefinitely.
-const SCHEDULED_MINIMUM_PRIORITY_STARTS = 6
+// Protect the seven settlement/money-movement jobs at the front of the ordered
+// batch. They must receive a start even when D1 pressure pushes the batch past
+// its nominal deadline; monitoring and maintenance work may defer to a later
+// tick without stranding an on-chain transfer or credited obligation.
+const SCHEDULED_MINIMUM_PRIORITY_STARTS = 7
+const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
 const SCHEDULED_LEASE_TTL_MS = 120_000
 
 type ScheduledPriorityJobName =
+  | "reconcile_reward_payouts"
+  | "reconcile_royalty_claims"
   | "reconcile_booking_settlements"
+  | "reconcile_purchase_settlements"
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
   | "reconcile_reward_funding_refunds"
   | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
-  | "reconcile_purchase_settlements"
   | "reconcile_d1_provisioning"
   | "revalidate_hns_namespaces"
   | "monitor_reward_campaigns"
@@ -996,13 +998,15 @@ export function scheduledPriorityJobNames(
   canRunHnsNamespaceRevalidation: boolean,
 ): ScheduledPriorityJobName[] {
   return [
+    "reconcile_reward_payouts",
+    "reconcile_royalty_claims",
     "reconcile_booking_settlements",
+    "reconcile_purchase_settlements",
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
     "monitor_reward_campaign_treasury_solvency",
     "process_community_jobs",
-    "reconcile_purchase_settlements",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
@@ -1054,23 +1058,25 @@ const handler: ExportedHandler<Env> = {
     // provisioning, and royalty-allocation verification after slower community/feed work,
     // so keep them first while lower-priority jobs rotate.
     const priorityJobRuns: Record<ScheduledPriorityJobName, () => Promise<void>> = {
+      reconcile_reward_payouts: () => reconcileScheduledRewardPayouts(env),
+      reconcile_royalty_claims: () => reconcileScheduledRoyaltyClaims(env),
       reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
+      reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       reconcile_reward_funding_refunds: () => reconcileScheduledRewardFundingRefunds(env),
       monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
-      reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two. The leading money-path jobs guarantee booking settlement,
-    // royalty verification, reward reconciliation, funding refunds, treasury solvency,
-    // and queued community delivery each get a turn even if earlier tasks run past the
-    // start deadline. Purchase settlement recovery remains the next priority task.
-    // D1 remains ahead of the slower, latency-tolerant HNS revalidation and reward
-    // monitor.
+    // Concurrency is two. The protected prefix contains only settlement and
+    // money-movement paths: payout/royalty finalization, booking/purchase
+    // settlement, reward reconciliation, and funding refunds. All seven get a
+    // start even when an earlier D1-backed job consumes the nominal batch
+    // deadline. Monitoring and community maintenance remain ordered after that
+    // prefix and may defer safely to a later tick.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
       canRunD1Reconciler,
       isHnsNamespaceRevalidationEnabled(env),
@@ -1081,9 +1087,7 @@ const handler: ExportedHandler<Env> = {
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
-      { name: "reconcile_reward_payouts", run: () => reconcileScheduledRewardPayouts(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
-      { name: "reconcile_royalty_claims", run: () => reconcileScheduledRoyaltyClaims(env) },
     ]
     const rotatedJobs: NamedTask[] = [
       ...(reconcilerOnly ? [] : generalJobs),
@@ -1096,7 +1100,20 @@ const handler: ExportedHandler<Env> = {
       ...priorityJobs.map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) })),
       ...rotatedJobs.slice(offset),
       ...rotatedJobs.slice(0, offset),
-    ]
+    ].map((job) => ({
+      name: job.name,
+      run: async () => {
+        const startedAt = Date.now()
+        try {
+          await job.run()
+        } finally {
+          const durationMs = Date.now() - startedAt
+          if (durationMs >= SCHEDULED_SLOW_JOB_WARNING_MS) {
+            console.warn(`[scheduled] slow job: ${job.name} took ${durationMs}ms`)
+          }
+        }
+      },
+    }))
 
     // The DO lease is REQUIRED. Rather than silently run without overlap
     // protection (which could re-trigger control-plane connection exhaustion), a
