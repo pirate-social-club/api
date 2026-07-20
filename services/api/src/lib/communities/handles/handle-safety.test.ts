@@ -40,6 +40,7 @@ describe("community handle safety controls", () => {
           claim_gate_expression_json: null,
           eligibility_timing: "claim_time",
           settings_json: null,
+          revision: 1,
           updated_at: null,
         }],
       }),
