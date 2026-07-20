@@ -25,6 +25,7 @@
   "canonical_schema": true,
   "unconditional": [
     "1124_community_job_checkpoints.sql",
+    "1125_rights_holds.sql",
     "1126_reward_qualification_outbox.sql",
     "1127_asset_story_metadata_refs.sql",
     "1128_community_job_attempt_leases.sql",
@@ -38,7 +39,8 @@
     "1136_community_handle_label_reservations.sql",
     "1137_community_handle_payment_reservation_cap.sql",
     "1138_namespace_handle_label_claim_rules.sql",
-    "1140_karaoke_attempts_schema_repair.sql"
+    "1140_karaoke_attempts_schema_repair.sql",
+    "1141_namespace_handle_policy_revision.sql"
   ],
   "features": {},
   "deferred": {

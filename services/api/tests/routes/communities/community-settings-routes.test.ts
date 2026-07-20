@@ -577,7 +577,35 @@ membership_mode: "request",
       ctx.env,
     )
     expect(mirrorPolicy.status).toBe(200)
-    expect((await json(mirrorPolicy) as { claims_enabled: boolean }).claims_enabled).toBe(false)
+    const mirrorPolicyBody = await json(mirrorPolicy) as { claims_enabled: boolean; revision: number }
+    expect(mirrorPolicyBody.claims_enabled).toBe(false)
+    expect(mirrorPolicyBody.revision).toBe(1)
+
+    const primaryPolicy = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(primaryPolicy.status).toBe(200)
+    const primaryPolicyBody = await json(primaryPolicy) as { revision: number }
+    expect(primaryPolicyBody.revision).toBe(1)
+
+    const updatedMirrorPolicy = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy?${mirrorSelector}`,
+      { expected_revision: mirrorPolicyBody.revision, claims_enabled: true },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(updatedMirrorPolicy.status).toBe(200)
+    expect(await json(updatedMirrorPolicy)).toMatchObject({ claims_enabled: true, revision: 2 })
+
+    const unchangedPrimaryPolicy = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(unchangedPrimaryPolicy.status).toBe(200)
+    expect(await json(unchangedPrimaryPolicy)).toMatchObject({ claims_enabled: false, revision: 1 })
 
     const reservedMirrorHandle = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/reserve?${mirrorSelector}`,
