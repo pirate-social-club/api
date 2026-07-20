@@ -7,6 +7,7 @@ describe("buildSongKaraokeLines", () => {
     const source = [
       "(Hoo-ooh)",
       "(Ha)",
+      "(Ooh) (ooh)",
       "[Chorus]",
       "I'm in town girl for just one night",
       "body down (tonight)",
@@ -28,6 +29,7 @@ describe("buildSongKaraokeLines", () => {
     expect(lines.map((line) => [line.text, line.kind])).toEqual([
       ["(Hoo-ooh)", "adlib"],
       ["(Ha)", "adlib"],
+      ["(Ooh) (ooh)", "adlib"],
       ["[Chorus]", "section"],
       ["I'm in town girl for just one night", "lyric"],
       ["body down (tonight)", "lyric"],

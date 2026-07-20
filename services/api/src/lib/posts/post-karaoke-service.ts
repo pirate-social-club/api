@@ -144,7 +144,7 @@ function isSectionMarker(text: string): boolean {
   return /^\[[^\]]+\]$/u.test(normalizeText(text))
 }
 
-const AD_LIB_LINE = /^\([^()]*\)$/u
+const AD_LIB_LINE = /^(?:\([^()]*\)[\s,]*)+$/u
 
 /**
  * Keep ad-libs in forced alignment so they continue to anchor surrounding
