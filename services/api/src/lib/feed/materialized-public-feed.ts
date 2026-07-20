@@ -9,6 +9,10 @@ import type { Env, HomeFeedResponse } from "../../types"
 const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v1"
 const MATERIALIZED_PUBLIC_HOME_FEED_FRESH_MS = 5 * 60 * 1000
 const MATERIALIZED_PUBLIC_HOME_FEED_STALE_MS = 30 * 60 * 1000
+// Keep the homepage available through a short scheduler/control-plane incident.
+// Expired snapshots are public-only and trigger a background refresh; the bound
+// prevents deleted or reordered content from remaining visible indefinitely.
+const MATERIALIZED_PUBLIC_HOME_FEED_EXPIRED_GRACE_MS = 2 * 60 * 60 * 1000
 const DEFAULT_MATERIALIZED_PUBLIC_HOME_FEED_LOCALES = ["en"]
 
 type MaterializedPublicHomeFeedTarget = {
@@ -136,7 +140,8 @@ export async function readMaterializedPublicHomeFeed(input: {
   }
 
   const startedAt = performance.now()
-  const now = nowIso(input.nowMs)
+  const nowMs = input.nowMs ?? Date.now()
+  const now = nowIso(nowMs)
   try {
     const result = await input.client.execute({
       sql: `
@@ -169,6 +174,16 @@ export async function readMaterializedPublicHomeFeed(input: {
       }
     }
     if (staleAt > now) {
+      return {
+        result: attachMaterializedServerTiming(body, {
+          durationMs: Math.round(performance.now() - startedAt),
+          state: "stale",
+        }),
+        state: "stale",
+      }
+    }
+    const staleAtMs = Date.parse(staleAt)
+    if (Number.isFinite(staleAtMs) && nowMs <= staleAtMs + MATERIALIZED_PUBLIC_HOME_FEED_EXPIRED_GRACE_MS) {
       return {
         result: attachMaterializedServerTiming(body, {
           durationMs: Math.round(performance.now() - startedAt),
