@@ -20,6 +20,7 @@ import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
 import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
+import { decodePublicCommunityId, decodePublicPostId } from "../public-ids"
 import {
   KARAOKE_MIN_MEASURED_LINES,
   KARAOKE_PLATFORM_MIN_SCORE_BPS,
@@ -244,8 +245,11 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
   }
   const normalized = {
     ...input,
-    community: nonEmpty(input.community, "community"),
-    post: nonEmpty(input.post, "post"),
+    // Web routes and API serializers expose public IDs (`com_cmt_…` and
+    // `post_pst_…`), while shard routing and campaign storage use raw IDs.
+    // Normalize at the write boundary so callers may use either safe form.
+    community: decodePublicCommunityId(nonEmpty(input.community, "community")),
+    post: decodePublicPostId(nonEmpty(input.post, "post")),
     idempotency_key: nonEmpty(input.idempotency_key, "idempotency_key"),
     min_score_bps: basisPoints(input.min_score_bps, "min_score_bps"),
     daily_reward_cents: cents(input.daily_reward_cents, "daily_reward_cents", false),

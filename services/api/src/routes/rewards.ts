@@ -23,6 +23,7 @@ import { captureScheduledWarning } from "../lib/ops-alerts/scheduled"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityReadClient } from "../lib/communities/community-read-access"
 import { rowValue, stringOrNull } from "../lib/sql-row"
+import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
 import type { RewardCashoutRequest } from "../types"
 import { inspectKaraokeRewardEligibility } from "../lib/posts/post-karaoke-service"
 
@@ -56,8 +57,13 @@ async function resolveCampaignTarget(
   postId: string,
   options?: { inspectKaraoke: boolean },
 ): Promise<RewardCampaignTarget> {
+  // Policy paths receive public IDs from the web client, whereas the routing
+  // table and shard rows use raw IDs. Campaign creation normalizes earlier,
+  // but normalize here too so every reward target entry point is consistent.
+  const resolvedCommunityId = decodePublicCommunityId(communityId)
+  const resolvedPostId = decodePublicPostId(postId)
   const communityRepository = getCommunityRepository(env)
-  const handle = await openCommunityReadClient(env, communityRepository, communityId)
+  const handle = await openCommunityReadClient(env, communityRepository, resolvedCommunityId)
   let target: RewardCampaignTarget
   let karaokeEnabled = false
   let lyrics: string | null = null
@@ -73,7 +79,7 @@ async function resolveCampaignTarget(
         WHERE community_id = ?1 AND post_id = ?2
         LIMIT 1
       `,
-      args: [communityId, postId],
+      args: [resolvedCommunityId, resolvedPostId],
     })
     const row = result.rows[0]
     if (
@@ -86,7 +92,7 @@ async function resolveCampaignTarget(
     if (!songArtifactBundleId || !songOwnerUserId) {
       throw badRequestError("Reward campaign song target is incomplete")
     }
-    target = { communityId, postId, songArtifactBundleId, songOwnerUserId }
+    target = { communityId: resolvedCommunityId, postId: resolvedPostId, songArtifactBundleId, songOwnerUserId }
     karaokeEnabled = Number(rowValue(row, "karaoke_enabled") ?? 0) === 1
     lyrics = stringOrNull(rowValue(row, "lyrics"))
   } finally {
@@ -94,7 +100,7 @@ async function resolveCampaignTarget(
   }
   if (!options?.inspectKaraoke) return target
   const eligibility = await inspectKaraokeRewardEligibility({
-    communityId,
+    communityId: resolvedCommunityId,
     env,
     karaokeEnabled,
     lyrics,
