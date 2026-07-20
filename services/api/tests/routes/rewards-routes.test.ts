@@ -259,8 +259,9 @@ describe("rewards routes", () => {
   function campaignBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     const now = Math.floor(Date.now() / 1000)
     return {
-      community: "cmt_rewards_route",
-      post: "pst_reward_campaign_song",
+      // The web client sends canonical public IDs from the page route.
+      community: "com_cmt_rewards_route",
+      post: "post_pst_reward_campaign_song",
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
@@ -403,7 +404,14 @@ describe("rewards routes", () => {
     }, ctx.env)
     expect(create.status).toBe(201)
     const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string; min_score_bps: number }
-    expect(campaign).toMatchObject({ status: "draft", song_owner: session.userId, eligible_activity: "either", min_score_bps: 7000 })
+    expect(campaign).toMatchObject({
+      community: "cmt_rewards_route",
+      post: "pst_reward_campaign_song",
+      status: "draft",
+      song_owner: session.userId,
+      eligible_activity: "either",
+      min_score_bps: 7000,
+    })
 
     const replay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
@@ -569,7 +577,7 @@ describe("rewards routes", () => {
     const outsider = await exchangeJwt(ctx.env, "reward-policy-outsider")
     await seedCampaignSong(ctx, owner.userId)
     await addWallet(ctx, booster.userId, new Date().toISOString())
-    const policyUrl = "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song"
+    const policyUrl = "http://pirate.test/reward_song_policies/com_cmt_rewards_route/post_pst_reward_campaign_song"
 
     const unauthorizedPolicy = await app.request(policyUrl, {
       method: "PUT",

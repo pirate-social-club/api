@@ -2,6 +2,7 @@ import { getAddress } from "ethers"
 
 import type { Env } from "../../env"
 import { providerUnavailable } from "../errors"
+import { decodePublicPostId } from "../public-ids"
 
 export type RewardCampaignConfig = {
   enabled: boolean
@@ -120,6 +121,10 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean)
+        // Public post IDs are what operators see and copy from URLs. Store the
+        // canonical shard form so either public or internal configuration
+        // matches the normalized campaign target.
+        .map(decodePublicPostId)
       return values.length > 0 ? new Set(values) : null
     })(),
   }
