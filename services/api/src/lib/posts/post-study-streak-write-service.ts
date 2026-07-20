@@ -53,6 +53,54 @@ export async function upsertStudyEngagementDay(input: {
   })
 }
 
+export async function upsertCompletedStudySessionDay(input: {
+  client: ReadClient
+  communityId: string
+  completedExerciseCount: number
+  firstPassCorrectCount: number
+  now: string
+  postId: string
+  qualified: boolean
+  requiredCorrectCount: number
+  studyTimezone?: string
+  userId: string
+}): Promise<void> {
+  const activityTimezone = input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE
+  const today = studyActivityDate(input.now, activityTimezone)
+  await input.client.execute({
+    sql: `
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date, activity_timezone,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?10, ?5, ?6, ?7, 0, ?8, ?9, ?9)
+      ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
+        activity_timezone = excluded.activity_timezone,
+        study_attempt_count = MAX(song_engagement_days.study_attempt_count, excluded.study_attempt_count),
+        study_correct_count = MAX(song_engagement_days.study_correct_count, excluded.study_correct_count),
+        study_target_count = excluded.study_target_count,
+        qualified = CASE
+          WHEN excluded.qualified = 1 OR song_engagement_days.karaoke_pass_count > 0
+            THEN 1
+          ELSE song_engagement_days.qualified
+        END,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      input.userId,
+      input.postId,
+      input.communityId,
+      today,
+      input.completedExerciseCount,
+      input.firstPassCorrectCount,
+      input.requiredCorrectCount,
+      input.qualified ? 1 : 0,
+      input.now,
+      activityTimezone,
+    ],
+  })
+}
+
 async function materializeStudyStreak(input: {
   activityDate?: string
   client: ReadClient

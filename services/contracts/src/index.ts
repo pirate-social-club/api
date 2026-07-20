@@ -2336,6 +2336,9 @@ export type SongStudyExercise = ({
   reference_text: string;
   translation_text?: string | null;
   max_attempts: number;
+  presentation_count: number;
+  mastered: boolean;
+  first_outcome: "correct" | "incorrect" | "revealed" | null;
 } | {
   id: string;
   type: "translation_choice";
@@ -2348,15 +2351,18 @@ export type SongStudyExercise = ({
     text: string;
   }>;
   max_attempts: number;
+  presentation_count: number;
+  mastered: boolean;
+  first_outcome: "correct" | "incorrect" | "revealed" | null;
 });
 
 export type SongStudyAttemptRequest = {
   idempotency_key: string;
+  session_id: string;
   exercise_id: string;
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
   selected_option_id?: string;
-  target_language?: string;
   transcript?: string;
 };
 
@@ -2372,6 +2378,7 @@ export type SongStudyAttemptResult = {
     extra?: Array<string>;
   };
   next_review_hint?: "again" | "hard" | "good" | "easy";
+  session?: SongStudySessionSummary;
   study_progress?: {
     study_attempt_count: number;
     study_correct_count: number;
@@ -4140,9 +4147,18 @@ type SongStreakLeaderboardIdentity = {
 };
 
 type SongStudySessionSummary = {
+  id: string | null;
+  status: "active" | "completed" | "caught_up" | "expired";
   due_count: number;
   served_count: number;
   total_units: number;
+  required_correct_count: number;
+  max_presentations: number;
+  presentation_count: number;
+  completed_exercise_count: number;
+  first_pass_correct_count: number;
+  mastered_exercise_count: number;
+  qualified: boolean;
   next_due_at?: number;
 };
 

@@ -14,7 +14,14 @@ import {
 } from "../../../src/lib/communities/assistant-policy/credential-service"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
 import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
-import { getPostStreakLeaderboard, getPostStreakSummary, getPostStudyPayload, getSongStudyAttemptTiming, submitPostStudyAttempt, transcribePostStudyAudio, upsertStudyStreakProgress } from "../../../src/lib/posts/post-study-service"
+import {
+  getPostStreakLeaderboard,
+  getPostStreakSummary,
+  getPostStudyPayload,
+  submitPostStudyAttempt as submitPostStudyAttemptRaw,
+  transcribePostStudyAudio,
+  upsertStudyStreakProgress,
+} from "../../../src/lib/posts/post-study-service"
 import type { Env, LocalizedPostResponse } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -93,6 +100,31 @@ function env(overrides: Partial<Env> = {}): Env {
   } as Env
 }
 
+async function submitPostStudyAttempt(
+  input: Omit<Parameters<typeof submitPostStudyAttemptRaw>[0], "body"> & {
+    body: Parameters<typeof submitPostStudyAttemptRaw>[0]["body"] & { test_target_language?: unknown }
+  },
+): ReturnType<typeof submitPostStudyAttemptRaw> {
+  const requestedTarget = typeof input.body.test_target_language === "string"
+    ? input.body.test_target_language
+    : /:translation_choice:([^:]+)$/u.exec(String(input.body.exercise_id ?? ""))?.[1] ?? "en"
+  const payload = await getPostStudyPayload({
+    actor: input.actor,
+    communityId: input.communityId,
+    communityRepository: input.communityRepository,
+    env: input.env,
+    postId: input.postId,
+    targetLanguage: requestedTarget,
+  })
+  const sessionId = payload.session?.id
+  if (!sessionId) throw new Error("test setup did not produce an active study session")
+  const { test_target_language: _testTarget, ...body } = input.body
+  return submitPostStudyAttemptRaw({
+    ...input,
+    body: { ...body, session_id: sessionId },
+  })
+}
+
 async function exec(sql: string, args: unknown[] = []): Promise<void> {
   if (!client) throw new Error("test db not initialized")
   await client.execute({ sql, args: args as never[] })
@@ -160,7 +192,7 @@ async function runStudyGenerationJob(input: {
   })
   const jobId = typeof storedJob.rows[0]?.job_id === "string" ? storedJob.rows[0].job_id : "cjb_study_test"
   const attemptCount = Number(storedJob.rows[0]?.attempt_count ?? 0)
-  return runCommunityJob({
+  const result = await runCommunityJob({
     env: input.env,
     communityRepository: repo as never,
     job: {
@@ -188,6 +220,14 @@ async function runStudyGenerationJob(input: {
       updated_at: NOW,
     },
   })
+  // Generation tests inspect a newly generated pack. The first lazy GET may
+  // already have fixed a say-it-back-only session, so end that setup session
+  // before opening the post-generation lesson.
+  await client!.execute({
+    sql: `UPDATE song_study_session SET status = 'expired' WHERE post_id = ?1 AND target_language = ?2 AND status = 'active'`,
+    args: [postId, targetLanguage],
+  })
+  return result
 }
 
 async function applyStudyMigration(): Promise<void> {
@@ -215,7 +255,9 @@ async function applyStudyMigration(): Promise<void> {
   }
 
   const attemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
-  if (!attemptColumns.rows.some((row) => String(row.name) === "review_session_id")) {
+  const hasLegacyReviewSessionId = attemptColumns.rows.some((row) => String(row.name) === "review_session_id")
+  const hasStudySessionId = attemptColumns.rows.some((row) => String(row.name) === "study_session_id")
+  if (!hasLegacyReviewSessionId && !hasStudySessionId) {
     const path = fileURLToPath(new URL("../../../test-fixtures/db/community-template/migrations/1118_song_study_review_sessions.sql", import.meta.url))
     const raw = await readFile(path, "utf8")
     for (const statement of splitSqlStatements(raw)) {
@@ -275,6 +317,21 @@ async function applyStudyMigration(): Promise<void> {
   if (generationRunTables.rows.length <= 0) {
     const path = fileURLToPath(
       new URL("../../../test-fixtures/db/community-template/migrations/1131_song_study_generation_runs.sql", import.meta.url),
+    )
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
+
+  const sessionTables = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'song_study_session'",
+  )
+  if (sessionTables.rows.length <= 0) {
+    const path = fileURLToPath(
+      new URL("../../../test-fixtures/db/community-template/migrations/1142_song_study_sessions.sql", import.meta.url),
     )
     const raw = await readFile(path, "utf8")
     for (const statement of splitSqlStatements(raw)) {
@@ -735,11 +792,11 @@ describe("post study service", () => {
     })
 
     expect(payload.access).toBe("ready")
-    expect(payload.exercise_count).toBe(15)
-    expect(payload.exercises).toHaveLength(15)
-    expect(payload.session).toEqual({
+    expect(payload.exercise_count).toBe(10)
+    expect(payload.exercises).toHaveLength(10)
+    expect(payload.session).toMatchObject({
       due_count: 40,
-      served_count: 15,
+      served_count: 10,
       total_units: 40,
     })
     expect(payload.exercises.map((exercise) => `${exercise.line_id}:${exercise.type}`)).toEqual([
@@ -753,11 +810,6 @@ describe("post study service", () => {
       "line_004:translation_choice",
       "line_005:say_it_back",
       "line_005:translation_choice",
-      "line_006:say_it_back",
-      "line_006:translation_choice",
-      "line_007:say_it_back",
-      "line_007:translation_choice",
-      "line_008:say_it_back",
     ])
   })
 
@@ -801,11 +853,11 @@ describe("post study service", () => {
     })
 
     expect(payload.access).toBe("ready")
-    expect(payload.exercise_count).toBe(15)
-    expect(payload.exercises).toHaveLength(15)
-    expect(payload.session).toEqual({
+    expect(payload.exercise_count).toBe(10)
+    expect(payload.exercises).toHaveLength(10)
+    expect(payload.session).toMatchObject({
       due_count: 40,
-      served_count: 15,
+      served_count: 10,
       total_units: 40,
     })
   })
@@ -1036,7 +1088,7 @@ describe("post study service", () => {
     await seedSongPost()
     await seedReadyPack()
 
-    const first = await submitPostStudyAttempt({
+    const input = {
       actor: learnerActor,
       body: {
         attempt_number: 1,
@@ -1049,29 +1101,26 @@ describe("post study service", () => {
       communityRepository: repo,
       env: env(),
       postId: POST_ID,
-    })
-    const retry = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-attempt-1",
-        selected_option_id: "opt_a",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })
+    } as const
+    const [first, retry] = await Promise.all([
+      submitPostStudyAttempt(input),
+      submitPostStudyAttempt(input),
+    ])
 
-    expect(first).toEqual({
-      attempts_remaining: 1,
+    expect(first).toMatchObject({
+      attempts_remaining: 2,
       correct_option_id: "opt_a",
       exercise_id: "stu:stu_2:translation_choice:es",
       next_review_hint: "good",
       object: "song_study_attempt_result",
       outcome: "correct",
+      session: {
+        completed_exercise_count: 1,
+        first_pass_correct_count: 1,
+        qualified: false,
+        required_correct_count: 3,
+        status: "active",
+      },
     })
     expect(retry).toEqual(first)
 
@@ -1139,14 +1188,14 @@ describe("post study service", () => {
     expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
   })
 
-  test("streak ledger counts wrong MCQ attempts stored as revealed without correctness credit", async () => {
+  test("a first-pass wrong MCQ does not write the session streak ledger early", async () => {
     await seedSongPost()
     await seedReadyPack()
 
     const result = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 2,
+        attempt_number: 1,
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-wrong-mcq",
         selected_option_id: "opt_b",
@@ -1158,7 +1207,7 @@ describe("post study service", () => {
       postId: POST_ID,
     })
 
-    expect(result.outcome).toBe("revealed")
+    expect(result.outcome).toBe("incorrect")
     const ledger = await client!.execute({
       sql: `
         SELECT study_attempt_count, study_correct_count, study_target_count, qualified
@@ -1167,20 +1216,10 @@ describe("post study service", () => {
       `,
       args: [LEARNER_ID, POST_ID],
     })
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 0,
-      study_attempt_count: 1,
-      study_correct_count: 0,
-      study_target_count: 3,
-    }])
+    expect(ledger.rows).toEqual([])
   })
 
-  test("near-missed say-it-back attempts stay in short recovery and can qualify the streak", async () => {
+  test("near-miss corrections master the card without inflating first-pass streak qualification", async () => {
     await seedSongPost()
     await seedReadyPack()
     const attemptEnv = env({
@@ -1194,7 +1233,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-nearmiss-recovery-correct-say",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },
@@ -1224,7 +1263,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_2:say_it_back:en",
         idempotency_key: "study-nearmiss-recovery-near-miss",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "Hold me close until the dawn",
         type: "say_it_back",
       },
@@ -1237,17 +1276,7 @@ describe("post study service", () => {
     expect(nearMiss.outcome).toBe("incorrect")
     expect(nearMiss.next_review_hint).toBe("again")
     let ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 0,
-      study_attempt_count: 3,
-      study_correct_count: 2,
-      study_target_count: 3,
-    }])
+    expect(ledger.rows).toEqual([])
 
     const review = await client!.execute({
       sql: `
@@ -1279,10 +1308,10 @@ describe("post study service", () => {
     const recovered = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 1,
+        attempt_number: 2,
         exercise_id: "stu:stu_2:say_it_back:en",
         idempotency_key: "study-nearmiss-recovery-corrected",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "Hold me close until the morning",
         type: "say_it_back",
       },
@@ -1294,10 +1323,9 @@ describe("post study service", () => {
 
     expect(recovered.outcome).toBe("correct")
     expect(recovered.study_progress).toMatchObject({
-      current_streak: 1,
-      qualified_today: true,
-      study_attempt_count: 4,
-      study_correct_count: 3,
+      qualified_today: false,
+      study_attempt_count: 3,
+      study_correct_count: 2,
       study_target_count: 3,
     })
     ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
@@ -1307,14 +1335,14 @@ describe("post study service", () => {
       study_correct_count: Number(row.study_correct_count),
       study_target_count: Number(row.study_target_count),
     }))).toEqual([{
-      qualified: 1,
-      study_attempt_count: 4,
-      study_correct_count: 3,
+      qualified: 0,
+      study_attempt_count: 3,
+      study_correct_count: 2,
       study_target_count: 3,
     }])
   })
 
-  test("does not qualify a short-pack streak from wrong attempts alone", async () => {
+  test("does not materialize a streak before a wrong-answer session completes", async () => {
     await seedSongPost()
     await seedReadyPack()
     const waitUntilPromises: Array<Promise<void>> = []
@@ -1323,10 +1351,10 @@ describe("post study service", () => {
     await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 2,
+        attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-streak-wrong-say",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "totally different words",
         type: "say_it_back",
       },
@@ -1339,7 +1367,7 @@ describe("post study service", () => {
     await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 2,
+        attempt_number: 1,
         exercise_id: "stu:stu_2:translation_choice:es",
         idempotency_key: "study-streak-wrong-choice",
         selected_option_id: "opt_b",
@@ -1354,10 +1382,10 @@ describe("post study service", () => {
     await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 2,
+        attempt_number: 1,
         exercise_id: "stu:stu_2:say_it_back:en",
         idempotency_key: "study-streak-wrong-say-second",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "still entirely wrong",
         type: "say_it_back",
       },
@@ -1370,22 +1398,12 @@ describe("post study service", () => {
 
     await Promise.all(waitUntilPromises)
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 0,
-      study_attempt_count: 3,
-      study_correct_count: 0,
-      study_target_count: 3,
-    }])
+    expect(ledger.rows).toEqual([])
     const streaks = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
     expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
   })
 
-  test("streak writes are idempotent across equivalent attempt retries", async () => {
+  test("attempt retries are idempotent before session-level streak qualification", async () => {
     await seedSongPost()
     await seedReadyPack()
 
@@ -1414,13 +1432,12 @@ describe("post study service", () => {
     })
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+    expect(ledger.rows).toEqual([])
+    const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
+    expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
   })
 
-  test("defers study streak progress through waitUntil when available", async () => {
+  test("does not schedule deferred streak materialization before session completion", async () => {
     await seedSongPost()
     await seedReadyPack()
     const waitUntilPromises: Array<Promise<void>> = []
@@ -1449,13 +1466,10 @@ describe("post study service", () => {
     })
 
     expect(result.outcome).toBe("correct")
-    expect(waitUntilPromises).toHaveLength(1)
+    expect(waitUntilPromises).toHaveLength(0)
 
     const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
-    expect(ledgerBeforeWaitUntil.rows.map((row) => ({
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+    expect(ledgerBeforeWaitUntil.rows).toEqual([])
     const streakBeforeWaitUntil = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
     expect(Number(streakBeforeWaitUntil.rows[0]?.count ?? 0)).toBe(0)
 
@@ -1463,10 +1477,7 @@ describe("post study service", () => {
     await Promise.all(waitUntilPromises)
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-    }))).toEqual([{ study_attempt_count: 1, study_correct_count: 1 }])
+    expect(ledger.rows).toEqual([])
   })
 
   test("records engagement progress inline for multiple waitUntil-deferred attempts", async () => {
@@ -1481,7 +1492,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-streak-inline-engagement-say",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },
@@ -1512,7 +1523,7 @@ describe("post study service", () => {
         attempt_number: 1,
         exercise_id: "stu:stu_2:say_it_back:en",
         idempotency_key: "study-streak-inline-engagement-say-second",
-        target_language: "es",
+        test_target_language: "es",
         transcript: "Hold me close until the morning",
         type: "say_it_back",
       },
@@ -1531,7 +1542,7 @@ describe("post study service", () => {
     })
     expect(typeof finalAttempt.study_progress?.next_due_at).toBe("number")
 
-    expect(waitUntilPromises).toHaveLength(3)
+    expect(waitUntilPromises).toHaveLength(1)
     const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
     expect(ledgerBeforeWaitUntil.rows.map((row) => ({
       qualified: Number(row.qualified),
@@ -1846,7 +1857,7 @@ describe("post study service", () => {
     }])
   })
 
-  test("omits already-attempted exercises from the study payload", async () => {
+  test("resumes the fixed session with mastered-card progress", async () => {
     await seedSongPost()
     await seedReadyPack()
 
@@ -1875,11 +1886,14 @@ describe("post study service", () => {
     })
 
     expect(payload.access).toBe("ready")
-    expect(payload.exercise_count).toBe(2)
+    expect(payload.exercise_count).toBe(3)
     expect(payload.exercises.map((exercise) => exercise.id)).toEqual([
       "stu:stu_1:say_it_back:en",
       "stu:stu_2:say_it_back:en",
+      "stu:stu_2:translation_choice:es",
     ])
+    expect(payload.exercises.find((exercise) => exercise.id === "stu:stu_2:translation_choice:es"))
+      .toMatchObject({ first_outcome: "correct", mastered: true, presentation_count: 1 })
   })
 
   test("returns a ready empty pack after the learner has attempted every exercise", async () => {
@@ -1934,6 +1948,7 @@ describe("post study service", () => {
       WHERE user_id = ?1
         AND post_id = ?2
     `, [LEARNER_ID, POST_ID])
+    await exec("UPDATE song_study_session SET status = 'expired' WHERE user_id = ?1 AND post_id = ?2", [LEARNER_ID, POST_ID])
 
     const payload = await getPostStudyPayload({
       actor: learnerActor,
@@ -1947,7 +1962,7 @@ describe("post study service", () => {
     expect(payload.access).toBe("ready")
     expect(payload.exercise_count).toBe(0)
     expect(payload.exercises).toEqual([])
-    expect(payload.session).toEqual({
+    expect(payload.session).toMatchObject({
       due_count: 0,
       next_due_at: 4102444800,
       served_count: 0,
@@ -2027,7 +2042,7 @@ describe("post study service", () => {
     expect(hiddenPayload.access).toBe("ready")
     expect(hiddenPayload.exercise_count).toBe(0)
     expect(hiddenPayload.exercises).toEqual([])
-    expect(hiddenPayload.session).toEqual({
+    expect(hiddenPayload.session).toMatchObject({
       due_count: 0,
       next_due_at: 4102444800,
       served_count: 0,
@@ -2047,27 +2062,14 @@ describe("post study service", () => {
     expect(duePayload.exercise_count).toBe(1)
     expect(duePayload.exercises.map((exercise) => exercise.id)).toEqual(["stu:stu_2:translation_choice:es"])
     expect(duePayload.exercises[0]).not.toHaveProperty("correct_option_id")
-    expect(duePayload.session).toEqual({
+    expect(duePayload.session).toMatchObject({
       due_count: 1,
       served_count: 1,
       total_units: 3,
     })
 
-    await expect(submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-review-choice-hidden",
-        selected_option_id: "opt_a",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })).rejects.toThrow(/Study exercise not found/)
-
+    // Once selected into a server-owned session, the card remains valid even if
+    // the rollout flag changes between the GET and attempt POST.
     const reviewAttempt = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
@@ -2136,6 +2138,7 @@ describe("post study service", () => {
         AND exercise_type = 'translation_choice'
     `, [LEARNER_ID, POST_ID])
 
+    await exec("UPDATE song_study_session SET status = 'expired' WHERE user_id = ?1 AND post_id = ?2", [LEARNER_ID, POST_ID])
     const payload = await getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
@@ -2151,328 +2154,6 @@ describe("post study service", () => {
       "line_001:say_it_back",
       "line_002:say_it_back",
     ])
-  })
-
-  test("freezes a deterministic study streak target from the full eligible set", async () => {
-    await seedSongPost()
-    await seedReadyPack()
-
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_1:say_it_back:en",
-        idempotency_key: "study-streak-prereq-say-1",
-        transcript: "I was lost in the midnight waves",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-streak-prereq-choice",
-        selected_option_id: "opt_a",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })
-    await exec(`
-      UPDATE song_study_review_state
-      SET due_at = CASE
-        WHEN line_id = 'line_001' AND exercise_type = 'say_it_back'
-          THEN '2026-06-28T08:00:00.000Z'
-        WHEN line_id = 'line_002' AND exercise_type = 'translation_choice'
-          THEN '2026-06-28T08:00:00.000Z'
-        ELSE '2100-01-01T00:00:00.000Z'
-      END
-      WHERE user_id = ?1
-        AND post_id = ?2
-    `, [LEARNER_ID, POST_ID])
-
-    const firstReview = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_1:say_it_back:en",
-        idempotency_key: "study-streak-review-say-1",
-        target_language: "es",
-        transcript: "I was lost in the midnight waves",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({
-        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
-        SONG_STUDY_ATTEMPT_TIMING_LOGS: "true",
-        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
-      }),
-      postId: POST_ID,
-    })
-    const firstTiming = getSongStudyAttemptTiming(firstReview)
-    expect(firstTiming?.credential_source).toBe("control_plane_miss")
-    expect(typeof firstTiming?.credential_probe_ms).toBe("number")
-    expect(typeof firstTiming?.due_review_count_ms).toBe("number")
-    expect(typeof firstTiming?.streak_target_count_ms).toBe("number")
-
-    const afterFirst = await client!.execute("SELECT study_attempt_count, study_target_count, qualified FROM song_engagement_days")
-    expect(afterFirst.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{ qualified: 0, study_attempt_count: 1, study_target_count: 3 }])
-
-    const secondReview = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:say_it_back:en",
-        idempotency_key: "study-streak-review-new-say-1",
-        target_language: "es",
-        transcript: "Hold me close until the morning",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({
-        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
-        SONG_STUDY_ATTEMPT_TIMING_LOGS: "true",
-        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
-      }),
-      postId: POST_ID,
-    })
-    const secondTiming = getSongStudyAttemptTiming(secondReview)
-    expect(secondTiming?.credential_source).toBe("local")
-    expect(typeof secondTiming?.credential_probe_ms).toBe("number")
-    expect(typeof secondTiming?.due_review_count_ms).toBe("number")
-    expect(typeof secondTiming?.streak_target_count_ms).toBe("number")
-    expect(secondReview.study_progress).toMatchObject({
-      current_streak: 0,
-      qualified_today: false,
-      study_attempt_count: 2,
-      study_correct_count: 2,
-      study_target_count: 3,
-    })
-
-    const thirdReview = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-streak-review-choice-1",
-        selected_option_id: "opt_a",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({
-        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
-        SONG_STUDY_ATTEMPT_TIMING_LOGS: "true",
-        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
-      }),
-      postId: POST_ID,
-    })
-    const thirdTiming = getSongStudyAttemptTiming(thirdReview)
-    expect(thirdTiming?.credential_source).toBe("local")
-    expect(typeof thirdTiming?.credential_probe_ms).toBe("number")
-    expect(typeof thirdTiming?.due_review_count_ms).toBe("number")
-    expect(typeof thirdTiming?.streak_target_count_ms).toBe("number")
-    expect(thirdReview.study_progress).toMatchObject({
-      current_streak: 1,
-      qualified_today: true,
-      study_attempt_count: 3,
-      study_correct_count: 3,
-      study_target_count: 3,
-    })
-    expect(typeof thirdReview.study_progress?.next_due_at).toBe("number")
-
-    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 1,
-      study_attempt_count: 3,
-      study_correct_count: 3,
-      study_target_count: 3,
-    }])
-
-    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
-    expect(streak.rows.map((row) => ({
-      best_streak: Number(row.best_streak),
-      current_streak: Number(row.current_streak),
-      total_qualified_days: Number(row.total_qualified_days),
-    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
-  })
-
-  test("uses the same streak target when the first graded card is new instead of due", async () => {
-    await seedSongPost()
-    await seedReadyPack()
-
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_1:say_it_back:en",
-        idempotency_key: "study-streak-new-first-prereq-say",
-        target_language: "es",
-        transcript: "I was lost in the midnight waves",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env(),
-      postId: POST_ID,
-    })
-    await exec(`
-      UPDATE song_study_review_state
-      SET due_at = '2026-06-28T08:00:00.000Z'
-      WHERE user_id = ?1
-        AND post_id = ?2
-        AND line_id = 'line_001'
-        AND exercise_type = 'say_it_back'
-    `, [LEARNER_ID, POST_ID])
-
-    const firstNew = await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:say_it_back:en",
-        idempotency_key: "study-streak-new-first-new-say",
-        target_language: "es",
-        transcript: "Hold me close until the morning",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({
-        SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
-        SONG_STUDY_STREAK_WRITES_ENABLED: "true",
-      }),
-      postId: POST_ID,
-    })
-
-    expect(firstNew.study_progress).toMatchObject({
-      qualified_today: false,
-      study_attempt_count: 1,
-      study_correct_count: 1,
-      study_target_count: 3,
-    })
-    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 0,
-      study_attempt_count: 1,
-      study_correct_count: 1,
-      study_target_count: 3,
-    }])
-  })
-
-  test("freezes a translation-only due review streak target without double-counting the current card", async () => {
-    await seedSongPost()
-    await clearElevenLabsCredential()
-    await exec(`
-      INSERT INTO song_study_unit (
-        id, post_id, line_id, line_index, source_language, prompt_text,
-        reference_text, say_it_back_status, unit_version, max_attempts,
-        created_at, updated_at
-      )
-      VALUES
-        ('stu_due_1', ?1, 'line_001', 0, 'en', 'Line one', 'Line one', 'ready', 2, 2, ?2, ?2),
-        ('stu_due_2', ?1, 'line_002', 1, 'en', 'Line two', 'Line two', 'ready', 2, 2, ?2, ?2),
-        ('stu_due_3', ?1, 'line_003', 2, 'en', 'Line three', 'Line three', 'ready', 2, 2, ?2, ?2)
-    `, [POST_ID, NOW])
-    for (const [unitId, lineId] of [
-      ["stu_due_1", "line_001"],
-      ["stu_due_2", "line_002"],
-      ["stu_due_3", "line_003"],
-    ] as const) {
-      await exec(`
-        INSERT INTO song_study_unit_localization (
-          id, unit_id, target_language, localization_version, status,
-          question, translation_text, options_json, correct_option_id,
-          explanation_text, max_attempts, generated_at, created_at, updated_at
-        )
-        VALUES (?1, ?2, 'es', 1, 'ready',
-                'Choose the best translation.', ?3, ?4,
-                'opt_a', 'explanation', 1, ?5, ?5, ?5)
-      `, [
-        `sul_${unitId}_es`,
-        unitId,
-        `translation ${lineId}`,
-        JSON.stringify([
-          { id: "opt_a", text: `translation ${lineId}` },
-          { id: "opt_b", text: "wrong answer" },
-          { id: "opt_c", text: "also wrong" },
-        ]),
-        NOW,
-      ])
-      await exec(`
-        INSERT INTO song_study_review_state (
-          user_id, post_id, line_id, exercise_type, target_language,
-          state, stability, difficulty, due_at, last_reviewed_at,
-          reps, lapses, fsrs_params_version, updated_at
-        )
-        VALUES (?1, ?2, ?3, 'translation_choice', 'es',
-                'review', 2.5, 5.0, '2026-06-28T08:00:00.000Z',
-                '2026-06-27T08:00:00.000Z', 1, 0, 1, ?4)
-      `, [LEARNER_ID, POST_ID, lineId, NOW])
-    }
-
-    for (const [index, unitId] of ["stu_due_1", "stu_due_2", "stu_due_3"].entries()) {
-      await submitPostStudyAttempt({
-        actor: learnerActor,
-        body: {
-          attempt_number: 1,
-          exercise_id: `stu:${unitId}:translation_choice:es`,
-          idempotency_key: `study-streak-review-choice-only-${index + 1}`,
-          selected_option_id: "opt_a",
-          target_language: "es",
-          type: "translation_choice",
-        },
-        communityId: COMMUNITY_ID,
-        communityRepository: repo,
-        env: env({
-          SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true",
-          SONG_STUDY_STREAK_WRITES_ENABLED: "true",
-        }),
-        postId: POST_ID,
-      })
-    }
-
-    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows.map((row) => ({
-      qualified: Number(row.qualified),
-      study_attempt_count: Number(row.study_attempt_count),
-      study_correct_count: Number(row.study_correct_count),
-      study_target_count: Number(row.study_target_count),
-    }))).toEqual([{
-      qualified: 1,
-      study_attempt_count: 3,
-      study_correct_count: 3,
-      study_target_count: 3,
-    }])
-
-    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
-    expect(streak.rows.map((row) => ({
-      best_streak: Number(row.best_streak),
-      current_streak: Number(row.current_streak),
-      total_qualified_days: Number(row.total_qualified_days),
-    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
   })
 
   test("rejects conflicting idempotency-key reuse", async () => {
@@ -2732,10 +2413,16 @@ describe("post study service", () => {
     `, [LEARNER_ID, POST_ID])
     expect(Date.parse(String(first.rows[0]?.due_at ?? ""))).toBeGreaterThan(Date.parse(NOW))
 
+    await exec("UPDATE song_study_session SET status = 'expired' WHERE user_id = ?1 AND post_id = ?2", [LEARNER_ID, POST_ID])
+    await exec(`
+      UPDATE song_study_review_state SET due_at = '2026-06-28T08:00:00.000Z'
+      WHERE user_id = ?1 AND post_id = ?2 AND line_id = 'line_001'
+    `, [LEARNER_ID, POST_ID])
+
     await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
-        attempt_number: 2,
+        attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-attempt-review-schedule-2",
         transcript: "I was lost in the midnight waves",
@@ -2743,7 +2430,7 @@ describe("post study service", () => {
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env(),
+      env: env({ SONG_STUDY_DUE_REVIEW_SERVING_ENABLED: "true" }),
       postId: POST_ID,
     })
 
@@ -2853,12 +2540,13 @@ describe("post study service", () => {
     await seedSongPost()
     await seedReadyPack()
 
-    await expect(submitPostStudyAttempt({
+    await expect(submitPostStudyAttemptRaw({
       actor: learnerActor,
       body: {
         attempt_number: 1,
         exercise_id: "stu:stu_1:say_it_back:en",
         idempotency_key: "study-attempt-disabled",
+        session_id: "sts_disabled",
         transcript: "I was lost in the midnight waves",
         type: "say_it_back",
       },

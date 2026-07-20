@@ -2178,6 +2178,56 @@ const spec = {
         "operationId": "get_communities_by_community_id"
       }
     },
+    "/communities/{community_id}/namespace": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "Attach a verified namespace to a community",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityNamespaceAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Community"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_communities_by_community_id_namespace"
+      }
+    },
     "/communities/{community_id}/money-policy": {
       "get": {
         "tags": [
@@ -10904,6 +10954,25 @@ const spec = {
           }
         }
       },
+      "CommunityNamespaceAttachRequest": {
+        "type": "object",
+        "required": [
+          "namespace_verification"
+        ],
+        "properties": {
+          "namespace_verification": {
+            "type": "string"
+          },
+          "namespace_role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "mirror"
+            ],
+            "default": "primary"
+          }
+        }
+      },
       "CommunityMoneyPolicy": {
         "type": "object",
         "required": [
@@ -14301,12 +14370,16 @@ const spec = {
         "type": "object",
         "required": [
           "idempotency_key",
+          "session_id",
           "exercise_id",
           "type",
           "attempt_number"
         ],
         "properties": {
           "idempotency_key": {
+            "type": "string"
+          },
+          "session_id": {
             "type": "string"
           },
           "exercise_id": {
@@ -14323,9 +14396,6 @@ const spec = {
             "type": "integer"
           },
           "selected_option_id": {
-            "type": "string"
-          },
-          "target_language": {
             "type": "string"
           },
           "transcript": {
@@ -14398,6 +14468,9 @@ const spec = {
               "good",
               "easy"
             ]
+          },
+          "session": {
+            "$ref": "#/components/schemas/SongStudySessionSummary"
           },
           "study_progress": {
             "type": "object",
@@ -20129,7 +20202,10 @@ const spec = {
               "line_index",
               "prompt_text",
               "reference_text",
-              "max_attempts"
+              "max_attempts",
+              "presentation_count",
+              "mastered",
+              "first_outcome"
             ],
             "properties": {
               "id": {
@@ -20159,6 +20235,21 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
+              },
+              "presentation_count": {
+                "type": "integer"
+              },
+              "mastered": {
+                "type": "boolean"
+              },
+              "first_outcome": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "correct",
+                  "incorrect",
+                  "revealed"
+                ]
               }
             },
             "additionalProperties": false
@@ -20174,7 +20265,10 @@ const spec = {
               "prompt_text",
               "question",
               "options",
-              "max_attempts"
+              "max_attempts",
+              "presentation_count",
+              "mastered",
+              "first_outcome"
             ],
             "properties": {
               "id": {
@@ -20219,6 +20313,21 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
+              },
+              "presentation_count": {
+                "type": "integer"
+              },
+              "mastered": {
+                "type": "boolean"
+              },
+              "first_outcome": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "correct",
+                  "incorrect",
+                  "revealed"
+                ]
               }
             },
             "additionalProperties": false
@@ -20228,11 +20337,33 @@ const spec = {
       "SongStudySessionSummary": {
         "type": "object",
         "required": [
+          "id",
+          "status",
           "due_count",
           "served_count",
-          "total_units"
+          "total_units",
+          "required_correct_count",
+          "max_presentations",
+          "presentation_count",
+          "completed_exercise_count",
+          "first_pass_correct_count",
+          "mastered_exercise_count",
+          "qualified"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed",
+              "caught_up",
+              "expired"
+            ]
+          },
           "due_count": {
             "type": "integer"
           },
@@ -20241,6 +20372,27 @@ const spec = {
           },
           "total_units": {
             "type": "integer"
+          },
+          "required_correct_count": {
+            "type": "integer"
+          },
+          "max_presentations": {
+            "type": "integer"
+          },
+          "presentation_count": {
+            "type": "integer"
+          },
+          "completed_exercise_count": {
+            "type": "integer"
+          },
+          "first_pass_correct_count": {
+            "type": "integer"
+          },
+          "mastered_exercise_count": {
+            "type": "integer"
+          },
+          "qualified": {
+            "type": "boolean"
           },
           "next_due_at": {
             "type": "integer",

@@ -33,6 +33,13 @@ async function applyStudyMigration(client: Client): Promise<void> {
   if (streakExisting.rows.length === 0) {
     await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1119_song_streaks.sql")
   }
+
+  const attemptColumns = await client.execute("PRAGMA table_info(song_study_attempt)")
+  if (!attemptColumns.rows.some((row) => String(row.name) === "study_session_id")) {
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1118_song_study_review_sessions.sql")
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1121_song_study_attempt_identity.sql")
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1142_song_study_sessions.sql")
+  }
 }
 
 async function applyMigrationFile(client: Client, relativePath: string): Promise<void> {
@@ -234,6 +241,7 @@ describe("community study routes", () => {
     )
     const studyBody = await json(studyResponse) as {
       exercises?: Array<{ id: string; reference_text?: string; type?: string }>
+      session?: { id?: string | null }
     }
     const exercise = studyBody.exercises?.find((item) => item.type === "say_it_back")
     expect(exercise).toBeTruthy()
@@ -250,6 +258,7 @@ describe("community study routes", () => {
           attempt_number: 1,
           exercise_id: exercise!.id,
           idempotency_key: "study-route-attempt-timing",
+          session_id: studyBody.session?.id,
           transcript: exercise!.reference_text,
           type: "say_it_back",
         }),

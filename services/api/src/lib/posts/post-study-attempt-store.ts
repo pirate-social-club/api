@@ -33,8 +33,10 @@ export type StudyAttemptRow = {
   exercise_id: string
   feedback_json: string | null
   fsrs_rating: FsrsRating | null
+  id: string
   outcome: AttemptOutcome
   selected_option_id: string | null
+  study_session_id: string | null
   transcript: string | null
   type: ExerciseType
 }
@@ -154,8 +156,9 @@ export async function getAttemptByIdempotencyKey(
 ): Promise<StudyAttemptRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT exercise_id, exercise_type, attempt_number,
-             selected_option_id, transcript, outcome, feedback_json, fsrs_rating
+      SELECT id, exercise_id, exercise_type, attempt_number,
+             selected_option_id, transcript, outcome, feedback_json, fsrs_rating,
+             study_session_id
       FROM song_study_attempt
       WHERE user_id = ?1
         AND idempotency_key = ?2
@@ -169,8 +172,45 @@ export async function getAttemptByIdempotencyKey(
         exercise_id: readString(row.exercise_id) ?? "",
         feedback_json: readString(row.feedback_json),
         fsrs_rating: readString(row.fsrs_rating) as FsrsRating | null,
+        id: readString(row.id) ?? "",
         outcome: (readString(row.outcome) ?? "incorrect") as AttemptOutcome,
         selected_option_id: readString(row.selected_option_id),
+        study_session_id: readString(row.study_session_id),
+        transcript: readString(row.transcript),
+        type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
+      }
+    : null
+}
+
+export async function getAttemptBySessionPresentation(input: {
+  attemptNumber: number
+  client: ReadClient
+  exerciseId: string
+  sessionId: string
+  userId: string
+}): Promise<StudyAttemptRow | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT id, exercise_id, exercise_type, attempt_number,
+             selected_option_id, transcript, outcome, feedback_json, fsrs_rating,
+             study_session_id
+      FROM song_study_attempt
+      WHERE user_id = ?1 AND study_session_id = ?2
+        AND exercise_id = ?3 AND presentation_number = ?4
+      LIMIT 1
+    `,
+    args: [input.userId, input.sessionId, input.exerciseId, input.attemptNumber],
+  }) as Record<string, unknown> | null
+  return row
+    ? {
+        attempt_number: Number(row.attempt_number ?? 1),
+        exercise_id: readString(row.exercise_id) ?? "",
+        feedback_json: readString(row.feedback_json),
+        fsrs_rating: readString(row.fsrs_rating) as FsrsRating | null,
+        id: readString(row.id) ?? "",
+        outcome: (readString(row.outcome) ?? "incorrect") as AttemptOutcome,
+        selected_option_id: readString(row.selected_option_id),
+        study_session_id: readString(row.study_session_id),
         transcript: readString(row.transcript),
         type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
       }
@@ -274,6 +314,7 @@ function buildReviewSchedule(input: {
 }
 
 export async function upsertReviewState(input: {
+  attemptId: string
   client: ReadClient
   existing: StudyReviewStateRow | null
   exercise: StudyExerciseForAttempt
@@ -289,7 +330,8 @@ export async function upsertReviewState(input: {
         state, stability, difficulty, due_at, last_reviewed_at,
         reps, lapses, fsrs_params_version, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13)
+      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13
+      WHERE EXISTS (SELECT 1 FROM song_study_attempt WHERE id = ?14)
       ON CONFLICT(user_id, post_id, line_id, exercise_type, target_language)
       DO UPDATE SET
         state = excluded.state,
@@ -316,6 +358,7 @@ export async function upsertReviewState(input: {
       schedule.lapseIncrement,
       FSRS_PARAMS_VERSION,
       input.now,
+      input.attemptId,
     ],
   })
   return input.rating
