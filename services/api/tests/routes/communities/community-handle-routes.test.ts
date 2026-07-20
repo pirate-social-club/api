@@ -1118,6 +1118,95 @@ describe("community handle routes", () => {
     })
   })
 
+  test("handle-policy revisions reject stale atomic rule replacement while legacy writes still advance", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-policy-revision-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const expression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: { type: "unique_human" as const, provider: "very" as const },
+      },
+    }
+
+    const loadedResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(loadedResponse.status).toBe(200)
+    const loaded = await json(loadedResponse) as { revision: number }
+    expect(loaded.revision).toBeGreaterThanOrEqual(2)
+
+    const firstResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        expected_revision: loaded.revision,
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: expression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(firstResponse.status).toBe(200)
+    const first = await json(firstResponse) as { revision: number; label_claim_rules: unknown[] }
+    expect(first.revision).toBe(loaded.revision + 1)
+    expect(first.label_claim_rules).toHaveLength(1)
+
+    const staleResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        expected_revision: loaded.revision,
+        claims_enabled: false,
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["gengar"] },
+          claim_gate_expression: expression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(staleResponse.status).toBe(409)
+    const conflict = await json(staleResponse) as {
+      code: string
+      details: {
+        current_policy: {
+          revision: number
+          claims_enabled: boolean
+          label_claim_rules: Array<{ selector: { labels: string[] | null } }>
+        }
+      }
+    }
+    expect(conflict.code).toBe("conflict")
+    expect(conflict.details.current_policy.revision).toBe(first.revision)
+    expect(conflict.details.current_policy.claims_enabled).toBe(true)
+    expect(conflict.details.current_policy.label_claim_rules[0]?.selector.labels).toEqual(["charizard"])
+
+    // Omission remains backward compatible and still advances the revision. These
+    // writes may serialize to the same updated_at second; revision remains exact.
+    const legacyResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claims_enabled: false },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(legacyResponse.status).toBe(200)
+    const legacy = await json(legacyResponse) as { revision: number; claims_enabled: boolean }
+    expect(legacy.revision).toBe(first.revision + 1)
+    expect(legacy.claims_enabled).toBe(false)
+  })
+
   test("per-label claim rules gate specific labels and bind {label} into inventory facets", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

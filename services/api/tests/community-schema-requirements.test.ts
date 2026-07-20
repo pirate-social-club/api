@@ -11,7 +11,7 @@ const RUNTIME_ROOT = fileURLToPath(new URL("../src/", import.meta.url))
 type RequirementsManifest = {
   unconditional: string[]
   features: Record<string, { migrations: string[] }>
-  deferred: Record<string, unknown>
+  deferred: Record<string, { rationale?: unknown }>
 }
 
 function deferredSchemaIdentifiers(sql: string): string[] {
@@ -50,6 +50,26 @@ function runtimeReferences(
 }
 
 describe("community schema requirements manifest", () => {
+  test("classifies every template migration in the manifest era", async () => {
+    const manifest = JSON.parse(await readFile(REQUIREMENTS_PATH, "utf8")) as RequirementsManifest
+    const classified = new Set([
+      ...manifest.unconditional,
+      ...Object.values(manifest.features).flatMap((policy) => policy.migrations),
+      ...Object.keys(manifest.deferred),
+    ])
+    const classificationFloor = Math.min(
+      ...[...classified].map((migration) => Number.parseInt(migration, 10)),
+    )
+    const migrations = (await readdir(MIGRATIONS_ROOT))
+      .filter((migration) => /^\d+_.+\.sql$/u.test(migration))
+      .filter((migration) => Number.parseInt(migration, 10) >= classificationFloor)
+
+    expect(
+      migrations.filter((migration) => !classified.has(migration)),
+      `Every community-template migration from ${classificationFloor} onward must be unconditional, feature-gated, or deferred with rationale`,
+    ).toEqual([])
+  })
+
   test("assigns every declared migration to exactly one policy class", async () => {
     const manifest = JSON.parse(await readFile(REQUIREMENTS_PATH, "utf8")) as RequirementsManifest
     const owners = new Map<string, string>()
@@ -62,7 +82,13 @@ describe("community schema requirements manifest", () => {
     for (const [feature, policy] of Object.entries(manifest.features)) {
       for (const migration of policy.migrations) claim(migration, `features.${feature}`)
     }
-    for (const migration of Object.keys(manifest.deferred)) claim(migration, "deferred")
+    for (const [migration, policy] of Object.entries(manifest.deferred)) {
+      expect(
+        typeof policy.rationale === "string" && policy.rationale.trim().length > 0,
+        `${migration} is deferred without a rationale`,
+      ).toBe(true)
+      claim(migration, "deferred")
+    }
 
     expect(owners.size).toBeGreaterThan(0)
     for (const migration of owners.keys()) {

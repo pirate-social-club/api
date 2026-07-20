@@ -1370,6 +1370,7 @@ export type CommunityHandlePolicy = {
   eligibility_timing: "claim_time" | "continuous";
   label_claim_rules?: Array<CommunityHandleLabelClaimRule>;
   settings: CommunityHandlePolicySettings;
+  revision: number;
   updated_at: number | null;
 };
 
@@ -1436,6 +1437,7 @@ export type CommunityHandleRevokeRequest = {
 };
 
 export type UpdateCommunityHandlePolicyRequest = {
+  expected_revision?: number;
   policy_template?: "standard" | "premium" | "membership_gated" | "custom";
   pricing_model?: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat";
   claims_enabled?: boolean;
