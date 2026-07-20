@@ -1,5 +1,4 @@
 import { isMissingRelationError } from "../db-helpers"
-import type { CommunityReadRepository } from "../communities/db-community-repository"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredNumber, requiredString } from "../sql-row"
 import { ensureCommunityHealthCountsTable, fetchTinybirdCommunityViewCounts, upsertCommunityHealthCounts } from "../analytics/community-analytics-sync"
@@ -172,7 +171,7 @@ async function mapWithConcurrency<T, TResult>(
 }
 
 function buildCommunitySummary(
-  community: Awaited<ReturnType<CommunityReadRepository["getCommunityById"]>>,
+  community: CommunityRow | null,
   communityViewCounts: Map<string, number> = new Map(),
 ): InternalHomeFeedCommunitySummary | null {
   if (!community) {
@@ -485,12 +484,9 @@ export async function listHomeFeed(input: {
     env: input.env,
     communityIds,
   })
-  const communitySummaries = (
-    await Promise.all(communityIds.map(async (communityId) => buildCommunitySummary(
-      await input.communityRepository.getCommunityById(communityId),
-      communityViewCounts,
-    )))
-  )
+  const activeCommunityById = new Map(activeCommunities.map((community) => [community.community_id, community] as const))
+  const communitySummaries = communityIds
+    .map((communityId) => buildCommunitySummary(activeCommunityById.get(communityId) ?? null, communityViewCounts))
     .filter((summary): summary is InternalHomeFeedCommunitySummary => Boolean(summary))
   phaseTimings.community_summaries_ms = elapsedMs(phaseStartedAt)
 
