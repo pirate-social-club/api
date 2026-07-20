@@ -57,7 +57,7 @@ describe("reward campaign config", () => {
     const restricted = resolveRewardCampaignConfig(configuredEnv({
       REWARDS_CAMPAIGN_POST_ALLOWLIST: " post_pst_allowed ,post_pst_second,post_pst_allowed ",
     }))
-    expect([...restricted.postAllowlist ?? []]).toEqual(["post_pst_allowed", "post_pst_second"])
+    expect([...restricted.postAllowlist ?? []]).toEqual(["pst_allowed", "pst_second"])
   })
 
   test("fails closed when an enabled rail is incomplete or inconsistent", () => {
