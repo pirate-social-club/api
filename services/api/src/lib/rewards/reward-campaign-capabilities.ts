@@ -1,4 +1,5 @@
 import type { Env } from "../../env"
+import { decodePublicPostId } from "../public-ids"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 
@@ -57,7 +58,9 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
 
   return {
     enabled: true,
-    post_eligible: config.postAllowlist == null || config.postAllowlist.has(postId),
+    // Page routes supply canonical public IDs (`post_pst_…`), while the
+    // configured allowlist is normalized to raw shard IDs (`pst_…`).
+    post_eligible: config.postAllowlist == null || config.postAllowlist.has(decodePublicPostId(postId)),
     min_budget_cents: config.minBudgetCents,
     max_budget_cents: config.maxBudgetCents,
     max_reward_cents: config.maxRewardCents,
