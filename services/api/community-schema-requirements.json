@@ -40,7 +40,8 @@
     "1137_community_handle_payment_reservation_cap.sql",
     "1138_namespace_handle_label_claim_rules.sql",
     "1140_karaoke_attempts_schema_repair.sql",
-    "1141_namespace_handle_policy_revision.sql"
+    "1141_namespace_handle_policy_revision.sql",
+    "1142_song_study_sessions.sql"
   ],
   "features": {},
   "deferred": {

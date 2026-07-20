@@ -35,27 +35,31 @@ describe("reward qualification outbox", () => {
 
   afterEach(() => client.close())
 
-  test("emits Study only after the server target has distinct exercises", async () => {
-    await client.execute("INSERT INTO song_study_attempt VALUES ('a1', 'usr_1', 'pst_reward', 'ex_1', '2026-07-10T23:55:00.000Z')")
+  test("emits Study only for a completed server session meeting first-pass correctness", async () => {
     expect(await emitStudyQualificationIfComplete({
       client, communityId: "cmt_1", now: "2026-07-10T23:55:00.000Z",
-      postId: "pst_reward", targetCount: 2, userId: "usr_1",
+      postId: "pst_reward", completedExerciseCount: 10, firstPassCorrectCount: 6,
+      requiredCorrectCount: 7, sessionId: "sts_1", userId: "usr_1",
     })).toBe(false)
-    await client.execute("INSERT INTO song_study_attempt VALUES ('a2', 'usr_1', 'pst_reward', 'ex_2', '2026-07-10T23:59:00.000Z')")
     expect(await emitStudyQualificationIfComplete({
       client, communityId: "cmt_1", now: "2026-07-10T23:59:00.000Z",
-      postId: "pst_reward", targetCount: 2, userId: "usr_1",
+      postId: "pst_reward", completedExerciseCount: 10, firstPassCorrectCount: 7,
+      requiredCorrectCount: 7, sessionId: "sts_1", userId: "usr_1",
     })).toBe(true)
     expect(await emitStudyQualificationIfComplete({
       client, communityId: "cmt_1", now: "2026-07-10T23:59:30.000Z",
-      postId: "pst_reward", targetCount: 2, userId: "usr_1",
+      postId: "pst_reward", completedExerciseCount: 10, firstPassCorrectCount: 7,
+      requiredCorrectCount: 7, sessionId: "sts_1", userId: "usr_1",
     })).toBe(false)
     const rows = await client.execute("SELECT activity, reward_period_key, qualification_policy_version, evidence_summary_json FROM reward_qualification_outbox")
     expect(rows.rows).toEqual([{
       activity: "study",
       reward_period_key: "2026-07-10",
-      qualification_policy_version: "study_completed_distinct_set_v1",
-      evidence_summary_json: JSON.stringify({ completed_exercises: 2, target_exercises: 2 }),
+      qualification_policy_version: "study_session_first_pass_v2",
+      evidence_summary_json: JSON.stringify({
+        study_session_id: "sts_1", completed_exercises: 10,
+        first_pass_correct: 7, required_correct: 7,
+      }),
     }])
   })
 
@@ -83,10 +87,10 @@ describe("reward qualification outbox", () => {
         return await client.execute(statement as Parameters<LibsqlClient["execute"]>[0]) as unknown as QueryResult
       },
     }
-    await client.execute("INSERT INTO song_study_attempt VALUES ('guard_a1', 'usr_guard', 'pst_reward', 'ex_1', '2026-07-10T23:55:00.000Z')")
     expect(await emitStudyQualificationIfComplete({
       client: guarded, communityId: "cmt_1", now: "2026-07-10T23:55:00.000Z",
-      postId: "pst_reward", targetCount: 1, userId: "usr_guard",
+      postId: "pst_reward", completedExerciseCount: 1, firstPassCorrectCount: 1,
+      requiredCorrectCount: 1, sessionId: "sts_guard", userId: "usr_guard",
     })).toBe(true)
     expect(await emitKaraokeQualification({
       attemptId: "att_guard", client: guarded, communityId: "cmt_1", finalScoreBps: 8100,

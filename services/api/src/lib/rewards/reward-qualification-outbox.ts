@@ -46,12 +46,16 @@ async function emit(input: {
 export async function emitStudyQualificationIfComplete(input: {
   client: Executor
   communityId: string
+  completedExerciseCount: number
+  firstPassCorrectCount: number
   now: string
   postId: string
-  targetCount: number
+  requiredCorrectCount: number
+  sessionId: string
   userId: string
 }): Promise<boolean> {
-  if (!Number.isSafeInteger(input.targetCount) || input.targetCount <= 0) return false
+  if (input.completedExerciseCount <= 0
+    || input.firstPassCorrectCount < input.requiredCorrectCount) return false
   const period = utcPeriod(input.now)
   const result = await input.client.execute({
     sql: `
@@ -62,29 +66,23 @@ export async function emitStudyQualificationIfComplete(input: {
       )
       SELECT
         ?1, ?2, ?3, ?4, p.song_artifact_bundle_id,
-        'study', ?5, ?6, 'study_completed_distinct_set_v1',
+        'study', ?5, ?6, 'study_session_first_pass_v2',
         json_object(
-          'completed_exercises', (
-            SELECT COUNT(DISTINCT exercise_id)
-            FROM song_study_attempt
-            WHERE user_id = ?2 AND post_id = ?4 AND created_at >= ?7 AND created_at < ?8
-          ),
-          'target_exercises', CAST(?9 AS INTEGER)
+          'study_session_id', ?7,
+          'completed_exercises', CAST(?8 AS INTEGER),
+          'first_pass_correct', CAST(?9 AS INTEGER),
+          'required_correct', CAST(?10 AS INTEGER)
         ),
         ?5
       FROM posts p
       WHERE p.post_id = ?4
         AND p.song_artifact_bundle_id IS NOT NULL
-        AND (
-          SELECT COUNT(DISTINCT exercise_id)
-          FROM song_study_attempt
-          WHERE user_id = ?2 AND post_id = ?4 AND created_at >= ?7 AND created_at < ?8
-        ) >= ?9
       ON CONFLICT (user_id, post_id, activity, reward_period_key) DO NOTHING
     `,
     args: [
       makeId("rqo"), input.userId, input.communityId, input.postId, input.now,
-      period.key, period.start, period.end, input.targetCount,
+      period.key, input.sessionId, input.completedExerciseCount,
+      input.firstPassCorrectCount, input.requiredCorrectCount,
     ],
   })
   return (result.rowsAffected ?? 0) > 0

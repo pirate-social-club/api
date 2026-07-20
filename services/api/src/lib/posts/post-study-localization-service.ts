@@ -110,7 +110,11 @@ const ASSUMED_STUDY_SOURCE_LANGUAGE = "en"
 // problem the source_language must be corrected for; revisit the assumption when study
 // expands beyond English-source songs.
 export function isSameLanguageStudyPair(sourceLanguage: string | null | undefined, targetLanguage: string): boolean {
-  return sameLanguageLocale(readString(sourceLanguage) ?? ASSUMED_STUDY_SOURCE_LANGUAGE, targetLanguage)
+  const source = readString(sourceLanguage) ?? ASSUMED_STUDY_SOURCE_LANGUAGE
+  // Script is not a learning-language boundary: Traditional and Simplified
+  // Chinese should use recall practice, not a misleading "translate to Chinese" card.
+  if (/^zh(?:[-_]|$)/iu.test(source) && /^zh(?:[-_]|$)/iu.test(targetLanguage)) return true
+  return sameLanguageLocale(source, targetLanguage)
 }
 
 function parsePositiveInteger(value: string | null | undefined): number | null {

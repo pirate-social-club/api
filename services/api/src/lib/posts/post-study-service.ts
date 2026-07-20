@@ -14,13 +14,12 @@ import { isCommunityStudyEnabled } from "../communities/community-study-policy-s
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import {
-  getCommunityElevenLabsStudyCapability,
   hasActiveCommunityElevenLabsCredential,
-  type CommunityElevenLabsStudyCapability,
 } from "../communities/assistant-policy/credential-service"
 import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
 import {
   getAttemptByIdempotencyKey,
+  getAttemptBySessionPresentation,
   getExerciseForAttempt,
   getReviewState,
   readString,
@@ -32,6 +31,16 @@ import {
 import { classifyStudyGenerationError } from "./post-study-generation-helpers"
 import { canReadPostForStudy, canStudyPost, getStudyPostById, type StudyPost } from "./post-study-access"
 import { getNextDueAt, listExercises } from "./post-study-exercise-query"
+import {
+  ensureStudySession,
+  getStudySessionSummary,
+  recordStudySessionPresentation,
+  requireStudySessionForAttempt,
+  STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
+  STUDY_SESSION_MAX_CARD_PRESENTATIONS,
+  type StudySessionExerciseProgress,
+  type StudySessionSummary,
+} from "./post-study-session-service"
 import { canGenerateStudyTranslations } from "./post-study-generation-provider"
 import { requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
@@ -63,14 +72,13 @@ import {
   readSongStreakSummary,
   studyActivityDate,
   STUDY_FALLBACK_TIMEZONE,
-  STREAK_MIN_STUDY_ATTEMPTS,
   type SongStreakLeaderboardEntry,
   type SongStreakSummary,
   type SongStreakViewerStanding,
 } from "./post-study-streak-read-service"
 import {
   recordStudyStreakMaterialization,
-  upsertStudyEngagementDay,
+  upsertCompletedStudySessionDay,
 } from "./post-study-streak-write-service"
 
 export { listPostStreakSummaries } from "./post-study-streak-read-service"
@@ -78,8 +86,6 @@ export type { SongStreakSummary } from "./post-study-streak-read-service"
 export { upsertStudyStreakProgress } from "./post-study-streak-write-service"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
-
-const STUDY_SESSION_EXERCISE_LIMIT = 15
 
 type StudyCapabilityPost = {
   access_mode?: "public" | "locked" | null
@@ -130,7 +136,10 @@ type SongStudyExercise =
       id: string
       line_id: string
       line_index: number
-      max_attempts: number
+    max_attempts: number
+    presentation_count: number
+    mastered: boolean
+    first_outcome: AttemptOutcome | null
       prompt_text: string
       reference_text: string
       translation_text?: string | null
@@ -140,19 +149,17 @@ type SongStudyExercise =
       id: string
       line_id: string
       line_index: number
-      max_attempts: number
+    max_attempts: number
+    presentation_count: number
+    mastered: boolean
+    first_outcome: AttemptOutcome | null
       options: Array<{ id: string; text: string }>
       prompt_text: string
       question: string
       type: "translation_choice"
     }
 
-type SongStudySessionSummary = {
-  due_count: number
-  next_due_at?: number
-  served_count: number
-  total_units: number
-}
+type SongStudySessionSummary = StudySessionSummary
 
 export type SongStudyPayload = {
   access: StudyAccess
@@ -177,8 +184,8 @@ export type SongStudyAttemptRequest = {
   attempt_number?: unknown
   exercise_id?: unknown
   idempotency_key?: unknown
+  session_id?: unknown
   selected_option_id?: unknown
-  target_language?: unknown
   transcript?: unknown
   type?: unknown
 }
@@ -195,6 +202,7 @@ export type SongStudyAttemptResult = {
   next_review_hint?: FsrsRating
   object: "song_study_attempt_result"
   outcome: AttemptOutcome
+  session?: SongStudySessionSummary
   study_progress?: SongStudyAttemptProgress
 }
 
@@ -210,9 +218,9 @@ type SongStudyAttemptProgress = {
 export type SongStudyAttemptTiming = {
   access_read_batch_ms?: number
   close_client_ms?: number
-  credential_probe_ms?: number
-  credential_source?: CommunityElevenLabsStudyCapability["source"]
   community_id: string
+  credential_probe_ms?: number
+  credential_source?: "community" | "platform"
   due_review_count_ms?: number
   exercise_id: string
   exercise_type?: ExerciseType
@@ -220,9 +228,9 @@ export type SongStudyAttemptTiming = {
   outcome: string
   parallel_read_batch_ms?: number
   post_id: string
-  streak_target_count_ms?: number
   streak_deferred: boolean
   streak_inline_ms?: number
+  streak_target_count_ms?: number
   streak_writes_enabled: boolean
   total_ms: number
   wait_until_available: boolean
@@ -295,11 +303,6 @@ function elapsedMs(start: number): number {
   return Math.round((performance.now() - start) * 10) / 10
 }
 
-function isDueReview(input: { dueAt: string; now: string }): boolean {
-  const dueAtMs = Date.parse(input.dueAt)
-  const nowMs = Date.parse(input.now)
-  return Number.isFinite(dueAtMs) && Number.isFinite(nowMs) && dueAtMs <= nowMs
-}
 // Cloudflare exposes the client's IANA timezone on `request.cf.timezone`. A US
 // learner studying at 21:00 local writes their streak day in their own calendar,
 // not the UTC calendar — so activity_date and streak continuation are computed in
@@ -314,10 +317,6 @@ export function resolveStudyTimezone(cf: Request["cf"] | undefined): string {
   } catch {
     return STUDY_FALLBACK_TIMEZONE
   }
-}
-
-function studyTargetCountFromServeableExerciseCount(exerciseCount: number): number {
-  return Math.max(1, Math.min(STREAK_MIN_STUDY_ATTEMPTS, exerciseCount))
 }
 
 async function canStudyCapabilityPost(input: {
@@ -561,24 +560,34 @@ function orderOptionsForLearner(options: Array<{ id: string; text: string }>, se
   })
 }
 
-function toExercise(row: StudyExerciseRow, learnerSeed: string): SongStudyExercise {
+function toExercise(
+  row: StudyExerciseRow,
+  learnerSeed: string,
+  progress: StudySessionExerciseProgress = { firstOutcome: null, mastered: false, presentationCount: 0 },
+): SongStudyExercise {
   if (row.exercise_type === "translation_choice") {
     return {
+      first_outcome: progress.firstOutcome,
       id: row.id,
       line_id: row.line_id,
       line_index: row.line_index,
-      max_attempts: row.max_attempts,
+      mastered: progress.mastered,
+      max_attempts: STUDY_SESSION_MAX_CARD_PRESENTATIONS,
       options: orderOptionsForLearner(parseOptions(row.options_json), `${learnerSeed}:${row.id}`),
+      presentation_count: progress.presentationCount,
       prompt_text: row.prompt_text,
       question: row.question || "Choose the best translation.",
       type: "translation_choice",
     }
   }
   return {
+    first_outcome: progress.firstOutcome,
     id: row.id,
     line_id: row.line_id,
     line_index: row.line_index,
-    max_attempts: row.max_attempts,
+    mastered: progress.mastered,
+    max_attempts: STUDY_SESSION_MAX_CARD_PRESENTATIONS,
+    presentation_count: progress.presentationCount,
     prompt_text: row.prompt_text,
     reference_text: row.reference_text || row.prompt_text,
     translation_text: row.translation_text,
@@ -685,9 +694,21 @@ export async function getPostStudyPayload(input: {
       postId: input.postId,
       targetLanguage,
       userId: input.actor.userId,
-      limit: STUDY_SESSION_EXERCISE_LIMIT,
+      limit: STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
     })
-    const exercises = eligibleExerciseResult.rows.map((row) => toExercise(row, input.actor.userId))
+    const studySession = await ensureStudySession({
+      available: canonicalExerciseRows,
+      candidates: eligibleExerciseResult.rows,
+      client: db.client,
+      communityId: input.communityId,
+      dueCount: eligibleExerciseResult.totalCount,
+      now,
+      postId: input.postId,
+      targetLanguage,
+      totalUnits: canonicalExerciseRows.length,
+      userId: input.actor.userId,
+    })
+    const exercises = studySession.exercises.map(({ progress, row }) => toExercise(row, input.actor.userId, progress))
     const nextDueAt = exercises.length === 0 && canonicalExerciseRows.length > 0
       ? await getNextDueAt({
         client: db.client,
@@ -701,9 +722,7 @@ export async function getPostStudyPayload(input: {
       : null
     const nextDueAtSeconds = toUnixSeconds(nextDueAt)
     const session: SongStudySessionSummary = {
-      due_count: eligibleExerciseResult.totalCount,
-      served_count: exercises.length,
-      total_units: canonicalExerciseRows.length,
+      ...studySession.summary,
       ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),
     }
     if (exercises.length === 0) {
@@ -846,13 +865,15 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
   }
 }
 
-function resultFromAttempt(row: StudyAttemptRow, exercise: { correct_option_id: string | null; exercise_type: ExerciseType; max_attempts: number }): SongStudyAttemptResult {
+function resultFromAttempt(
+  row: StudyAttemptRow,
+  exercise: { correct_option_id: string | null; exercise_type: ExerciseType; max_attempts: number },
+  session?: StudySessionSummary,
+): SongStudyAttemptResult {
   const feedback = row.feedback_json ? JSON.parse(row.feedback_json) as SongStudyAttemptResult["feedback"] : undefined
   return {
-    attempts_remaining: Math.max(0, exercise.max_attempts - row.attempt_number),
-    ...(exercise.exercise_type === "translation_choice"
-      && (row.outcome === "correct" || row.outcome === "revealed")
-      && exercise.correct_option_id
+    attempts_remaining: Math.max(0, STUDY_SESSION_MAX_CARD_PRESENTATIONS - row.attempt_number),
+    ...(exercise.exercise_type === "translation_choice" && exercise.correct_option_id
       ? { correct_option_id: exercise.correct_option_id }
       : {}),
     exercise_id: row.exercise_id,
@@ -860,6 +881,7 @@ function resultFromAttempt(row: StudyAttemptRow, exercise: { correct_option_id: 
     ...(row.fsrs_rating ? { next_review_hint: row.fsrs_rating } : {}),
     object: "song_study_attempt_result",
     outcome: row.outcome,
+    ...(session ? { session } : {}),
   }
 }
 
@@ -875,6 +897,7 @@ function assertEquivalentIdempotentRetry(input: {
   const same = input.existing.exercise_id === input.exerciseId
     && input.existing.type === input.type
     && input.existing.attempt_number === input.attemptNumber
+    && input.existing.study_session_id === readString(input.body.session_id)
     && input.existing.selected_option_id === selectedOptionId
     && input.existing.transcript === transcript
   if (!same) {
@@ -980,70 +1003,6 @@ async function getStudyAttemptProgressSnapshot(input: {
   }
 }
 
-async function resolveStudyStreakTargetCount(input: {
-  client: ReadClient
-  communityId: string
-  env: Env
-  now: string
-  postId: string
-  sourceLanguage: string | null
-  targetLanguage: string
-  userId: string
-}): Promise<{
-  count: number
-  credentialSource?: CommunityElevenLabsStudyCapability["source"]
-  credentialProbeMs?: number
-  dueReviewCountMs?: number
-  includeSayItBack: boolean
-  includeTranslation: boolean
-  totalMs: number
-}> {
-  const startedAt = performance.now()
-  const credentialProbeStartedAt = performance.now()
-  const capability = await getCommunityElevenLabsStudyCapability({
-    client: input.client,
-    env: input.env,
-    communityId: input.communityId,
-  })
-  const credentialProbeMs = elapsedMs(credentialProbeStartedAt)
-  const includeSayItBack = capability.active
-  const includeTranslation = !isSameLanguageStudyPair(input.sourceLanguage, input.targetLanguage)
-  // The streak target must be the SAME eligible set GET serves (due reviews +
-  // unattempted new cards for this user, with due-review serving honored), so the
-  // bar is deterministic regardless of which card the learner grades first. The
-  // old branch made the target swing between min(10, due) and min(10, serveable)
-  // depending on the first graded attempt's path; that nondeterminism is what
-  // froze an unpredictable bar on the day's first write.
-  const exerciseCountStartedAt = performance.now()
-  const reServeDueReviews = dueReviewServingEnabled(input.env)
-  const exerciseCount = (await listExercises({
-    client: input.client,
-    dueReviewServing: reServeDueReviews,
-    includeSayItBack,
-    includeTranslation,
-    now: input.now,
-    postId: input.postId,
-    targetLanguage: input.targetLanguage,
-    userId: input.userId,
-    limit: 1,
-  })).totalCount
-  const dueReviewCountMs = elapsedMs(exerciseCountStartedAt)
-  // If async generation has only produced a smaller ready set, that smaller pack
-  // is the bar for this pilot day. study_target_count is frozen on the first
-  // engagement-day INSERT (the ON CONFLICT path never updates it), so computing
-  // it from the full eligible set — not a per-attempt subset — is what makes the
-  // streak bar predictable across a mixed due+new session.
-  return {
-    count: studyTargetCountFromServeableExerciseCount(exerciseCount),
-    credentialSource: capability.source,
-    credentialProbeMs,
-    dueReviewCountMs,
-    includeSayItBack,
-    includeTranslation,
-    totalMs: elapsedMs(startedAt),
-  }
-}
-
 export async function submitPostStudyAttempt(input: {
   actor: ActorContext | AdminActorContext
   body: SongStudyAttemptRequest
@@ -1058,6 +1017,7 @@ export async function submitPostStudyAttempt(input: {
   waitUntil?: (promise: Promise<void>) => void
 }): Promise<SongStudyAttemptResult> {
   const idempotencyKey = readRequiredString(input.body.idempotency_key, "idempotency_key")
+  const sessionId = readRequiredString(input.body.session_id, "session_id")
   const exerciseId = readRequiredString(input.body.exercise_id, "exercise_id")
   const type = readRequiredString(input.body.type, "type") as ExerciseType
   if (type !== "say_it_back" && type !== "translation_choice") {
@@ -1073,10 +1033,6 @@ export async function submitPostStudyAttempt(input: {
   let writeTxMs: number | undefined
   let streakInlineMs: number | undefined
   let closeClientMs: number | undefined
-  let credentialProbeMs: number | undefined
-  let credentialSource: CommunityElevenLabsStudyCapability["source"] | undefined
-  let dueReviewCountMs: number | undefined
-  let streakTargetCountMs: number | undefined
   let timingOutcome = "error"
   let timingExerciseType: ExerciseType | undefined
   let timingStreakDeferred = false
@@ -1091,6 +1047,71 @@ export async function submitPostStudyAttempt(input: {
     if (!communityStudyEnabled) {
       throw new HttpError(403, "forbidden", "Study is disabled for this community")
     }
+    const streakWritesEnabled = studyStreakWritesEnabled(input.env)
+    const rewardQualificationWritesEnabled = envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
+      && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false)
+    timingStreakWritesEnabled = streakWritesEnabled
+    const persistCompletedSession = async (summary: StudySessionSummary) => {
+      if (summary.status !== "completed" || !summary.id) return
+      const completedAt = nowIso()
+      const completedSessionId = summary.id
+      await withTransaction(db.client, "write", async (tx) => {
+        if (streakWritesEnabled) {
+          await upsertCompletedStudySessionDay({
+            client: tx,
+            communityId: input.communityId,
+            completedExerciseCount: summary.completed_exercise_count,
+            firstPassCorrectCount: summary.first_pass_correct_count,
+            now: completedAt,
+            postId: input.postId,
+            qualified: summary.qualified,
+            requiredCorrectCount: summary.required_correct_count,
+            studyTimezone: input.studyTimezone,
+            userId: input.actor.userId,
+          })
+        }
+        if (rewardQualificationWritesEnabled && summary.qualified) {
+          await emitStudyQualificationIfComplete({
+            client: tx,
+            communityId: input.communityId,
+            completedExerciseCount: summary.completed_exercise_count,
+            firstPassCorrectCount: summary.first_pass_correct_count,
+            now: completedAt,
+            postId: input.postId,
+            requiredCorrectCount: summary.required_correct_count,
+            sessionId: completedSessionId,
+            userId: input.actor.userId,
+          })
+        }
+      })
+      if (!streakWritesEnabled) return
+      const recordStreak = async () => {
+        await input.testHooks?.beforeDeferredStreakMaterialization?.()
+        await recordStudyStreakMaterialization({
+          communityId: input.communityId,
+          communityRepository: input.communityRepository,
+          env: input.env,
+          now: completedAt,
+          postId: input.postId,
+          studyTimezone: input.studyTimezone,
+          userId: input.actor.userId,
+        })
+      }
+      if (input.waitUntil) {
+        timingStreakDeferred = true
+        input.waitUntil(recordStreak().catch((error) => {
+          console.error("[song-study] streak progress update failed", {
+            error,
+            post_id: input.postId,
+            user_id: input.actor.userId,
+          })
+        }))
+      } else {
+        const streakInlineStartedAt = performance.now()
+        await recordStreak()
+        streakInlineMs = elapsedMs(streakInlineStartedAt)
+      }
+    }
 
     const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
     const existingExercise = existing ? await getExerciseForAttempt(db.client, existing.exercise_id) : null
@@ -1104,7 +1125,41 @@ export async function submitPostStudyAttempt(input: {
       })
       timingOutcome = "idempotent_retry"
       timingExerciseType = existingExercise.exercise_type
-      resultForTiming = resultFromAttempt(existing, existingExercise)
+      const retrySession = existing.study_session_id
+        ? await getStudySessionSummary(db.client, existing.study_session_id)
+        : undefined
+      if (retrySession) await persistCompletedSession(retrySession)
+      resultForTiming = resultFromAttempt(existing, existingExercise, retrySession)
+      return resultForTiming
+    }
+
+    const existingPresentation = await getAttemptBySessionPresentation({
+      attemptNumber,
+      client: db.client,
+      exerciseId,
+      sessionId,
+      userId: input.actor.userId,
+    })
+    const existingPresentationExercise = existingPresentation
+      ? await getExerciseForAttempt(db.client, existingPresentation.exercise_id)
+      : null
+    if (existingPresentation && existingPresentationExercise) {
+      assertEquivalentIdempotentRetry({
+        attemptNumber,
+        body: input.body,
+        existing: existingPresentation,
+        exerciseId,
+        type,
+      })
+      timingOutcome = "logical_retry"
+      timingExerciseType = existingPresentationExercise.exercise_type
+      const retrySession = await getStudySessionSummary(db.client, sessionId)
+      if (retrySession) await persistCompletedSession(retrySession)
+      resultForTiming = resultFromAttempt(
+        existingPresentation,
+        existingPresentationExercise,
+        retrySession,
+      )
       return resultForTiming
     }
 
@@ -1124,6 +1179,15 @@ export async function submitPostStudyAttempt(input: {
       throw notFoundError("Study exercise not found")
     }
     const now = nowIso()
+    const studySession = await requireStudySessionForAttempt({
+      attemptNumber,
+      client: db.client,
+      exerciseId,
+      now,
+      postId: input.postId,
+      sessionId,
+      userId: input.actor.userId,
+    })
     const parallelReadBatchStartedAt = performance.now()
     const [existingReviewState, post] = await Promise.all([
       getReviewState({
@@ -1134,15 +1198,6 @@ export async function submitPostStudyAttempt(input: {
       getStudyPostById(db.client, input.postId),
     ])
     parallelReadBatchMs = elapsedMs(parallelReadBatchStartedAt)
-    if (attemptNumber > exercise.max_attempts) {
-      throw badRequestError("attempt_number exceeds max_attempts")
-    }
-    if (existingReviewState && attemptNumber <= 1 && !(
-      dueReviewServingEnabled(input.env)
-      && isDueReview({ dueAt: existingReviewState.due_at, now })
-    )) {
-      throw notFoundError("Study exercise not found")
-    }
 
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
     const accessReadBatchStartedAt = performance.now()
@@ -1157,14 +1212,6 @@ export async function submitPostStudyAttempt(input: {
     if (!canStudy) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
-    const streakWritesEnabled = studyStreakWritesEnabled(input.env)
-    const rewardQualificationWritesEnabled = envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
-      && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false)
-    timingStreakWritesEnabled = streakWritesEnabled
-    const streakTargetLanguage = readString(input.body.target_language)
-      ? normalizeStudyTargetLanguage(input.body.target_language)
-      : exercise.target_language
-
     let correct = false
     let selectedOptionId: string | null = null
     let transcript: string | null = null
@@ -1190,46 +1237,25 @@ export async function submitPostStudyAttempt(input: {
     }
     const outcome: AttemptOutcome = correct
       ? "correct"
-      : attemptNumber >= exercise.max_attempts ? "revealed" : "incorrect"
+      : attemptNumber >= STUDY_SESSION_MAX_CARD_PRESENTATIONS ? "revealed" : "incorrect"
     rating ??= fsrsRatingFor(outcome, attemptNumber)
-    const attemptsRemaining = Math.max(0, exercise.max_attempts - attemptNumber)
-    const studyStreakTarget = streakWritesEnabled || rewardQualificationWritesEnabled
-      ? await resolveStudyStreakTargetCount({
-        client: db.client,
-        communityId: input.communityId,
-        env: input.env,
-        now,
-        postId: input.postId,
-        sourceLanguage: post.source_language,
-        targetLanguage: streakTargetLanguage,
-        userId: input.actor.userId,
-      })
-      : null
-    credentialSource = studyStreakTarget?.credentialSource
-    credentialProbeMs = studyStreakTarget?.credentialProbeMs
-    dueReviewCountMs = studyStreakTarget?.dueReviewCountMs
-    streakTargetCountMs = studyStreakTarget?.totalMs
+    const attemptsRemaining = Math.max(0, STUDY_SESSION_MAX_CARD_PRESENTATIONS - attemptNumber)
     const writeTxStartedAt = performance.now()
-    const fsrsRating = await withTransaction(db.client, "write", async (tx) => {
-      const reviewRating = await upsertReviewState({
-        client: tx,
-        existing: existingReviewState,
-        exercise,
-        now,
-        rating,
-        userId: input.actor.userId,
-      })
+    const attemptId = makeId("sta")
+    await withTransaction(db.client, "write", async (tx) => {
       await tx.execute({
         sql: `
           INSERT INTO song_study_attempt (
             id, user_id, post_id, exercise_id, line_id, exercise_type,
             target_language, study_pack_version, attempt_number, idempotency_key,
-            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at
+            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at,
+            study_session_id, presentation_number
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?9)
+          ON CONFLICT DO NOTHING
         `,
         args: [
-          makeId("sta"),
+          attemptId,
           input.actor.userId,
           input.postId,
           exercise.id,
@@ -1243,79 +1269,70 @@ export async function submitPostStudyAttempt(input: {
           transcript,
           outcome,
           feedback ? JSON.stringify(feedback) : null,
-          reviewRating,
+          rating,
           now,
+          sessionId,
         ],
       })
-      if (streakWritesEnabled && studyStreakTarget != null) {
-        await upsertStudyEngagementDay({
-          client: tx,
-          communityId: input.communityId,
-          isCorrect: outcome === "correct",
-          now,
-          postId: input.postId,
-          studyTargetCount: studyStreakTarget.count,
-          studyTimezone: input.studyTimezone,
-          userId: input.actor.userId,
-        })
-      }
-      if (rewardQualificationWritesEnabled && studyStreakTarget != null) {
-        await emitStudyQualificationIfComplete({
-          client: tx,
-          communityId: input.communityId,
-          now,
-          postId: input.postId,
-          targetCount: studyStreakTarget.count,
-          userId: input.actor.userId,
-        })
-      }
-      return reviewRating
+      await upsertReviewState({
+        attemptId,
+        client: tx,
+        existing: existingReviewState,
+        exercise,
+        now,
+        rating,
+        userId: input.actor.userId,
+      })
+      await recordStudySessionPresentation({
+        attemptId,
+        client: tx,
+        exerciseId,
+        now,
+        outcome,
+        sessionId,
+      })
     })
+    const storedAttempt = await getAttemptBySessionPresentation({
+      attemptNumber,
+      client: db.client,
+      exerciseId,
+      sessionId,
+      userId: input.actor.userId,
+    })
+    if (!storedAttempt) throw conflictError("Study presentation has already been recorded")
+    if (storedAttempt.id !== attemptId) {
+      assertEquivalentIdempotentRetry({ attemptNumber, body: input.body, existing: storedAttempt, exerciseId, type })
+      timingOutcome = "logical_retry"
+      const retrySession = await getStudySessionSummary(db.client, sessionId)
+      if (retrySession) await persistCompletedSession(retrySession)
+      resultForTiming = resultFromAttempt(
+        storedAttempt,
+        exercise,
+        retrySession,
+      )
+      return resultForTiming
+    }
+    const sessionSummary = await getStudySessionSummary(db.client, sessionId)
+    if (!sessionSummary) throw new Error("Study session disappeared after recording progress")
+    await persistCompletedSession(sessionSummary)
+    const fsrsRating = rating
     writeTxMs = elapsedMs(writeTxStartedAt)
-    if (streakWritesEnabled && studyStreakTarget != null) {
+    if (streakWritesEnabled && sessionSummary.status === "completed") {
       studyProgress = await getStudyAttemptProgressSnapshot({
         client: db.client,
-        includeSayItBack: studyStreakTarget.includeSayItBack,
-        includeTranslation: studyStreakTarget.includeTranslation,
+        includeSayItBack: true,
+        includeTranslation: !isSameLanguageStudyPair(post.source_language, studySession.targetLanguage),
         now,
         postId: input.postId,
-        targetLanguage: streakTargetLanguage,
+        targetLanguage: studySession.targetLanguage,
         studyTimezone: input.studyTimezone,
         userId: input.actor.userId,
       })
     }
-    if (streakWritesEnabled) {
-      const recordStreak = async () => {
-        await input.testHooks?.beforeDeferredStreakMaterialization?.()
-        await recordStudyStreakMaterialization({
-          communityId: input.communityId,
-          communityRepository: input.communityRepository,
-          env: input.env,
-          now,
-          postId: input.postId,
-          studyTimezone: input.studyTimezone,
-          userId: input.actor.userId,
-        })
-      }
-      if (input.waitUntil) {
-        timingStreakDeferred = true
-        input.waitUntil(recordStreak().catch((error) => {
-          console.error("[song-study] streak progress update failed", {
-            error,
-            post_id: input.postId,
-            user_id: input.actor.userId,
-          })
-        }))
-      } else {
-        const streakInlineStartedAt = performance.now()
-        await recordStreak()
-        streakInlineMs = elapsedMs(streakInlineStartedAt)
-      }
-    }
     timingOutcome = outcome
     resultForTiming = {
       attempts_remaining: attemptsRemaining,
-      ...(type === "translation_choice" && (outcome === "correct" || outcome === "revealed") && exercise.correct_option_id
+      ...(type === "translation_choice" && exercise.correct_option_id
         ? { correct_option_id: exercise.correct_option_id }
         : {}),
       exercise_id: exercise.id,
@@ -1323,6 +1340,7 @@ export async function submitPostStudyAttempt(input: {
       next_review_hint: fsrsRating,
       object: "song_study_attempt_result",
       outcome,
+      session: sessionSummary,
       ...(studyProgress ? { study_progress: studyProgress } : {}),
     }
     return resultForTiming
@@ -1334,17 +1352,13 @@ export async function submitPostStudyAttempt(input: {
       const timing: SongStudyAttemptTiming = {
         access_read_batch_ms: accessReadBatchMs,
         close_client_ms: closeClientMs,
-        credential_probe_ms: credentialProbeMs,
-        credential_source: credentialSource,
         community_id: input.communityId,
-        due_review_count_ms: dueReviewCountMs,
         exercise_id: exerciseId,
         exercise_type: timingExerciseType,
         open_client_ms: openClientMs,
         outcome: timingOutcome,
         parallel_read_batch_ms: parallelReadBatchMs,
         post_id: input.postId,
-        streak_target_count_ms: streakTargetCountMs,
         streak_deferred: timingStreakDeferred,
         streak_inline_ms: streakInlineMs,
         streak_writes_enabled: timingStreakWritesEnabled,
