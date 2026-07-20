@@ -593,6 +593,48 @@ describe("feed routes", () => {
     expect(await json(response)).toEqual(materializedBody)
   })
 
+  test("GET /feed/home/public serves and stores a degraded empty feed when live compute exceeds its budget", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const target = buildMaterializedPublicHomeFeedTarget({
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    if (!target) {
+      throw new Error("expected materialized target")
+    }
+
+    ctx.env.PUBLIC_HOME_FEED_COMPUTE_BUDGET_MS = "0"
+    const response = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en", {}, ctx.env)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-pirate-materialized-feed")).toBe("degraded")
+    expect(await json(response)).toEqual({
+      items: [],
+      top_communities: [],
+      next_cursor: null,
+    })
+    const stored = await ctx.client.execute({
+      sql: `
+        SELECT json_body
+        FROM materialized_public_feeds
+        WHERE cache_key = ?1
+        LIMIT 1
+      `,
+      args: [target.cacheKey],
+    })
+    expect(stored.rows).toHaveLength(1)
+
+    // The stored entry keeps the endpoint alive: a follow-up request with a
+    // normal budget is served from the cache instead of re-entering the slow
+    // live path.
+    delete ctx.env.PUBLIC_HOME_FEED_COMPUTE_BUDGET_MS
+    const second = await app.request("http://pirate.test/feed/home/public?sort=best&locale=en", {}, ctx.env)
+    expect(second.status).toBe(200)
+    expect(second.headers.get("x-pirate-materialized-feed")).toBe("hit")
+  })
+
   test("GET /feed/home/public stores the default public feed after a materialized miss", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
