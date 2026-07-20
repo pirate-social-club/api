@@ -3,6 +3,47 @@ import { describe, expect, test } from "bun:test"
 import { buildSongKaraokeLines } from "../../../src/lib/posts/post-karaoke-service"
 
 describe("buildSongKaraokeLines", () => {
+  test("classifies whole-line parentheticals as timed ad-libs", () => {
+    const source = [
+      "(Hoo-ooh)",
+      "(Ha)",
+      "(Ooh) (ooh)",
+      "[Chorus]",
+      "I'm in town girl for just one night",
+      "body down (tonight)",
+      "  (Oh baby)  ",
+      "(a) and (b)",
+      "()",
+    ]
+    const lines = buildSongKaraokeLines({
+      lyrics: source.join("\n"),
+      timedLyrics: {
+        segments: source.map((text, index) => ({
+          end_ms: (index + 1) * 1_000,
+          start_ms: index * 1_000,
+          text,
+        })),
+      },
+    })
+
+    expect(lines.map((line) => [line.text, line.kind])).toEqual([
+      ["(Hoo-ooh)", "adlib"],
+      ["(Ha)", "adlib"],
+      ["(Ooh) (ooh)", "adlib"],
+      ["[Chorus]", "section"],
+      ["I'm in town girl for just one night", "lyric"],
+      ["body down (tonight)", "lyric"],
+      ["(Oh baby)", "adlib"],
+      ["(a) and (b)", "lyric"],
+      ["()", "adlib"],
+    ])
+    expect(lines[0]?.words).toEqual([{
+      end_ms: 1_000,
+      start_ms: 0,
+      text: "(Hoo-ooh)",
+    }])
+  })
+
   test("groups token-stream alignment output using submitted lyric line breaks", () => {
     const lines = buildSongKaraokeLines({
       lyrics: [

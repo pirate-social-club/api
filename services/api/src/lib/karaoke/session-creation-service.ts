@@ -25,6 +25,7 @@ const KARAOKE_CREATION_PENDING_TTL_SECONDS = 30
 const KARAOKE_CREATION_FAILED_TTL_SECONDS = 60
 
 type KaraokeSessionCreateErrorCode =
+  | "karaoke_all_lines_adlib"
   | "karaoke_scoring_disabled"
   | "karaoke_unavailable"
   | "karaoke_stt_unconfigured"
@@ -114,6 +115,9 @@ function cachedFailureError(failureCode: string | null): HttpError {
   if (failureCode === "karaoke_stt_unconfigured") {
     return karaokeError(400, "karaoke_stt_unconfigured", "Karaoke scoring provider is not configured")
   }
+  if (failureCode === "karaoke_all_lines_adlib") {
+    return karaokeError(409, "karaoke_all_lines_adlib", "Karaoke lyrics contain only backing vocals")
+  }
   if (failureCode === "karaoke_scoring_disabled" || failureCode === "karaoke_unavailable") {
     return karaokeError(409, failureCode, "Karaoke is unavailable")
   }
@@ -166,7 +170,8 @@ function parseStoredPolicy(json: string): KaraokeSessionCreateResponse["scoring_
 }
 
 function toScorableLines(payload: SongKaraokePayload): ScorableKaraokeLine[] {
-  const source = payload.karaoke_lines?.filter((line) => line.kind === "lyric") ?? []
+  const payloadLines = payload.karaoke_lines ?? []
+  const source = payloadLines.filter((line) => line.kind === "lyric")
   const seen = new Set<string>()
   const lines = source.map((line, scoredLineIndex) => {
     if (!line.id || seen.has(line.id)) {
@@ -200,6 +205,9 @@ function toScorableLines(payload: SongKaraokePayload): ScorableKaraokeLine[] {
     }
   })
   if (lines.length === 0) {
+    if (payloadLines.some((line) => line.kind === "adlib")) {
+      throw karaokeError(409, "karaoke_all_lines_adlib", "Karaoke lyrics contain only backing vocals")
+    }
     throw karaokeError(409, "karaoke_unavailable", "Karaoke has no scorable lyric lines")
   }
   for (let index = 1; index < lines.length; index += 1) {

@@ -144,6 +144,19 @@ function isSectionMarker(text: string): boolean {
   return /^\[[^\]]+\]$/u.test(normalizeText(text))
 }
 
+const AD_LIB_LINE = /^(?:\([^()]*\)[\s,]*)+$/u
+
+/**
+ * Keep ad-libs in forced alignment so they continue to anchor surrounding
+ * lyric timings. Classification only controls presentation and scoring.
+ */
+function classifyLine(text: string): SongKaraokeLine["kind"] {
+  const trimmed = text.trim()
+  if (isSectionMarker(trimmed)) return "section"
+  if (AD_LIB_LINE.test(trimmed)) return "adlib"
+  return "lyric"
+}
+
 type PlayableArtifactDescriptor = {
   decentralized_storage?: unknown
   gateway_url?: unknown
@@ -266,7 +279,7 @@ function createKaraokeLine(input: {
     kind: input.kind,
     start_ms: input.startMs,
     text: input.text,
-    words: input.kind === "lyric"
+    words: input.kind !== "section"
       ? input.words?.length
         ? input.words
         : [{ end_ms: input.endMs, start_ms: input.startMs, text: input.text }]
@@ -279,7 +292,7 @@ function lineFromTimedEntry(entry: TimedTextEntry, index: number): SongKaraokeLi
     return null
   }
 
-  const kind: SongKaraokeLine["kind"] = isSectionMarker(entry.text) ? "section" : "lyric"
+  const kind = classifyLine(entry.text)
   return createKaraokeLine({
     endMs: entry.endMs,
     index,
@@ -316,7 +329,7 @@ function buildTokenStreamKaraokeLines(input: {
   const lines: SongKaraokeLine[] = []
 
   for (const sourceLine of sourceLines) {
-    const kind: SongKaraokeLine["kind"] = isSectionMarker(sourceLine) ? "section" : "lyric"
+    const kind = classifyLine(sourceLine)
 
     if (kind === "section") {
       const sectionEntry = input.entries.find((entry) => (
