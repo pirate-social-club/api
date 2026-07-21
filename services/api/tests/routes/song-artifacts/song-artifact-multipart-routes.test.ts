@@ -196,6 +196,41 @@ describe("song artifact multipart routes", () => {
     expect(new Date(String(session.rows[0]?.expires_at)).getTime()).toBeGreaterThan(new Date(oldExpiry).getTime())
   })
 
+  test("pins multipart signing and completion to the session storage target", async () => {
+    const setup = await createMultipartRouteSetup()
+    const intent = await createMultipartIntent(setup)
+
+    setup.env.FILEBASE_MEDIA_BUCKET = "rotated-media"
+    setup.env.FILEBASE_S3_ENDPOINT = "https://rotated.filebase.test"
+
+    const signed = await app.request(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads/${intent.id}/sessions/${intent.upload_session.id}/parts/1/signed-url`,
+      { headers: { authorization: `Bearer ${setup.owner.accessToken}` } },
+      setup.env,
+    )
+    expect(signed.status).toBe(200)
+    const signedBody = await json(signed) as { url: string }
+    const signedUrl = new URL(signedBody.url)
+    expect(signedUrl.origin).toBe("https://s3.filebase.test")
+    expect(signedUrl.pathname).toStartWith("/pirate-media/")
+
+    const completed = await requestJson(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads/${intent.id}/sessions/${intent.upload_session.id}/complete`,
+      {
+        upload_id: intent.upload_session.upload_id,
+        content_hash: CONTENT_HASH,
+        parts: PART_ETAGS.map((etag, index) => ({ part_number: index + 1, etag })),
+      },
+      setup.env,
+      setup.owner.accessToken,
+    )
+    expect(completed.status).toBe(200)
+    expect(setup.filebase.completeBodies).toHaveLength(1)
+    const completedBody = await json(completed) as { storage_bucket?: string | null; storage_endpoint?: string | null }
+    expect(completedBody.storage_bucket).toBe("pirate-media")
+    expect(completedBody.storage_endpoint).toBe("https://s3.filebase.test/")
+  })
+
   test("rejects invalid or expired part signing requests", async () => {
     const setup = await createMultipartRouteSetup()
     const intent = await createMultipartIntent(setup)
