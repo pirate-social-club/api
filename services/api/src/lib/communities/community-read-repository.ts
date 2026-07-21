@@ -43,10 +43,20 @@ export async function listCommunityNamespaceAttachments(
   client: Client,
   communityId: string,
 ): Promise<CommunityNamespaceAttachmentRow[]> {
+  const now = new Date().toISOString()
   const result = await client.execute({
     sql: `
       SELECT cnb.namespace_verification_id, cnb.namespace_role,
-             nv.family, nv.normalized_root_label, nv.status AS verification_status
+             nv.family, nv.normalized_root_label,
+             CASE
+               WHEN nv.status = 'disputed' THEN 'disputed'
+               WHEN nv.expires_at <= ?2 THEN 'expired'
+               WHEN nv.status != 'verified' OR nv.club_attach_allowed != 1 THEN 'stale'
+               WHEN nv.family = 'hns' AND (
+                 nv.pirate_dns_authority_verified != 1 OR nv.pirate_web_routing_allowed != 1
+               ) THEN 'stale'
+               ELSE 'verified'
+             END AS verification_status
       FROM community_namespace_bindings cnb
       JOIN namespace_verifications nv
         ON nv.namespace_verification_id = cnb.namespace_verification_id
@@ -56,7 +66,7 @@ export async function listCommunityNamespaceAttachments(
                cnb.created_at ASC,
                cnb.namespace_verification_id ASC
     `,
-    args: [communityId],
+    args: [communityId, now],
   })
   return result.rows.map((row) => ({
     namespaceVerificationId: requiredString(row, "namespace_verification_id"),
