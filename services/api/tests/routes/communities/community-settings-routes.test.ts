@@ -431,7 +431,7 @@ membership_mode: "request",
       pending_namespace_verification_session: string | null
       route_slug: string | null
     }
-    expect(secondAttachBody.namespace_verification).toBe(firstCompletedBody.namespace_verification)
+    expect(secondAttachBody.namespace_verification).toBe(secondCompletedBody.namespace_verification)
     expect(secondAttachBody.pending_namespace_verification_session).toBeNull()
     expect(secondAttachBody.route_slug).toBe("samenamespaceroot")
   })
