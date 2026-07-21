@@ -61,8 +61,11 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
       PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
-      REWARDS_CAMPAIGN_POST_ALLOWLIST: "post_pst_66644f58a5824bff85de4a723a57aa47,post_pst_2ba4789d3a1b45449abcef6213c0880d",
     })
+    // Empty/absent => no restriction (resolveRewardCampaignConfig treats a blank
+    // allowlist as null): the pilot post-scoping has been deliberately removed so
+    // any eligible published song can carry a funded bounty.
+    expect(vars.REWARDS_CAMPAIGN_POST_ALLOWLIST ?? "").toBe("")
     expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
   })
 })
