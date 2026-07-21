@@ -250,6 +250,7 @@ export interface CommunityMutationRepository {
     communityId: string
     namespaceVerificationId: string
     namespaceRole: CommunityNamespaceRole
+    replacesNamespaceVerificationId?: string
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow>

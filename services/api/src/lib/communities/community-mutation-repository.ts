@@ -15,6 +15,7 @@ export async function attachNamespaceToCommunity(
     communityId: string
     namespaceVerificationId: string
     namespaceRole: CommunityNamespaceRole
+    replacesNamespaceVerificationId?: string
     routeSlug: string
     updatedAt: string
   },
@@ -46,11 +47,37 @@ export async function attachNamespaceToCommunity(
       throw conflictError("Namespace is already attached with a different community or role")
     }
 
-    if (input.namespaceRole === "primary" && existing.namespace_verification_id) {
+    const replacingPrimary = input.namespaceRole === "primary" && Boolean(input.replacesNamespaceVerificationId)
+    if (replacingPrimary && existing.namespace_verification_id !== input.replacesNamespaceVerificationId) {
+      throw conflictError("Community primary namespace changed before recovery completed")
+    }
+    if (input.namespaceRole === "primary" && existing.namespace_verification_id && !replacingPrimary) {
       throw conflictError("Community already has a different primary namespace attached")
     }
     if (input.namespaceRole === "mirror" && !existing.namespace_verification_id) {
       throw conflictError("Community must have a primary namespace before attaching mirrors")
+    }
+
+    if (replacingPrimary) {
+      const superseded = await tx.execute({
+        sql: `
+          UPDATE community_namespace_bindings
+          SET status = 'superseded',
+              updated_at = ?3
+          WHERE community_id = ?1
+            AND namespace_verification_id = ?2
+            AND namespace_role = 'primary'
+            AND status = 'active'
+        `,
+        args: [
+          input.communityId,
+          input.replacesNamespaceVerificationId!,
+          input.updatedAt,
+        ],
+      })
+      if ((superseded.rowsAffected ?? 0) !== 1) {
+        throw conflictError("Active primary namespace binding is missing during recovery")
+      }
     }
 
     await tx.execute({

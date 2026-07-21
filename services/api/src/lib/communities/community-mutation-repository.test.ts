@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createClient, type Client } from "@libsql/client"
 import { describe, expect, test } from "bun:test"
-import { setCommunityLifecycleStatus } from "./community-mutation-repository"
+import { attachNamespaceToCommunity, setCommunityLifecycleStatus } from "./community-mutation-repository"
 import { listActiveCommunityRows, searchActiveCommunityRows } from "../auth/auth-db-community-queries"
 
 async function setupControl(): Promise<Client> {
@@ -40,8 +40,78 @@ async function setupControl(): Promise<Client> {
       updated_at TEXT NOT NULL
     )
   `)
+  await client.execute(`
+    CREATE TABLE community_namespace_bindings (
+      community_namespace_binding_id TEXT PRIMARY KEY,
+      community_id TEXT NOT NULL,
+      namespace_verification_id TEXT NOT NULL,
+      namespace_role TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
   return client
 }
+
+describe("attachNamespaceToCommunity", () => {
+  test("atomically replaces a same-root primary verification during recovery", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_recovery", "active")
+    await client.execute(`
+      UPDATE communities
+      SET namespace_verification_id = 'nv_old', route_slug = 'dankmeme'
+      WHERE community_id = 'cmt_recovery'
+    `)
+    await client.execute(`
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES ('cnb_old', 'cmt_recovery', 'nv_old', 'primary', 'active',
+        '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
+    `)
+
+    const updated = await attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_new",
+      communityId: "cmt_recovery",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      replacesNamespaceVerificationId: "nv_old",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    })
+
+    expect(updated.namespace_verification_id).toBe("nv_new")
+    const bindings = await client.execute({
+      sql: `SELECT namespace_verification_id, status FROM community_namespace_bindings ORDER BY created_at, namespace_verification_id`,
+      args: [],
+    })
+    expect(bindings.rows).toEqual([
+      expect.objectContaining({ namespace_verification_id: "nv_old", status: "superseded" }),
+      expect.objectContaining({ namespace_verification_id: "nv_new", status: "active" }),
+    ])
+    client.close()
+  })
+
+  test("refuses recovery when the primary changed concurrently", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_race", "active")
+    await client.execute(`
+      UPDATE communities SET namespace_verification_id = 'nv_other' WHERE community_id = 'cmt_race'
+    `)
+
+    await expect(attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_new",
+      communityId: "cmt_race",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      replacesNamespaceVerificationId: "nv_old",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    })).rejects.toThrow("changed before recovery completed")
+    client.close()
+  })
+})
 
 async function insertCommunity(
   client: Client,
