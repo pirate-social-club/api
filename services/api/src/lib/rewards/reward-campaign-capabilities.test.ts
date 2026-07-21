@@ -28,7 +28,7 @@ const enabledEnv = {
 
 describe("getRewardCampaignCapabilities", () => {
   test("reports the live guardrails when campaigns are enabled", () => {
-    const capabilities = getRewardCampaignCapabilities(enabledEnv, "pst_allowed")
+    const capabilities = getRewardCampaignCapabilities(enabledEnv, "post_pst_allowed")
     expect(capabilities.enabled).toBe(true)
     expect(capabilities.post_eligible).toBe(true)
     expect(capabilities.min_budget_cents).toBe(100)
