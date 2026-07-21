@@ -1,6 +1,7 @@
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { badRequestError, conflictError, HttpError, notFoundError } from "../errors"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
+import type { S3SigningConfig } from "../storage/s3-signing"
 import {
   abortMultipartUpload,
   buildUploadPartPresignedUrl,
@@ -78,6 +79,18 @@ function addMilliseconds(iso: string, milliseconds: number): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function resolveSessionFilebaseConfig(
+  env: Env,
+  session: Pick<SongArtifactUploadSessionRow, "bucket" | "storage_endpoint">,
+): S3SigningConfig {
+  const current = resolveFilebaseConfig(env)
+  return {
+    ...current,
+    bucket: session.bucket,
+    endpoint: new URL(session.storage_endpoint),
+  }
 }
 
 export function computeMultipartPartPlan(totalSizeBytes: number): { partSizeBytes: number; totalParts: number } {
@@ -220,6 +233,7 @@ function isRetryableHeadVerificationError(error: unknown): boolean {
 
 async function headObjectAfterComplete(input: {
   env: Env
+  config: S3SigningConfig
   objectKey: string
 }): ReturnType<typeof headObject> {
   let lastError: unknown = null
@@ -394,6 +408,7 @@ export async function mintSongArtifactPartSignedUrl(input: {
   }
   const url = await buildUploadPartPresignedUrl({
     env: input.env,
+    config: resolveSessionFilebaseConfig(input.env, session),
     objectKey: session.object_key,
     uploadId: session.filebase_upload_id,
     partNumber: input.partNumber,
@@ -453,6 +468,7 @@ export async function completeMultipartSongArtifactUpload(input: {
 
   const completeResult = await completeMultipartUpload({
     env: input.env,
+    config: resolveSessionFilebaseConfig(input.env, session),
     objectKey: session.object_key,
     uploadId: session.filebase_upload_id,
     parts: input.parts,
@@ -470,6 +486,7 @@ export async function completeMultipartSongArtifactUpload(input: {
   }
   const head = await headObjectAfterComplete({
     env: input.env,
+    config: resolveSessionFilebaseConfig(input.env, session),
     objectKey: session.object_key,
   })
   if (head.contentLength !== session.declared_size_bytes) {
@@ -482,7 +499,6 @@ export async function completeMultipartSongArtifactUpload(input: {
     throw badRequestError("Multipart object CID does not match the completion response")
   }
 
-  const config = resolveFilebaseConfig(input.env)
   const gatewayUrl = upload.storage_ref
   const uploadedSession = await markSongArtifactUploadSessionUploaded({
     client,
@@ -490,7 +506,7 @@ export async function completeMultipartSongArtifactUpload(input: {
     sessionId: input.sessionId,
     storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
     storageObjectKey: session.object_key,
-    storageBucket: config.bucket,
+    storageBucket: session.bucket,
     gatewayUrl,
     ipfsCid: head.cid ?? completeResult.cid,
     contentHash,
@@ -509,9 +525,9 @@ export async function completeMultipartSongArtifactUpload(input: {
     sizeBytes: head.contentLength,
     contentHash,
     storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
-    storageBucket: config.bucket,
+    storageBucket: session.bucket,
     storageObjectKey: session.object_key,
-    storageEndpoint: config.endpoint.toString(),
+    storageEndpoint: session.storage_endpoint,
     gatewayUrl,
     ipfsCid: head.cid ?? completeResult.cid,
     contentHashVerifiedAt: null,
@@ -551,6 +567,7 @@ export async function abortMultipartSongArtifactUpload(input: {
   if (session.filebase_upload_id) {
     await abortMultipartUpload({
       env: input.env,
+      config: resolveSessionFilebaseConfig(input.env, session),
       objectKey: session.object_key,
       uploadId: session.filebase_upload_id,
     })
@@ -601,6 +618,7 @@ export async function reapStaleMultipartSongArtifactUploads(input: {
     if (session.filebase_upload_id) {
       await abortMultipartUpload({
         env: input.env,
+        config: resolveSessionFilebaseConfig(input.env, session),
         objectKey: session.object_key,
         uploadId: session.filebase_upload_id,
       })
