@@ -661,9 +661,13 @@ export async function createRewardCampaignFundingQuote(input: {
       sql: `
         SELECT COALESCE(SUM(expected_amount_cents), 0) AS pending_cents
         FROM reward_campaign_funding_effects
-        WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+        WHERE reward_campaign_id = ?1
+          AND (
+            status = 'confirming'
+            OR (status = 'quoted' AND expires_at > ?2)
+          )
       `,
-      args: [input.campaignId],
+      args: [input.campaignId, now],
     })
     const pending = integer(rowValue(pendingResult.rows[0], "pending_cents"))
     if (amountCents > budget - funded - pending) {
@@ -751,7 +755,11 @@ async function markFundingRefundPending(input: {
       SET status = CASE
             WHEN EXISTS (
               SELECT 1 FROM reward_campaign_funding_effects
-              WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+              WHERE reward_campaign_id = ?1
+                AND (
+                  status = 'confirming'
+                  OR (status = 'quoted' AND expires_at > ?2)
+                )
             ) THEN 'funding_quoted'
             WHEN funded_cents > 0 THEN 'funding_quoted'
             ELSE 'draft'
@@ -953,7 +961,11 @@ export async function confirmRewardCampaignFunding(input: {
           SET status = CASE
                 WHEN EXISTS (
                   SELECT 1 FROM reward_campaign_funding_effects
-                  WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+                  WHERE reward_campaign_id = ?1
+                    AND (
+                      status = 'confirming'
+                      OR (status = 'quoted' AND expires_at > ?2)
+                    )
                 ) THEN 'funding_quoted'
                 WHEN funded_cents > 0 THEN 'funding_quoted'
                 ELSE 'draft'
@@ -1000,7 +1012,19 @@ export async function confirmRewardCampaignFunding(input: {
     const amount = integer(rowValue(effect, "expected_amount_cents"))
     const nextFunded = integer(rowValue(campaign, "funded_cents")) + amount
     const budget = integer(rowValue(campaign, "budget_cents"))
-    if (nextFunded > budget) throw conflictError("Confirmed funding would exceed campaign budget")
+    if (nextFunded > budget) {
+      return fundingResource(await markFundingRefundPending({
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        receivedAmountAtomic: requiredString(effect, "expected_amount_atomic"),
+        senderAddress: verification.senderAddress,
+        blockNumber: verification.blockNumber,
+        blockHash: verification.blockHash,
+        reason: "funding_campaign_budget_exceeded",
+        now,
+      }))
+    }
     const nowMillis = Date.parse(now)
     const requestedStartMillis = Date.parse(requiredString(campaign, "starts_at"))
     const requestedEndMillis = Date.parse(requiredString(campaign, "ends_at"))

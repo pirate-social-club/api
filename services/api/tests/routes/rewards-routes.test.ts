@@ -741,6 +741,69 @@ describe("rewards routes", () => {
       .toEqual([{ holder_campaign_id: secondCampaign.id }])
   })
 
+  test("an expired full-budget quote can be replaced without stranding a late receipt", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-expired-full-budget")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "expired-full-budget-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quote = async (key: string) => {
+      const response = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100000, idempotency_key: key }),
+      }, ctx.env)
+      expect(response.status).toBe(201)
+      return await json(response) as { id: string }
+    }
+    const confirm = (fundingId: string, hash: string) => app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${fundingId}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: hash }),
+      },
+      ctx.env,
+    )
+
+    const expired = await quote("expired-full-budget-first")
+    const expiredAt = new Date(Date.now() - 60_000)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [expired.id, expiredAt.toISOString()],
+    })
+
+    const replacement = await quote("expired-full-budget-replacement")
+    const replacementHash = `0x${"8".repeat(64)}`
+    const expiredHash = `0x${"9".repeat(64)}`
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+      blockTimestamp: fundingTxRef === expiredHash
+        ? Math.floor(expiredAt.getTime() / 1000) - 30
+        : Math.floor(Date.now() / 1000),
+    }))
+
+    expect(await json(await confirm(replacement.id, replacementHash))).toMatchObject({
+      status: "confirmed",
+    })
+    expect(await json(await confirm(expired.id, expiredHash))).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "funding_campaign_budget_exceeded",
+    })
+    expect(await json(await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env))).toMatchObject({ funded_cents: 100000 })
+  })
+
   test("a transfer broadcast before expiry still funds the campaign when confirmation is resumed after expiry", async () => {
     // The money-stranding case. A wallet broadcasts valid USDC, the confirm request is lost, the
     // quote lapses, and the client resumes with the SAME hash on reload. Refusing on wall-clock
