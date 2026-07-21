@@ -40,69 +40,72 @@ CREATE INDEX reward_payout_allocations_campaign_status_idx
 
 -- Backfill only unambiguous historical settlement: a user with exactly one
 -- confirmed payout and exactly one campaign-backed reward event, of the same
--- amount.  Mixed histories deliberately remain unallocated rather than being
--- guessed; they require an explicit, reviewed reconciliation.
-WITH unambiguous AS (
-    SELECT
-        p.reward_payout_effect_id,
-        e.reward_event_id,
-        e.reward_campaign_id,
-        p.amount_cents
-    FROM reward_payout_effects p
-    JOIN reward_events e
-      ON e.user_id = p.user_id
-     AND e.reward_campaign_id IS NOT NULL
-     AND e.amount_cents = p.amount_cents
-    WHERE p.status = 'confirmed'
-      AND NOT EXISTS (
-          SELECT 1
-          FROM reward_payout_allocations a
-          WHERE a.reward_payout_effect_id = p.reward_payout_effect_id
-      )
-      AND 1 = (
-          SELECT COUNT(*)
-          FROM reward_payout_effects p2
-          WHERE p2.user_id = p.user_id
-            AND p2.status = 'confirmed'
-      )
-      AND 1 = (
-          SELECT COUNT(*)
-          FROM reward_events e2
-          WHERE e2.user_id = p.user_id
-            AND e2.reward_campaign_id IS NOT NULL
-      )
-), inserted AS (
-    INSERT INTO reward_payout_allocations (
-        reward_payout_allocation_id,
-        reward_payout_effect_id,
-        reward_event_id,
-        reward_campaign_id,
-        amount_cents,
-        status,
-        created_at,
-        confirmed_at,
-        updated_at
-    )
-    SELECT
-        'rpa_backfill_' || reward_payout_effect_id,
-        reward_payout_effect_id,
-        reward_event_id,
-        reward_campaign_id,
-        amount_cents,
-        'confirmed',
-        NOW(),
-        NOW(),
-        NOW()
-    FROM unambiguous
-    ON CONFLICT (reward_payout_effect_id, reward_event_id) DO NOTHING
-    RETURNING reward_campaign_id, amount_cents
-), totals AS (
-    SELECT reward_campaign_id, SUM(amount_cents) AS amount_cents
-    FROM inserted
-    GROUP BY reward_campaign_id
+-- amount. Mixed histories deliberately remain unallocated rather than being
+-- guessed; they require an explicit, reviewed reconciliation. Keep this as
+-- separate portable statements: the local control-plane test database is
+-- SQLite, which does not support data-changing CTEs.
+INSERT INTO reward_payout_allocations (
+    reward_payout_allocation_id,
+    reward_payout_effect_id,
+    reward_event_id,
+    reward_campaign_id,
+    amount_cents,
+    status,
+    created_at,
+    confirmed_at,
+    updated_at
 )
+SELECT
+    'rpa_backfill_' || p.reward_payout_effect_id,
+    p.reward_payout_effect_id,
+    e.reward_event_id,
+    e.reward_campaign_id,
+    p.amount_cents,
+    'confirmed',
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+FROM reward_payout_effects p
+JOIN reward_events e
+  ON e.user_id = p.user_id
+ AND e.reward_campaign_id IS NOT NULL
+ AND e.amount_cents = p.amount_cents
+WHERE p.status = 'confirmed'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM reward_payout_allocations a
+      WHERE a.reward_payout_effect_id = p.reward_payout_effect_id
+  )
+  AND 1 = (
+      SELECT COUNT(*)
+      FROM reward_payout_effects p2
+      WHERE p2.user_id = p.user_id
+        AND p2.status = 'confirmed'
+  )
+  AND 1 = (
+      SELECT COUNT(*)
+      FROM reward_events e2
+      WHERE e2.user_id = p.user_id
+        AND e2.reward_campaign_id IS NOT NULL
+  )
+ON CONFLICT (reward_payout_effect_id, reward_event_id) DO NOTHING;
+
+-- The backfill only targets campaigns with no prior paid projection, making
+-- this repair safe if a local bootstrap replays its migration set.
 UPDATE reward_campaigns campaign
-SET paid_cents = campaign.paid_cents + totals.amount_cents,
-    updated_at = NOW()
-FROM totals
-WHERE campaign.reward_campaign_id = totals.reward_campaign_id;
+SET paid_cents = paid_cents + COALESCE((
+        SELECT SUM(allocation.amount_cents)
+        FROM reward_payout_allocations allocation
+        WHERE allocation.reward_campaign_id = campaign.reward_campaign_id
+          AND allocation.status = 'confirmed'
+          AND allocation.reward_payout_allocation_id LIKE 'rpa_backfill_%'
+    ), 0),
+    updated_at = CURRENT_TIMESTAMP
+WHERE paid_cents = 0
+  AND EXISTS (
+      SELECT 1
+      FROM reward_payout_allocations allocation
+      WHERE allocation.reward_campaign_id = campaign.reward_campaign_id
+        AND allocation.status = 'confirmed'
+        AND allocation.reward_payout_allocation_id LIKE 'rpa_backfill_%'
+  );
