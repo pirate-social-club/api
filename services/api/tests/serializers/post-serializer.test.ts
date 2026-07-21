@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { serializeLocalizedPostResponse, serializePost } from "../../src/serializers/post"
-import type { LocalizedPostResponse, Post } from "../../src/types"
+import { serializeProfileActivityResponse } from "../../src/serializers/profile-activity"
+import { resolveAgeGateViewerState } from "../../src/lib/posts/age-gate-viewer-state"
+import { buildDefaultVerificationCapabilities } from "../../src/lib/verification/verification-capabilities"
+import type { UserRepository } from "../../src/lib/auth/repositories"
+import type { LocalizedPostResponse, Post, ProfileActivityResponse, User } from "../../src/types"
 
 function makeLinkPost(overrides: Partial<Post> = {}): Post {
   return {
@@ -136,7 +140,108 @@ function makeLocalizedResponse(post: Post, resolvedLocale: string): LocalizedPos
   }
 }
 
+function makeProofRequiredVideoResponse(): LocalizedPostResponse {
+  const response = makeLocalizedResponse(makeLinkPost({
+    post_type: "video",
+    age_gate_policy: "18_plus",
+    content_safety_state: "adult",
+    media_refs: [{
+      storage_ref: "https://media.test/adult-video.mp4",
+      poster_ref: "https://media.test/adult-poster.jpg",
+      mime_type: "video/mp4",
+    }],
+  }), "en")
+  response.age_gate_viewer_state = "proof_required"
+  return response
+}
+
+function expectNoAdultMedia(value: unknown): void {
+  const json = JSON.stringify(value)
+  expect(json).not.toContain("media_refs")
+  expect(json).not.toContain("adult-video.mp4")
+  expect(json).not.toContain("adult-poster.jpg")
+}
+
 describe("serializeLocalizedPostResponse feed pruning", () => {
+  test("omits video media and poster refs when age proof is required", () => {
+    const response = makeProofRequiredVideoResponse()
+
+    const result = serializeLocalizedPostResponse(response)
+
+    expectNoAdultMedia(result)
+    expect(result.age_gate_viewer_state).toBe("proof_required")
+  })
+
+  test("omits age-gated media from the home-feed payload", () => {
+    expectNoAdultMedia(serializeLocalizedPostResponse(makeProofRequiredVideoResponse(), { surface: "home_feed" }))
+  })
+
+  test("omits age-gated media for an authenticated but age-unverified viewer", async () => {
+    const user = {
+      user_id: "usr_unverified",
+      verification_state: "unverified",
+      verification_capabilities: buildDefaultVerificationCapabilities(),
+      created_at: "2026-05-15T00:00:00.000Z",
+      updated_at: "2026-05-15T00:00:00.000Z",
+    } as User
+    const userRepository = {
+      getUserById: async () => user,
+    } as unknown as UserRepository
+    const response = makeProofRequiredVideoResponse()
+    response.age_gate_viewer_state = await resolveAgeGateViewerState({
+      userId: user.user_id,
+      userRepository,
+      postAgeGatePolicy: "18_plus",
+    })
+
+    expect(response.age_gate_viewer_state).toBe("proof_required")
+    expectNoAdultMedia(serializeLocalizedPostResponse(response))
+  })
+
+  test("omits age-gated media from profile-activity payloads", () => {
+    const post = makeProofRequiredVideoResponse()
+    const response = {
+      tab: "posts",
+      posts: [{
+        kind: "post",
+        post,
+        community: {
+          community_id: "cmt_test",
+          display_name: "Test",
+          membership_mode: "open",
+          karaoke_enabled: true,
+          human_verification_lane: "none",
+          moderators: [],
+          membership_gate_summaries: [],
+        },
+        created_at: "2026-05-15T00:00:00.000Z",
+      }],
+      comments: [],
+      overview_items: [],
+      next_cursor: null,
+    } as unknown as ProfileActivityResponse
+
+    expectNoAdultMedia(serializeProfileActivityResponse(response))
+  })
+
+  test("keeps media for warning-only sensitive content", () => {
+    const response = makeLocalizedResponse(makeLinkPost({
+      post_type: "video",
+      content_safety_state: "sensitive",
+      age_gate_policy: "none",
+      media_refs: [{
+        storage_ref: "https://media.test/sensitive-video.mp4",
+        poster_ref: "https://media.test/sensitive-poster.jpg",
+        mime_type: "video/mp4",
+      }],
+    }), "en")
+
+    const result = serializeLocalizedPostResponse(response)
+
+    expect(result.post.media_refs).toHaveLength(1)
+    expect(result.post.media_refs?.[0]?.poster_ref).toBe("https://media.test/sensitive-poster.jpg")
+  })
+
   test("post serializer includes public live room status snapshot", () => {
     const result = serializePost(makeLinkPost({
       anchor_live_room_id: "lr_test",

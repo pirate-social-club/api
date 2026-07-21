@@ -165,6 +165,11 @@ function pruneLinkEnrichmentTranslations(
 
 export function serializeLocalizedPostResponse(response: LocalizedPostResponse, options?: { surface: "home_feed" }): ContractLocalizedPostResponse {
   const serializedPost = serializePost(response.post)
+  // `sensitive` is warning-only. Only an unresolved 18+ proof gate suppresses
+  // media capability URLs from the response payload.
+  if (response.age_gate_viewer_state === "proof_required") {
+    serializedPost.media_refs = undefined
+  }
   if (options?.surface === "home_feed") {
     serializedPost.link_enrichment = pruneLinkEnrichmentTranslations(
       serializedPost.link_enrichment as Record<string, unknown> | null | undefined,
