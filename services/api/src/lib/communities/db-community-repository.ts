@@ -365,6 +365,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     communityId: string
     namespaceVerificationId: string
     namespaceRole: "primary" | "mirror"
+    replacesNamespaceVerificationId?: string
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow> {

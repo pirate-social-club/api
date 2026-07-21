@@ -582,19 +582,16 @@ export async function attachNamespaceToCommunity(input: {
     if (!existingNamespaceVerification || !isSameNamespaceRoot(existingNamespaceVerification, namespaceVerification)) {
       throw eligibilityFailed("Community already has a different namespace attached")
     }
-    effectiveNamespaceVerification = existingNamespaceVerification
-    if (community.pending_namespace_verification_session_id) {
-      await input.communityRepository.setPendingNamespaceVerificationSession({
-        communityId: input.communityId,
-        sessionId: null,
-        updatedAt: createdAt,
-      })
-      attachedCommunity = {
-        ...community,
-        pending_namespace_verification_session_id: null,
-        updated_at: createdAt,
-      }
-    }
+    const routeSlug = namespaceRouteSlug(namespaceVerification)
+    attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
+      communityNamespaceBindingId: makeId("cnb"),
+      communityId: input.communityId,
+      namespaceVerificationId: input.namespaceVerificationId,
+      namespaceRole,
+      replacesNamespaceVerificationId: community.namespace_verification_id,
+      routeSlug,
+      updatedAt: createdAt,
+    })
   } else {
     const routeSlug = namespaceRouteSlug(namespaceVerification)
     attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
