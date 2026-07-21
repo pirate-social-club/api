@@ -92,11 +92,11 @@ ON CONFLICT (reward_payout_effect_id, reward_event_id) DO NOTHING;
 
 -- The backfill only targets campaigns with no prior paid projection, making
 -- this repair safe if a local bootstrap replays its migration set.
-UPDATE reward_campaigns campaign
+UPDATE reward_campaigns
 SET paid_cents = paid_cents + COALESCE((
         SELECT SUM(allocation.amount_cents)
         FROM reward_payout_allocations allocation
-        WHERE allocation.reward_campaign_id = campaign.reward_campaign_id
+        WHERE allocation.reward_campaign_id = reward_campaigns.reward_campaign_id
           AND allocation.status = 'confirmed'
           AND allocation.reward_payout_allocation_id LIKE 'rpa_backfill_%'
     ), 0),
@@ -105,7 +105,7 @@ WHERE paid_cents = 0
   AND EXISTS (
       SELECT 1
       FROM reward_payout_allocations allocation
-      WHERE allocation.reward_campaign_id = campaign.reward_campaign_id
+      WHERE allocation.reward_campaign_id = reward_campaigns.reward_campaign_id
         AND allocation.status = 'confirmed'
         AND allocation.reward_payout_allocation_id LIKE 'rpa_backfill_%'
   );
