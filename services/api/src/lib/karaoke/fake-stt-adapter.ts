@@ -40,6 +40,7 @@ export class FakeKaraokeStreamingSttAdapter implements KaraokeStreamingSttAdapte
   async start(input: {
     attemptId: string;
     sessionId: string;
+    initialSequence: number;
     onMessage: FakeSttMessageHandler;
   }): Promise<void> {
     if (this.starting) {
@@ -49,6 +50,10 @@ export class FakeKaraokeStreamingSttAdapter implements KaraokeStreamingSttAdapte
     this.starting = (async () => {
       this.startCount += 1;
       this.started = true;
+      // Seed like the real emitter on EVERY start. This fake previously carried
+      // sttSeq across restarts, making it strictly more monotonic than production
+      // and hiding the restart-reset defect from the DO restore tests.
+      this.sttSeq = input.initialSequence;
       // A fresh, globally-unique generation per start so a restored (new-instance)
       // stream never collides with an evicted stream's persisted pending commit.
       this.streamGeneration = crypto.randomUUID();

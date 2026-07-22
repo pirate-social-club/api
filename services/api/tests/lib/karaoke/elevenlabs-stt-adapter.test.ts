@@ -87,7 +87,9 @@ function timedFrame(songStartMs: number, bytes: number, sequence: number): Karao
   })
 }
 
-async function startAdapter(options: { retention?: "not_stored" } = { retention: "not_stored" }): Promise<{
+async function startAdapter(
+  options: { retention?: "not_stored"; initialSequence?: number } = { retention: "not_stored" },
+): Promise<{
   adapter: ElevenLabsKaraokeSttAdapter
   socket: FakeSttSocket
   messages: KaraokeSttAdapterMessage[]
@@ -110,6 +112,7 @@ async function startAdapter(options: { retention?: "not_stored" } = { retention:
   })
   await adapter.start({
     attemptId: "attempt-1",
+    initialSequence: options.initialSequence ?? 0,
     onMessage: async (message) => {
       messages.push(message)
     },
@@ -146,9 +149,9 @@ describe("ElevenLabsKaraokeSttAdapter", () => {
   test("each start() mints a distinct stream generation", async () => {
     const socket = new FakeSttSocket()
     const adapter = new ElevenLabsKaraokeSttAdapter({ apiKey: "k", connect: async () => socket })
-    await adapter.start({ attemptId: "a", onMessage: async () => {}, sessionId: "s" })
+    await adapter.start({ attemptId: "a", initialSequence: 0, onMessage: async () => {}, sessionId: "s" })
     const first = adapter.streamGeneration
-    await adapter.start({ attemptId: "a", onMessage: async () => {}, sessionId: "s" })
+    await adapter.start({ attemptId: "a", initialSequence: 0, onMessage: async () => {}, sessionId: "s" })
     const second = adapter.streamGeneration
     expect(first).toBeTruthy()
     expect(second).toBeTruthy()
@@ -163,6 +166,25 @@ describe("ElevenLabsKaraokeSttAdapter", () => {
       message_type: "input_audio_chunk",
       sample_rate: 16_000,
     })
+  })
+
+  test("resumes the envelope sequence from initialSequence after a restart", async () => {
+    // The real emitter, not a fake: a restarted stream must continue the
+    // per-ATTEMPT sequence rather than restarting at 1. The session host rejects
+    // anything <= its surviving lastSttSequence and does NOT advance on
+    // rejection, so a reset here silently suppresses the rest of the attempt.
+    const { socket, messages } = await startAdapter({ initialSequence: 5, retention: "not_stored" })
+
+    await socket.deliver({ message_type: "partial_transcript", text: "hold" })
+    await socket.deliver({ message_type: "partial_transcript", text: "hold on" })
+
+    expect(messages.map((m) => m.event.sequence)).toEqual([6, 7])
+  })
+
+  test("starts the envelope sequence at 1 for a fresh attempt", async () => {
+    const { socket, messages } = await startAdapter()
+    await socket.deliver({ message_type: "partial_transcript", text: "hold" })
+    expect(messages[0]!.event.sequence).toBe(1)
   })
 
   test("emits a text-only stt_partial for partial transcripts (no commit metadata)", async () => {
@@ -370,6 +392,7 @@ describe("STT lifecycle: unexpected close", () => {
     const start = () =>
       adapter.start({
         attemptId: "a",
+        initialSequence: 0,
         onMessage: async () => {},
         onTerminalError: (code) => {
           terminal.push(code)

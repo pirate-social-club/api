@@ -22,14 +22,25 @@ export type KaraokeSttEmit = (message: KaraokeSttAdapterMessage) => Promise<void
  * it travels to the host on the message wrapper (never on the client transcript).
  */
 export class KaraokeSttEventEmitter {
-  private sequence = 0
+  private sequence: number
   private latestAudioMs = 0
 
   constructor(
     private readonly sessionId: string,
     private readonly attemptId: string,
     private readonly emit: KaraokeSttEmit,
-  ) {}
+    // Resume point for the envelope sequence. A provider stream can restart
+    // mid-attempt (reconnect, or a fresh DO restoring the session), and each
+    // restart builds a NEW emitter — but the host's `lastSttSequence` survives and
+    // rejects anything not strictly greater, WITHOUT advancing on rejection. So a
+    // counter that restarted at 0 silently suppressed transcript + scoring for the
+    // rest of the attempt. Always seed from the host's surviving high-water mark.
+    // Required, not defaulted: a default would let a future restart path silently
+    // reintroduce the reset.
+    initialSequence: number,
+  ) {
+    this.sequence = initialSequence
+  }
 
   noteAudioTimeMs(ms: number): void {
     if (Number.isFinite(ms) && ms > this.latestAudioMs) {

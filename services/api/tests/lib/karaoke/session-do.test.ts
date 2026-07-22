@@ -819,6 +819,75 @@ describe("KaraokeSessionRuntimeDO", () => {
     expect(sent.at(-1)?.sequence).toBe(3);
   });
 
+  test("resumes STT scoring after a fresh DO restores the session", async () => {
+    const sent: KaraokeServerEvent[] = [];
+    const broadcast = async (event: KaraokeServerEvent) => {
+      sent.push(event);
+    };
+    const { ctx, storage } = makeContext();
+    const outbox = new InMemoryOutboxStore();
+    const adapterA = new FakeKaraokeStreamingSttAdapter();
+    const doA = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterA,
+    });
+    expect((await doA.fetch(initDoRequest())).status).toBe(200);
+    await startAndScore(doA, adapterA);
+
+    // Build a REALISTIC pre-eviction high-water mark. A watermark of 1 is not a
+    // valid guard: the fake's own increment clears it by luck, so the test passes
+    // even with the seeding reverted. Drive four more committed acks so the
+    // persisted counter reaches 5 and a reset to 0 is unambiguously fatal.
+    let clientSeq = 3;
+    for (const audioEndMs of [1300, 1500, 1700, 1900]) {
+      clientSeq += 1;
+      await doA.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq, audioEndMs));
+      clientSeq += 1;
+      await doA.fetch(clientEventRequest(clientSeq, "playback_sync", { audioTimeMs: audioEndMs, playing: true }));
+      await doA.drainCommitChainForTests();
+      await adapterA.ackCommit(HOLD_ON_WORDS);
+      await doA.drainCommitChainForTests();
+    }
+    expect(storedSnapshot(storage).lastSttSequence).toBe(5);
+
+    // A fresh DO instance (eviction / runtime restart) with a BRAND-NEW adapter,
+    // whose sequence counter therefore starts from whatever the host seeds it with.
+    const adapterB = new FakeKaraokeStreamingSttAdapter();
+    const doB = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterB,
+    });
+
+    // Drive real post-restore scoring: audio → playback → committed final.
+    // Client sequences continue past the restored lastClientSequence.
+    const relayedBefore = sent.filter((event) => event.type === "stt_final").length;
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 1, 2400));
+    await doB.fetch(clientEventRequest(clientSeq + 2, "playback_sync", { audioTimeMs: 2400, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+
+    // The restored stream resumed at 6, one past the persisted watermark of 5, so
+    // the final was accepted rather than refused. With the counter reset to 0 the
+    // fresh adapter emits 1, which the host rejects WITHOUT advancing
+    // lastSttSequence — silently killing transcript and scoring for the rest of
+    // the attempt.
+    const codes = sent.map((event) => (event as { code?: string }).code);
+    expect(codes).not.toContain("non_monotonic_sequence");
+    expect(sent.filter((event) => event.type === "stt_final").length).toBe(relayedBefore + 1);
+    expect(storedSnapshot(storage).lastSttSequence).toBe(6);
+
+    // And it keeps flowing: the defect suppressed the whole tail, not one event.
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 3, 2600));
+    await doB.fetch(clientEventRequest(clientSeq + 4, "playback_sync", { audioTimeMs: 2600, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+    expect(storedSnapshot(storage).lastSttSequence).toBe(7);
+  });
+
   test("persists snapshot and pending output before a failed broadcast, then replays it", async () => {
     const { ctx, storage } = makeContext();
     const adapter = new FakeKaraokeStreamingSttAdapter();
@@ -1232,6 +1301,7 @@ describe("FakeKaraokeStreamingSttAdapter", () => {
     const received: string[] = [];
     await adapter.start({
       attemptId: "attempt-1",
+      initialSequence: 0,
       onMessage: async (message) => {
         received.push(message.event.text);
       },
