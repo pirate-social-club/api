@@ -33,6 +33,8 @@ type ProvisionInput = {
   namespaceVerificationId: string | null
   routeSlug: string | null
   communityRepository: CommunityProvisioningRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }
 
 type ProvisionedCommunityCredential = {
@@ -168,7 +170,12 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
     }
 
     // 1. Allocate a binding from the shard pool.
-    const bindResult = await shard.communityD1Bind({ communityId, now })
+    const bindResult = await shard.communityD1Bind({
+      communityId,
+      now,
+      source: input.allocationAttribution?.source ?? null,
+      runId: input.allocationAttribution?.runId ?? null,
+    })
     if (!bindResult.ok) {
       if (bindResult.code === "shard_pool_exhausted") {
         throw new HttpError(

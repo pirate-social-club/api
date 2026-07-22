@@ -78,6 +78,8 @@ type FakePoolRow = {
   last_error: string | null
   released_at: string | null
   version: number
+  allocation_source?: string | null
+  allocation_run_id?: string | null
 }
 
 /**
@@ -94,7 +96,13 @@ type FakePoolRow = {
  */
 function fakePoolD1(
   initialRows: FakePoolRow[] = [],
-  options?: { simulateUniqueCommunityIdViolation?: boolean },
+  options?: {
+    simulateUniqueCommunityIdViolation?: boolean
+    /** Simulate a pool D1 that predates migration 0002 (no attribution columns). */
+    simulateMissingAttributionColumns?: boolean
+    /** Simulate a genuine write failure that must NOT be swallowed by the fallback. */
+    simulateClaimFailure?: Error
+  },
 ) {
   const calls: FakeCall[] = []
   const rows: FakePoolRow[] = [...initialRows]
@@ -160,12 +168,15 @@ function fakePoolD1(
           return { success: true, meta: { changes: 1, last_row_id: rows.length } }
         }
         if (/UPDATE d1_pool SET\s+community_id = \?2/.test(sql)) {
-          const [binding_name, community_id, allocated_at, version] = s._args as [
-            string,
-            string,
-            string,
-            number,
-          ]
+          const [binding_name, community_id, allocated_at, version, allocation_source, allocation_run_id] =
+            s._args as [string, string, string, number, string | null, string | null]
+          const attributed = /allocation_source/.test(sql)
+          if (opts.simulateClaimFailure) {
+            throw opts.simulateClaimFailure
+          }
+          if (attributed && opts.simulateMissingAttributionColumns) {
+            throw new Error("D1_ERROR: no such column: allocation_source at offset 42")
+          }
           if (opts.simulateUniqueCommunityIdViolation) {
             opts.simulateUniqueCommunityIdViolation = false
             const winnerRow = rows.find((r) => r.binding_name === binding_name)
@@ -190,6 +201,10 @@ function fakePoolD1(
           }
           row.community_id = community_id
           row.allocated_at = allocated_at
+          if (attributed) {
+            row.allocation_source = allocation_source ?? null
+            row.allocation_run_id = allocation_run_id ?? null
+          }
           row.released_at = null
           row.last_loaded_at = null
           row.last_error = null
@@ -570,6 +585,187 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
     expect(claimed?.community_id).toBe("cmt_new")
     expect(claimed?.allocated_at).toBe(NOW)
+  })
+
+  test("records allocation attribution on the claimed row", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "web-e2e:gate-builder",
+      runId: "run-12345",
+    })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source).toBe("web-e2e:gate-builder")
+    expect(claimed?.allocation_run_id).toBe("run-12345")
+  })
+
+  // Attribution is diagnostic; an allocation must never fail or change shape
+  // because a caller omitted it. Untagged callers simply produce NULL.
+  test("allocates normally with attribution absent, blank, or non-string", async () => {
+    for (const attribution of [
+      {},
+      { source: "   ", runId: "" },
+      { source: null, runId: undefined },
+      { source: 42 as unknown as string },
+    ]) {
+      const pool = fakePoolD1([
+        { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+      ])
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, ...attribution })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+      const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+      expect(claimed?.allocation_source ?? null).toBeNull()
+      expect(claimed?.allocation_run_id ?? null).toBeNull()
+    }
+  })
+
+  // The source string is caller-supplied (a request header) on a hot provisioning
+  // path, so it is capped rather than trusted.
+  test("truncates an oversized attribution value instead of rejecting the allocation", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "x".repeat(5_000) })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source?.length).toBe(200)
+  })
+
+  // SCHEMA SKEW. The pool D1 has no automated migration runner, so a shard
+  // deployed ahead of migration 0002 is a real operational state. Attribution is
+  // diagnostic, so it must degrade to unattributed allocation -- NOT take
+  // provisioning down.
+  describe("attribution column skew (migration 0002 not applied)", () => {
+    test("still allocates, without attribution, when the columns are missing", async () => {
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, {
+        communityId: "cmt_new",
+        now: NOW,
+        source: "web-e2e:gate-builder",
+        runId: "run-123",
+      })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+      const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+      expect(claimed?.community_id).toBe("cmt_new")
+      expect(claimed?.allocated_at).toBe(NOW)
+      expect(claimed?.allocation_source ?? null).toBeNull()
+    })
+
+    // The fallback must not weaken the claim. It drops ONLY the diagnostic
+    // columns: same optimistic-lock predicate, same binding, same version, so
+    // concurrency behaviour is identical to the attributed path.
+    test("fallback preserves the claim predicate, binding and version", async () => {
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 7 },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "s", runId: "r" })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+
+      const updates = pool.calls.filter((c) => /UPDATE d1_pool SET/.test(c.sql))
+      expect(updates).toHaveLength(2) // attributed attempt, then legacy fallback
+      const [attributed, fallback] = updates as [{ sql: string; args: unknown[] }, { sql: string; args: unknown[] }]
+
+      // Identical claim predicate...
+      expect(attributed.sql).toContain("WHERE binding_name = ?1 AND version = ?4")
+      expect(fallback.sql).toContain("WHERE binding_name = ?1 AND version = ?4")
+      // ...and the fallback still increments the version (optimistic lock intact).
+      expect(fallback.sql).toContain("version = version + 1")
+      // ...binding, communityId, now and version are byte-identical; only the
+      // two diagnostic args are dropped.
+      expect(fallback.args).toEqual(attributed.args.slice(0, 4))
+      expect(fallback.args[3]).toBe(7)
+      expect(fallback.sql).not.toContain("allocation_source")
+    })
+
+    // Narrowness check: a REAL database failure must still fail loudly rather
+    // than being downgraded into an unattributed allocation.
+    test("does NOT swallow a genuine write failure", async () => {
+      const boom = new Error("D1_ERROR: database is locked")
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+        ],
+        { simulateClaimFailure: boom },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      await expect(
+        runShardBind(env, { communityId: "cmt_new", now: NOW, source: "s" }),
+      ).rejects.toThrow("database is locked")
+      const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+      expect(row?.community_id).toBeNull()
+    })
+
+    // Skew must not create a rewrite path either.
+    test("idempotent retry still cannot rewrite attribution under skew", async () => {
+      const pool = fakePoolD1(
+        [
+          {
+            binding_name: "DB_CMTY_NEW",
+            community_id: "cmt_new",
+            allocated_at: NOW,
+            last_error: null,
+            released_at: null,
+            last_loaded_at: null,
+            version: 1,
+            allocation_source: "original-consumer",
+            allocation_run_id: "run-original",
+          },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "different-consumer" })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false } })
+      const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+      expect(row?.allocation_source).toBe("original-consumer")
+    })
+  })
+
+  // The idempotent path must not rewrite attribution: the ORIGINAL allocator is
+  // the consumer that spent the capacity, and a later retry by someone else must
+  // not steal the credit -- that would corrupt the very ranking this exists for.
+  test("does not overwrite attribution on the idempotent (already-allocated) path", async () => {
+    const pool = fakePoolD1([
+      {
+        binding_name: "DB_CMTY_NEW",
+        community_id: "cmt_new",
+        allocated_at: NOW,
+        last_error: null,
+        released_at: null,
+        last_loaded_at: null,
+        version: 1,
+        allocation_source: "original-consumer",
+        allocation_run_id: "run-original",
+      },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "different-consumer",
+      runId: "run-different",
+    })
+    expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false } })
+    const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+    expect(row?.allocation_source).toBe("original-consumer")
+    expect(row?.allocation_run_id).toBe("run-original")
   })
 
   test("§8.3 — idempotency: second call returns the same binding with allocated: false", async () => {

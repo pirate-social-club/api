@@ -43,6 +43,27 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
       userRepository,
       verificationRepository,
       communityRepository,
+      // DIAGNOSTIC-ONLY. Every community create permanently consumes a D1 pool
+      // binding (release has never fired), and staging has exhausted mid-release
+      // more than once. Explicit headers let a CI consumer name itself; the
+      // user-agent fallback means an untagged caller is still distinguishable
+      // from an unattributed historical row, which is what makes the first
+      // ranking pass possible without changing every consumer first.
+      //
+      // CLAIMED, NOT TRUSTED. Both values are caller-supplied and therefore
+      // spoofable: an external client can send any allocation_source it likes.
+      // That is acceptable for discovering which of OUR consumers burns capacity
+      // -- our own CI has no motive to lie -- but it is NOT authoritative
+      // accounting and must never be used for authorization, billing, or
+      // enforcement. Trusted internal consumers should eventually get
+      // server-derived labels (or authenticated caller validation) rather than
+      // self-declared ones.
+      allocationAttribution: {
+        source: c.req.header("x-pirate-allocation-source")
+          ?? c.req.header("user-agent")
+          ?? null,
+        runId: c.req.header("x-pirate-allocation-run-id") ?? null,
+      },
     })
     await trackApiEvent(c.env, c.req, {
       eventName: "community_create_submitted",
