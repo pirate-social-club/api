@@ -183,7 +183,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
+          ref: b89477b554004d7c3562f87056acb011442c40ef
           path: .cross-repo/web
 
       - name: Link cross-repo file deps
@@ -277,7 +277,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
+          ref: b89477b554004d7c3562f87056acb011442c40ef
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
@@ -481,7 +481,7 @@ jobs:
         # time-dependent failure with no change in this repo.
         #
         # !!! INTERIM PIN — MUST BE RE-PINNED BEFORE THIS PR MERGES !!!
-        # 916d1cf6 is the HEAD of web PR #569 (fix/karaoke-stt-sequence-continuity), a
+        # b89477b5 is the HEAD of web PR #569 (fix/karaoke-stt-sequence-continuity), a
         # feature branch. It is pinned here only so this PR's CI can verify the paired
         # change. Once web #569 merges, re-pin all occurrences in this repo to the
         # resulting web `main` SHA. Merging this PR against a feature-branch pin would
@@ -500,7 +500,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
+          ref: b89477b554004d7c3562f87056acb011442c40ef
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
@@ -618,7 +618,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
+          ref: b89477b554004d7c3562f87056acb011442c40ef
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
