@@ -407,12 +407,7 @@ async function closeRequestControlPlaneClients(store: RequestControlPlaneStore):
   }))
 }
 
-export async function withRequestControlPlaneClients<T>(operation: () => Promise<T>): Promise<T> {
-  const existingStore = requestControlPlaneStore.getStore()
-  if (existingStore) {
-    return operation()
-  }
-
+async function runInFreshControlPlaneScope<T>(operation: () => Promise<T>): Promise<T> {
   const store: RequestControlPlaneStore = { clients: new Map() }
   return requestControlPlaneStore.run(store, async () => {
     try {
@@ -421,6 +416,36 @@ export async function withRequestControlPlaneClients<T>(operation: () => Promise
       await closeRequestControlPlaneClients(store)
     }
   })
+}
+
+export async function withRequestControlPlaneClients<T>(operation: () => Promise<T>): Promise<T> {
+  const existingStore = requestControlPlaneStore.getStore()
+  if (existingStore) {
+    return operation()
+  }
+
+  return runInFreshControlPlaneScope(operation)
+}
+
+/**
+ * Control-plane scope for work that OUTLIVES the request that scheduled it
+ * (`ctx.waitUntil(...)` background tasks).
+ *
+ * `withRequestControlPlaneClients` deliberately joins an enclosing scope so that
+ * nested calls within one request share a single connection. That reuse is wrong
+ * for a background task: the request middleware closes the request store's
+ * clients as soon as the response is produced, while the task is still running.
+ * The task then either operates on a closed pool or lazily allocates a
+ * replacement into an orphaned store that nobody ever closes (a leaked
+ * PlanetScale slot — the exact exhaustion the scheduled-batch concurrency cap
+ * exists to prevent).
+ *
+ * This ALWAYS opens its own store, so the background task owns an independent
+ * client lifecycle: usable for as long as the task runs, closed exactly once
+ * when it settles, unaffected by the request scope closing first.
+ */
+export async function withBackgroundControlPlaneClients<T>(operation: () => Promise<T>): Promise<T> {
+  return runInFreshControlPlaneScope(operation)
 }
 
 export async function withStandaloneControlPlaneClient<T>(
