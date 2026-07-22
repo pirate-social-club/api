@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { trimEnv } from "../env-strings"
+import { DEFAULT_OPENROUTER_MODEL } from "../openrouter-client"
 import type { Post, SongArtifactUpload } from "../../types"
 import {
   decryptActiveCommunityElevenLabsKey,
@@ -166,7 +167,7 @@ async function classifyLyricsAgeGate(input: {
   }
 
   const baseUrl = trimEnv(input.env.OPENROUTER_BASE_URL) || "https://openrouter.ai/api/v1"
-  const model = trimEnv(input.env.OPENROUTER_MODEL) || "google/gemini-3.1-flash-lite-preview"
+  const model = trimEnv(input.env.OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL
   const timeoutMs = providerTimeoutMs(input.env.OPENROUTER_TIMEOUT_MS, DEFAULT_OPENROUTER_TIMEOUT_MS)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)

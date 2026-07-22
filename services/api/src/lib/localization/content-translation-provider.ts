@@ -3,6 +3,7 @@ import {
   firstTrimmedEnv,
   parsePositiveIntegerEnv,
   requestOpenRouterChatCompletion,
+  DEFAULT_OPENROUTER_MODEL,
 } from "../openrouter-client"
 import { normalizeContentLocale } from "./content-locale"
 import { missingTranslatedContentField } from "./content-translation-validation"
@@ -149,7 +150,7 @@ export async function requestContentTranslation(input: {
   }
 
   const model = firstTrimmedEnv(input.env.OPENROUTER_TRANSLATION_MODEL)
-    || "google/gemini-2.5-flash-lite"
+    || DEFAULT_OPENROUTER_MODEL
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
   const initialMaxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)

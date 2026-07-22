@@ -2,6 +2,22 @@ import { trimEnv } from "./env-strings"
 
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+/**
+ * Fallback model for every OpenRouter-backed provider that has no explicit env override.
+ *
+ * ONE constant on purpose. When each provider carried its own literal they drifted:
+ * content translation was moved to this stable id while labelling, study generation,
+ * link summaries, and link translation were left on the dated preview alias
+ * `google/gemini-2.5-flash-lite-preview-09-2025`. OpenRouter retired that alias, which
+ * returns `http_404 No endpoints found` — a non-transient error that still burns all
+ * eight retry attempts before the job dies. Prod shard community-d1-pool-0073 holds 15
+ * translation jobs killed exactly that way.
+ *
+ * Prefer an unversioned model id here: dated preview aliases are removed upstream without
+ * notice, and this value is the one used when nobody configured anything.
+ */
+export const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash-lite"
+
 export type OpenRouterChatCompletionResponse = Record<string, unknown> & {
   choices?: Array<{
     finish_reason?: unknown
