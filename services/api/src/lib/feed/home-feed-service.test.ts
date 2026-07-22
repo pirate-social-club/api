@@ -9,8 +9,25 @@ import {
   sortCommunitySummariesByViews,
   sortCommunitySummaries,
   sortHomeFeedProjectionRows,
+  parseVideoFeedCursor,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
+
+describe("parseVideoFeedCursor", () => {
+  test("keeps one ranking timestamp across candidate pages", () => {
+    expect(parseVideoFeedCursor("v1:1753182000000:25", 1753182999999)).toEqual({
+      offset: 25,
+      rankedAt: 1753182000000,
+    })
+  })
+
+  test("starts a fresh snapshot for invalid cursors", () => {
+    expect(parseVideoFeedCursor("o:25", 1753182999999)).toEqual({
+      offset: 0,
+      rankedAt: 1753182999999,
+    })
+  })
+})
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
