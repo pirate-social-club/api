@@ -1,8 +1,26 @@
 import { createClient } from "@libsql/client"
 import { describe, expect, test } from "bun:test"
-import { supersedePromotedLocalMirror } from "./namespace-local-repository"
+import {
+  reconcileCommittedLocalNamespaceAttachment,
+  writeLocalNamespaceAttachment,
+} from "./namespace-local-repository"
 
-describe("supersedePromotedLocalMirror", () => {
+describe("reconcileCommittedLocalNamespaceAttachment", () => {
+  test("reports a post-commit projection failure without rejecting the committed mutation", async () => {
+    const failure = new Error("local projection failed")
+    let observed: unknown = null
+
+    const reconciled = await reconcileCommittedLocalNamespaceAttachment(
+      async () => { throw failure },
+      (error) => { observed = error },
+    )
+
+    expect(reconciled).toBe(false)
+    expect(observed).toBe(failure)
+  })
+})
+
+describe("writeLocalNamespaceAttachment", () => {
   test("retires the active mirror before the recovered verification becomes primary", async () => {
     const client = createClient({ url: ":memory:" })
     await client.execute(`
@@ -10,8 +28,27 @@ describe("supersedePromotedLocalMirror", () => {
         namespace_id TEXT PRIMARY KEY,
         community_id TEXT NOT NULL,
         namespace_verification_id TEXT NOT NULL,
+        display_label TEXT NOT NULL,
+        normalized_label TEXT NOT NULL,
+        resolver_label TEXT,
+        route_family TEXT,
         namespace_role TEXT NOT NULL,
         status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+    await client.execute(`
+      CREATE TABLE namespace_handle_policies (
+        namespace_handle_policy_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        namespace_id TEXT NOT NULL,
+        policy_template TEXT NOT NULL,
+        pricing_model TEXT,
+        membership_required_for_claim INTEGER NOT NULL,
+        claims_enabled INTEGER NOT NULL,
+        settings_json TEXT,
+        created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
     `)
@@ -22,21 +59,19 @@ describe("supersedePromotedLocalMirror", () => {
     `)
     await client.execute(`
       INSERT INTO namespace_bindings VALUES
-        ('ns_cmt_1', 'cmt_1', 'nv_old', 'primary', 'active', 'old'),
-        ('ns_nv_new', 'cmt_1', 'nv_new', 'mirror', 'active', 'old')
+        ('ns_cmt_1', 'cmt_1', 'nv_old', 'dankmeme', 'dankmeme', NULL, NULL,
+          'primary', 'active', 'old', 'old'),
+        ('ns_nv_new', 'cmt_1', 'nv_new', 'dankmeme', 'dankmeme', NULL, NULL,
+          'mirror', 'active', 'old', 'old')
     `)
 
-    await supersedePromotedLocalMirror(client, {
+    await writeLocalNamespaceAttachment(client, {
       communityId: "cmt_1",
       namespaceVerificationId: "nv_new",
-      primaryNamespaceId: "ns_cmt_1",
-      updatedAt: "new",
+      namespaceRole: "primary",
+      namespaceLabel: "dankmeme",
+      now: "new",
     })
-    await client.execute(`
-      UPDATE namespace_bindings
-      SET namespace_verification_id = 'nv_new', updated_at = 'new'
-      WHERE namespace_id = 'ns_cmt_1'
-    `)
 
     const rows = await client.execute(`
       SELECT namespace_id, namespace_verification_id, namespace_role, status
