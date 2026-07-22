@@ -379,6 +379,21 @@ describe("runPostPublishFinalize integration", () => {
     })
   })
 
+  test("does not attempt Story registration for a derivative video with an upstream asset", async () => {
+    state.post = basePost({
+      post_type: "video",
+      rights_basis: "derivative",
+      upstream_asset_refs: ["asset_song_source"],
+    })
+
+    await expectFinalizeFailure({
+      code: "internal_error",
+      retryable: false,
+    })
+
+    expect(state.assetCalls).toBe(0)
+  })
+
   test("converges a published post before treating a retried finalize as complete", async () => {
     state.post = basePost({ status: "published" })
 
