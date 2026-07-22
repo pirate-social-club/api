@@ -15,6 +15,7 @@ export type HomeFeedProjectionRow = {
   downvote_count: number
   comment_count: number
   like_count: number
+  post_type?: "text" | "image" | "video" | "link" | "song" | "crosspost"
 }
 
 export type InternalHomeFeedCommunitySummary = HomeFeedCommunitySummary & {

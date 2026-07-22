@@ -149,6 +149,25 @@ feed.get("/home/public", async (c) => {
   return c.json(result, 200)
 })
 
+feed.get("/home/videos/public", async (c) => {
+  const result = await listHomeFeed({
+    env: c.env,
+    userId: null,
+    locale: c.req.query("locale") ?? null,
+    sort: c.req.query("sort") ?? null,
+    timeRange: c.req.query("time_range") ?? null,
+    cursor: c.req.query("cursor") ?? null,
+    contentKind: "video",
+    communityRepository: getCommunityRepository(c.env),
+    userRepository: null,
+    profileRepository: getProfileRepository(c.env),
+    waitUntil: getWaitUntil(c),
+  })
+  setPublicReadCacheHeaders(c)
+  setHomeFeedServerTiming(c, result)
+  return c.json(result, 200)
+})
+
 feed.use("*", authenticateOptional)
 
 feed.get("/home", async (c) => {
@@ -161,6 +180,29 @@ feed.get("/home", async (c) => {
     sort: c.req.query("sort") ?? null,
     timeRange: c.req.query("time_range") ?? null,
     cursor: c.req.query("cursor") ?? null,
+    communityRepository: getCommunityRepository(c.env),
+    userRepository: actor?.userId ? getUserRepository(c.env) : null,
+    profileRepository: getProfileRepository(c.env),
+    waitUntil: getWaitUntil(c),
+  })
+  if (!actor && !c.req.header("authorization")) {
+    setPublicReadCacheHeaders(c, { vary: ["Authorization"] })
+  }
+  setHomeFeedServerTiming(c, result)
+  return c.json(result, 200)
+})
+
+feed.get("/home/videos", async (c) => {
+  const actor = c.get("actor")
+  const result = await listHomeFeed({
+    env: c.env,
+    userId: actor?.userId ?? null,
+    locale: c.req.query("locale") ?? null,
+    studyTimezone: actor?.userId ? resolveStudyTimezone(c.req.raw.cf) : undefined,
+    sort: c.req.query("sort") ?? null,
+    timeRange: c.req.query("time_range") ?? null,
+    cursor: c.req.query("cursor") ?? null,
+    contentKind: "video",
     communityRepository: getCommunityRepository(c.env),
     userRepository: actor?.userId ? getUserRepository(c.env) : null,
     profileRepository: getProfileRepository(c.env),

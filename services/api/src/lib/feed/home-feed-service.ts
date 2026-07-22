@@ -143,6 +143,80 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
+    post_type: typeof (row as Record<string, unknown>).post_type === "string"
+      ? (row as Record<string, unknown>).post_type as HomeFeedProjectionRow["post_type"]
+      : undefined,
+  }
+}
+
+type VideoFeedCursor = { offset: number; rankedAt: number }
+
+export function parseVideoFeedCursor(cursor: string | null | undefined, now: number): VideoFeedCursor {
+  const match = /^v1:(\d+):(\d+)$/u.exec(cursor ?? "")
+  if (!match) return { offset: 0, rankedAt: now }
+  const rankedAt = Number(match[1])
+  const offset = Number(match[2])
+  if (!Number.isSafeInteger(rankedAt) || rankedAt <= 0 || !Number.isSafeInteger(offset) || offset < 0) {
+    return { offset: 0, rankedAt: now }
+  }
+  return { offset, rankedAt }
+}
+
+function videoFeedOrderSql(sort: HomeFeedSort, rankedAtPlaceholder: string): string {
+  const score = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
+  if (sort === "new") return "source_created_at DESC, source_post_id DESC"
+  if (sort === "top") {
+    return `CASE WHEN ${score} > 0 THEN 1 ELSE 0 END DESC, ${score} DESC, source_created_at DESC, source_post_id DESC`
+  }
+  return `((${score} + 1.0) / POW(MAX(0.0, (${rankedAtPlaceholder} - unixepoch(source_created_at) * 1000.0) / 3600000.0) + 2.0, 1.5)) DESC, source_created_at DESC, source_post_id DESC`
+}
+
+async function listVideoHomeFeedProjectionRows(input: {
+  communityIds: string[]
+  cursor?: string | null
+  env: Env
+  now: number
+  sort: HomeFeedSort
+  timeRange: HomeFeedTimeRange
+}): Promise<{ nextCursor: string | null; rows: HomeFeedProjectionRow[] }> {
+  const cursor = parseVideoFeedCursor(input.cursor, input.now)
+  const args: Array<string | number> = [...input.communityIds]
+  const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const cutoffMs = getTimeRangeCutoffMs(input.timeRange, cursor.rankedAt)
+  const filters = [
+    "projection_version = 1",
+    "status = 'published'",
+    "post_type = 'video'",
+    `community_id IN (${communityPlaceholders})`,
+  ]
+  if (cutoffMs != null) {
+    args.push(new Date(cutoffMs).toISOString())
+    filters.push(`source_created_at >= ?${args.length}`)
+  }
+  let rankedAtPlaceholder = "0"
+  if (input.sort === "best") {
+    args.push(cursor.rankedAt)
+    rankedAtPlaceholder = `?${args.length}`
+  }
+  args.push(26, cursor.offset)
+  const limitPlaceholder = `?${args.length - 1}`
+  const offsetPlaceholder = `?${args.length}`
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT community_id, source_post_id, source_created_at, visibility, post_type,
+             upvote_count, downvote_count, comment_count, like_count
+      FROM community_post_projections
+      WHERE ${filters.join("\n        AND ")}
+      ORDER BY ${videoFeedOrderSql(input.sort, rankedAtPlaceholder)}
+      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
+    `,
+    args,
+  })
+  const rows = result.rows.map((row) => toHomeFeedProjectionRow(row))
+  const hasMore = rows.length > 25
+  return {
+    rows: rows.slice(0, 25),
+    nextCursor: hasMore ? `v1:${cursor.rankedAt}:${cursor.offset + 25}` : null,
   }
 }
 
@@ -415,6 +489,7 @@ export async function listHomeFeed(input: {
   userRepository?: UserRepository | null
   profileRepository?: ProfileRepository | null
   waitUntil?: HomeFeedWaitUntil
+  contentKind?: "video" | null
 }): Promise<HomeFeedResponseWithTiming> {
   const requestStartedAt = performance.now()
   const phaseTimings: Record<string, number> = {}
@@ -493,17 +568,29 @@ export async function listHomeFeed(input: {
   phaseStartedAt = performance.now()
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
+  const timeRange = parseHomeFeedTimeRange(input.timeRange)
+  const videoPage = input.contentKind === "video"
+    ? await listVideoHomeFeedProjectionRows({
+        communityIds,
+        cursor: input.cursor,
+        env: input.env,
+        now,
+        sort,
+        timeRange,
+      })
+    : null
   const allRows = filterVisibleHomeFeedProjections(
-    await listHomeFeedProjectionRows({
+    videoPage?.rows ?? await listHomeFeedProjectionRows({
       env: input.env,
       communityIds,
     }),
     memberCommunityIdSet,
   )
 
-  const timeRange = parseHomeFeedTimeRange(input.timeRange)
   const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
-  const timeFilteredRows = cutoffMs != null
+  const timeFilteredRows = videoPage
+    ? allRows
+    : cutoffMs != null
     ? allRows.filter((row) => getProjectionCreatedAtMs(row) >= cutoffMs)
     : allRows
 
@@ -536,9 +623,9 @@ export async function listHomeFeed(input: {
 
   const sortedRows = sortHomeFeedProjectionRows(timeFilteredRows, sort, now)
 
-  const offset = parseOffsetCursor(input.cursor)
-  const pageRows = sortedRows.slice(offset, offset + 25)
-  const nextCursor = offset + 25 < sortedRows.length ? `o:${offset + 25}` : null
+  const offset = videoPage ? 0 : parseOffsetCursor(input.cursor)
+  const pageRows = videoPage ? allRows : sortedRows.slice(offset, offset + 25)
+  const nextCursor = videoPage?.nextCursor ?? (offset + 25 < sortedRows.length ? `o:${offset + 25}` : null)
   phaseTimings.projections_and_rank_ms = elapsedMs(phaseStartedAt)
 
   const rowsByCommunityId = new Map<string, HomeFeedProjectionRow[]>()
@@ -578,15 +665,18 @@ export async function listHomeFeed(input: {
   const orderedItems = pageRows
     .map((row) => itemByPostId[row.source_post_id])
     .filter((item): item is HomeFeedItem => Boolean(item))
+    .filter((item) => input.contentKind !== "video" || item.post.post.media_refs?.some((media) => Boolean(media.storage_ref?.trim())))
   phaseTimings.order_items_ms = elapsedMs(phaseStartedAt)
 
   phaseStartedAt = performance.now()
-  const topCommunities = await resolveTopCommunitiesIdentity({
-    env: input.env,
-    communityRepository: input.communityRepository,
-    summaries: sortCommunitySummariesByViews(communitiesWithPosts).slice(0, 6),
-    cachedIdentityByCommunityId: communityIdentityById,
-  })
+  const topCommunities = input.contentKind === "video"
+    ? []
+    : await resolveTopCommunitiesIdentity({
+        env: input.env,
+        communityRepository: input.communityRepository,
+        summaries: sortCommunitySummariesByViews(communitiesWithPosts).slice(0, 6),
+        cachedIdentityByCommunityId: communityIdentityById,
+      })
   phaseTimings.top_communities_ms = elapsedMs(phaseStartedAt)
   const totalMs = elapsedMs(requestStartedAt)
   if (totalMs >= HOME_FEED_TIMING_LOG_THRESHOLD_MS) {
