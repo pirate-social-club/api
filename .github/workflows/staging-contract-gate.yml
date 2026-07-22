@@ -49,7 +49,12 @@ jobs:
   required-contracts:
     name: Required staging API contracts
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 20
+    # Must exceed the sum of the step ceilings that can realistically run, and in
+    # particular must leave room after the multipart step's 20min ceiling for the
+    # Playwright report upload below. A job that hits THIS ceiling is killed
+    # outright and uploads nothing, which is the same diagnostic black hole the
+    # step ceiling used to create.
+    timeout-minutes: 45
     env:
       API_SHA: ${{ inputs.api_sha || github.sha }}
       AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
@@ -159,7 +164,16 @@ jobs:
         run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "follows a real staging community and persists after reload"
 
       - name: Verify direct multipart upload contract
-        timeout-minutes: 10
+        # MUST stay above the test's own timeout (currently 15min, set via
+        # testInfo.setTimeout in web's e2e/live-staging.live.spec.ts). When this
+        # ceiling is the lower of the two, the runner kills the step before
+        # Playwright can fail the test, so no trace, screenshot or error-context
+        # is ever written — every hang becomes undiagnosable. That inversion cost
+        # us a full investigation on 2026-07-22: the failing run produced a 214KB
+        # artifact containing only the fixture, against 11.1MB (trace + snapshot)
+        # from a run where the test failed on its own terms.
+        # The 5min margin covers teardown, trace assembly and artifact flush.
+        timeout-minutes: 20
         working-directory: web
         run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "uploads a public video through direct multipart in a real browser"
 
