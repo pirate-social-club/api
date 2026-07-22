@@ -156,6 +156,8 @@ async function createNamespacelessCommunity(input: {
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
@@ -191,6 +193,7 @@ async function createNamespacelessCommunity(input: {
       namespaceVerificationId: null,
       routeSlug: null,
       communityRepository: input.communityRepository,
+      allocationAttribution: input.allocationAttribution,
     })
     const localSnapshot = provisioned.localSnapshot
       ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
@@ -276,6 +279,8 @@ async function provisionNamespacedCommunity(input: {
   namespaceVerificationId: string
   namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const { env, body, auth, existingCommunity, namespaceVerificationId, namespaceVerification, communityRepository: repo } = input
   const routeSlug = namespaceRouteSlug(namespaceVerification)
@@ -330,6 +335,7 @@ async function provisionNamespacedCommunity(input: {
       namespaceVerificationId,
       routeSlug,
       communityRepository: repo,
+      allocationAttribution: input.allocationAttribution,
     })
     localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
     const databaseUrl = provisioned.binding.databaseUrl
@@ -406,6 +412,8 @@ export async function createCommunity(input: {
   userRepository: UserRepository
   verificationRepository: VerificationRepository
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const auth = await resolveCreateCommunityAuth(input)
   await assertGatePolicyContractsValid({
@@ -419,6 +427,7 @@ export async function createCommunity(input: {
       body: input.body,
       auth,
       communityRepository: input.communityRepository,
+      allocationAttribution: input.allocationAttribution,
     })
   }
 
@@ -461,6 +470,7 @@ export async function createCommunity(input: {
     namespaceVerificationId: auth.namespaceVerificationId,
     namespaceVerification,
     communityRepository: input.communityRepository,
+    allocationAttribution: input.allocationAttribution,
   })
 }
 

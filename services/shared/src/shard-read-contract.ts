@@ -82,6 +82,22 @@ export type ShardBindRequest = {
   communityId: string
   /** ISO timestamp; recorded as allocated_at on the pool row. */
   now: string
+  /**
+   * DIAGNOSTIC-ONLY attribution: who is consuming pool capacity. Recorded on the
+   * pool row when this call actually allocates; ignored on the idempotent path
+   * (the original allocator keeps the credit).
+   *
+   * Optional by design. The pool drains monotonically and has exhausted staging
+   * mid-release, but allocation counts alone cannot be apportioned across the ten
+   * or so consumers that provision communities, so there is no evidence-based way
+   * to pick one to fix. These fields supply that evidence.
+   *
+   * NOTHING may branch on them: allocation must never fail, or behave
+   * differently, because attribution is absent or wrong.
+   */
+  source?: string | null
+  /** DIAGNOSTIC-ONLY: CI run / invocation id, to group allocations by run. */
+  runId?: string | null
 }
 
 export type ShardBindResponse = {

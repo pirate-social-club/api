@@ -354,6 +354,26 @@ export async function runShardWrite(
 const MAX_BIND_ATTEMPTS = 5
 
 /**
+ * Upper bound on a stored attribution value. These strings come from a caller-
+ * supplied request header, so they are untrusted input on a hot provisioning
+ * path; cap them so a pathological header cannot bloat pool rows.
+ */
+const MAX_ATTRIBUTION_LENGTH = 200
+
+/**
+ * Attribution is DIAGNOSTIC and must never be able to fail an allocation, so this
+ * never throws: anything missing, blank, or non-string becomes NULL, and anything
+ * over the cap is truncated rather than rejected. A wrong or absent label costs us
+ * one unattributed row; a rejected allocation costs a release.
+ */
+function normalizeAttribution(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, MAX_ATTRIBUTION_LENGTH)
+}
+
+/**
  * Detect a UNIQUE(community_id) violation on d1_pool.community_id. libsql
  * exposes this as a LibsqlError with rawCode "SQLITE_CONSTRAINT_UNIQUE"
  * and a message containing "UNIQUE constraint failed". We check both to
@@ -444,15 +464,29 @@ export async function runShardBind(
     }
 
     try {
+      // Attribution is written in the SAME optimistic-locked UPDATE as the claim,
+      // not a follow-up statement: a second write could fail or race and leave a
+      // binding allocated but unattributed, which is precisely the blind spot
+      // these columns exist to remove. Diagnostic only — never read for control
+      // flow, and absent/oversized values degrade to NULL rather than failing an
+      // allocation.
       const updateResult = await pool
         .prepare(
           "UPDATE d1_pool SET " +
             "community_id = ?2, allocated_at = ?3, " +
             "released_at = NULL, last_loaded_at = NULL, last_error = NULL, " +
+            "allocation_source = ?5, allocation_run_id = ?6, " +
             "version = version + 1 " +
             "WHERE binding_name = ?1 AND version = ?4",
         )
-        .bind(freeBinding, input.communityId, input.now, freeVersion)
+        .bind(
+          freeBinding,
+          input.communityId,
+          input.now,
+          freeVersion,
+          normalizeAttribution(input.source),
+          normalizeAttribution(input.runId),
+        )
         .run()
 
       if (updateResult.meta?.changes && updateResult.meta.changes > 0) {

@@ -78,6 +78,8 @@ type FakePoolRow = {
   last_error: string | null
   released_at: string | null
   version: number
+  allocation_source?: string | null
+  allocation_run_id?: string | null
 }
 
 /**
@@ -160,12 +162,8 @@ function fakePoolD1(
           return { success: true, meta: { changes: 1, last_row_id: rows.length } }
         }
         if (/UPDATE d1_pool SET\s+community_id = \?2/.test(sql)) {
-          const [binding_name, community_id, allocated_at, version] = s._args as [
-            string,
-            string,
-            string,
-            number,
-          ]
+          const [binding_name, community_id, allocated_at, version, allocation_source, allocation_run_id] =
+            s._args as [string, string, string, number, string | null, string | null]
           if (opts.simulateUniqueCommunityIdViolation) {
             opts.simulateUniqueCommunityIdViolation = false
             const winnerRow = rows.find((r) => r.binding_name === binding_name)
@@ -190,6 +188,8 @@ function fakePoolD1(
           }
           row.community_id = community_id
           row.allocated_at = allocated_at
+          row.allocation_source = allocation_source ?? null
+          row.allocation_run_id = allocation_run_id ?? null
           row.released_at = null
           row.last_loaded_at = null
           row.last_error = null
@@ -570,6 +570,87 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
     expect(claimed?.community_id).toBe("cmt_new")
     expect(claimed?.allocated_at).toBe(NOW)
+  })
+
+  test("records allocation attribution on the claimed row", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "web-e2e:gate-builder",
+      runId: "run-12345",
+    })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source).toBe("web-e2e:gate-builder")
+    expect(claimed?.allocation_run_id).toBe("run-12345")
+  })
+
+  // Attribution is diagnostic; an allocation must never fail or change shape
+  // because a caller omitted it. Untagged callers simply produce NULL.
+  test("allocates normally with attribution absent, blank, or non-string", async () => {
+    for (const attribution of [
+      {},
+      { source: "   ", runId: "" },
+      { source: null, runId: undefined },
+      { source: 42 as unknown as string },
+    ]) {
+      const pool = fakePoolD1([
+        { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+      ])
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, ...attribution })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+      const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+      expect(claimed?.allocation_source ?? null).toBeNull()
+      expect(claimed?.allocation_run_id ?? null).toBeNull()
+    }
+  })
+
+  // The source string is caller-supplied (a request header) on a hot provisioning
+  // path, so it is capped rather than trusted.
+  test("truncates an oversized attribution value instead of rejecting the allocation", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "x".repeat(5_000) })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source?.length).toBe(200)
+  })
+
+  // The idempotent path must not rewrite attribution: the ORIGINAL allocator is
+  // the consumer that spent the capacity, and a later retry by someone else must
+  // not steal the credit -- that would corrupt the very ranking this exists for.
+  test("does not overwrite attribution on the idempotent (already-allocated) path", async () => {
+    const pool = fakePoolD1([
+      {
+        binding_name: "DB_CMTY_NEW",
+        community_id: "cmt_new",
+        allocated_at: NOW,
+        last_error: null,
+        released_at: null,
+        last_loaded_at: null,
+        version: 1,
+        allocation_source: "original-consumer",
+        allocation_run_id: "run-original",
+      },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "different-consumer",
+      runId: "run-different",
+    })
+    expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false } })
+    const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+    expect(row?.allocation_source).toBe("original-consumer")
+    expect(row?.allocation_run_id).toBe("run-original")
   })
 
   test("§8.3 — idempotency: second call returns the same binding with allocated: false", async () => {
