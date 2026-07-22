@@ -6,6 +6,7 @@ on:
       - ".github/workflows/api-ci.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
+      - ".github/ci-refs/web.sha"
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/api-ci.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
+      - ".github/ci-refs/web.sha"
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
@@ -51,6 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       core_sha: ${{ steps.core-ref.outputs.sha }}
+      web_sha: ${{ steps.web-ref.outputs.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -78,6 +81,20 @@ jobs:
             else
               echo "- Core source: committed .github/ci-refs/core.sha"
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve Web commit
+        id: web-ref
+        shell: bash
+        run: |
+          pinned_web_sha="$(< .github/ci-refs/web.sha)"
+          if [[ ! "$pinned_web_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Web CI reference must be one full lowercase commit SHA"
+            exit 1
+          fi
+          echo "sha=$pinned_web_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "- Web: \`${pinned_web_sha}\` (committed .github/ci-refs/web.sha)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   community-d1-shard:
@@ -183,7 +200,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
+          ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
       - name: Link cross-repo file deps
@@ -277,7 +294,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
+          ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
@@ -480,7 +497,8 @@ jobs:
         # PINNED to a SHA, not a mutable branch, so web drift cannot cause a
         # time-dependent failure with no change in this repo.
         #
-        # b449f8b2 is web main (#569, "resume the STT sequence across provider restarts").
+        # The SHA lives in .github/ci-refs/web.sha (single source of truth, mirroring
+        # core.sha) and is resolved once by the ci-inputs job. Bump it there.
         #
         # The api karaoke tests REQUIRE a web ref carrying the `initialSequence` field on
         # KaraokeStreamingSttAdapter.start(). Against the previous pin (ecda035d) they fail:
@@ -495,7 +513,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
+          ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
@@ -613,7 +631,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
+          ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
