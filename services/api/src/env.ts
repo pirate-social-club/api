@@ -5,6 +5,7 @@ import type { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settl
 
 /** RPC surface of the `CachedPublicReads` entrypoint, reached via self-binding. */
 export type PublicReadCacheRpc = {
+  fetch?(request: Request): Promise<Response>
   purgeCacheTags(tags: string[]): Promise<{ success: boolean; errors?: unknown }>
 }
 
@@ -47,6 +48,8 @@ export type Env = {
    * dispatched into that entrypoint rather than run inline.
    */
   PUBLIC_READ_CACHE?: PublicReadCacheRpc
+  PUBLIC_READ_CACHE_CANARY_ENABLED?: string
+  PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES?: string
 
   // Analytics
   ANALYTICS_ENABLED?: string

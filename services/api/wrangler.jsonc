@@ -459,6 +459,8 @@
       ],
       "vars": {
         "ENVIRONMENT": "staging",
+        "PUBLIC_READ_CACHE_CANARY_ENABLED": "true",
+        "PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES": "15",
         "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
         "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
         "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
@@ -690,6 +692,8 @@
       ],
       "vars": {
         "ENVIRONMENT": "production",
+        "PUBLIC_READ_CACHE_CANARY_ENABLED": "true",
+        "PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES": "15",
         "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
         "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
         "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
