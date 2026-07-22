@@ -10,6 +10,7 @@ import {
   sortCommunitySummaries,
   sortHomeFeedProjectionRows,
   parseVideoFeedCursor,
+  videoFeedOrderSql,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
 
@@ -26,6 +27,15 @@ describe("parseVideoFeedCursor", () => {
       offset: 0,
       rankedAt: 1753182999999,
     })
+  })
+})
+
+describe("videoFeedOrderSql", () => {
+  test("keeps best ranking in D1 core SQLite functions", () => {
+    const orderBy = videoFeedOrderSql("best", "?1")
+
+    expect(orderBy).toContain("unixepoch(source_created_at)")
+    expect(orderBy).not.toMatch(/\bpow(?:er)?\s*\(/iu)
   })
 })
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
