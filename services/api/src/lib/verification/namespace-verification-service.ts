@@ -402,15 +402,16 @@ export async function completeNamespaceVerificationSession(
       try {
         // Provision the child zone AND publish the session nonce in one write —
         // a bare ensure-zone would leave the health check nothing to read back.
+        // Do not reuse row.challenge_host here: owner-managed HNS roots prove
+        // ownership at the apex, while the provisioned child-zone health nonce
+        // always lives at _pirate.<root>.
         authorityProvisioningEvidence = await publishHnsChallenge(env, {
           rootLabel: requireNormalizedRootLabel(row),
-          challengeHost: row.challenge_host,
           challengeTxtValue: row.challenge_txt_value ?? "",
         })
         try {
           const health = await checkHnsAuthorityHealth(env, {
             rootLabel: requireNormalizedRootLabel(row),
-            challengeHost: row.challenge_host,
           })
           authorityHealthEvidence = health
           // A serving-path result is REQUIRED: challenge_served === null means

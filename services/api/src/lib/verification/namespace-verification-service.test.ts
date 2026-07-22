@@ -137,4 +137,93 @@ describe("completeNamespaceVerificationSession", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  test("uses the child-zone _pirate name for authority health after an apex ownership challenge", async () => {
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ url: string; body: Record<string, unknown> | null }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = typeof init?.body === "string"
+        ? JSON.parse(init.body) as Record<string, unknown>
+        : null
+      requests.push({ url, body })
+
+      if (url.endsWith("/verify-txt-public")) {
+        return Response.json({
+          verified: true,
+          observation_provider: "hns_parent_chain",
+          ownership_source: "hns_parent_chain_txt",
+          failure_reason: null,
+          observed_values: ["pirate-verification=nvs_test"],
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
+          routing_enabled: true,
+          pirate_dns_authority_verified: true,
+          control_class: "single_holder_root",
+          operation_class: "pirate_delegated_namespace",
+        })
+      }
+
+      if (url.endsWith("/publish-txt")) {
+        return Response.json({
+          root_label: "dankmeme",
+          zone_name: "dankmeme.",
+          challenge_name: "_pirate.dankmeme.",
+          challenge_txt_value: "pirate-verification=nvs_test",
+          zone_created: false,
+          nameservers: ["ns1.pirate."],
+          observation_provider: "powerdns_sqlite",
+          rrsets: [],
+        })
+      }
+
+      if (url.includes("/authority-health")) {
+        return Response.json({
+          root_label: "dankmeme",
+          zone_name: "dankmeme.",
+          challenge_name: "_pirate.dankmeme.",
+          zone_provisioned: true,
+          challenge_present: true,
+          challenge_served: true,
+          nameservers: ["ns1.pirate."],
+          observation_provider: "powerdns_sqlite",
+        })
+      }
+
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as never
+
+    try {
+      const client = new HnsCompleteClient(makeHnsChallengeRow({
+        submitted_root_label: "dankmeme",
+        normalized_root_label: "dankmeme",
+        challenge_host: "dankmeme",
+      }))
+
+      await expect(completeNamespaceVerificationSession(client, {
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "test-token",
+      } as never, {
+        namespaceVerificationSessionId: "nvs_test",
+        userId: "usr_test",
+      })).rejects.toThrow("batch should not run without an HNS verifier")
+
+      expect(requests[1]).toEqual({
+        url: "https://verifier.pirate.sc/hns/publish-txt",
+        body: {
+          root_label: "dankmeme",
+          challenge_host: null,
+          challenge_txt_value: "pirate-verification=nvs_test",
+        },
+      })
+      expect(requests[2]).toEqual({
+        url: "https://verifier.pirate.sc/hns/authority-health?root_label=dankmeme",
+        body: null,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
