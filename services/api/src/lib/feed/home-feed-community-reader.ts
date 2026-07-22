@@ -13,6 +13,7 @@ import {
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
+import { hydrateDerivativeSourcesForResponses } from "../posts/upstream-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
@@ -74,6 +75,7 @@ export type HomeFeedCommunityTiming = {
   snapshots_ms: number
   votes_ms: number
   localize_ms: number
+  derivatives_ms: number
   enqueue_ms: number
 }
 
@@ -85,6 +87,15 @@ export type HomeFeedCommunityReadResult = {
 
 function elapsedMs(startedAt: number): number {
   return Math.round(performance.now() - startedAt)
+}
+
+export function homeFeedVideoDerivativeResponses(
+  responses: LocalizedPostResponse[],
+): LocalizedPostResponse[] {
+  return responses.filter((response) =>
+    response.post.post_type === "video"
+    && (response.post.upstream_asset_refs?.length ?? 0) > 0
+  )
 }
 
 function placeholders(count: number): string {
@@ -378,6 +389,7 @@ export async function readHomeFeedCommunityItems(input: {
         snapshots_ms: 0,
         votes_ms: 0,
         localize_ms: 0,
+        derivatives_ms: 0,
         enqueue_ms: 0,
       },
     }
@@ -476,6 +488,18 @@ export async function readHomeFeedCommunityItems(input: {
       studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
+    const derivativeResponses = homeFeedVideoDerivativeResponses(postReadJobs.map((job) => job.response))
+    const derivativesStartedAt = performance.now()
+    if (derivativeResponses.length > 0) {
+      await hydrateDerivativeSourcesForResponses({
+        client: db.client,
+        communityId: input.communityId,
+        env: input.env,
+        responses: derivativeResponses,
+        profileRepository: input.profileRepository,
+      })
+    }
+    const derivativesMs = elapsedMs(derivativesStartedAt)
     if (communitySummary) {
       const serializedCommunitySummary = serializeHomeFeedCommunitySummary(communitySummary)
       for (const job of postReadJobs) {
@@ -512,6 +536,7 @@ export async function readHomeFeedCommunityItems(input: {
         snapshots_ms: snapshotsMs,
         votes_ms: votesMs,
         localize_ms: localizeMs,
+        derivatives_ms: derivativesMs,
         enqueue_ms: enqueueMs,
       },
     }
