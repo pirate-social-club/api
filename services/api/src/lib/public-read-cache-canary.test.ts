@@ -42,7 +42,7 @@ describe("public read cache canary", () => {
   test("proves a warmed entry changes after the purge", async () => {
     await expect(runPublicReadCacheCanary({
       PUBLIC_READ_CACHE: fakeEntrypoint(),
-    } as Env)).resolves.toEqual({ warmed: true, evicted: true, propagation_ms: 0 })
+    } as Env, { now: () => 1_000 })).resolves.toEqual({ warmed: true, evicted: true, propagation_ms: 0 })
   })
 
   test("allows bounded cache purge propagation delay", async () => {
