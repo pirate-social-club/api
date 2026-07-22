@@ -39,7 +39,14 @@ export async function attachNamespaceToCommunity(
     })
     const bindingCommunityId = activeBinding.rows[0]?.community_id
     const bindingRole = activeBinding.rows[0]?.namespace_role
-    if (bindingCommunityId) {
+    // A recovery that rebuilds a namespace mints a new verification id. If the
+    // caller already attached that fresh verification as a mirror, promoting it
+    // is the repair, not a conflicting re-attach.
+    const promotingExistingMirror = bindingCommunityId === input.communityId
+      && bindingRole === "mirror"
+      && input.namespaceRole === "primary"
+      && Boolean(input.replacesNamespaceVerificationId)
+    if (bindingCommunityId && !promotingExistingMirror) {
       if (bindingCommunityId === input.communityId && bindingRole === input.namespaceRole) {
         await tx.rollback()
         return existing
@@ -98,26 +105,48 @@ export async function attachNamespaceToCommunity(
       ],
     })
 
-    await tx.execute({
-      sql: `
-        INSERT INTO community_namespace_bindings (
-          community_namespace_binding_id,
-          community_id,
-          namespace_verification_id,
-          namespace_role,
-          status,
-          created_at,
-          updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
-      `,
-      args: [
-        input.communityNamespaceBindingId,
-        input.communityId,
-        input.namespaceVerificationId,
-        input.namespaceRole,
-        input.updatedAt,
-      ],
-    })
+    if (promotingExistingMirror) {
+      const promoted = await tx.execute({
+        sql: `
+          UPDATE community_namespace_bindings
+          SET namespace_role = 'primary',
+              updated_at = ?3
+          WHERE community_id = ?1
+            AND namespace_verification_id = ?2
+            AND namespace_role = 'mirror'
+            AND status = 'active'
+        `,
+        args: [
+          input.communityId,
+          input.namespaceVerificationId,
+          input.updatedAt,
+        ],
+      })
+      if ((promoted.rowsAffected ?? 0) !== 1) {
+        throw conflictError("Mirror namespace binding changed before promotion completed")
+      }
+    } else {
+      await tx.execute({
+        sql: `
+          INSERT INTO community_namespace_bindings (
+            community_namespace_binding_id,
+            community_id,
+            namespace_verification_id,
+            namespace_role,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
+        `,
+        args: [
+          input.communityNamespaceBindingId,
+          input.communityId,
+          input.namespaceVerificationId,
+          input.namespaceRole,
+          input.updatedAt,
+        ],
+      })
+    }
 
     const updated = await getCommunityRowById(tx, input.communityId)
     if (!updated) {

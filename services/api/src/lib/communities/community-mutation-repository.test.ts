@@ -93,6 +93,151 @@ describe("attachNamespaceToCommunity", () => {
     client.close()
   })
 
+  test("promotes an already-attached mirror during recovery", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_promote", "active")
+    await client.execute(`
+      UPDATE communities
+      SET namespace_verification_id = 'nv_old', route_slug = 'dankmeme'
+      WHERE community_id = 'cmt_promote'
+    `)
+    await client.execute(`
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES
+        ('cnb_old', 'cmt_promote', 'nv_old', 'primary', 'active',
+          '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z'),
+        ('cnb_mirror', 'cmt_promote', 'nv_new', 'mirror', 'active',
+          '2026-06-22T00:30:00.000Z', '2026-06-22T00:30:00.000Z')
+    `)
+
+    const updated = await attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_unused",
+      communityId: "cmt_promote",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      replacesNamespaceVerificationId: "nv_old",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    })
+
+    expect(updated.namespace_verification_id).toBe("nv_new")
+    expect(updated.route_slug).toBe("dankmeme")
+    const bindings = await client.execute({
+      sql: `
+        SELECT community_namespace_binding_id, namespace_verification_id, namespace_role, status
+        FROM community_namespace_bindings
+        ORDER BY created_at
+      `,
+      args: [],
+    })
+    // The mirror row is promoted in place — no duplicate binding is minted.
+    expect(bindings.rows).toEqual([
+      expect.objectContaining({
+        community_namespace_binding_id: "cnb_old",
+        namespace_role: "primary",
+        status: "superseded",
+      }),
+      expect.objectContaining({
+        community_namespace_binding_id: "cnb_mirror",
+        namespace_verification_id: "nv_new",
+        namespace_role: "primary",
+        status: "active",
+      }),
+    ])
+    client.close()
+  })
+
+  test("promoting a mirror is idempotent once it is already primary", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_idem", "active")
+    await client.execute(`
+      UPDATE communities
+      SET namespace_verification_id = 'nv_new', route_slug = 'dankmeme'
+      WHERE community_id = 'cmt_idem'
+    `)
+    await client.execute(`
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES ('cnb_new', 'cmt_idem', 'nv_new', 'primary', 'active',
+        '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
+    `)
+
+    const updated = await attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_retry",
+      communityId: "cmt_idem",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      replacesNamespaceVerificationId: "nv_old",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T02:00:00.000Z",
+    })
+
+    expect(updated.namespace_verification_id).toBe("nv_new")
+    const bindings = await client.execute({
+      sql: `SELECT community_namespace_binding_id FROM community_namespace_bindings`,
+      args: [],
+    })
+    expect(bindings.rows).toHaveLength(1)
+    client.close()
+  })
+
+  test("refuses to promote a mirror belonging to another community", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_owner", "active")
+    await insertCommunity(client, "cmt_thief", "active")
+    await client.execute(`
+      UPDATE communities SET namespace_verification_id = 'nv_old' WHERE community_id = 'cmt_thief'
+    `)
+    await client.execute(`
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES ('cnb_owned', 'cmt_owner', 'nv_new', 'mirror', 'active',
+        '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
+    `)
+
+    await expect(attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_new",
+      communityId: "cmt_thief",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      replacesNamespaceVerificationId: "nv_old",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    })).rejects.toThrow("already attached with a different community or role")
+    client.close()
+  })
+
+  test("refuses to promote a mirror without a recovery target", async () => {
+    const client = await setupControl()
+    await insertCommunity(client, "cmt_no_target", "active")
+    await client.execute(`
+      UPDATE communities SET namespace_verification_id = 'nv_old' WHERE community_id = 'cmt_no_target'
+    `)
+    await client.execute(`
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES ('cnb_mirror', 'cmt_no_target', 'nv_new', 'mirror', 'active',
+        '2026-06-22T00:00:00.000Z', '2026-06-22T00:00:00.000Z')
+    `)
+
+    // No replacesNamespaceVerificationId: this is an ordinary re-attach, which
+    // must stay a conflict rather than silently seizing the primary slot.
+    await expect(attachNamespaceToCommunity(client, {
+      communityNamespaceBindingId: "cnb_new",
+      communityId: "cmt_no_target",
+      namespaceVerificationId: "nv_new",
+      namespaceRole: "primary",
+      routeSlug: "dankmeme",
+      updatedAt: "2026-06-22T01:00:00.000Z",
+    })).rejects.toThrow("already attached with a different community or role")
+    client.close()
+  })
+
   test("refuses recovery when the primary changed concurrently", async () => {
     const client = await setupControl()
     await insertCommunity(client, "cmt_race", "active")
