@@ -2760,6 +2760,7 @@ export type RewardsCashoutSummary = {
   eligible: boolean;
   min_cents: number;
   verification_state: RewardVerificationState;
+  verification_provider: "self" | "very" | null;
 };
 
 export type RewardsSummaryResponse = {
@@ -2767,6 +2768,7 @@ export type RewardsSummaryResponse = {
   balance_cents: number;
   today_earned_cents: number;
   recent_events: Array<RewardEventSummary>;
+  pending_verification: RewardPendingVerificationSummary;
   cashout: RewardsCashoutSummary;
   latest_in_flight_cashout: RewardPayoutSummary | null;
 };
@@ -4060,6 +4062,12 @@ type ResolvedBookingSlot = {
   endUtc: string;
   priceCents: number;
   available: boolean;
+};
+
+type RewardPendingVerificationSummary = {
+  count: number;
+  conditional_cents: number;
+  earliest_expires_at: number | null;
 };
 
 type RootPostQuotaByTrustTier = {

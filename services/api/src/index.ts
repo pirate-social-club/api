@@ -862,6 +862,8 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
     if (summary.enabled && (
       summary.ingested_qualifications > 0
       || summary.credited_events > 0
+      || summary.pending_verification > 0
+      || summary.expired_pending > 0
       || summary.skipped_budget > 0
       || summary.skipped_expired > 0
       || summary.skipped_owner_blocked > 0

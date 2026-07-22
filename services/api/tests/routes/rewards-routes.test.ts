@@ -1208,7 +1208,7 @@ describe("rewards routes", () => {
       balance_cents: number
       today_earned_cents: number
       recent_events: Array<{ id: string; amount_cents: number; reward_kind: string }>
-      cashout: { eligible: boolean; min_cents: number; verification_state: string }
+      cashout: { eligible: boolean; min_cents: number; verification_state: string; verification_provider: string }
     }
     expect(unverifiedBody.balance_cents).toBe(80)
     expect(unverifiedBody.today_earned_cents).toBe(30)
@@ -1217,6 +1217,7 @@ describe("rewards routes", () => {
       eligible: false,
       min_cents: 100,
       verification_state: "unverified",
+      verification_provider: "self",
     })
 
     await addNullifier(ctx, session.userId, now)
@@ -1252,7 +1253,7 @@ describe("rewards routes", () => {
     expect(verified.status).toBe(200)
     const verifiedBody = await json(verified) as {
       balance_cents: number
-      cashout: { eligible: boolean; min_cents: number; verification_state: string }
+      cashout: { eligible: boolean; min_cents: number; verification_state: string; verification_provider: string }
       latest_in_flight_cashout: { id: string; amount_cents: number; status: string } | null
     }
     expect(verifiedBody.balance_cents).toBe(90)
@@ -1260,6 +1261,7 @@ describe("rewards routes", () => {
       eligible: false,
       min_cents: 100,
       verification_state: "verified",
+      verification_provider: "self",
     })
     expect(verifiedBody.latest_in_flight_cashout).toMatchObject({
       id: "rpe_route_pending",
@@ -1318,10 +1320,16 @@ describe("rewards routes", () => {
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
+      pending_verification: {
+        count: 0,
+        conditional_cents: 0,
+        earliest_expires_at: null,
+      },
       cashout: {
         eligible: false,
         min_cents: 100,
         verification_state: "unverified",
+        verification_provider: null,
       },
       latest_in_flight_cashout: null,
     })

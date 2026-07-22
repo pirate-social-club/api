@@ -81,11 +81,13 @@ export async function getRewardsSummaryForUser(input: {
   client?: Client
   activityDate?: string
   recentLimit?: number
+  now?: string
 }): Promise<RewardsSummaryResponse> {
   const client = input.client ?? getControlPlaneClient(input.env)
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
+  const verificationProvider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   assertRewardsCampaignAndSettlementChainsMatch(input.env)
   const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardReadsEnabled(input.env)) {
@@ -94,16 +96,22 @@ export async function getRewardsSummaryForUser(input: {
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
+      pending_verification: {
+        count: 0,
+        conditional_cents: 0,
+        earliest_expires_at: null,
+      },
       cashout: {
         eligible: false,
         min_cents: minCashoutCents,
         verification_state: "unverified",
+        verification_provider: verificationProvider,
       },
       latest_in_flight_cashout: null,
     }
   }
 
-  const [creditRow, payoutRow, todayRow, eventRows, latestInFlightRow, hasNullifier] = await Promise.all([
+  const [creditRow, payoutRow, todayRow, eventRows, pendingRow, latestInFlightRow, hasNullifier] = await Promise.all([
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS credit_cents
@@ -144,6 +152,18 @@ export async function getRewardsSummaryForUser(input: {
     }),
     executeFirst(client, {
       sql: `
+        SELECT COUNT(*) AS pending_count,
+          COALESCE(SUM(conditional_amount_cents), 0) AS conditional_cents,
+          MIN(expires_at) AS earliest_expires_at
+        FROM reward_pending_qualifications
+        WHERE user_id = ?1
+          AND status IN ('pending_verification', 'reconciling')
+          AND expires_at > ?2
+      `,
+      args: [input.userId, input.now ?? new Date().toISOString()],
+    }),
+    executeFirst(client, {
+      sql: `
         SELECT reward_payout_effect_id, amount_cents, recipient_address, status, settlement_ref, failure_reason
         FROM reward_payout_effects
         WHERE user_id = ?1 AND status = 'submitted'
@@ -152,13 +172,16 @@ export async function getRewardsSummaryForUser(input: {
       `,
       args: [input.userId],
     }),
-    hasActiveUniqueHumanNullifier(client, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)),
+    hasActiveUniqueHumanNullifier(client, input.userId, verificationProvider),
   ])
 
   const creditCents = numberOrNull(rowValue(creditRow, "credit_cents")) ?? 0
   const payoutCents = numberOrNull(rowValue(payoutRow, "payout_cents")) ?? 0
   const balanceCents = Math.max(0, creditCents - payoutCents)
   const todayEarnedCents = numberOrNull(rowValue(todayRow, "credited_cents")) ?? 0
+  const pendingCount = numberOrNull(rowValue(pendingRow, "pending_count")) ?? 0
+  const pendingConditionalCents = numberOrNull(rowValue(pendingRow, "conditional_cents")) ?? 0
+  const pendingExpiresAt = rowValue(pendingRow, "earliest_expires_at")
   const verificationState = resolveVerificationState(hasNullifier)
 
   return {
@@ -166,10 +189,16 @@ export async function getRewardsSummaryForUser(input: {
     balance_cents: balanceCents,
     today_earned_cents: todayEarnedCents,
     recent_events: eventRows.rows.map(serializeRewardEvent),
+    pending_verification: {
+      count: pendingCount,
+      conditional_cents: pendingConditionalCents,
+      earliest_expires_at: pendingExpiresAt == null ? null : unixSeconds(pendingExpiresAt),
+    },
     cashout: {
       eligible: balanceCents >= minCashoutCents && verificationState === "verified",
       min_cents: minCashoutCents,
       verification_state: verificationState,
+      verification_provider: verificationProvider,
     },
     latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow, chainId) : null,
   }
