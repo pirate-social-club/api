@@ -48,6 +48,41 @@ type CommunityJobProcessingSummary = {
   failed_communities: CommunityJobCommunityFailureSummary[]
 }
 
+export type ExhaustedCommunityJob = {
+  community_id: string
+  job_id: string
+  job_type: CommunityJobType
+  subject_id: string
+  error_code: string | null
+}
+
+/**
+ * Jobs that burned their last attempt in this tick.
+ *
+ * Exhaustion is the one community-job outcome nobody recovers from: no further
+ * retry is scheduled and the subject is abandoned in place. It was previously
+ * indistinguishable from ordinary retry noise, so batches of permanently dead
+ * jobs accumulated unnoticed (one prod shard held 28, including 13 songs whose
+ * Study content will never generate).
+ *
+ * Derived from the summary rather than alerted per-failure, so a tick raises at
+ * most one alert no matter how many jobs died in it.
+ */
+export function exhaustedCommunityJobs(
+  summary: Pick<CommunityJobProcessingSummary, "communities">,
+): ExhaustedCommunityJob[] {
+  return summary.communities.flatMap((community) =>
+    community.jobs
+      .filter((job) => job.status === "failed" && job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS)
+      .map((job) => ({
+        community_id: job.community_id,
+        job_id: job.job_id,
+        job_type: job.job_type,
+        subject_id: job.subject_id,
+        error_code: job.error_code,
+      })))
+}
+
 export class CommunityJobAttemptTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`community_job_attempt_timeout:${timeoutMs}`)
@@ -255,6 +290,27 @@ export function selectScheduledCommunityJobPollIds(
   return Array.from(selected)
 }
 
+/**
+ * Attempt duration and end-to-end queue wait.
+ *
+ * Completion timestamps alone cannot distinguish "the work is slow" from "the
+ * work waited a long time for a runner" — a distinction that mattered when song
+ * posts sat in `processing` for tens of minutes and nothing recorded which half
+ * was responsible. `attempt_duration_ms` measures execution; `queue_wait_ms`
+ * measures created_at → this attempt starting.
+ */
+function communityJobTimings(
+  job: Pick<CommunityJobRow, "created_at">,
+  startedAt: string,
+): { attempt_duration_ms: number; queue_wait_ms: number | null } {
+  const startedMs = Date.parse(startedAt)
+  const createdMs = Date.parse(job.created_at)
+  return {
+    attempt_duration_ms: Math.max(0, Date.now() - startedMs),
+    queue_wait_ms: Number.isFinite(createdMs) ? Math.max(0, startedMs - createdMs) : null,
+  }
+}
+
 export async function processCommunityJobById(input: {
   env: Env
   communityId: string
@@ -330,6 +386,7 @@ export async function processCommunityJobById(input: {
         community_id: running.community_id,
         ...summarizeReference("subject_id", running.subject_id),
         attempt_count: running.attempt_count,
+        ...communityJobTimings(running, startedAt),
         ...summarizeReference("result_ref", resultRef),
       })
       if (resultRef?.startsWith("failed:")) {
@@ -356,6 +413,7 @@ export async function processCommunityJobById(input: {
       }
       const failedAt = nowIso()
       return await recordCommunityJobFailure({
+        timings: communityJobTimings(running, startedAt),
         client: db.client,
         env: input.env,
         job: running,

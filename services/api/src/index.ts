@@ -45,7 +45,7 @@ import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/co
 import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabled, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
-import { processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
+import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
@@ -574,6 +574,24 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         })),
       }))
     }
+    // Jobs that burned their final attempt this tick are abandoned permanently —
+    // no retry follows and the subject silently stays unfinished. Aggregated to
+    // one alert per tick so ordinary retry churn stays quiet.
+    const exhausted = exhaustedCommunityJobs(summary)
+    if (exhausted.length > 0) {
+      console.error("[community-jobs] jobs exhausted all attempts", JSON.stringify({ exhausted }))
+      await captureScheduledWarning(
+        env,
+        "Community jobs exhausted all retry attempts and were abandoned",
+        "community_jobs_attempt_exhaustion",
+        {
+          exhausted_jobs: exhausted.length,
+          job_types: [...new Set(exhausted.map((job) => job.job_type))],
+          jobs: exhausted.slice(0, 20),
+        },
+        { urgency: exhausted.length > 5 ? "high" : "low" },
+      )
+    }
     await runOpsAlerts({ env, communityRepository, nowMs: Date.now() })
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
@@ -975,10 +993,18 @@ const SCHEDULED_JOB_CONCURRENCY = 2
 // and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
 const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // Protect the seven settlement/money-movement jobs at the front of the ordered
-// batch. They must receive a start even when D1 pressure pushes the batch past
-// its nominal deadline; monitoring and maintenance work may defer to a later
-// tick without stranding an on-chain transfer or credited obligation.
-const SCHEDULED_MINIMUM_PRIORITY_STARTS = 7
+// batch plus the community job drain. They must receive a start even when D1
+// pressure pushes the batch past its nominal deadline; monitoring work may defer
+// to a later tick without stranding an on-chain transfer or credited obligation.
+//
+// The drain earns protection because it is not maintenance: it is the retry
+// engine for EVERY community job, so deferring it strands user-visible content,
+// not just metrics. Measured on prod shard community-d1-pool-0073, only 21% of
+// first-attempt-success jobs were picked up within a minute of being enqueued;
+// 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
+// publish-finalize attempt fails backs off 30s and then waits on this job to get
+// a start, which is why "Preparing song features" could linger for half an hour.
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 8
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
@@ -1011,8 +1037,11 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
-    "monitor_reward_campaign_treasury_solvency",
+    // Inside the protected prefix (SCHEDULED_MINIMUM_PRIORITY_STARTS): the drain
+    // is the retry engine for every community job, so a deferred start delays
+    // user-visible publishing, lyrics, and translations — not just monitoring.
     "process_community_jobs",
+    "monitor_reward_campaign_treasury_solvency",
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
