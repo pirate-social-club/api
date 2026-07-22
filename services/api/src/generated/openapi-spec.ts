@@ -13629,6 +13629,39 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "lyrics_language": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "readOnly": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "lyrics_language_reliable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "lyrics_language_detector": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_source_hash": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
           "translation_policy": {
             "type": "string",
             "enum": [
