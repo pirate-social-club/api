@@ -162,13 +162,16 @@ export function parseVideoFeedCursor(cursor: string | null | undefined, now: num
   return { offset, rankedAt }
 }
 
-function videoFeedOrderSql(sort: HomeFeedSort, rankedAtPlaceholder: string): string {
+export function videoFeedOrderSql(sort: HomeFeedSort, rankedAtPlaceholder: string): string {
   const score = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
   if (sort === "new") return "source_created_at DESC, source_post_id DESC"
   if (sort === "top") {
     return `CASE WHEN ${score} > 0 THEN 1 ELSE 0 END DESC, ${score} DESC, source_created_at DESC, source_post_id DESC`
   }
-  return `((${score} + 1.0) / POW(MAX(0.0, (${rankedAtPlaceholder} - unixepoch(source_created_at) * 1000.0) / 3600000.0) + 2.0, 1.5)) DESC, source_created_at DESC, source_post_id DESC`
+  // D1 does not expose SQLite's optional math extension, so POW() causes the
+  // public `sort=best` endpoint to fail at query time. Keep the decay in SQL,
+  // but use only core SQLite date and scalar functions.
+  return `((${score} + 1.0) / (MAX(0.0, (${rankedAtPlaceholder} - unixepoch(source_created_at) * 1000.0) / 3600000.0) + 2.0)) DESC, source_created_at DESC, source_post_id DESC`
 }
 
 async function listVideoHomeFeedProjectionRows(input: {
