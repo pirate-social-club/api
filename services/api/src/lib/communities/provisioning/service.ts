@@ -43,6 +43,7 @@ import {
 import { assertGatePolicyContractsValid } from "../membership/gate-policy-contract-validation"
 import type { GatePolicy } from "../membership/gate-types"
 import { HttpError } from "../../errors"
+import { supersedePromotedLocalMirror } from "./namespace-local-repository"
 
 type CommunityProvisioningServiceRepository =
   & CommunityReadRepository
@@ -140,6 +141,19 @@ async function upsertLocalNamespaceAttachment(input: {
 
   try {
     await withTransaction(db.client, "write", async (tx) => {
+      // A recovered verification may already be attached locally as a mirror.
+      // Retire that row before moving the same verification onto the stable
+      // primary namespace id; otherwise the active-verification unique index
+      // rejects the primary upsert after the control-plane promotion committed.
+      if (input.namespaceRole === "primary") {
+        await supersedePromotedLocalMirror(tx, {
+          communityId: input.communityId,
+          namespaceVerificationId: input.namespaceVerificationId,
+          primaryNamespaceId: namespaceId,
+          updatedAt: input.now,
+        })
+      }
+
       await tx.execute({
         sql: `
           INSERT INTO namespace_bindings (
