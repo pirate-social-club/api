@@ -579,7 +579,12 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     // one alert per tick so ordinary retry churn stays quiet.
     const exhausted = exhaustedCommunityJobs(summary)
     if (exhausted.length > 0) {
-      console.error("[community-jobs] jobs exhausted all attempts", JSON.stringify({ exhausted }))
+      // Capped: a bad tick can exhaust jobs across many communities, and the
+      // console line should stay bounded. Messages are already redacted upstream.
+      console.error("[community-jobs] jobs exhausted all attempts", JSON.stringify({
+        exhausted_jobs: exhausted.length,
+        jobs: exhausted.slice(0, 20),
+      }))
       await captureScheduledWarning(
         env,
         "Community jobs exhausted all retry attempts and were abandoned",

@@ -37,8 +37,25 @@ describe("exhaustedCommunityJobs", () => {
       job_id: "cjb_dead",
       job_type: "song_study_generate",
       subject_id: "pst_1",
-      error_code: "Unsupported community job type: song_study_generate",
+      error: "Unsupported community job type: song_study_generate",
     }])
+  })
+
+  it("redacts and truncates the raw exception message before it reaches logs and the alert sink", () => {
+    // error_code is not a code: recordCommunityJobFailure stores the raw exception
+    // message, which carries provider response bodies verbatim.
+    const [entry] = exhaustedCommunityJobs(summaryOf([
+      job({
+        error_code: `OpenRouter request failed: https://openrouter.ai/api/v1/chat?key=sk-secret contact ops@pirate.sc ${"x".repeat(400)}`,
+      }),
+    ]))
+
+    expect(entry!.error).not.toContain("openrouter.ai")
+    expect(entry!.error).not.toContain("sk-secret")
+    expect(entry!.error).not.toContain("ops@pirate.sc")
+    expect(entry!.error).toContain("[url]")
+    expect(entry!.error).toContain("[email]")
+    expect(entry!.error!.length).toBeLessThanOrEqual(240)
   })
 
   it("ignores failures that still have retries left", () => {

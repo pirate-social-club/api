@@ -26,7 +26,11 @@ export async function recordCommunityJobFailure(input: {
   job: CommunityJobRow
   error: unknown
   failedAt: string
-  timings?: { attempt_duration_ms: number; queue_wait_ms: number | null }
+  timings?: {
+    attempt_duration_ms: number
+    pickup_latency_ms: number | null
+    job_age_at_attempt_start_ms: number | null
+  }
 }): Promise<CommunityJobRow | null> {
   const message = input.error instanceof Error ? input.error.message : String(input.error)
   // Attempt N has already been counted by markCommunityJobRunning, so this is the
