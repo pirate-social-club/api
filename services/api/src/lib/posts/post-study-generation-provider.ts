@@ -3,6 +3,7 @@ import {
   firstTrimmedEnv,
   parsePositiveIntegerEnv,
   requestOpenRouterChatCompletion,
+  DEFAULT_OPENROUTER_MODEL,
 } from "../openrouter-client"
 
 export type StudyGeneratedLine = {
@@ -31,7 +32,7 @@ type ParsedGeneratedLine = {
   distractors: string[]
 }
 
-const DEFAULT_STUDY_GENERATION_MODEL = "google/gemini-2.5-flash-lite-preview-09-2025"
+const DEFAULT_STUDY_GENERATION_MODEL = DEFAULT_OPENROUTER_MODEL
 const DEFAULT_STUDY_GENERATION_MAX_COMPLETION_TOKENS = 4_096
 const DEFAULT_STUDY_GENERATION_TIMEOUT_MS = 30_000
 

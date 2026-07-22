@@ -3,6 +3,7 @@ import {
   firstTrimmedEnv,
   parsePositiveIntegerEnv,
   requestOpenRouterChatCompletion,
+  DEFAULT_OPENROUTER_MODEL,
 } from "../../openrouter-client"
 import {
   cleanProviderText,
@@ -88,7 +89,7 @@ export async function requestLinkSummary(input: {
     input.env.OPENROUTER_LINK_SUMMARY_MODEL,
     input.env.OPENROUTER_MODEL,
   )
-    || "google/gemini-2.5-flash-lite-preview-09-2025"
+    || DEFAULT_OPENROUTER_MODEL
   const timeoutMs = parsePositiveIntegerEnv(firstTrimmedEnv(
     input.env.OPENROUTER_LINK_SUMMARY_TIMEOUT_MS,
     input.env.OPENROUTER_TIMEOUT_MS,
