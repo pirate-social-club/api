@@ -3,6 +3,11 @@ import type { RateLimiterBinding } from "./lib/rate-limit"
 import type { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
 import type { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settlement-wallet-coordinator-do"
 
+/** RPC surface of the `CachedPublicReads` entrypoint, reached via self-binding. */
+export type PublicReadCacheRpc = {
+  purgeCacheTags(tags: string[]): Promise<{ success: boolean; errors?: unknown }>
+}
+
 export type Env = {
   // Runtime
   BUILD_GIT_REF?: string
@@ -35,6 +40,13 @@ export type Env = {
   CLOUDFLARE_CACHE_PURGE_API_TOKEN?: string
   CLOUDFLARE_ZONE_ID?: string
   CLOUDFLARE_API_TOKEN?: string
+  /**
+   * Self-binding to this Worker's `CachedPublicReads` entrypoint. Zone-level
+   * purges do not reach Workers Caching, and a Workers cache purge only affects
+   * the entrypoint that issues it — so public-read invalidation has to be
+   * dispatched into that entrypoint rather than run inline.
+   */
+  PUBLIC_READ_CACHE?: PublicReadCacheRpc
 
   // Analytics
   ANALYTICS_ENABLED?: string

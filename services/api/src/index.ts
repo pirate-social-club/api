@@ -1151,6 +1151,32 @@ export class CachedPublicReads extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     return withRequestControlPlaneClients(async () => publicReadApp.fetch(request, this.env, this.ctx))
   }
+
+  /**
+   * Evicts cached public reads by `Cache-Tag`.
+   *
+   * Workers Caching is a distinct layer from the zone CDN cache: no zone-level
+   * purge reaches it, and a purge only affects the entrypoint that issues it.
+   * Public reads are cached here (see the `CachedPublicReads` export config in
+   * wrangler.jsonc), so this must run inside this class — calling
+   * `ctx.cache.purge()` from the default entrypoint would target that
+   * entrypoint's own (disabled) cache and silently do nothing.
+   */
+  async purgeCacheTags(tags: string[]): Promise<{ success: boolean; errors?: unknown }> {
+    const unique = [...new Set(tags)].filter((tag) => tag.length > 0)
+    if (unique.length === 0) {
+      return { success: true }
+    }
+    const cache = this.ctx.cache
+    if (!cache) {
+      // Report rather than swallow: without this layer the invalidation is a
+      // no-op and public reads stay stale until their own TTL expires, which is
+      // exactly the failure this method exists to prevent.
+      return { success: false, errors: [{ message: "Workers cache purge is unavailable on this runtime" }] }
+    }
+    const result = await cache.purge({ tags: unique })
+    return { success: result.success, errors: result.errors }
+  }
 }
 
 export { app }

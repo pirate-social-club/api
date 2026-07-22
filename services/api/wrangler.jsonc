@@ -431,6 +431,11 @@
       ],
       "services": [
         {
+          "binding": "PUBLIC_READ_CACHE",
+          "service": "pirate-api-staging",
+          "entrypoint": "CachedPublicReads"
+        },
+        {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
           "entrypoint": "CommunityD1Shard"
@@ -656,6 +661,11 @@
         }
       ],
       "services": [
+        {
+          "binding": "PUBLIC_READ_CACHE",
+          "service": "api-core",
+          "entrypoint": "CachedPublicReads"
+        },
         {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-prod",

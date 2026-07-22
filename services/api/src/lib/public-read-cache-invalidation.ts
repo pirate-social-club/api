@@ -56,13 +56,37 @@ function cloudflareCachePurgeConfig(env: Env): { zoneId: string; token: string }
   return { zoneId, token }
 }
 
-export async function purgePublicReadCacheTags(input: {
+/**
+ * Evicts the Workers Caching layer that fronts the `CachedPublicReads`
+ * entrypoint.
+ *
+ * This is NOT covered by the zone purge below: per Cloudflare, no zone-level
+ * purge affects Workers Caching content, and a Workers cache purge only applies
+ * to the entrypoint that issues it. Public reads are served from that
+ * entrypoint's cache, so without this call an invalidation is a silent no-op
+ * and stale threads survive until their own TTL expires.
+ */
+async function purgeWorkersCacheTags(input: {
+  env: Env
+  tags: string[]
+}): Promise<void> {
+  const entrypoint = input.env.PUBLIC_READ_CACHE
+  if (!entrypoint) {
+    return
+  }
+  const result = await entrypoint.purgeCacheTags(input.tags)
+  if (!result.success) {
+    throw new Error(`Workers cache purge did not report success: ${JSON.stringify(result.errors ?? null).slice(0, 500)}`)
+  }
+}
+
+async function purgeZoneCacheTags(input: {
   env: Env
   tags: string[]
   fetcher?: typeof fetch
 }): Promise<void> {
   const config = cloudflareCachePurgeConfig(input.env)
-  if (!config || input.tags.length === 0) {
+  if (!config) {
     return
   }
 
@@ -91,6 +115,31 @@ export async function purgePublicReadCacheTags(input: {
 
   if (!body || body.success !== true) {
     throw new Error(`Cloudflare cache purge did not report success${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
+  }
+}
+
+export async function purgePublicReadCacheTags(input: {
+  env: Env
+  tags: string[]
+  fetcher?: typeof fetch
+}): Promise<void> {
+  if (input.tags.length === 0) {
+    return
+  }
+
+  const results = await Promise.allSettled([
+    purgeWorkersCacheTags({ env: input.env, tags: input.tags }),
+    purgeZoneCacheTags({ env: input.env, tags: input.tags, fetcher: input.fetcher }),
+  ])
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason)
+
+  if (failures.length === 1) {
+    throw failures[0]
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Workers and zone cache purges both failed")
   }
 }
 

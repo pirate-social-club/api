@@ -80,6 +80,131 @@ describe("public read cache invalidation", () => {
     })
   })
 
+  // Regression: public reads are served from the Workers cache fronting the
+  // CachedPublicReads entrypoint. Zone-level purges do not reach that layer, so
+  // a comment write used to leave threads stale until their own TTL expired.
+  test("purges the Workers cache via the CachedPublicReads entrypoint", async () => {
+    const purged: string[][] = []
+    await purgePublicReadCacheTags({
+      env: {
+        CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags(tags: string[]) {
+            purged.push(tags)
+            return { success: true }
+          },
+        },
+      } satisfies Env,
+      tags: ["post:post_pst_1", "community:com_cmt_1"],
+      fetcher: (async () => new Response(JSON.stringify({ success: true }), { status: 200 })) as typeof fetch,
+    })
+
+    expect(purged).toEqual([["post:post_pst_1", "community:com_cmt_1"]])
+  })
+
+  test("purges the Workers cache even when zone purge config is absent", async () => {
+    const purged: string[][] = []
+    await purgePublicReadCacheTags({
+      env: {
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags(tags: string[]) {
+            purged.push(tags)
+            return { success: true }
+          },
+        },
+      } satisfies Env,
+      tags: ["post:post_pst_1"],
+      fetcher: (async () => new Response("{}")) as typeof fetch,
+    })
+
+    expect(purged).toEqual([["post:post_pst_1"]])
+  })
+
+  test("rejects Workers cache purge responses without success true", async () => {
+    await expect(purgePublicReadCacheTags({
+      env: {
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags() {
+            return { success: false, errors: [{ message: "nope" }] }
+          },
+        },
+      } satisfies Env,
+      tags: ["post:post_pst_1"],
+      fetcher: (async () => new Response("{}")) as typeof fetch,
+    })).rejects.toThrow(/Workers cache purge did not report success/)
+  })
+
+  test("still attempts the zone purge when the Workers purge fails", async () => {
+    const zoneCalls: string[] = []
+    await expect(purgePublicReadCacheTags({
+      env: {
+        CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags() {
+            return { success: false, errors: [{ message: "workers failed" }] }
+          },
+        },
+      } satisfies Env,
+      tags: ["post:post_pst_1"],
+      fetcher: (async (url) => {
+        zoneCalls.push(String(url))
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }) as typeof fetch,
+    })).rejects.toThrow(/Workers cache purge did not report success/)
+
+    expect(zoneCalls).toEqual(["https://api.cloudflare.com/client/v4/zones/zone_123/purge_cache"])
+  })
+
+  test("still attempts the Workers purge when the zone purge fails", async () => {
+    const workerTags: string[][] = []
+    await expect(purgePublicReadCacheTags({
+      env: {
+        CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags(tags: string[]) {
+            workerTags.push(tags)
+            return { success: true }
+          },
+        },
+      } satisfies Env,
+      tags: ["post:post_pst_1"],
+      fetcher: (async () => new Response(JSON.stringify({
+        success: false,
+        errors: [{ message: "zone failed" }],
+      }), { status: 200 })) as typeof fetch,
+    })).rejects.toThrow(/Cloudflare cache purge did not report success/)
+
+    expect(workerTags).toEqual([["post:post_pst_1"]])
+  })
+
+  test("skips both purges when there are no tags", async () => {
+    let entrypointCalled = false
+    let fetched = false
+    await purgePublicReadCacheTags({
+      env: {
+        CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
+        PUBLIC_READ_CACHE: {
+          async purgeCacheTags() {
+            entrypointCalled = true
+            return { success: true }
+          },
+        },
+      } satisfies Env,
+      tags: [],
+      fetcher: (async () => {
+        fetched = true
+        return new Response("{}")
+      }) as typeof fetch,
+    })
+
+    expect(entrypointCalled).toBe(false)
+    expect(fetched).toBe(false)
+  })
+
   test("rejects Cloudflare cache purge responses without success true", async () => {
     await expect(purgePublicReadCacheTags({
       env: {
