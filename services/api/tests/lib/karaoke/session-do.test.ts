@@ -834,7 +834,22 @@ describe("KaraokeSessionRuntimeDO", () => {
     });
     expect((await doA.fetch(initDoRequest())).status).toBe(200);
     await startAndScore(doA, adapterA);
-    expect(storedSnapshot(storage).lastSttSequence).toBe(1);
+
+    // Build a REALISTIC pre-eviction high-water mark. A watermark of 1 is not a
+    // valid guard: the fake's own increment clears it by luck, so the test passes
+    // even with the seeding reverted. Drive four more committed acks so the
+    // persisted counter reaches 5 and a reset to 0 is unambiguously fatal.
+    let clientSeq = 3;
+    for (const audioEndMs of [1300, 1500, 1700, 1900]) {
+      clientSeq += 1;
+      await doA.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq, audioEndMs));
+      clientSeq += 1;
+      await doA.fetch(clientEventRequest(clientSeq, "playback_sync", { audioTimeMs: audioEndMs, playing: true }));
+      await doA.drainCommitChainForTests();
+      await adapterA.ackCommit(HOLD_ON_WORDS);
+      await doA.drainCommitChainForTests();
+    }
+    expect(storedSnapshot(storage).lastSttSequence).toBe(5);
 
     // A fresh DO instance (eviction / runtime restart) with a BRAND-NEW adapter,
     // whose sequence counter therefore starts from whatever the host seeds it with.
@@ -846,21 +861,31 @@ describe("KaraokeSessionRuntimeDO", () => {
     });
 
     // Drive real post-restore scoring: audio → playback → committed final.
-    // Client sequences continue past the restored lastClientSequence of 3.
-    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(4, 2400));
-    await doB.fetch(clientEventRequest(5, "playback_sync", { audioTimeMs: 2400, playing: true }));
+    // Client sequences continue past the restored lastClientSequence.
+    const relayedBefore = sent.filter((event) => event.type === "stt_final").length;
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 1, 2400));
+    await doB.fetch(clientEventRequest(clientSeq + 2, "playback_sync", { audioTimeMs: 2400, playing: true }));
     await doB.drainCommitChainForTests();
     await adapterB.ackCommit(HOLD_ON_WORDS);
     await doB.drainCommitChainForTests();
 
-    // The restored stream resumed at 2 (persisted high-water mark was 1), so the
-    // final was accepted rather than refused. Before the initialSequence contract
-    // the fresh adapter emitted 1, which the host rejected without advancing —
-    // silently killing transcript and scoring for the rest of the attempt.
+    // The restored stream resumed at 6, one past the persisted watermark of 5, so
+    // the final was accepted rather than refused. With the counter reset to 0 the
+    // fresh adapter emits 1, which the host rejects WITHOUT advancing
+    // lastSttSequence — silently killing transcript and scoring for the rest of
+    // the attempt.
     const codes = sent.map((event) => (event as { code?: string }).code);
     expect(codes).not.toContain("non_monotonic_sequence");
-    expect(sent.some((event) => event.type === "stt_final")).toBe(true);
-    expect(storedSnapshot(storage).lastSttSequence).toBe(2);
+    expect(sent.filter((event) => event.type === "stt_final").length).toBe(relayedBefore + 1);
+    expect(storedSnapshot(storage).lastSttSequence).toBe(6);
+
+    // And it keeps flowing: the defect suppressed the whole tail, not one event.
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 3, 2600));
+    await doB.fetch(clientEventRequest(clientSeq + 4, "playback_sync", { audioTimeMs: 2600, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+    expect(storedSnapshot(storage).lastSttSequence).toBe(7);
   });
 
   test("persists snapshot and pending output before a failed broadcast, then replays it", async () => {
