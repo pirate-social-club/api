@@ -51,7 +51,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b89477b554004d7c3562f87056acb011442c40ef
+          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
           path: .cross-repo/web
 
       - name: Link cross-repo file deps

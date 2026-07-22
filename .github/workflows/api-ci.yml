@@ -183,7 +183,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b89477b554004d7c3562f87056acb011442c40ef
+          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
           path: .cross-repo/web
 
       - name: Link cross-repo file deps
@@ -277,7 +277,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b89477b554004d7c3562f87056acb011442c40ef
+          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
@@ -480,12 +480,7 @@ jobs:
         # PINNED to a SHA, not a mutable branch, so web drift cannot cause a
         # time-dependent failure with no change in this repo.
         #
-        # !!! INTERIM PIN — MUST BE RE-PINNED BEFORE THIS PR MERGES !!!
-        # b89477b5 is the HEAD of web PR #569 (fix/karaoke-stt-sequence-continuity), a
-        # feature branch. It is pinned here only so this PR's CI can verify the paired
-        # change. Once web #569 merges, re-pin all occurrences in this repo to the
-        # resulting web `main` SHA. Merging this PR against a feature-branch pin would
-        # leave CI depending on a ref that may be deleted.
+        # b449f8b2 is web main (#569, "resume the STT sequence across provider restarts").
         #
         # The api karaoke tests REQUIRE a web ref carrying the `initialSequence` field on
         # KaraokeStreamingSttAdapter.start(). Against the previous pin (ecda035d) they fail:
@@ -500,7 +495,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b89477b554004d7c3562f87056acb011442c40ef
+          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
@@ -618,7 +613,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: b89477b554004d7c3562f87056acb011442c40ef
+          ref: b449f8b2e2af9ad8a9e5e7e7e33650bb04f53f9e
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
