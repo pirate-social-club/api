@@ -73,6 +73,10 @@ import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet
 import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import {
+  runPublicReadCacheCanary,
+  shouldRunPublicReadCacheCanary,
+} from "./lib/public-read-cache-canary"
+import {
   hnsNamespaceRevalidationAlertState,
   isHnsNamespaceRevalidationEnabled,
   sweepHnsNamespaceRevalidations,
@@ -1019,6 +1023,33 @@ const handler: ExportedHandler<Env> = {
   fetch: fetchApi,
 
   scheduled: (controller, env, ctx) => {
+    if (shouldRunPublicReadCacheCanary(env, controller.scheduledTime || Date.now())) {
+      ctx.waitUntil(
+        runPublicReadCacheCanary(env)
+          .then((result) => console.info(JSON.stringify({
+            component: "public_read_cache",
+            operation: "eviction_canary",
+            ...result,
+          })))
+          .catch(async (error) => {
+            console.error(JSON.stringify({
+              component: "public_read_cache",
+              operation: "eviction_canary",
+              error: error instanceof Error ? error.message : String(error),
+            }))
+            await withRequestControlPlaneClients(
+              () => captureScheduledError(env, error, "public_read_cache_canary"),
+            ).catch((alertError) => {
+              console.error(JSON.stringify({
+                component: "public_read_cache",
+                operation: "eviction_canary_alert_delivery",
+                error: alertError instanceof Error ? alertError.message : String(alertError),
+              }))
+            })
+          }),
+      )
+    }
+
     // Story signer funding watchdog. Read-only RPC (no control-plane connection),
     // internally rate-limited and fully fail-soft, so it runs independently of the
     // DO-leased batch below and cannot destabilise it.
