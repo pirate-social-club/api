@@ -16,7 +16,7 @@ import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-h
 import { hydrateDerivativeSourcesForResponses } from "../posts/upstream-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
-import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
+import { getControlPlaneClient, withBackgroundControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import { publicCommunityId } from "../public-ids"
@@ -221,7 +221,7 @@ function enqueuePostReadJobs(input: {
     })
   }
 
-  input.waitUntil(withRequestControlPlaneClients(async () => {
+  input.waitUntil(withBackgroundControlPlaneClients(async () => {
     const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
     try {
       await enqueuePostReadJobsForCommunity({

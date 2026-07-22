@@ -54,7 +54,7 @@ import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
 import { conflictError, eligibilityFailed, internalError, notFoundError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
-import { withRequestControlPlaneClients } from "../runtime-deps"
+import { withBackgroundControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
 import type { Asset, CreatePostRequest, Post } from "../../types"
@@ -245,7 +245,7 @@ export async function retryPostPublish(input: {
       post: updated,
       updatedAt: retryAt,
     })
-    input.waitUntil?.(withRequestControlPlaneClients(async () => {
+    input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
       await processCommunityJobById({
         env: input.env,
         communityId: input.communityId,
@@ -289,7 +289,7 @@ async function enqueueLockedAssetDeliveryJobIfRequested(input: {
     createdAt: input.createdAt,
   })
 
-  input.waitUntil?.(withRequestControlPlaneClients(async () => {
+  input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
     try {
       await processCommunityJobById({
         env: input.env,
@@ -535,7 +535,7 @@ export async function createPost(input: {
     if (input.body.publish_mode === "async") {
       if (postPublishFinalizeJobId) {
         const jobId = postPublishFinalizeJobId
-        input.waitUntil?.(withRequestControlPlaneClients(async () => {
+        input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
           try {
             await processImmediatePostPublishFinalize({
               env: input.env,
