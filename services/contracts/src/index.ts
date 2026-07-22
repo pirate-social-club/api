@@ -2165,6 +2165,7 @@ export type RightsReviewCase = {
 };
 
 export type RightsReviewCaseListItem = (RightsReviewCase & {
+  story_royalty_registration_status: "none" | "pending" | "registered" | "failed" | null;
   analysis: MediaAnalysisResult | null;
   post: ModerationCasePostPreview | null;
 });
