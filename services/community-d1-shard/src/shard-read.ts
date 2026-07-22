@@ -374,6 +374,96 @@ function normalizeAttribution(value: string | null | undefined): string | null {
 }
 
 /**
+ * The claim predicate, written once so the attributed and legacy statements
+ * cannot drift apart. Optimistic locking (`version = ?4`) and the binding
+ * identity are part of the CLAIM, not of attribution — the fallback must not
+ * weaken them.
+ */
+const CLAIM_PREDICATE = "WHERE binding_name = ?1 AND version = ?4"
+const CLAIM_SET_BASE =
+  "UPDATE d1_pool SET " +
+  "community_id = ?2, allocated_at = ?3, " +
+  "released_at = NULL, last_loaded_at = NULL, last_error = NULL, "
+
+/**
+ * Does this error mean the attribution columns are not present on this pool D1?
+ *
+ * Deliberately NARROW: it matches a missing-column schema error naming one of
+ * the attribution columns, and nothing else. A broad catch here would silently
+ * downgrade genuine write failures — including lock conflicts and corruption —
+ * into "allocated but unattributed", which is exactly the kind of masking that
+ * makes an incident undiagnosable.
+ */
+function isMissingAttributionColumn(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e ?? "")
+  if (!/no such column|has no column named/i.test(message)) return false
+  return /allocation_source|allocation_run_id/i.test(message)
+}
+
+/**
+ * Claim a free binding, recording attribution when the pool schema supports it.
+ *
+ * SCHEMA-SKEW SAFETY: attribution is diagnostic, so a pool D1 that predates
+ * migration 0002 must still ALLOCATE — it must not take provisioning down. The
+ * pool D1 has no automated migration runner, so a shard deployed ahead of its
+ * migration is a real operational state, not a hypothetical. On the specific
+ * missing-column error we retry the LEGACY claim, with the same predicate,
+ * version and binding, so concurrency behaviour is identical and only the
+ * diagnostic columns are lost.
+ *
+ * Any other error propagates untouched: unique-violation handling, lock
+ * conflicts and real failures all keep their existing behaviour.
+ */
+async function claimFreeBinding(
+  pool: D1Database,
+  claim: {
+    bindingName: string
+    communityId: string
+    now: string
+    version: number
+    source?: string | null
+    runId?: string | null
+  },
+): Promise<D1Response> {
+  try {
+    return await pool
+      .prepare(
+        CLAIM_SET_BASE +
+          "allocation_source = ?5, allocation_run_id = ?6, " +
+          "version = version + 1 " +
+          CLAIM_PREDICATE,
+      )
+      .bind(
+        claim.bindingName,
+        claim.communityId,
+        claim.now,
+        claim.version,
+        normalizeAttribution(claim.source),
+        normalizeAttribution(claim.runId),
+      )
+      .run()
+  } catch (e) {
+    if (!isMissingAttributionColumn(e)) throw e
+    // Loud on purpose: this is a config/deploy-order defect, and the whole point
+    // of attribution is that someone acts on the numbers. Silently unattributed
+    // rows would make the capacity data quietly wrong instead of visibly absent.
+    console.warn(
+      JSON.stringify({
+        event: "d1_pool_attribution_columns_missing",
+        message:
+          "d1_pool is missing allocation_source/allocation_run_id (migration 0002 not applied to this pool D1). " +
+          "Allocating WITHOUT attribution; capacity accounting will be incomplete until the migration is applied.",
+        binding_name: claim.bindingName,
+      }),
+    )
+    return await pool
+      .prepare(CLAIM_SET_BASE + "version = version + 1 " + CLAIM_PREDICATE)
+      .bind(claim.bindingName, claim.communityId, claim.now, claim.version)
+      .run()
+  }
+}
+
+/**
  * Detect a UNIQUE(community_id) violation on d1_pool.community_id. libsql
  * exposes this as a LibsqlError with rawCode "SQLITE_CONSTRAINT_UNIQUE"
  * and a message containing "UNIQUE constraint failed". We check both to
@@ -464,30 +554,14 @@ export async function runShardBind(
     }
 
     try {
-      // Attribution is written in the SAME optimistic-locked UPDATE as the claim,
-      // not a follow-up statement: a second write could fail or race and leave a
-      // binding allocated but unattributed, which is precisely the blind spot
-      // these columns exist to remove. Diagnostic only — never read for control
-      // flow, and absent/oversized values degrade to NULL rather than failing an
-      // allocation.
-      const updateResult = await pool
-        .prepare(
-          "UPDATE d1_pool SET " +
-            "community_id = ?2, allocated_at = ?3, " +
-            "released_at = NULL, last_loaded_at = NULL, last_error = NULL, " +
-            "allocation_source = ?5, allocation_run_id = ?6, " +
-            "version = version + 1 " +
-            "WHERE binding_name = ?1 AND version = ?4",
-        )
-        .bind(
-          freeBinding,
-          input.communityId,
-          input.now,
-          freeVersion,
-          normalizeAttribution(input.source),
-          normalizeAttribution(input.runId),
-        )
-        .run()
+      const updateResult = await claimFreeBinding(pool, {
+        bindingName: freeBinding,
+        communityId: input.communityId,
+        now: input.now,
+        version: freeVersion,
+        source: input.source,
+        runId: input.runId,
+      })
 
       if (updateResult.meta?.changes && updateResult.meta.changes > 0) {
         return {
