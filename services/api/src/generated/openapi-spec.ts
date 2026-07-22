@@ -20728,10 +20728,21 @@ const spec = {
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "story_royalty_registration_status",
               "analysis",
               "post"
             ],
             "properties": {
+              "story_royalty_registration_status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "pending",
+                  "registered",
+                  "failed"
+                ],
+                "nullable": true
+              },
               "analysis": {
                 "$ref": "#/components/schemas/MediaAnalysisResult",
                 "nullable": true

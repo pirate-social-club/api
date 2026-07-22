@@ -252,6 +252,39 @@ async function readPostRightsMetadata(input: {
   }
 }
 
+async function setStoryRoyaltyRegistrationStatus(input: {
+  communityDbRoot: string
+  communityId: string
+  assetId: string
+  status: "none" | "pending" | "registered"
+  completeRegistration?: boolean
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE assets
+        SET story_royalty_registration_status = ?2,
+            story_ip_id = ?3,
+            story_license_terms_id = ?4,
+            updated_at = ?5
+        WHERE asset_id = ?1
+      `,
+      args: [
+        input.assetId,
+        input.status,
+        input.status === "registered" && input.completeRegistration !== false ? "0xStoryIp" : null,
+        input.status === "registered" && input.completeRegistration !== false ? "1" : null,
+        new Date().toISOString(),
+      ],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 afterEach(async () => {
   resetRuntimeCaches()
   if (cleanup) {
@@ -366,6 +399,105 @@ describe("rights review routes", () => {
       owner.accessToken,
     )
     expect(invalidClear.status).toBe(400)
+
+    await setStoryRoyaltyRegistrationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_review_video",
+      status: "registered",
+    })
+    const unsafePlainClear = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      { action_type: "clear" },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(unsafePlainClear.status).toBe(409)
+    expect((await json(unsafePlainClear) as { code: string; details: { asset_id: string } })).toMatchObject({
+      code: "story_lineage_correction_required",
+      details: { asset_id: "ast_review_video" },
+    })
+    const registeredCases = await app.request(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases`,
+      { headers: { authorization: `Bearer ${owner.accessToken}` } },
+      ctx.env,
+    )
+    expect(registeredCases.status).toBe(200)
+    expect((await json(registeredCases) as {
+      items: Array<{ story_royalty_registration_status: string | null }>
+    }).items[0]?.story_royalty_registration_status).toBe("registered")
+
+    const unsafeStoryClear = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      {
+        action_type: "clear_with_upstream_refs",
+        evidence_refs: [`song-bundle:${community.communityId}:sab_catalog_song`],
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(unsafeStoryClear.status).toBe(409)
+    const unsafeStoryClearBody = await json(unsafeStoryClear) as {
+      code: string
+      details: { asset_id: string }
+    }
+    expect(unsafeStoryClearBody).toMatchObject({
+      code: "story_lineage_correction_required",
+      details: { asset_id: "ast_review_video" },
+    })
+    expect(await readPostRightsMetadata({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      postId: rawPostId,
+    })).toEqual({
+      upstreamAssetRefsJson: null,
+      derivativeLinks: [],
+    })
+    expect((await readRightsHolds({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+    }))[0]?.status).toBe("active")
+
+    await setStoryRoyaltyRegistrationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_review_video",
+      status: "registered",
+      completeRegistration: false,
+    })
+    const incompleteStoryClear = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      { action_type: "clear" },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(incompleteStoryClear.status).toBe(409)
+    expect((await json(incompleteStoryClear) as { code: string }).code).toBe("story_lineage_correction_required")
+
+    await setStoryRoyaltyRegistrationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_review_video",
+      status: "pending",
+    })
+    const pendingStoryClear = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,
+      {
+        action_type: "clear_with_upstream_refs",
+        evidence_refs: [`song-bundle:${community.communityId}:sab_catalog_song`],
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(pendingStoryClear.status).toBe(409)
+    expect((await json(pendingStoryClear) as { code: string }).code).toBe("story_lineage_correction_required")
+
+    await setStoryRoyaltyRegistrationStatus({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId: community.communityId,
+      assetId: "ast_review_video",
+      status: "none",
+    })
 
     const action = await requestJson(
       `http://pirate.test/communities/${community.communityId}/rights-review/cases/${seeded.caseId}/actions`,

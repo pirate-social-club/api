@@ -16,10 +16,20 @@ export function shouldAttemptStoryRoyaltyRegistration(input: {
   return input.assetKind !== "song_audio" || input.hasSongBundle
 }
 
-export function hasCompleteStoryRoyaltyRegistration(asset: AssetRow): boolean {
+type StoryRoyaltyRegistrationIdentity = Pick<
+  AssetRow,
+  "story_royalty_registration_status" | "story_ip_id" | "story_license_terms_id"
+>
+
+export function hasCompleteStoryRoyaltyRegistration(asset: StoryRoyaltyRegistrationIdentity): boolean {
   return asset.story_royalty_registration_status === "registered"
     && Boolean(asset.story_ip_id?.trim())
     && Boolean(asset.story_license_terms_id?.trim())
+}
+
+export function hasStartedStoryRoyaltyRegistration(asset: StoryRoyaltyRegistrationIdentity): boolean {
+  return asset.story_royalty_registration_status !== "none"
+    && asset.story_royalty_registration_status !== "failed"
 }
 
 type StoryRegisteredProjectionCandidate = {

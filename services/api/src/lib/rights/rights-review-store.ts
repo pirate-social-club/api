@@ -68,6 +68,9 @@ function serializeRightsReviewCaseListItem(row: unknown): RightsReviewCaseListIt
   const postId = stringOrNull(rowValue(row, "post_post_id"))
   return {
     ...caseRow,
+    story_royalty_registration_status: stringOrNull(
+      rowValue(row, "story_royalty_registration_status"),
+    ) as RightsReviewCaseListItem["story_royalty_registration_status"],
     analysis: mediaAnalysisResultId ? serializeMediaAnalysisResult(row, "mar_") : null,
     post: postId
       ? {
@@ -150,6 +153,7 @@ export async function listRightsReviewCases(input: {
         p.body as post_body,
         p.caption as post_caption,
         p.media_refs_json,
+        a.story_royalty_registration_status,
         NULL as author_handle
       FROM rights_review_cases rrc
       LEFT JOIN media_analysis_results mar ON mar.media_analysis_result_id = rrc.analysis_result_ref
@@ -157,6 +161,12 @@ export async function listRightsReviewCases(input: {
         WHEN rrc.subject_type = 'post' THEN rrc.subject_id
         ELSE mar.source_post_id
       END
+      LEFT JOIN assets a
+        ON a.community_id = rrc.community_id
+       AND a.asset_id = CASE
+         WHEN rrc.subject_type = 'asset' THEN rrc.subject_id
+         ELSE p.asset_id
+       END
       WHERE rrc.community_id = ?1
         AND rrc.status IN (${placeholders})
       ORDER BY rrc.updated_at DESC, rrc.rights_review_case_id DESC
