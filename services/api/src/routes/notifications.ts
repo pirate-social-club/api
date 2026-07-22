@@ -35,8 +35,11 @@ notifications.get("/tasks", async (c) => {
 notifications.get("/feed", async (c) => {
   const actor = c.get("actor")
   const cursor = c.req.query("cursor") ?? null
-  const limitRaw = Number(c.req.query("limit") ?? "")
-  const limit = Number.isFinite(limitRaw) ? Math.min(100, Math.max(1, Math.trunc(limitRaw))) : 25
+  const limitParam = (c.req.query("limit") ?? "").trim()
+  const limitRaw = Number(limitParam)
+  const limit = limitParam !== "" && Number.isFinite(limitRaw)
+    ? Math.min(100, Math.max(1, Math.trunc(limitRaw)))
+    : 25
 
   const feed = await getNotificationsFeed({
     env: c.env,

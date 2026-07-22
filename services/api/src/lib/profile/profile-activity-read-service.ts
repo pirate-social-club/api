@@ -97,8 +97,9 @@ export function parseProfileActivityTab(value: string | null | undefined): Profi
 }
 
 export function parseProfileActivityLimit(value: string | null | undefined): number {
-  const parsed = Number(value ?? "")
-  if (!Number.isFinite(parsed)) {
+  const raw = (value ?? "").trim()
+  const parsed = Number(raw)
+  if (raw === "" || !Number.isFinite(parsed)) {
     return 20
   }
   return Math.min(50, Math.max(1, Math.trunc(parsed)))

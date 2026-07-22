@@ -52,9 +52,10 @@ async function requireReadableMember(client: Parameters<typeof getCommunityMembe
   }
 }
 
-function parseCommentLimit(limit: string | null | undefined): number {
-  const parsed = Number(limit ?? "")
-  if (!Number.isFinite(parsed)) {
+export function parseCommentLimit(limit: string | null | undefined): number {
+  const raw = (limit ?? "").trim()
+  const parsed = Number(raw)
+  if (raw === "" || !Number.isFinite(parsed)) {
     return 25
   }
   return Math.min(100, Math.max(1, Math.trunc(parsed)))
