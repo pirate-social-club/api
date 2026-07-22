@@ -222,6 +222,24 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (user_id, activity_date)
       );
+      CREATE TABLE reward_pending_qualifications (
+        reward_pending_qualification_id TEXT PRIMARY KEY,
+        reward_qualification_event_id TEXT NOT NULL UNIQUE,
+        reward_campaign_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        community_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        reward_period_key TEXT NOT NULL,
+        reward_kind TEXT NOT NULL,
+        qualification_basis TEXT NOT NULL,
+        conditional_amount_cents INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        terminal_reason TEXT,
+        credited_reward_event_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
     `)
     await db.unsafe(await readFile(SONG_PERIOD_CLAIMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))

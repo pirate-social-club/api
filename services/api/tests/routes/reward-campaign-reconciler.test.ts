@@ -107,6 +107,131 @@ describe("reward campaign reconciler", () => {
     }
   })
 
+  test("shows an unverified qualification as conditional value and converts it after verification", async () => {
+    const ctx = await createRouteTestContext(env())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "campaign-pending-verification-user")
+    const now = "2026-07-10T12:00:00.000Z"
+    const candidate = {
+      eventId: "rqe_pending_verification",
+      userId: session.userId,
+      communityId: "cmt_pending_verification",
+      postId: "pst_pending_verification",
+      artifactBundleId: "sab_pending_verification",
+      activity: "karaoke" as const,
+      qualifiedAt: now,
+      periodKey: "2026-07-10",
+      policyVersion: "policy-v1",
+      finalScoreBps: 8600,
+    }
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, membership_mode,
+          status, provisioning_state, transfer_state, created_at, updated_at
+        ) VALUES (?1, ?2, 'Pending rewards', 'open', 'active', 'active', 'none', ?3, ?3)
+      `,
+      args: [candidate.communityId, session.userId, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+          community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+          status, eligible_activity, min_score_bps, daily_reward_cents,
+          milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+          budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+          activated_at, created_at, updated_at
+        ) VALUES (
+          'rcp_pending_verification', ?1, 'pending-verification-create', ?2, ?3, ?4,
+          ?1, 'active', 'karaoke', 7000, 100, 0, 0, 100, 1000, 1000,
+          'pending-verification-terms', '2026-07-01T00:00:00.000Z',
+          '2026-07-31T00:00:00.000Z', ?5, ?5, ?5
+        )
+      `,
+      args: [session.userId, candidate.communityId, candidate.postId, candidate.artifactBundleId, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_qualification_events (
+          reward_qualification_event_id, community_id, shard_sequence, user_id,
+          post_id, song_artifact_bundle_id, activity, qualified_at,
+          reward_period_key, qualification_policy_version, evidence_summary_json,
+          ingested_at
+        ) VALUES (?1, ?2, 1, ?3, ?4, ?5, 'karaoke', ?6, ?7, ?8, ?9, ?6)
+      `,
+      args: [
+        candidate.eventId, candidate.communityId, candidate.userId, candidate.postId,
+        candidate.artifactBundleId, candidate.qualifiedAt, candidate.periodKey,
+        candidate.policyVersion, JSON.stringify({ final_score_bps: candidate.finalScoreBps }),
+      ],
+    })
+
+    expect(await creditRewardCampaignQualification({ env: ctx.env, client: ctx.client, candidate, now })).toEqual({
+      result: "identity",
+      amountCents: 0,
+    })
+    const beforeVerification = await getRewardsSummaryForUser({
+      env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
+      userId: session.userId,
+      client: ctx.client,
+      now,
+    })
+    expect(beforeVerification).toMatchObject({
+      balance_cents: 0,
+      pending_verification: { count: 1, conditional_cents: 100 },
+      cashout: { eligible: false, verification_state: "unverified", verification_provider: "self" },
+    })
+
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [session.userId, JSON.stringify({
+        unique_human: {
+          state: "verified", provider: "self", proof_type: "unique_human",
+          mechanism: "session_complete", verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          status, first_seen_at, created_at, updated_at
+        ) VALUES ('idn_pending_verification', ?1, 'self', 'zk-nullifier',
+          'pending-verification-human', 'active', ?2, ?2, ?2)
+      `,
+      args: [session.userId, now],
+    })
+    expect(await creditRewardCampaignQualification({ env: ctx.env, client: ctx.client, candidate, now })).toEqual({
+      result: "credited",
+      amountCents: 100,
+    })
+    const afterVerification = await getRewardsSummaryForUser({
+      env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
+      userId: session.userId,
+      client: ctx.client,
+      now,
+    })
+    expect(afterVerification).toMatchObject({
+      balance_cents: 100,
+      pending_verification: { count: 0, conditional_cents: 0 },
+      cashout: { eligible: true, verification_state: "verified", verification_provider: "self" },
+    })
+    const projection = await ctx.client.execute({
+      sql: `
+        SELECT status, conditional_amount_cents, credited_reward_event_id
+        FROM reward_pending_qualifications
+        WHERE reward_qualification_event_id = ?1
+      `,
+      args: [candidate.eventId],
+    })
+    expect(projection.rows).toEqual([expect.objectContaining({
+      status: "credited",
+      conditional_amount_cents: 100,
+      credited_reward_event_id: expect.stringMatching(/^rew_/),
+    })])
+  })
+
   test("fails closed unless campaign flags, identity provider, and alert ownership are configured", async () => {
     let listed = false
     const summary = await reconcileRewardCampaigns({
@@ -341,6 +466,34 @@ describe("reward campaign reconciler", () => {
         args: [unverifiedSession.userId],
       })
       expect(Number(unverifiedReservations.rows[0]?.count ?? 0)).toBe(0)
+      const pending = await ctx.client.execute({
+        sql: `
+          SELECT status, conditional_amount_cents, expires_at
+          FROM reward_pending_qualifications
+          WHERE user_id = ?1
+        `,
+        args: [unverifiedSession.userId],
+      })
+      expect(pending.rows).toEqual([expect.objectContaining({
+        status: "pending_verification",
+        conditional_amount_cents: 40,
+      })])
+      const pendingRewards = await getRewardsSummaryForUser({
+        env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
+        userId: unverifiedSession.userId,
+        client: ctx.client,
+        activityDate: "2026-07-10",
+        now: reconcileNow,
+      })
+      expect(pendingRewards).toMatchObject({
+        balance_cents: 0,
+        pending_verification: { count: 1, conditional_cents: 40 },
+        cashout: {
+          eligible: false,
+          verification_state: "unverified",
+          verification_provider: "self",
+        },
+      })
       let checkpoint = await ctx.client.execute("SELECT last_shard_sequence FROM reward_qualification_checkpoints")
       expect(checkpoint.rows).toEqual([{ last_shard_sequence: 1 }])
       const secondActivity = await reconcileRewardCampaigns({

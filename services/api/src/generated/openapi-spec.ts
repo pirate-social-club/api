@@ -16413,6 +16413,7 @@ const spec = {
           "balance_cents",
           "today_earned_cents",
           "recent_events",
+          "pending_verification",
           "cashout",
           "latest_in_flight_cashout"
         ],
@@ -16432,6 +16433,9 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/RewardEventSummary"
             }
+          },
+          "pending_verification": {
+            "$ref": "#/components/schemas/RewardPendingVerificationSummary"
           },
           "cashout": {
             "$ref": "#/components/schemas/RewardsCashoutSummary"
@@ -21583,12 +21587,36 @@ const spec = {
           }
         }
       },
+      "RewardPendingVerificationSummary": {
+        "type": "object",
+        "required": [
+          "count",
+          "conditional_cents",
+          "earliest_expires_at"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "conditional_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "earliest_expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
       "RewardsCashoutSummary": {
         "type": "object",
         "required": [
           "eligible",
           "min_cents",
-          "verification_state"
+          "verification_state",
+          "verification_provider"
         ],
         "properties": {
           "eligible": {
@@ -21599,6 +21627,14 @@ const spec = {
           },
           "verification_state": {
             "$ref": "#/components/schemas/RewardVerificationState"
+          },
+          "verification_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "very"
+            ],
+            "nullable": true
           }
         }
       },

@@ -14,6 +14,7 @@ import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 
 const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
+const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
 
 export type RewardQualificationCandidate = {
   eventId: string
@@ -39,6 +40,8 @@ export type RewardCampaignReconciliationSummary = {
   activated_campaigns: number
   ended_campaigns: number
   skipped_identity: number
+  pending_verification: number
+  expired_pending: number
   skipped_expired: number
   skipped_owner_blocked: number
   skipped_no_campaign: number
@@ -61,6 +64,8 @@ function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
     activated_campaigns: 0,
     ended_campaigns: 0,
     skipped_identity: 0,
+    pending_verification: 0,
+    expired_pending: 0,
     skipped_expired: 0,
     skipped_owner_blocked: 0,
     skipped_no_campaign: 0,
@@ -182,6 +187,13 @@ async function ingestCommunity(input: {
 }
 
 type CreditResult = "credited" | "duplicate" | "identity" | "expired" | "owner_blocked" | "no_campaign" | "budget" | "cap" | "score"
+type PendingTerminalReason =
+  | "campaign_ended"
+  | "budget_unavailable"
+  | "identity_duplicate"
+  | "owner_blocked"
+  | "score"
+  | "verification_window_expired"
 
 export function rewardQualificationExpiresAt(qualifiedAt: string): string {
   const qualifiedAtMs = Date.parse(qualifiedAt)
@@ -195,6 +207,62 @@ export function isRewardQualificationExpired(qualifiedAt: string, now: string): 
   return nowMs >= Date.parse(rewardQualificationExpiresAt(qualifiedAt))
 }
 
+function pendingQualificationExpiresAt(qualifiedAt: string, campaignEndsAt: string): string {
+  const qualificationExpiry = Date.parse(rewardQualificationExpiresAt(qualifiedAt))
+  const campaignSettlementExpiry = Date.parse(campaignEndsAt) + REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS
+  if (!Number.isFinite(campaignSettlementExpiry)) throw new Error("Reward campaign end timestamp is invalid")
+  return new Date(Math.min(qualificationExpiry, campaignSettlementExpiry)).toISOString()
+}
+
+async function markPendingQualificationTerminal(input: {
+  client: { execute: Client["execute"] }
+  eventId: string
+  status: "expired" | "ineligible"
+  reason: PendingTerminalReason
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE reward_pending_qualifications
+      SET status = ?2, terminal_reason = ?3, updated_at = ?4
+      WHERE reward_qualification_event_id = ?1
+        AND status IN ('pending_verification', 'reconciling')
+    `,
+    args: [input.eventId, input.status, input.reason, input.now],
+  })
+}
+
+async function createPendingQualification(input: {
+  client: { execute: Client["execute"] }
+  candidate: RewardQualificationCandidate
+  campaignId: string
+  campaignEndsAt: string
+  amountCents: number
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      INSERT INTO reward_pending_qualifications (
+        reward_pending_qualification_id, reward_qualification_event_id,
+        reward_campaign_id, user_id, community_id, post_id, reward_period_key,
+        reward_kind, qualification_basis, conditional_amount_cents, status,
+        expires_at, created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9,
+        'pending_verification', ?10, ?11, ?11
+      )
+      ON CONFLICT DO NOTHING
+    `,
+    args: [
+      makeId("rpq"), input.candidate.eventId, input.campaignId,
+      input.candidate.userId, input.candidate.communityId, input.candidate.postId,
+      input.candidate.periodKey, input.candidate.activity, input.amountCents,
+      pendingQualificationExpiresAt(input.candidate.qualifiedAt, input.campaignEndsAt),
+      input.now,
+    ],
+  })
+}
+
 export async function creditRewardCampaignQualification(input: {
   env: Env
   client: Client
@@ -203,18 +271,24 @@ export async function creditRewardCampaignQualification(input: {
   currentTime?: () => string
 }): Promise<{ result: CreditResult; amountCents: number }> {
   if (isRewardQualificationExpired(input.candidate.qualifiedAt, input.now)) {
+    await markPendingQualificationTerminal({
+      client: input.client,
+      eventId: input.candidate.eventId,
+      status: "expired",
+      reason: "verification_window_expired",
+      now: input.now,
+    })
     return { result: "expired", amountCents: 0 }
   }
   const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   const identity = await resolveActiveRewardIdentity(input.client, input.candidate.userId, provider)
-  if (!identity) return { result: "identity", amountCents: 0 }
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   return withTransaction(input.client, "write", async (tx) => {
     const campaign = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_id, eligible_activity, min_score_bps, daily_reward_cents,
           reward_period_cap_cents, funded_cents, reserved_cents, credited_cents,
-          refunded_cents, terms_version,
+          refunded_cents, terms_version, ends_at,
           CASE WHEN EXISTS (
             SELECT 1 FROM reward_song_owner_policies p
             WHERE p.community_id = c.community_id AND p.post_id = c.post_id
@@ -233,23 +307,64 @@ export async function creditRewardCampaignQualification(input: {
         input.candidate.qualifiedAt, input.candidate.activity,
       ],
     })
-    if (!campaign) return { result: "no_campaign", amountCents: 0 }
+    if (!campaign) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "campaign_ended", now: input.now,
+      })
+      return { result: "no_campaign", amountCents: 0 }
+    }
     const campaignRow = campaign as QueryResultRow
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "owner_blocked", now: input.now,
+      })
       return { result: "owner_blocked", amountCents: 0 }
     }
     if (input.candidate.activity === "karaoke") {
       const score = input.candidate.finalScoreBps
       const minimum = Number(rowValue(campaignRow, "min_score_bps"))
       if (!Number.isSafeInteger(score) || !Number.isSafeInteger(minimum) || (score ?? 0) < minimum) {
+        await markPendingQualificationTerminal({
+          client: tx, eventId: input.candidate.eventId, status: "ineligible",
+          reason: "score", now: input.now,
+        })
         return { result: "score", amountCents: 0 }
       }
     }
     const creditNow = input.currentTime?.() ?? input.now
     if (isRewardQualificationExpired(input.candidate.qualifiedAt, creditNow)) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "expired",
+        reason: "verification_window_expired", now: creditNow,
+      })
       return { result: "expired", amountCents: 0 }
     }
     const campaignId = text(campaignRow, "reward_campaign_id")
+    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
+    const funded = Number(rowValue(campaignRow, "funded_cents") ?? 0)
+    const reserved = Number(rowValue(campaignRow, "reserved_cents") ?? 0)
+    const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
+    const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
+    if (!Number.isSafeInteger(amount) || amount <= 0 || funded - reserved - credited - refunded < amount) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "budget_unavailable", now: creditNow,
+      })
+      return { result: "budget", amountCents: 0 }
+    }
+    if (!identity) {
+      await createPendingQualification({
+        client: tx,
+        candidate: input.candidate,
+        campaignId,
+        campaignEndsAt: text(campaignRow, "ends_at"),
+        amountCents: amount,
+        now: creditNow,
+      })
+      return { result: "identity", amountCents: 0 }
+    }
     const existing = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_reservation_id
@@ -263,14 +378,12 @@ export async function creditRewardCampaignQualification(input: {
         identity.id, input.candidate.periodKey,
       ],
     })
-    if (existing) return { result: "duplicate", amountCents: 0 }
-    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
-    const funded = Number(rowValue(campaignRow, "funded_cents") ?? 0)
-    const reserved = Number(rowValue(campaignRow, "reserved_cents") ?? 0)
-    const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
-    const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
-    if (!Number.isSafeInteger(amount) || amount <= 0 || funded - reserved - credited - refunded < amount) {
-      return { result: "budget", amountCents: 0 }
+    if (existing) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "identity_duplicate", now: creditNow,
+      })
+      return { result: "duplicate", amountCents: 0 }
     }
     const period = await executeFirst(tx, {
       sql: `
@@ -284,6 +397,10 @@ export async function creditRewardCampaignQualification(input: {
     const used = Number(rowValue(period, "used_cents") ?? 0)
     const cap = Number(rowValue(campaignRow, "reward_period_cap_cents") ?? 0)
     if (!Number.isSafeInteger(used) || !Number.isSafeInteger(cap) || used + amount > cap) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "identity_duplicate", now: creditNow,
+      })
       return { result: "cap", amountCents: 0 }
     }
     const reservationId = makeId("rcr")
@@ -306,7 +423,13 @@ export async function creditRewardCampaignQualification(input: {
         input.candidate.artifactBundleId, identity.id, input.candidate.periodKey, creditNow,
       ],
     })
-    if (claim.rows.length === 0) return { result: "duplicate", amountCents: 0 }
+    if (claim.rows.length === 0) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "identity_duplicate", now: creditNow,
+      })
+      return { result: "duplicate", amountCents: 0 }
+    }
     const rewardEventId = makeId("rew")
     await tx.execute({
       sql: `
@@ -387,6 +510,16 @@ export async function creditRewardCampaignQualification(input: {
       `,
       args: [input.candidate.userId, input.candidate.periodKey, amount, creditNow],
     })
+    await tx.execute({
+      sql: `
+        UPDATE reward_pending_qualifications
+        SET status = 'credited', credited_reward_event_id = ?2,
+          terminal_reason = NULL, updated_at = ?3
+        WHERE reward_qualification_event_id = ?1
+          AND status IN ('pending_verification', 'reconciling')
+      `,
+      args: [input.candidate.eventId, rewardEventId, creditNow],
+    })
     return { result: "credited", amountCents: amount }
   })
 }
@@ -408,6 +541,15 @@ export async function reconcileRewardCampaigns(input: {
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
+  const expiredPending = await input.controlPlaneClient.execute({
+    sql: `
+      UPDATE reward_pending_qualifications
+      SET status = 'expired', terminal_reason = 'verification_window_expired', updated_at = ?1
+      WHERE status IN ('pending_verification', 'reconciling') AND expires_at <= ?1
+    `,
+    args: [now],
+  })
+  summary.expired_pending = expiredPending.rowsAffected ?? expiredPending.rows.length
   const lifecycle = await advanceRewardCampaignLifecycle({ client: input.controlPlaneClient, now })
   summary.activated_campaigns = lifecycle.activated_campaigns
   summary.ended_campaigns = lifecycle.ended_campaigns
@@ -496,7 +638,10 @@ export async function reconcileRewardCampaigns(input: {
         if (result.result === "credited") {
           summary.credited_events += 1
           summary.credited_cents += result.amountCents
-        } else if (result.result === "identity") summary.skipped_identity += 1
+        } else if (result.result === "identity") {
+          summary.skipped_identity += 1
+          summary.pending_verification += 1
+        }
         else if (result.result === "expired") summary.skipped_expired += 1
         else if (result.result === "owner_blocked") summary.skipped_owner_blocked += 1
         else if (result.result === "no_campaign") summary.skipped_no_campaign += 1

@@ -178,6 +178,13 @@ type RewardsCashoutSummary = {
   eligible: boolean
   min_cents: number
   verification_state: RewardVerificationState
+  verification_provider: "self" | "very" | null
+}
+
+type RewardPendingVerificationSummary = {
+  count: number
+  conditional_cents: number
+  earliest_expires_at: number | null
 }
 
 export type RewardsSummaryResponse = {
@@ -185,6 +192,7 @@ export type RewardsSummaryResponse = {
   balance_cents: number
   today_earned_cents: number
   recent_events: RewardEventSummary[]
+  pending_verification: RewardPendingVerificationSummary
   cashout: RewardsCashoutSummary
   latest_in_flight_cashout: RewardPayoutSummary | null
 }
