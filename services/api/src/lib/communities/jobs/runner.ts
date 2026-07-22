@@ -1,7 +1,7 @@
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { openCommunityWriteClient } from "../community-read-access"
-import { logPipelineError, logPipelineInfo, summarizeReference } from "../../observability/pipeline-log"
+import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeReference } from "../../observability/pipeline-log"
 import {
   findNextRunnableCommunityJob,
   getCommunityJobById,
@@ -46,6 +46,48 @@ type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
   failed_communities: CommunityJobCommunityFailureSummary[]
+}
+
+export type ExhaustedCommunityJob = {
+  community_id: string
+  job_id: string
+  job_type: CommunityJobType
+  subject_id: string
+  /**
+   * `community_jobs.error_code` is NOT a code — `recordCommunityJobFailure`
+   * writes the raw exception message into it, which routinely carries provider
+   * response bodies, URLs, and addresses (e.g. the OpenRouter 404 payload).
+   * This value reaches console logs and the ops-alert sink, so it is redacted
+   * and truncated on the way out rather than forwarded verbatim.
+   */
+  error: string | null
+}
+
+/**
+ * Jobs that burned their last attempt in this tick.
+ *
+ * Exhaustion is the one community-job outcome nobody recovers from: no further
+ * retry is scheduled and the subject is abandoned in place. It was previously
+ * indistinguishable from ordinary retry noise, so batches of permanently dead
+ * jobs accumulated unnoticed (one prod shard held 28, including 13 songs whose
+ * Study content will never generate).
+ *
+ * Derived from the summary rather than alerted per-failure, so a tick raises at
+ * most one alert no matter how many jobs died in it.
+ */
+export function exhaustedCommunityJobs(
+  summary: Pick<CommunityJobProcessingSummary, "communities">,
+): ExhaustedCommunityJob[] {
+  return summary.communities.flatMap((community) =>
+    community.jobs
+      .filter((job) => job.status === "failed" && job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS)
+      .map((job) => ({
+        community_id: job.community_id,
+        job_id: job.job_id,
+        job_type: job.job_type,
+        subject_id: job.subject_id,
+        error: sanitizeLogText(job.error_code),
+      })))
 }
 
 export class CommunityJobAttemptTimeoutError extends Error {
@@ -255,6 +297,44 @@ export function selectScheduledCommunityJobPollIds(
   return Array.from(selected)
 }
 
+/**
+ * Attempt duration, scheduler pickup latency, and end-to-end job age.
+ *
+ * Completion timestamps alone cannot distinguish "the work is slow" from "the
+ * work waited a long time for a runner" — the distinction that mattered when
+ * song posts sat in `processing` for tens of minutes and nothing recorded which
+ * half was responsible. Three separate numbers, because they answer different
+ * questions and conflating them is how the original diagnosis went wrong:
+ *
+ * - `attempt_duration_ms` — how long THIS attempt executed.
+ * - `pickup_latency_ms` — how long the job sat *eligible* before a runner
+ *   claimed it. Measured from `available_at` (the retry-backoff expiry, or a
+ *   deliberate delay) and only falling back to `created_at` for a job that was
+ *   runnable the moment it was enqueued. This is the scheduler-health number:
+ *   measuring from `created_at` on a retry would fold in the previous attempt's
+ *   execution time and its backoff, which are not scheduler wait at all.
+ * - `job_age_at_attempt_start_ms` — created_at → now, across every prior
+ *   attempt and backoff. This is what the user actually waited.
+ */
+export function communityJobTimings(
+  job: Pick<CommunityJobRow, "created_at" | "available_at">,
+  startedAt: string,
+): {
+  attempt_duration_ms: number
+  pickup_latency_ms: number | null
+  job_age_at_attempt_start_ms: number | null
+} {
+  const startedMs = Date.parse(startedAt)
+  const createdMs = Date.parse(job.created_at)
+  const availableMs = job.available_at ? Date.parse(job.available_at) : Number.NaN
+  const eligibleMs = Number.isFinite(availableMs) ? availableMs : createdMs
+  return {
+    attempt_duration_ms: Math.max(0, Date.now() - startedMs),
+    pickup_latency_ms: Number.isFinite(eligibleMs) ? Math.max(0, startedMs - eligibleMs) : null,
+    job_age_at_attempt_start_ms: Number.isFinite(createdMs) ? Math.max(0, startedMs - createdMs) : null,
+  }
+}
+
 export async function processCommunityJobById(input: {
   env: Env
   communityId: string
@@ -330,6 +410,7 @@ export async function processCommunityJobById(input: {
         community_id: running.community_id,
         ...summarizeReference("subject_id", running.subject_id),
         attempt_count: running.attempt_count,
+        ...communityJobTimings(running, startedAt),
         ...summarizeReference("result_ref", resultRef),
       })
       if (resultRef?.startsWith("failed:")) {
@@ -356,6 +437,7 @@ export async function processCommunityJobById(input: {
       }
       const failedAt = nowIso()
       return await recordCommunityJobFailure({
+        timings: communityJobTimings(running, startedAt),
         client: db.client,
         env: input.env,
         job: running,
