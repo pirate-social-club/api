@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import { parseListLimit } from "../lib/list-limit"
 import {
   getCommunityPreview,
 } from "../lib/communities/community-preview-service"
@@ -78,13 +79,12 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
 
   communities.get("/:communityId/membership-requests", async (c) => {
     const { actor, communityId, communityRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
-    const limitRaw = Number(c.req.query("limit") ?? "")
     const result = await listMembershipRequests({
       env: c.env,
       userId: actor.userId,
       communityId,
       cursor: c.req.query("cursor") ?? null,
-      limit: Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : undefined,
+      limit: parseListLimit(c.req.query("limit"), { fallback: 25, max: 100 }),
       communityRepository,
       profileRepository,
     })

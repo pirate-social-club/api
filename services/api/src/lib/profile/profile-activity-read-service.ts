@@ -7,6 +7,7 @@ import type {
 } from "../communities/db-community-repository"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError } from "../errors"
+import { parseListLimit } from "../list-limit"
 import { getCommentById } from "../comments/community-comment-store"
 import { hydrateCommentAuthorPublicHandles } from "../comments/comment-author-hydration"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
@@ -97,11 +98,7 @@ export function parseProfileActivityTab(value: string | null | undefined): Profi
 }
 
 export function parseProfileActivityLimit(value: string | null | undefined): number {
-  const parsed = Number(value ?? "")
-  if (!Number.isFinite(parsed)) {
-    return 20
-  }
-  return Math.min(50, Math.max(1, Math.trunc(parsed)))
+  return parseListLimit(value, { fallback: 20, max: 50 })
 }
 
 function cursorClause(

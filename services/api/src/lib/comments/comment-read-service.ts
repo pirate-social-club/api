@@ -13,6 +13,7 @@ import {
   getCommunityMembershipState,
 } from "../communities/membership/membership-state-store"
 import { notFoundError } from "../errors"
+import { parseListLimit } from "../list-limit"
 import { getPostById } from "../posts/community-post-query-store"
 import { getProfileRepository } from "../auth/repositories"
 import type { ProfileRepository } from "../auth/repositories"
@@ -53,11 +54,7 @@ async function requireReadableMember(client: Parameters<typeof getCommunityMembe
 }
 
 function parseCommentLimit(limit: string | null | undefined): number {
-  const parsed = Number(limit ?? "")
-  if (!Number.isFinite(parsed)) {
-    return 25
-  }
-  return Math.min(100, Math.max(1, Math.trunc(parsed)))
+  return parseListLimit(limit, { fallback: 25, max: 100 })
 }
 
 function parseCommentSort(sort: string | null | undefined): CommentSort {
