@@ -451,7 +451,10 @@ jobs:
 
       - name: Audit ZKPassport verifier container dependencies
         working-directory: services/zkpassport-verifier-container
-        run: bun audit --audit-level=high
+        # Temporary tooling-only exception. Miniflare pins sharp 0.34.5, while
+        # the verifier image installs its dedicated production runtime only.
+        # Expires 2026-08-05; remove via #699.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
 
       - name: Typecheck ZKPassport verifier container
         working-directory: services/zkpassport-verifier-container
@@ -460,6 +463,14 @@ jobs:
       - name: Test ZKPassport verifier container
         working-directory: services/zkpassport-verifier-container
         run: bun run test
+
+      - name: Install ZKPassport verifier runtime dependencies
+        working-directory: services/zkpassport-verifier-runtime
+        run: bun install --frozen-lockfile --production
+
+      - name: Audit ZKPassport verifier runtime dependencies
+        working-directory: services/zkpassport-verifier-runtime
+        run: bun audit --audit-level=high
 
       - name: Check out web repo for cross-repo file deps
         # services/api depends on @pirate-social-club/karaoke-runtime via
@@ -494,7 +505,9 @@ jobs:
 
       - name: Audit song preview container dependencies
         working-directory: services/song-preview-container
-        run: bun audit --audit-level=high
+        # Wrangler/Miniflare development-tool exception. Expires 2026-08-05;
+        # remove via #699 once Miniflare consumes sharp >=0.35.0.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
 
       - name: Typecheck song preview container
         working-directory: services/song-preview-container
@@ -510,7 +523,10 @@ jobs:
 
       - name: Audit API dependencies
         working-directory: services/api
-        run: bun audit --audit-level=high
+        # Wrangler/Vitest Miniflare development-tool exception. The deployed
+        # Worker bundle does not ship this Node dependency tree. Expires
+        # 2026-08-05; remove via #699.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
 
       - name: Typecheck API service
         working-directory: services/api
