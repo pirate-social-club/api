@@ -80,17 +80,11 @@ async function purgeWorkersCacheTags(input: {
   }
 }
 
-export async function purgePublicReadCacheTags(input: {
+async function purgeZoneCacheTags(input: {
   env: Env
   tags: string[]
   fetcher?: typeof fetch
 }): Promise<void> {
-  if (input.tags.length === 0) {
-    return
-  }
-
-  await purgeWorkersCacheTags({ env: input.env, tags: input.tags })
-
   const config = cloudflareCachePurgeConfig(input.env)
   if (!config) {
     return
@@ -121,6 +115,31 @@ export async function purgePublicReadCacheTags(input: {
 
   if (!body || body.success !== true) {
     throw new Error(`Cloudflare cache purge did not report success${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
+  }
+}
+
+export async function purgePublicReadCacheTags(input: {
+  env: Env
+  tags: string[]
+  fetcher?: typeof fetch
+}): Promise<void> {
+  if (input.tags.length === 0) {
+    return
+  }
+
+  const results = await Promise.allSettled([
+    purgeWorkersCacheTags({ env: input.env, tags: input.tags }),
+    purgeZoneCacheTags({ env: input.env, tags: input.tags, fetcher: input.fetcher }),
+  ])
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason)
+
+  if (failures.length === 1) {
+    throw failures[0]
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Workers and zone cache purges both failed")
   }
 }
 
