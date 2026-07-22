@@ -31,11 +31,12 @@ describe("parseVideoFeedCursor", () => {
 })
 
 describe("videoFeedOrderSql", () => {
-  test("keeps best ranking in D1 core SQLite functions", () => {
-    const orderBy = videoFeedOrderSql("best", "?1")
+  test("uses the proven portable engagement ordering for best", () => {
+    const orderBy = videoFeedOrderSql("best")
 
-    expect(orderBy).toContain("unixepoch(source_created_at)")
+    expect(orderBy).toContain("CASE WHEN")
     expect(orderBy).not.toMatch(/\bpow(?:er)?\s*\(/iu)
+    expect(orderBy).not.toContain("unixepoch(")
   })
 })
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
