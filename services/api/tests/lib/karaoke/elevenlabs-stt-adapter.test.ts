@@ -110,6 +110,7 @@ async function startAdapter(options: { retention?: "not_stored" } = { retention:
   })
   await adapter.start({
     attemptId: "attempt-1",
+    initialSequence: 0,
     onMessage: async (message) => {
       messages.push(message)
     },
@@ -146,9 +147,9 @@ describe("ElevenLabsKaraokeSttAdapter", () => {
   test("each start() mints a distinct stream generation", async () => {
     const socket = new FakeSttSocket()
     const adapter = new ElevenLabsKaraokeSttAdapter({ apiKey: "k", connect: async () => socket })
-    await adapter.start({ attemptId: "a", onMessage: async () => {}, sessionId: "s" })
+    await adapter.start({ attemptId: "a", initialSequence: 0, onMessage: async () => {}, sessionId: "s" })
     const first = adapter.streamGeneration
-    await adapter.start({ attemptId: "a", onMessage: async () => {}, sessionId: "s" })
+    await adapter.start({ attemptId: "a", initialSequence: 0, onMessage: async () => {}, sessionId: "s" })
     const second = adapter.streamGeneration
     expect(first).toBeTruthy()
     expect(second).toBeTruthy()
@@ -370,6 +371,7 @@ describe("STT lifecycle: unexpected close", () => {
     const start = () =>
       adapter.start({
         attemptId: "a",
+        initialSequence: 0,
         onMessage: async () => {},
         onTerminalError: (code) => {
           terminal.push(code)

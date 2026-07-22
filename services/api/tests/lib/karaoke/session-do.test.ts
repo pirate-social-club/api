@@ -819,6 +819,50 @@ describe("KaraokeSessionRuntimeDO", () => {
     expect(sent.at(-1)?.sequence).toBe(3);
   });
 
+  test("resumes STT scoring after a fresh DO restores the session", async () => {
+    const sent: KaraokeServerEvent[] = [];
+    const broadcast = async (event: KaraokeServerEvent) => {
+      sent.push(event);
+    };
+    const { ctx, storage } = makeContext();
+    const outbox = new InMemoryOutboxStore();
+    const adapterA = new FakeKaraokeStreamingSttAdapter();
+    const doA = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterA,
+    });
+    expect((await doA.fetch(initDoRequest())).status).toBe(200);
+    await startAndScore(doA, adapterA);
+    expect(storedSnapshot(storage).lastSttSequence).toBe(1);
+
+    // A fresh DO instance (eviction / runtime restart) with a BRAND-NEW adapter,
+    // whose sequence counter therefore starts from whatever the host seeds it with.
+    const adapterB = new FakeKaraokeStreamingSttAdapter();
+    const doB = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterB,
+    });
+
+    // Drive real post-restore scoring: audio → playback → committed final.
+    // Client sequences continue past the restored lastClientSequence of 3.
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(4, 2400));
+    await doB.fetch(clientEventRequest(5, "playback_sync", { audioTimeMs: 2400, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+
+    // The restored stream resumed at 2 (persisted high-water mark was 1), so the
+    // final was accepted rather than refused. Before the initialSequence contract
+    // the fresh adapter emitted 1, which the host rejected without advancing —
+    // silently killing transcript and scoring for the rest of the attempt.
+    const codes = sent.map((event) => (event as { code?: string }).code);
+    expect(codes).not.toContain("non_monotonic_sequence");
+    expect(sent.some((event) => event.type === "stt_final")).toBe(true);
+    expect(storedSnapshot(storage).lastSttSequence).toBe(2);
+  });
+
   test("persists snapshot and pending output before a failed broadcast, then replays it", async () => {
     const { ctx, storage } = makeContext();
     const adapter = new FakeKaraokeStreamingSttAdapter();
@@ -1232,6 +1276,7 @@ describe("FakeKaraokeStreamingSttAdapter", () => {
     const received: string[] = [];
     await adapter.start({
       attemptId: "attempt-1",
+      initialSequence: 0,
       onMessage: async (message) => {
         received.push(message.event.text);
       },

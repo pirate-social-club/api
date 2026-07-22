@@ -183,7 +183,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
           path: .cross-repo/web
 
       - name: Link cross-repo file deps
@@ -277,7 +277,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
@@ -477,19 +477,30 @@ jobs:
         # file:../../../web/packages/karaoke-runtime — CI must mirror the
         # workspace layout (web as a sibling) so the file: path resolves.
         #
-        # PINNED to a SHA, not the mutable `release/karaoke-web` branch. That branch drifts
-        # independently of this repo: commit cd4b93fb added a required `uncertainLineCount` field to
-        # KaraokeSessionSummary, which breaks `tsgo` against the (un-updated) api karaoke test in
-        # tests/lib/karaoke/session-do.test.ts — a time-dependent failure with no change in this repo.
-        # de5eafa2 is the last commit on release/karaoke-web before cd4b93fb (last type-compatible
-        # with the current api karaoke test).
-        # UPDATE PROCEDURE: when the api karaoke test is updated to the newer karaoke-runtime type
-        # (uncertainLineCount), bump this SHA to the matching release/karaoke-web commit, ideally
-        # landing both changes together.
+        # PINNED to a SHA, not a mutable branch, so web drift cannot cause a
+        # time-dependent failure with no change in this repo.
+        #
+        # !!! INTERIM PIN — MUST BE RE-PINNED BEFORE THIS PR MERGES !!!
+        # 916d1cf6 is the HEAD of web PR #569 (fix/karaoke-stt-sequence-continuity), a
+        # feature branch. It is pinned here only so this PR's CI can verify the paired
+        # change. Once web #569 merges, re-pin all occurrences in this repo to the
+        # resulting web `main` SHA. Merging this PR against a feature-branch pin would
+        # leave CI depending on a ref that may be deleted.
+        #
+        # The api karaoke tests REQUIRE a web ref carrying the `initialSequence` field on
+        # KaraokeStreamingSttAdapter.start(). Against the previous pin (ecda035d) they fail:
+        #   - "restores JSON, binary, STT, and server-output sequence counters after eviction"
+        #   - "resumes STT scoring after a fresh DO restores the session"
+        # Note `tsc` stays CLEAN against the old pin (TypeScript method parameter
+        # bivariance hides the missing field), so the runtime tests are the only guard.
+        #
+        # The previous pin's stated blocker is resolved: cd4b93fb's required
+        # `uncertainLineCount` on KaraokeSessionSummary no longer breaks this repo — the api
+        # suite and `tsc` both pass against web main.
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
           path: .cross-repo/web
 
       - name: Link web repo for cross-repo file deps
@@ -607,7 +618,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          ref: 916d1cf60a2235e7ad21ea3aad95f2d3d9ba4c3a
           path: .cross-repo/web
 
       - name: Link workspace dependencies and test fixtures
