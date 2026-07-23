@@ -19,6 +19,7 @@
     "smoke:community-create": "bun run scripts/smoke-staging-community-create.ts",
     "smoke:song-submit": "bun run scripts/smoke-staging-song-submit-ci.ts",
     "smoke:paid-booking": "bun run scripts/smoke-paid-booking.ts",
+    "smoke:booking-settlement:evaluate": "bun run scripts/smoke-booking-settlement-evaluate.ts",
     "smoke:booking-review": "bun run scripts/smoke-booking-settlement-review.ts",
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
     "smoke:public-read-cache": "bun run scripts/smoke-public-read-cache.ts",
