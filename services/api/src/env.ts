@@ -447,5 +447,10 @@ export type Env = {
   HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS?: string
   HNS_NAMESPACE_REVALIDATION_VALIDITY_SECONDS?: string
   HNS_NAMESPACE_REVALIDATION_BATCH_SIZE?: string
+  // Root-scoped DS/DNSSEC/redundancy observer. Strict "true" enables; dark by default.
+  HNS_ROOT_OBSERVER_ENABLED?: string
+  // Defaults to the five-minute evidence cadence required by the freshness model.
+  HNS_ROOT_OBSERVER_INTERVAL_SECONDS?: string
+  HNS_ROOT_OBSERVER_BATCH_SIZE?: string
   HNS_CHALLENGE_TTL_HOURS?: string
 }

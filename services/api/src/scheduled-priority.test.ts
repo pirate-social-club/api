@@ -42,6 +42,15 @@ describe("scheduled priority ordering", () => {
     expect(scheduledMinimumPriorityStarts(false)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS)
   })
 
+  test("guarantees enabled root observation a start inside its freshness budget", () => {
+    const names = scheduledPriorityJobNames(true, false, true)
+    const observerIndex = names.indexOf("observe_hns_roots")
+    expect(observerIndex).toBeGreaterThanOrEqual(0)
+    expect(observerIndex).toBeLessThan(scheduledMinimumPriorityStarts(true, true))
+    expect(scheduledMinimumPriorityStarts(true, true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 2)
+    expect(scheduledMinimumPriorityStarts(false, true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 1)
+  })
+
   test("keeps D1 provisioning ahead of the latency-tolerant reward monitor", () => {
     expect(scheduledPriorityJobNames(true, false)).toEqual([
       "reconcile_reward_payouts",
@@ -84,6 +93,24 @@ describe("scheduled priority ordering", () => {
       "reconcile_reward_funding_refunds",
       "process_community_jobs",
       "reconcile_d1_provisioning",
+      "monitor_reward_campaign_treasury_solvency",
+      "revalidate_hns_namespaces",
+      "monitor_reward_campaigns",
+    ])
+  })
+
+  test("schedules root observation before latency-tolerant monitoring and revalidation", () => {
+    expect(scheduledPriorityJobNames(true, true, true)).toEqual([
+      "reconcile_reward_payouts",
+      "reconcile_royalty_claims",
+      "reconcile_booking_settlements",
+      "reconcile_purchase_settlements",
+      "reconcile_royalty_allocation_verifications",
+      "reconcile_reward_campaigns",
+      "reconcile_reward_funding_refunds",
+      "process_community_jobs",
+      "reconcile_d1_provisioning",
+      "observe_hns_roots",
       "monitor_reward_campaign_treasury_solvency",
       "revalidate_hns_namespaces",
       "monitor_reward_campaigns",
