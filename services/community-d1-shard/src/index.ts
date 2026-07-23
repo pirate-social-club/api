@@ -20,6 +20,7 @@ import type {
   ShardQueryResult,
   ShardReadRequest,
   ShardResult,
+  ShardVersionInfo,
   ShardWriteRequest,
 } from "@pirate/api-shared"
 import type { Env } from "./env"
@@ -36,6 +37,7 @@ import {
   runShardReset,
   runShardWrite,
 } from "./shard-read"
+import { shardVersionInfo } from "./version"
 
 /**
  * Community D1 shard. Hosts per-community D1 bindings and exposes a
@@ -144,8 +146,16 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardPoolStats(this.env, input)
   }
 
+  async communityD1Version(): Promise<ShardVersionInfo> {
+    return shardVersionInfo(this.env)
+  }
+
   async fetch(): Promise<Response> {
-    return new Response(JSON.stringify({ ok: true, service: "community-d1-shard" }), {
+    return new Response(JSON.stringify({
+      ok: true,
+      service: "community-d1-shard",
+      version: shardVersionInfo(this.env),
+    }), {
       headers: { "content-type": "application/json" },
     })
   }

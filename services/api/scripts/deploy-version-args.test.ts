@@ -9,14 +9,18 @@ describe("deploy version stamping", () => {
     const metadata = resolveBuildVersionMetadata({
       GITHUB_SHA: "sha-from-github",
       GITHUB_REF_NAME: "main",
-    }, () => {
-      throw new Error("git fallback should not run")
+    }, (_command, args) => {
+      if (args[0] === "status") return ""
+      if (args[1] === "HEAD:services/community-d1-shard") return "shard-tree"
+      if (args[1] === "HEAD:services/shared") return "shared-tree"
+      throw new Error(`unexpected git fallback: ${args.join(" ")}`)
     }, () => new Date("2026-07-06T12:00:00.000Z"))
 
     expect(metadata).toEqual({
       gitSha: "sha-from-github",
       gitRef: "main",
       timestamp: "2026-07-06T12:00:00.000Z",
+      communityD1ShardSourceVersion: "shard-tree.shared-tree",
     })
   })
 
@@ -27,13 +31,30 @@ describe("deploy version stamping", () => {
       GITHUB_SHA: "github-sha",
       GITHUB_REF_NAME: "main",
       BUILD_TIMESTAMP: "2026-07-06T12:01:00.000Z",
-    }, () => "git-output")
+    }, (_command, args) => {
+      if (args[0] === "status") return ""
+      if (args[1] === "HEAD:services/community-d1-shard") return "shard-tree"
+      if (args[1] === "HEAD:services/shared") return "shared-tree"
+      return "git-output"
+    })
 
     expect(metadata).toEqual({
       gitSha: "explicit-sha",
       gitRef: "release/api",
       timestamp: "2026-07-06T12:01:00.000Z",
+      communityD1ShardSourceVersion: "shard-tree.shared-tree",
     })
+  })
+
+  test("refuses to stamp dirty shard sources", () => {
+    expect(() =>
+      resolveBuildVersionMetadata({}, (_command, args) => {
+        if (args[0] === "status") {
+          return " M services/community-d1-shard/src/index.ts\n"
+        }
+        throw new Error(`unexpected command after dirty-tree check: ${args.join(" ")}`)
+      })
+    ).toThrow("dirty community-d1-shard/shared sources")
   })
 
   test("builds wrangler deploy args with compile-time defines after passthrough args", () => {
@@ -41,6 +62,7 @@ describe("deploy version stamping", () => {
       gitSha: "abc123",
       gitRef: "main",
       timestamp: "2026-07-06T12:02:00.000Z",
+      communityD1ShardSourceVersion: "shard-tree.shared-tree",
     })).toEqual([
       "deploy",
       "--env",
@@ -51,6 +73,10 @@ describe("deploy version stamping", () => {
       "__PIRATE_BUILD_GIT_REF__:\"main\"",
       "--define",
       "__PIRATE_BUILD_TIMESTAMP__:\"2026-07-06T12:02:00.000Z\"",
+      "--define",
+      "__PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__:\"shard-tree.shared-tree\"",
+      "--tag",
+      "abc123",
     ])
   })
 })

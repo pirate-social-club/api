@@ -108,7 +108,7 @@ Deploy the staging shard from the clean refill worktree before inserting pool
 rows:
 
 ```bash
-rtk bunx wrangler deploy --env=""
+rtk bun run deploy -- --env=""
 ```
 
 Confirm Wrangler prints the newly added `env.DB_CMTY_NNNN` bindings in the deploy

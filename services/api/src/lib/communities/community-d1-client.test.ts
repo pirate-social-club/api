@@ -57,6 +57,19 @@ function fakeShard() {
       calls.push({ m: "communityD1PoolStats", input })
       return { ok: true as const, value: { total: 1, allocated: 0, free: 1, quarantined: 0 } }
     },
+    communityD1Version: async () => ({
+      build: {
+        gitRef: "main",
+        gitSha: "shard-commit",
+        timestamp: "2026-07-23T10:00:00.000Z",
+        sourceVersion: "shard-tree.shared-tree",
+      },
+      workerVersion: {
+        id: "worker-version-id",
+        tag: "shard-commit",
+        timestamp: "2026-07-23T10:00:01.000Z",
+      },
+    }),
   }
 }
 

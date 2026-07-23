@@ -9,7 +9,7 @@
  *
  * SAFE ORDER (enforced by --apply being a two-phase, operator-gated flow):
  *   1. `wrangler d1 create` × N            (irreversible — creates Cloudflare resources)
- *   2. add the d1_databases entries to wrangler.jsonc + `wrangler deploy` the shard
+ *   2. add the d1_databases entries to wrangler.jsonc + `bun run deploy -- --env=""` the shard
  *   3. INSERT the free rows into d1_pool    (only AFTER the bindings are deployed, so
  *                                            allocation never picks an unbound binding)
  *
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
     console.log(`DRY-RUN: would create ${args.count} pool D1s (DB_CMTY_${String(args.start).padStart(4, "0")}…):`)
     for (const p of plans) console.log(`  ${p.bindingName}  ←  ${p.databaseName}`)
     console.log("\nPass --apply to create them. After creating + adding the d1_databases entries to")
-    console.log("wrangler.jsonc + `wrangler deploy`, run this INSERT against the pool D1:")
+    console.log("wrangler.jsonc + `bun run deploy -- --env=\"\"`, run this INSERT against the pool D1:")
     console.log(`  ${buildPoolInsertSql(plans.map((p) => p.bindingName))}`)
     return
   }
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
     log: (m) => console.log(m),
   })
 
-  console.log("\n✅ Created. Add these to wrangler.jsonc d1_databases, then `wrangler deploy`:")
+  console.log("\n✅ Created. Add these to wrangler.jsonc d1_databases, then `bun run deploy -- --env=\"\"`:")
   console.log(JSON.stringify(result.created, null, 2))
   console.log("\nTHEN — only after the bindings are deployed — run against the pool D1:")
   console.log(`  bunx wrangler d1 execute community-d1-shard-pool-staging --remote --command "${result.poolInsertSql}"`)

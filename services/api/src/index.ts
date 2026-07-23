@@ -114,6 +114,7 @@ registerStorySettlementChainPrimitives(storySettlementRealChain)
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
 declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
+declare const __PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__: string | undefined
 
 const app = new Hono<RequestCorrelationEnv>()
 
@@ -137,6 +138,18 @@ const COMPILED_BUILD_VERSION_METADATA: BuildVersionMetadata = {
   git_ref: typeof __PIRATE_BUILD_GIT_REF__ === "string" ? __PIRATE_BUILD_GIT_REF__ : null,
   git_sha: typeof __PIRATE_BUILD_GIT_SHA__ === "string" ? __PIRATE_BUILD_GIT_SHA__ : null,
   build_timestamp: typeof __PIRATE_BUILD_TIMESTAMP__ === "string" ? __PIRATE_BUILD_TIMESTAMP__ : null,
+}
+
+const COMPILED_COMMUNITY_D1_SHARD_SOURCE_VERSION =
+  typeof __PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__ === "string"
+    ? __PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__
+    : null
+
+export function expectedCommunityD1ShardSourceVersion(
+  env: Pick<Env, "COMMUNITY_D1_SHARD_SOURCE_VERSION">,
+): string | null {
+  return env.COMMUNITY_D1_SHARD_SOURCE_VERSION
+    ?? COMPILED_COMMUNITY_D1_SHARD_SOURCE_VERSION
 }
 
 app.use("*", requestCorrelationMiddleware)
@@ -247,6 +260,59 @@ app.get("/health/provisioning", async (c) => {
     )
   }
 
+  const expectedShardSourceVersion = expectedCommunityD1ShardSourceVersion(c.env)
+  let shardVersion
+  try {
+    shardVersion = await c.env.COMMUNITY_D1_SHARD!.communityD1Version()
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "community_d1_shard_version_unavailable",
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        shard_configured: true,
+        region_configured: true,
+        admin_configured: true,
+        environment: c.env.ENVIRONMENT ?? null,
+        expected_shard_source_version: expectedShardSourceVersion,
+        error_code: "d1_shard_version_unavailable",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+  const actualShardSourceVersion = shardVersion.build.sourceVersion
+  if (
+    !expectedShardSourceVersion
+    || !actualShardSourceVersion
+    || actualShardSourceVersion !== expectedShardSourceVersion
+  ) {
+    console.error(JSON.stringify({
+      event: "community_d1_shard_version_mismatch",
+      expectedShardSourceVersion,
+      actualShardSourceVersion,
+      shardVersion,
+    }))
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        shard_configured: true,
+        region_configured: true,
+        admin_configured: true,
+        environment: c.env.ENVIRONMENT ?? null,
+        shard_version: shardVersion,
+        expected_shard_source_version: expectedShardSourceVersion,
+        error_code: "d1_shard_version_mismatch",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+
   const result = await c.env.COMMUNITY_D1_SHARD!.communityD1PoolStats({
     adminToken: c.env.SHARD_ADMIN_TOKEN!,
   })
@@ -290,6 +356,8 @@ app.get("/health/provisioning", async (c) => {
       region_configured: true,
       admin_configured: true,
       environment: c.env.ENVIRONMENT ?? null,
+      shard_version: shardVersion,
+      expected_shard_source_version: expectedShardSourceVersion,
       pool_capacity: capacity,
       ...(degraded ? { degraded: true, degraded_reason: "d1_pool_low_capacity" } : {}),
       ...(exhausted ? { error_code: "d1_pool_exhausted" } : {}),
