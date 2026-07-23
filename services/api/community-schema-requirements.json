@@ -47,16 +47,48 @@
   "transitional": {
     "1143_lyrics_language.sql": {
       "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
-      "promotion_condition": "Promote to unconditional once DB_CMTY_0092 is resolved through its quarantine process and 1143 is independently verified in both its migration ledger and physical schema.",
+      "promotion_condition": "Promote to unconditional only after the fleet reconciles as 100 applied + 1 quarantined DB_CMTY_0092, DB_CMTY_0092 is resolved through its quarantine process, and 1143 is independently verified in both schema_migrations and physical column presence across the resulting full live denominator. Stage 2 remains blocked until this promotion closes.",
+      "expires_after": "2026-08-15T13:44:00Z",
       "capability_guard": "hasLyricsLanguageColumns",
-      "runtime_references": [
-        "src/lib/posts/community-post-projection.ts",
-        "src/lib/posts/community-post-serialization.ts",
-        "src/serializers/post.ts",
-        "src/types.ts"
-      ],
+      "runtime_reference_counts": {
+        "src/lib/posts/community-post-projection.ts": {
+          "lyrics_language": 4,
+          "lyrics_language_confidence": 3,
+          "lyrics_language_reliable": 3,
+          "lyrics_language_detector": 3,
+          "lyrics_language_detected_at": 3,
+          "lyrics_language_source_hash": 3
+        },
+        "src/lib/posts/community-post-serialization.ts": {
+          "lyrics_language": 5,
+          "lyrics_language_confidence": 5,
+          "lyrics_language_reliable": 5,
+          "lyrics_language_detector": 5,
+          "lyrics_language_detected_at": 5,
+          "lyrics_language_source_hash": 5
+        },
+        "src/serializers/post.ts": {
+          "lyrics_language": 2,
+          "lyrics_language_confidence": 2,
+          "lyrics_language_reliable": 2,
+          "lyrics_language_detector": 2,
+          "lyrics_language_detected_at": 2,
+          "lyrics_language_source_hash": 2
+        },
+        "src/types.ts": {
+          "lyrics_language": 1,
+          "lyrics_language_confidence": 1,
+          "lyrics_language_reliable": 1,
+          "lyrics_language_detector": 1,
+          "lyrics_language_detected_at": 1,
+          "lyrics_language_source_hash": 1
+        }
+      },
       "compatibility_tests": [
-        "src/lib/posts/community-post-projection.lyrics-language.test.ts"
+        {
+          "path": "src/lib/posts/community-post-projection.lyrics-language.test.ts",
+          "sha256": "6ecb769d1570ea57e2f72b1da9148ba66c8b68ad11a7306f9b89a2ab0d323343"
+        }
       ]
     }
   },
