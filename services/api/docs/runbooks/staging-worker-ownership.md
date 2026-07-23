@@ -77,17 +77,18 @@ anything:
 
 ## Current holds
 
-- **Codex `/root` — API #756 scheduler-bounding soak.** Starts
-  2026-07-23T17:39:09Z. Source head `f6ab4efc` (deploy the resulting squash
-  merge SHA). Measure the 45s community-drain cutoff, started/deferred community
-  counts, reward-monitor execution, connection-pressure errors, and continued
-  backlog drain. Do not deploy over this hold until its staging evidence and
-  final running SHA are recorded below.
+_None._
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-23** — API #756 scheduler-bounding soak failed. Deployed squash
+  `69a6c3e6` as Worker version `b843dfea`; the cutoff reported
+  `started_communities=1` and `deferred_communities=99`, but that one community
+  ran for 516.2s with zero jobs processed. Both reward monitors and five other
+  jobs were still deferred. Rolled staging back to version `4b613d6d`, pinned
+  API `f8636836`.
 - **2026-07-23** — rewards qualification-projection gate. Deployed api main
   `4af45dbb`, measured reconciler durations and `reward_pending_qualifications`
   transitions, then released. Staging left on `4af45dbb`, later replaced by a
