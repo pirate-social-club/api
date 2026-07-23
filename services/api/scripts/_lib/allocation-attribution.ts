@@ -1,6 +1,8 @@
 const SOURCE_HEADER = "x-pirate-allocation-source"
 const RUN_ID_HEADER = "x-pirate-allocation-run-id"
 
+// Keep the source explicit: the fetch user-agent collapses every Node/Bun
+// consumer into the same "node" bucket and cannot support capacity ranking.
 export function allocationAttributionHeaders(
   source: string,
   env: Record<string, string | undefined> = process.env,
