@@ -44,14 +44,25 @@
     "1142_song_study_sessions.sql"
   ],
   "features": {},
+  "transitional": {
+    "1143_lyrics_language.sql": {
+      "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
+      "promotion_condition": "Promote to unconditional once DB_CMTY_0092 is resolved through its quarantine process and 1143 is independently verified in both its migration ledger and physical schema.",
+      "capability_guard": "hasLyricsLanguageColumns",
+      "runtime_references": [
+        "src/lib/posts/community-post-projection.ts",
+        "src/lib/posts/community-post-serialization.ts",
+        "src/serializers/post.ts",
+        "src/types.ts"
+      ],
+      "compatibility_tests": [
+        "src/lib/posts/community-post-projection.lyrics-language.test.ts"
+      ]
+    }
+  },
   "deferred": {
     "1139_story_registration_durable_request.sql": {
       "rationale": "Core prepares durable_request_json for persist-and-replay Story registration, but this API commit does not read or write that column. Require it when the durable registration runtime lands."
-    },
-    "1143_lyrics_language.sql": {
-      "rationale": "TRANSITIONAL, not an indefinite deferral. Core adds posts.lyrics_language and its five provenance columns as Stage 1 of the source_language split; this API commit projects them read-only and never writes them. Deferred solely to avoid a core/API rollout race - marking it required the moment it exists on core main would fail schema verification on every live shard until the fleet run completes.",
-      "promotion_condition": "Promote to required once 1143 is applied to every non-quarantined live assigned shard (current denominator: 100 applied + 1 quarantined DB_CMTY_0092), verified independently in the schema_migrations ledger AND by physical column presence, and the quarantined shard is resolved through its own quarantine process. Stage 2 (the compatibility backfill) is blocked until that promotion closes.",
-      "differs_from_1139": "1139 has no runtime consumer and an independent standalone rollout. 1143 is a hard prerequisite for later stages of the source_language split and MUST become required - it must not inherit 1139's indefinite-deferral semantics."
     }
   }
 }

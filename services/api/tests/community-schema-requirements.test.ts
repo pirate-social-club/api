@@ -11,6 +11,13 @@ const RUNTIME_ROOT = fileURLToPath(new URL("../src/", import.meta.url))
 type RequirementsManifest = {
   unconditional: string[]
   features: Record<string, { migrations: string[] }>
+  transitional: Record<string, {
+    rationale?: unknown
+    promotion_condition?: unknown
+    capability_guard?: unknown
+    runtime_references?: unknown
+    compatibility_tests?: unknown
+  }>
   deferred: Record<string, { rationale?: unknown }>
 }
 
@@ -55,6 +62,7 @@ describe("community schema requirements manifest", () => {
     const classified = new Set([
       ...manifest.unconditional,
       ...Object.values(manifest.features).flatMap((policy) => policy.migrations),
+      ...Object.keys(manifest.transitional),
       ...Object.keys(manifest.deferred),
     ])
     const classificationFloor = Math.min(
@@ -81,6 +89,17 @@ describe("community schema requirements manifest", () => {
     for (const migration of manifest.unconditional) claim(migration, "unconditional")
     for (const [feature, policy] of Object.entries(manifest.features)) {
       for (const migration of policy.migrations) claim(migration, `features.${feature}`)
+    }
+    for (const [migration, policy] of Object.entries(manifest.transitional)) {
+      expect(
+        typeof policy.rationale === "string" && policy.rationale.trim().length > 0,
+        `${migration} is transitional without a rationale`,
+      ).toBe(true)
+      expect(
+        typeof policy.promotion_condition === "string" && policy.promotion_condition.trim().length > 0,
+        `${migration} is transitional without a promotion condition`,
+      ).toBe(true)
+      claim(migration, "transitional")
     }
     for (const [migration, policy] of Object.entries(manifest.deferred)) {
       expect(
@@ -114,6 +133,47 @@ describe("community schema requirements manifest", () => {
           references,
           `${migration} is deferred but runtime source references ${identifier}: ${references.join(", ")}`,
         ).toEqual([])
+      }
+    }
+  })
+
+  test("transitional migrations have exact audited runtime references and compatibility coverage", async () => {
+    const manifest = JSON.parse(await readFile(REQUIREMENTS_PATH, "utf8")) as RequirementsManifest
+    const sources = await Promise.all(
+      (await runtimeSourceFiles()).map(async (path) => ({ path, source: await readFile(path, "utf8") })),
+    )
+
+    for (const [migration, policy] of Object.entries(manifest.transitional)) {
+      expect(typeof policy.capability_guard, `${migration} has no capability guard`).toBe("string")
+      expect(Array.isArray(policy.runtime_references), `${migration} has no runtime reference allowlist`).toBe(true)
+      expect(Array.isArray(policy.compatibility_tests), `${migration} has no compatibility tests`).toBe(true)
+
+      const sql = await readFile(`${MIGRATIONS_ROOT}${migration}`, "utf8")
+      const identifiers = deferredSchemaIdentifiers(sql)
+      expect(identifiers.length, `${migration} exposes no mechanically checkable identifiers`).toBeGreaterThan(0)
+
+      const actualReferences = [...new Set(
+        identifiers.flatMap((identifier) => runtimeReferences(identifier, sources)),
+      )].sort()
+      const allowedReferences = [...policy.runtime_references as string[]].sort()
+      expect(
+        actualReferences,
+        `${migration} runtime references differ from its audited allowlist`,
+      ).toEqual(allowedReferences)
+
+      const guard = policy.capability_guard as string
+      expect(
+        sources.some(({ path, source }) => allowedReferences.includes(relative(SERVICE_ROOT, path))
+          && new RegExp(`\\b${guard}\\b`, "u").test(source)),
+        `${migration} capability guard ${guard} is absent from its allowed runtime path`,
+      ).toBe(true)
+
+      for (const testPath of policy.compatibility_tests as string[]) {
+        expect(testPath.endsWith(".test.ts"), `${migration} compatibility coverage is not a test`).toBe(true)
+        const source = await readFile(resolve(SERVICE_ROOT, testPath), "utf8")
+        expect(source).toContain(`${guard}: true`)
+        expect(source).toContain(`${guard}: false`)
+        for (const identifier of identifiers) expect(source).toContain(identifier)
       }
     }
   })
