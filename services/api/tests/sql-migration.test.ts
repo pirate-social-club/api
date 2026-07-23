@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
+import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
@@ -204,6 +207,57 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
     expect(toSqliteCompatibleStatement(
       "ALTER TABLE reward_campaign_monitor_state ALTER COLUMN last_successful_scan_at DROP NOT NULL;",
     )).toBeNull()
+  })
+
+  test("applies the verbatim 0153 fixture to sqlite and preserves root-state coherence", async () => {
+    const database = new Database(":memory:")
+    const applyFixture = async (fileName: string) => {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      await applyFixture("0152_control_plane_hns_root_delegation_state.sql")
+      database.exec(`
+        INSERT INTO hns_root_delegation_state (
+          normalized_root_label,
+          rollover_state,
+          state_changed_at,
+          created_at,
+          updated_at
+        ) VALUES ('pirate', 'none', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')
+      `)
+
+      await applyFixture("0153_control_plane_hns_root_authority_redundancy.sql")
+
+      const migrated = database.query(`
+        SELECT canonical_routing_eligible, routing_hard_denied
+        FROM hns_root_delegation_state
+        WHERE normalized_root_label = 'pirate'
+      `).get() as {
+        canonical_routing_eligible: number;
+        routing_hard_denied: number;
+      }
+      expect(migrated).toEqual({
+        canonical_routing_eligible: 0,
+        routing_hard_denied: 0,
+      })
+      expect(() => database.exec(`
+        UPDATE hns_root_delegation_state
+        SET authority_redundancy_ok = 1
+        WHERE normalized_root_label = 'pirate'
+      `)).toThrow()
+    } finally {
+      database.close()
+    }
   })
 
   test("a ';' inside a block comment does not split the statement", () => {

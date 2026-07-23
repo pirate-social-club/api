@@ -16446,6 +16446,7 @@ const spec = {
           "balance_cents",
           "today_earned_cents",
           "recent_events",
+          "recent_qualifications",
           "pending_verification",
           "cashout",
           "latest_in_flight_cashout"
@@ -16465,6 +16466,12 @@ const spec = {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RewardEventSummary"
+            }
+          },
+          "recent_qualifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardQualificationSummary"
             }
           },
           "pending_verification": {
@@ -19962,6 +19969,9 @@ const spec = {
           },
           "post": {
             "$ref": "#/components/schemas/LocalizedPostResponse"
+          },
+          "booking": {
+            "$ref": "#/components/schemas/FeedBooking"
           }
         }
       },
@@ -21626,6 +21636,80 @@ const spec = {
             "nullable": true
           },
           "created_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardQualificationSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "reward_qualification_event_id",
+          "reward_campaign_id",
+          "community_id",
+          "post_id",
+          "reward_period_key",
+          "qualification_basis",
+          "amount_cents",
+          "status",
+          "outcome_reason",
+          "expires_at",
+          "credited_reward_event_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reward_qualification_event_id": {
+            "type": "string"
+          },
+          "reward_campaign_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "reward_period_key": {
+            "type": "string"
+          },
+          "qualification_basis": {
+            "type": "string",
+            "enum": [
+              "study",
+              "karaoke",
+              "both"
+            ]
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardQualificationStatus"
+          },
+          "outcome_reason": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardQualificationOutcomeReason"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credited_reward_event_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at": {
             "type": "integer",
             "format": "int64"
           }
@@ -24121,6 +24205,30 @@ const spec = {
           "unavailable"
         ]
       },
+      "FeedBooking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host_user_id",
+          "base_price_cents",
+          "currency"
+        ],
+        "properties": {
+          "host_user_id": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USDC"
+            ]
+          }
+        }
+      },
       "KaraokeLeaderboardIdentity": {
         "type": "object",
         "required": [
@@ -24440,6 +24548,27 @@ const spec = {
           "campaign_practice_day",
           "campaign_milestone_7",
           "campaign_milestone_30"
+        ]
+      },
+      "RewardQualificationStatus": {
+        "type": "string",
+        "enum": [
+          "checking",
+          "pending_verification",
+          "credited",
+          "expired",
+          "unavailable"
+        ]
+      },
+      "RewardQualificationOutcomeReason": {
+        "type": "string",
+        "enum": [
+          "campaign_ended",
+          "budget_unavailable",
+          "identity_duplicate",
+          "owner_blocked",
+          "score",
+          "verification_window_expired"
         ]
       },
       "RewardVerificationState": {
