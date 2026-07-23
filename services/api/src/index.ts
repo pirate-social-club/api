@@ -665,11 +665,14 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
+      deadlineMs: COMMUNITY_JOB_TICK_DEADLINE_MS,
     })
-    if (summary.processed_jobs > 0 || summary.failed_communities.length > 0) {
+    if (summary.processed_jobs > 0 || summary.failed_communities.length > 0 || summary.deferred_communities > 0) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({
         failed_communities: summary.failed_communities.length,
         processed_jobs: summary.processed_jobs,
+        started_communities: summary.started_communities,
+        deferred_communities: summary.deferred_communities,
         communities: summary.communities.map((community) => ({
           community_id: community.community_id,
           processed_jobs: community.processed_jobs,
@@ -1120,6 +1123,13 @@ const SCHEDULED_JOB_CONCURRENCY = 2
 // under the 60s cron interval (no overlapping invocations stacking connections)
 // and far inside the Worker invocation limit (no mid-flight kill leaking a slot).
 const SCHEDULED_BATCH_DEADLINE_MS = 30_000
+// process_community_jobs polls up to 100 communities sequentially. It is bounded
+// by community count but not by time, so under D1 pressure a single tick has run
+// 6-7 minutes, holding the scheduler lease and deferring every job behind it —
+// including the reward campaign and treasury solvency monitors. Bound the drain
+// in wall-time too: unstarted communities roll to the next tick, which the poll
+// rotation already accounts for.
+const COMMUNITY_JOB_TICK_DEADLINE_MS = 45_000
 // Protect the seven settlement/money-movement jobs at the front of the ordered
 // batch plus the community job drain. They must receive a start even when D1
 // pressure pushes the batch past its nominal deadline; monitoring work may defer

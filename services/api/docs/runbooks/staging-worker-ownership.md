@@ -77,7 +77,12 @@ anything:
 
 ## Current holds
 
-_None._
+- **Codex `/root` — API #756 scheduler-bounding soak.** Starts
+  2026-07-23T17:39:09Z. Source head `f6ab4efc` (deploy the resulting squash
+  merge SHA). Measure the 45s community-drain cutoff, started/deferred community
+  counts, reward-monitor execution, connection-pressure errors, and continued
+  backlog drain. Do not deploy over this hold until its staging evidence and
+  final running SHA are recorded below.
 
 ## Hold history
 
