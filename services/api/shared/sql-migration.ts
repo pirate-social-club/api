@@ -198,6 +198,164 @@ const SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD = [
   `,
 ]
 
+// Migration 0153 adds seven columns plus table-level CHECK/FK constraints in
+// one PostgreSQL ALTER TABLE. SQLite supports neither comma-separated ADD
+// COLUMN clauses nor ADD CONSTRAINT, so rebuild the table while preserving all
+// 0152 invariants. The fixture itself remains byte-identical to Core; this is
+// the dialect boundary used by every control-plane fixture.
+const SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD = [
+  `
+    CREATE TABLE hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label TEXT PRIMARY KEY,
+      rollover_state TEXT NOT NULL CHECK (
+        rollover_state IN (
+          'none',
+          'required',
+          'new_key_prepublished',
+          'new_ds_pending',
+          'overlap',
+          'old_ds_removal_pending'
+        )
+      ),
+      expected_keyset_id TEXT,
+      expected_ds_derived_at TIMESTAMPTZ,
+      pending_keyset_id TEXT,
+      pending_evidence_kind TEXT CHECK (
+        pending_evidence_kind IS NULL OR pending_evidence_kind IN (
+          'wallet_transaction_id',
+          'mempool_observation',
+          'user_acknowledgement'
+        )
+      ),
+      pending_evidence_ref TEXT,
+      pending_evidence_at TIMESTAMPTZ,
+      last_parent_observation_id TEXT,
+      last_parent_observation_outcome TEXT CHECK (
+        last_parent_observation_outcome IS NULL
+        OR last_parent_observation_outcome = 'succeeded'
+      ),
+      last_parent_observation_attempt_at TIMESTAMPTZ,
+      state_changed_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      last_redundancy_observation_id TEXT,
+      last_redundancy_observation_outcome TEXT CHECK (
+        last_redundancy_observation_outcome IS NULL
+        OR last_redundancy_observation_outcome = 'succeeded'
+      ),
+      last_redundancy_observation_at TIMESTAMPTZ,
+      last_redundancy_observation_attempt_at TIMESTAMPTZ,
+      canonical_routing_eligible INTEGER NOT NULL DEFAULT 0 CHECK (
+        canonical_routing_eligible IN (0, 1)
+      ),
+      routing_hard_denied INTEGER NOT NULL DEFAULT 0 CHECK (
+        routing_hard_denied IN (0, 1)
+      ),
+      FOREIGN KEY (expected_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (pending_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (
+        last_parent_observation_id,
+        normalized_root_label,
+        last_parent_observation_outcome
+      ) REFERENCES hns_root_parent_observations(
+        parent_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      CONSTRAINT hns_root_delegation_state_pending_evidence_complete CHECK (
+        (pending_evidence_kind IS NULL
+          AND pending_evidence_ref IS NULL
+          AND pending_evidence_at IS NULL)
+        OR (pending_evidence_kind IS NOT NULL
+          AND pending_evidence_ref IS NOT NULL
+          AND pending_evidence_at IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_last_observation_complete CHECK (
+        (last_parent_observation_id IS NULL
+          AND last_parent_observation_outcome IS NULL)
+        OR (last_parent_observation_id IS NOT NULL
+          AND last_parent_observation_outcome IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_redundancy_complete CHECK (
+        (authority_redundancy_ok IS NULL
+          AND last_redundancy_observation_id IS NULL
+          AND last_redundancy_observation_outcome IS NULL
+          AND last_redundancy_observation_at IS NULL)
+        OR (authority_redundancy_ok IS NOT NULL
+          AND last_redundancy_observation_id IS NOT NULL
+          AND last_redundancy_observation_outcome = 'succeeded'
+          AND last_redundancy_observation_at IS NOT NULL)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at
+    FROM hns_root_delegation_state;
+  `,
+  `DROP TABLE hns_root_delegation_state;`,
+  `ALTER TABLE hns_root_delegation_state_sqlite_rebuild RENAME TO hns_root_delegation_state;`,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_observation_due
+      ON hns_root_delegation_state(
+        (last_parent_observation_attempt_at IS NOT NULL),
+        last_parent_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_last_observation
+      ON hns_root_delegation_state(last_parent_observation_id);
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollover
+      ON hns_root_delegation_state(rollover_state)
+      WHERE rollover_state <> 'none';
+  `,
+]
+
 // Drop leading blank / `--` comment lines so statement-type detection sees the real SQL. The
 // splitter glues a file's leading comment block onto its first statement; without this, a
 // skippable Postgres-only statement (e.g. `ALTER TABLE ... OWNER TO`) preceded by comments would
@@ -261,6 +419,14 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
     return []
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
+    && normalized.includes("ADD COLUMN AUTHORITY_REDUNDANCY_OK ")
+    && normalized.includes("HNS_ROOT_DELEGATION_STATE_REDUNDANCY_COMPLETE")
+  ) {
+    return SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
