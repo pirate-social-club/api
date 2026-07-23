@@ -1,6 +1,7 @@
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
+import { recomputeBookingFeedDiscoverySnapshot } from "../bookings/booking-feed-discovery"
 import { applyCanonicalBookingMigrations } from "../bookings/test-migrations"
 import {
   listFeedBookingsByHostUserIds,
@@ -10,6 +11,7 @@ import {
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "feed_booking_discovery_test"
+const MONDAY_WINDOW_START = "2026-07-20T00:00:00.000Z"
 
 function urlFor(database?: string): string {
   const url = new URL(ADMIN_URL as string)
@@ -44,6 +46,7 @@ function makeExecutor(connection: {
 
 describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
   let database: SQL
+  let executor: FeedBookingExecutor
 
   beforeAll(async () => {
     const root = connect()
@@ -64,27 +67,73 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         platform_fee_bps, is_published, created_at, updated_at
       ) VALUES
         ('host_ready', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_no_rules', 'UTC', 4000, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_unreachable', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_priority', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_blocked', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
+        ('host_full', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
+        ('host_no_window', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_base', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_above', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
+        ('host_duration', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_dst', 'Europe/Berlin', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_expired', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
         ('host_unpublished', 'UTC', 4500, 1800, 1000, FALSE, NOW(), NOW())
     `)
     await setup.unsafe(`
       INSERT INTO bookings.availability_rules (
         rule_id, host_user_id, by_weekday, start_local, end_local,
-        slot_duration_seconds, created_at, updated_at
+        slot_duration_seconds, effective_from_utc, created_at, updated_at
       ) VALUES
-        ('rule_ready', 'host_ready', '{1}', '09:00', '10:00', 1800, NOW(), NOW()),
-        ('rule_unpublished', 'host_unpublished', '{2}', '09:00', '10:00', 1800, NOW(), NOW())
+        ('rule_unreachable', 'host_unreachable', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_priority', 'host_priority', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_blocked', 'host_blocked', '{1}', '09:00', '11:00', 3600, NULL, NOW(), NOW()),
+        ('rule_full', 'host_full', '{1}', '09:00', '10:00', 3600, NULL, NOW(), NOW()),
+        ('rule_no_window', 'host_no_window', '{1}', '09:00', '10:00', 1800, '2026-08-04T00:00:00Z', NOW(), NOW()),
+        ('rule_base', 'host_base', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_above', 'host_above', '{1}', '09:00', '11:00', 3600, NULL, NOW(), NOW()),
+        ('rule_duration', 'host_duration', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_dst', 'host_dst', '{0}', '01:00', '03:00', 1800, NULL, NOW(), NOW())
     `)
     await setup.unsafe(`
       INSERT INTO bookings.price_rules (
         price_rule_id, host_user_id, match_weekday, match_local_start, match_local_end,
         match_duration_seconds, price_cents, priority, created_at, updated_at
       ) VALUES
-        ('price_ready_low', 'host_ready', '{1}', '09:00', '09:30', 1800, 2500, 20, NOW(), NOW()),
-        ('price_ready_high', 'host_ready', '{1}', '09:30', '10:00', 1800, 5000, 10, NOW(), NOW())
+        ('price_unreachable', 'host_unreachable', '{0}', NULL, NULL, NULL, 1000, 10, NOW(), NOW()),
+        ('price_priority_high', 'host_priority', '{1}', NULL, NULL, 1800, 3000, 20, NOW(), NOW()),
+        ('price_priority_low', 'host_priority', '{1}', NULL, NULL, 1800, 1000, 10, NOW(), NOW()),
+        ('price_blocked', 'host_blocked', '{1}', '09:00', '10:00', 3600, 2000, 10, NOW(), NOW()),
+        ('price_above', 'host_above', '{1}', '09:00', '10:00', 3600, 6000, 10, NOW(), NOW()),
+        ('price_duration', 'host_duration', '{1}', NULL, NULL, 3600, 1000, 10, NOW(), NOW()),
+        ('price_dst', 'host_dst', '{0}', NULL, NULL, 1800, 2500, 10, NOW(), NOW())
+    `)
+    await setup.unsafe(`
+      INSERT INTO bookings.availability_exceptions (
+        exception_id, host_user_id, kind, start_utc, end_utc, created_at
+      ) VALUES
+        ('block_1', 'host_blocked', 'block', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', NOW()),
+        ('block_2', 'host_blocked', 'block', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', NOW())
+    `)
+    await setup.unsafe(`
+      INSERT INTO bookings.holds (
+        hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
+        price_cents, status, source_community_id, expires_at_utc, created_at, updated_at
+      ) VALUES
+        ('hold_1', 'host_full', 'booker_1', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 3500, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW()),
+        ('hold_2', 'host_full', 'booker_2', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', 3500, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW())
+    `)
+    await setup.unsafe(`
+      INSERT INTO bookings.feed_discovery_snapshots (
+        host_user_id, has_available_slot, starting_price_cents,
+        window_start_utc, window_end_utc, valid_until, computed_at
+      ) VALUES
+        ('host_ready', TRUE, 2500, NOW(), NOW() + INTERVAL '14 days', NOW() + INTERVAL '10 minutes', NOW()),
+        ('host_expired', TRUE, 1500, NOW() - INTERVAL '20 minutes', NOW() + INTERVAL '13 days', NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '20 minutes'),
+        ('host_unpublished', TRUE, 1000, NOW(), NOW() + INTERVAL '14 days', NOW() + INTERVAL '10 minutes', NOW())
     `)
     await setup.end()
     database = connect(TEST_DB)
+    executor = makeExecutor(database)
   })
 
   afterAll(async () => {
@@ -97,10 +146,10 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
     await root.end()
   })
 
-  test("returns only published hosts with configured availability", async () => {
-    const result = await listFeedBookingsByHostUserIds(makeExecutor(database), [
+  test("reads only current snapshots for published hosts", async () => {
+    const result = await listFeedBookingsByHostUserIds(executor, [
       "host_ready",
-      "host_no_rules",
+      "host_expired",
       "host_unpublished",
       "host_missing",
     ])
@@ -110,9 +159,44 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
       {
         host_user_id: "host_ready",
         base_price_cents: 3500,
+        has_available_slot: true,
         starting_price_cents: 2500,
         currency: "USDC",
       },
     ]])
+  })
+
+  test("derives floors from canonical available slots rather than raw rule minima", async () => {
+    const expected = new Map<string, number | null>([
+      ["host_unreachable", 3500],
+      ["host_priority", 3000],
+      ["host_blocked", 3500],
+      ["host_full", null],
+      ["host_no_window", null],
+      ["host_base", 3500],
+      ["host_above", 3500],
+      ["host_duration", 3500],
+    ])
+
+    for (const [hostUserId, startingPriceCents] of expected) {
+      const snapshot = await recomputeBookingFeedDiscoverySnapshot({
+        executor: executor as never,
+        hostUserId,
+        nowUtc: MONDAY_WINDOW_START,
+      })
+      expect(snapshot?.startingPriceCents, hostUserId).toBe(startingPriceCents)
+      expect(snapshot?.hasAvailableSlot, hostUserId).toBe(startingPriceCents !== null)
+    }
+  })
+
+  test("resolves a DST-boundary window in the host timezone", async () => {
+    const snapshot = await recomputeBookingFeedDiscoverySnapshot({
+      executor: executor as never,
+      hostUserId: "host_dst",
+      nowUtc: "2026-10-24T00:00:00.000Z",
+    })
+
+    expect(snapshot?.hasAvailableSlot).toBe(true)
+    expect(snapshot?.startingPriceCents).toBe(2500)
   })
 })
