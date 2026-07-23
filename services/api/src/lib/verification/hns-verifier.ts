@@ -60,6 +60,49 @@ export type HnsEnsureZoneResult = {
   observation_provider?: string | null
 }
 
+export type HnsRootAuthorityObservation = {
+  root_label: string
+  zone_name: string
+  provider: string
+  observed_at: string
+  authoritative_dnssec_valid: boolean
+  parent_ds_matches_live_dnskey: boolean
+  earliest_rrsig_expires_at: string | null
+  parent: {
+    nameservers: string[]
+    ds_records: Array<{
+      key_tag: number
+      algorithm: number
+      digest_type: number
+      digest: string
+    }>
+  }
+  parent_ds_results: Array<{
+    key_tag: number
+    algorithm: number
+    digest_type: number
+    digest: string
+    supported: boolean
+    matches_live_dnskey: boolean | null
+    failure_code: string | null
+  }>
+  authority_redundancy_ok: boolean
+  authorities: Array<{
+    nameserver: string
+    reachable: boolean
+    soa_serial: string | null
+    failure_code: string | null
+    serial_in_sync: boolean | null
+  }>
+  required_rrsets: Array<{
+    name: string
+    type: string
+    validated: boolean
+    rrsig_expirations: string[]
+    failure_code: string | null
+  }>
+}
+
 export type HnsPublishChallengeResult = {
   root_label?: string
   zone_name?: string
@@ -239,6 +282,18 @@ export async function inspectHnsRoot(
   return request<HnsInspectResult>(env, `/inspect-public?${params.toString()}`, {
     signal: input.signal,
   })
+}
+
+export async function observeHnsRootAuthority(
+  env: Env,
+  input: { rootLabel: string },
+): Promise<HnsRootAuthorityObservation> {
+  assertHnsRootLabel(input.rootLabel)
+  const params = new URLSearchParams({ root_label: input.rootLabel })
+  return request<HnsRootAuthorityObservation>(
+    env,
+    `/observe-root-authority?${params.toString()}`,
+  )
 }
 
 export async function verifyHnsTxtRecord(
