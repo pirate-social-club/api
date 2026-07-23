@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test"
 import {
   processAvailableCommunityJobs,
   processCommunityJobsForCommunity,
-  selectScheduledCommunityJobPollIds,
+  rotateCommunityJobTickIds,
 } from "./runner"
 import type { Env } from "../../../env"
 import type { CommunityJobRepository } from "./runner-types"
@@ -91,14 +91,13 @@ describe("processAvailableCommunityJobs tick deadline", () => {
   })
 
   it("rotates the front of a fully selected poll so truncated sweeps stay fair", () => {
-    const communities = ["cmt_1", "cmt_2", "cmt_3"].map((community_id) => ({ community_id }))
-
-    expect(selectScheduledCommunityJobPollIds(communities, 3, 0)).toEqual([
+    const communityIds = ["cmt_1", "cmt_2", "cmt_3"]
+    expect(rotateCommunityJobTickIds(communityIds, 0)).toEqual([
       "cmt_1",
       "cmt_2",
       "cmt_3",
     ])
-    expect(selectScheduledCommunityJobPollIds(communities, 3, 60_000)).toEqual([
+    expect(rotateCommunityJobTickIds(communityIds, 60_000)).toEqual([
       "cmt_2",
       "cmt_3",
       "cmt_1",

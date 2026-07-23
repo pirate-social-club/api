@@ -280,15 +280,8 @@ export function selectScheduledCommunityJobPollIds(
   maxCommunities: number,
   nowMs: number = Date.now(),
 ): string[] {
-  const minuteBucket = Math.floor(nowMs / 60_000)
-  const rotate = (ids: string[]): string[] => {
-    if (ids.length <= 1) return ids
-    const start = minuteBucket % ids.length
-    return ids.slice(start).concat(ids.slice(0, start))
-  }
-
   if (communities.length <= maxCommunities) {
-    return rotate(communities.map((community) => community.community_id))
+    return communities.map((community) => community.community_id)
   }
 
   const recentCount = Math.max(1, Math.min(maxCommunities, Math.ceil(maxCommunities / 4)))
@@ -307,12 +300,19 @@ export function selectScheduledCommunityJobPollIds(
     return Array.from(selected)
   }
 
+  const minuteBucket = Math.floor(nowMs / 60_000)
   const start = remaining.length === 0 ? 0 : (minuteBucket * rotatingCount) % remaining.length
   for (let index = 0; index < rotatingCount && index < remaining.length; index += 1) {
     selected.add(remaining[(start + index) % remaining.length]!.community_id)
   }
 
-  return rotate(Array.from(selected))
+  return Array.from(selected)
+}
+
+export function rotateCommunityJobTickIds(ids: string[], nowMs: number): string[] {
+  if (ids.length <= 1) return ids
+  const start = Math.floor(nowMs / 60_000) % ids.length
+  return ids.slice(start).concat(ids.slice(0, start))
 }
 
 /**
@@ -606,9 +606,9 @@ export async function processAvailableCommunityJobs(input: {
     : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
-    : selectScheduledCommunityJobPollIds(
-      activeCommunities,
-      maxCommunities,
+    : rotateCommunityJobTickIds(
+      selectScheduledCommunityJobPollIds(activeCommunities, maxCommunities, startedAt),
+      startedAt,
     )
   const communities: CommunityJobCommunityProcessingSummary[] = []
   const sweepStartedAt = now()
