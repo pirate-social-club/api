@@ -12,6 +12,7 @@ import {
   type KaraokeStreamingSttAdapter,
   type ScorableKaraokeLine,
   type StoredKaraokeSessionSnapshot,
+  type KaraokeTransportGuardDiagnostic,
 } from "@pirate-social-club/karaoke-runtime";
 
 import type { Env } from "../../env";
@@ -161,6 +162,24 @@ interface KaraokeWebSocketAttachment {
   connectedAtMs: number;
 }
 
+function hasRestoreState(restore: {
+  lastClientSequence?: number | null;
+  lastSttSequence?: number | null;
+  serverSequence?: number;
+}): boolean {
+  return restore.lastClientSequence !== undefined
+    || restore.lastSttSequence !== undefined
+    || restore.serverSequence !== undefined;
+}
+
+async function socketIdentityHash(nonce: string | null): Promise<string | null> {
+  if (!nonce) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
+}
+
 export interface KaraokeSessionRuntimeDOOptions {
   sttAdapter?: KaraokeStreamingSttAdapter;
   outboxStore?: OutboxStore;
@@ -177,6 +196,11 @@ export class KaraokeSessionRuntimeDO {
   private effectRunner: CloudflareKaraokeEffectRunner | null = null;
   private sttAdapter: KaraokeStreamingSttAdapter | null = null;
   private meta: PersistedRuntimeMeta | null = null;
+  // Set only while a client WebSocket message is being evaluated by the host.
+  // The runtime guard diagnostic has no socket dependency, so keep this DO-level
+  // correlation value out of the shared protocol package and never retain a raw
+  // nonce in memory or logs.
+  private activeSocketIdentityHash: string | null = null;
   private readonly schemaReady: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env);
@@ -237,7 +261,9 @@ export class KaraokeSessionRuntimeDO {
         await this.effectRunner!.reportTransportError(decoded.error, this.host!.snapshot().state);
         return;
       }
-      await this.host!.handleAudioFrame(decoded.frame);
+      await this.withSocketDiagnosticContext(server, async () => {
+        await this.host!.handleAudioFrame(decoded.frame);
+      });
       await this.persistSnapshotIfNeeded();
       return;
     }
@@ -253,7 +279,9 @@ export class KaraokeSessionRuntimeDO {
       await this.sendSessionError(server, "WebSocket message is not a KaraokeClientEvent");
       return;
     }
-    await this.host!.handleClientEvent(clientEvent);
+    await this.withSocketDiagnosticContext(server, async () => {
+      await this.host!.handleClientEvent(clientEvent);
+    });
     await this.persistSnapshotIfNeeded();
   }
 
@@ -577,6 +605,7 @@ export class KaraokeSessionRuntimeDO {
       serverSequence?: number;
     } = {},
   ): Promise<void> {
+    const hostLifecycle = hasRestoreState(restore) ? "restored" : "resident";
     const outbox = this.options.outboxStore ?? new SqliteOutboxStore({ storage: this.ctx.storage });
     const broadcast = this.options.broadcast ?? ((event) => this.broadcastToAttempt(event));
     const effectRunner = new CloudflareKaraokeEffectRunner({
@@ -598,6 +627,40 @@ export class KaraokeSessionRuntimeDO {
         lastClientSequence: restore.lastClientSequence,
         lastSttSequence: restore.lastSttSequence,
       },
+      onTransportGuardFailure: (diagnostic) => {
+        this.logTransportGuardFailure(diagnostic, hostLifecycle);
+      },
+    });
+  }
+
+  private async withSocketDiagnosticContext<T>(server: WebSocket, callback: () => Promise<T>): Promise<T> {
+    const previousSocketIdentityHash = this.activeSocketIdentityHash;
+    this.activeSocketIdentityHash = await socketIdentityHash(this.readAttachment(server)?.nonce ?? null);
+    try {
+      return await callback();
+    } finally {
+      this.activeSocketIdentityHash = previousSocketIdentityHash;
+    }
+  }
+
+  private logTransportGuardFailure(
+    diagnostic: KaraokeTransportGuardDiagnostic,
+    hostLifecycle: "resident" | "restored",
+  ): void {
+    // Workers Logs indexes object fields, making reset-shaped failures (for
+    // example 1 after a persisted 87) queryable without exposing diagnostics to
+    // the client transport envelope.
+    console.warn({
+      attemptId: diagnostic.attemptId,
+      channel: diagnostic.channel,
+      code: diagnostic.code,
+      event: "karaoke.transport_guard_rejected",
+      hostLifecycle,
+      incomingSequence: diagnostic.incomingSequence,
+      previousSequence: diagnostic.previousSequence,
+      sessionId: diagnostic.sessionId,
+      socketIdentityHash: diagnostic.channel === "client" ? this.activeSocketIdentityHash : null,
+      sttStreamGeneration: diagnostic.sttStreamGeneration,
     });
   }
 
