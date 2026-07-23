@@ -51,6 +51,7 @@ export type PostProjectionSchema = {
   hasSongCoverArtRef: boolean
   hasSongDurationMs: boolean
   hasAsyncPublishColumns: boolean
+  hasLyricsLanguageColumns: boolean
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
@@ -80,6 +81,14 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("publish_failure_message")
       && columnNames.has("publish_failure_retryable")
       && columnNames.has("publish_failed_at"),
+    // 1143 is transitional/deferred: shards that have not received the fleet run yet
+    // (including quarantined ones) must project NULL rather than fail the query.
+    hasLyricsLanguageColumns: columnNames.has("lyrics_language")
+      && columnNames.has("lyrics_language_confidence")
+      && columnNames.has("lyrics_language_reliable")
+      && columnNames.has("lyrics_language_detector")
+      && columnNames.has("lyrics_language_detected_at")
+      && columnNames.has("lyrics_language_source_hash"),
   }
 }
 
@@ -105,6 +114,12 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   const asyncPublishProjection = schema.hasAsyncPublishColumns
     ? "idempotency_body_hash, publish_failure_code, publish_failure_message, publish_failure_retryable, publish_failed_at"
     : "NULL AS idempotency_body_hash, NULL AS publish_failure_code, NULL AS publish_failure_message, NULL AS publish_failure_retryable, NULL AS publish_failed_at"
+  const lyricsLanguageProjection = schema.hasLyricsLanguageColumns
+    ? "lyrics_language, lyrics_language_confidence, lyrics_language_reliable, lyrics_language_detector, lyrics_language_detected_at, lyrics_language_source_hash"
+    // A shard without 1143 reports lyrics_language as absent, never as an error. Note the
+    // reliable flag projects 0 (not NULL) to match the column's NOT NULL DEFAULT 0 semantics:
+    // no detection evidence must read as unverified, never as reliable.
+    : "NULL AS lyrics_language, NULL AS lyrics_language_confidence, 0 AS lyrics_language_reliable, NULL AS lyrics_language_detector, NULL AS lyrics_language_detected_at, NULL AS lyrics_language_source_hash"
   const eventProjection = schema.hasPostEvents
     ? `
   (
@@ -173,6 +188,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   ${eventProjection},
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
   ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, translation_policy,
+  ${lyricsLanguageProjection},
   access_mode, asset_id, (
     SELECT live_room_id
     FROM live_rooms

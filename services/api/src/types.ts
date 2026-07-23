@@ -585,6 +585,18 @@ export type Post = {
   creator_relation?: PostCreatorRelation | null
   promotion_disclosure?: PromotionDisclosure | null
   source_language?: string | null
+  /**
+   * Dominant language of `lyrics`. Null when the post has no lyrics, when detection
+   * abstained, or when the shard has not yet received migration 1143 (transitional).
+   * Never derived from title/body/caption and never used for translation provenance.
+   */
+  lyrics_language?: string | null
+  lyrics_language_confidence?: number | null
+  /** False when there is no detection evidence. Never defaults true. */
+  lyrics_language_reliable?: boolean
+  lyrics_language_detector?: string | null
+  lyrics_language_detected_at?: string | null
+  lyrics_language_source_hash?: string | null
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
