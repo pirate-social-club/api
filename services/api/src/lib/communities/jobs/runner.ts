@@ -46,6 +46,10 @@ type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
   failed_communities: CommunityJobCommunityFailureSummary[]
+  /** Communities this tick began draining. */
+  started_communities: number
+  /** Communities left for the next tick because the tick deadline passed. */
+  deferred_communities: number
 }
 
 export type ExhaustedCommunityJob = {
@@ -559,8 +563,13 @@ export async function processAvailableCommunityJobs(input: {
   maxCommunities?: number
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
+  deadlineMs?: number | null
+  now?: () => number
 }): Promise<CommunityJobProcessingSummary> {
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const now = input.now ?? (() => Date.now())
+  const startedAt = now()
+  const deadlineMs = input.deadlineMs != null && input.deadlineMs > 0 ? input.deadlineMs : null
   const activeCommunities = input.communityIds?.length
     ? []
     : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
@@ -579,7 +588,21 @@ export async function processAvailableCommunityJobs(input: {
     communityIds,
   })
 
+  let startedCommunities = 0
   for (const communityId of communityIds) {
+    // The batch deadline stops this tick from starting more communities; it never
+    // interrupts a community already in flight. Always start at least one so a
+    // tick cannot degenerate into doing nothing, and log what was left for the
+    // next tick rather than truncating silently.
+    if (deadlineMs != null && startedCommunities > 0 && now() - startedAt >= deadlineMs) {
+      console.warn("[community-job] tick deadline reached", JSON.stringify({
+        started_communities: startedCommunities,
+        deferred_communities: communityIds.length - startedCommunities,
+        deadline_ms: deadlineMs,
+      }))
+      break
+    }
+    startedCommunities += 1
     let processed: CommunityJobCommunityProcessingSummary
     try {
       processed = await processCommunityJobsForCommunity({
@@ -607,6 +630,8 @@ export async function processAvailableCommunityJobs(input: {
     processed_jobs: communities.reduce((sum, community) => sum + community.processed_jobs, 0),
     communities,
     failed_communities: failedCommunities,
+    started_communities: startedCommunities,
+    deferred_communities: communityIds.length - startedCommunities,
   }
 }
 
