@@ -1320,6 +1320,7 @@ describe("rewards routes", () => {
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
+      recent_qualifications: [],
       pending_verification: {
         count: 0,
         conditional_cents: 0,

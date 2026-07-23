@@ -180,6 +180,15 @@ describe("reward campaign reconciler", () => {
     expect(beforeVerification).toMatchObject({
       balance_cents: 0,
       pending_verification: { count: 1, conditional_cents: 100 },
+      recent_qualifications: [{
+        reward_qualification_event_id: candidate.eventId,
+        reward_campaign_id: "rcp_pending_verification",
+        post_id: candidate.postId,
+        qualification_basis: "karaoke",
+        amount_cents: 100,
+        status: "pending_verification",
+        outcome_reason: null,
+      }],
       cashout: { eligible: false, verification_state: "unverified", verification_provider: "self" },
     })
 
@@ -215,6 +224,13 @@ describe("reward campaign reconciler", () => {
     expect(afterVerification).toMatchObject({
       balance_cents: 100,
       pending_verification: { count: 0, conditional_cents: 0 },
+      recent_qualifications: [{
+        reward_qualification_event_id: candidate.eventId,
+        amount_cents: 100,
+        status: "credited",
+        outcome_reason: null,
+        credited_reward_event_id: expect.stringMatching(/^rew_/),
+      }],
       cashout: { eligible: true, verification_state: "verified", verification_provider: "self" },
     })
     const projection = await ctx.client.execute({

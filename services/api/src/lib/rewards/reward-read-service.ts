@@ -11,6 +11,9 @@ import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "..
 import type {
   RewardEventKind,
   RewardEventSummary,
+  RewardQualificationOutcomeReason,
+  RewardQualificationStatus,
+  RewardQualificationSummary,
   RewardPayoutSummary,
   RewardsSummaryResponse,
   RewardVerificationState,
@@ -71,6 +74,35 @@ function serializeRewardPayout(row: QueryResultRow, chainId: number): RewardPayo
   }
 }
 
+function serializeRewardQualification(row: QueryResultRow): RewardQualificationSummary {
+  const storedStatus = requiredString(row, "status")
+  const status: RewardQualificationStatus =
+    storedStatus === "reconciling"
+      ? "checking"
+      : storedStatus === "ineligible"
+        ? "unavailable"
+        : storedStatus as RewardQualificationStatus
+  if (!["checking", "pending_verification", "credited", "expired", "unavailable"].includes(status)) {
+    throw new Error(`unexpected_reward_qualification_status:${storedStatus}`)
+  }
+  return {
+    id: requiredString(row, "reward_pending_qualification_id"),
+    reward_qualification_event_id: requiredString(row, "reward_qualification_event_id"),
+    reward_campaign_id: requiredString(row, "reward_campaign_id"),
+    community_id: requiredString(row, "community_id"),
+    post_id: requiredString(row, "post_id"),
+    reward_period_key: requiredString(row, "reward_period_key"),
+    qualification_basis: requiredString(row, "qualification_basis") as RewardQualificationSummary["qualification_basis"],
+    amount_cents: requiredNumber(row, "conditional_amount_cents"),
+    status,
+    outcome_reason: stringOrNull(rowValue(row, "terminal_reason")) as RewardQualificationOutcomeReason | null,
+    expires_at: unixSeconds(rowValue(row, "expires_at")),
+    credited_reward_event_id: stringOrNull(rowValue(row, "credited_reward_event_id")),
+    created_at: unixSeconds(rowValue(row, "created_at")),
+    updated_at: unixSeconds(rowValue(row, "updated_at")),
+  }
+}
+
 function resolveVerificationState(hasNullifier: boolean): RewardVerificationState {
   return hasNullifier ? "verified" : "unverified"
 }
@@ -96,6 +128,7 @@ export async function getRewardsSummaryForUser(input: {
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
+      recent_qualifications: [],
       pending_verification: {
         count: 0,
         conditional_cents: 0,
@@ -111,7 +144,7 @@ export async function getRewardsSummaryForUser(input: {
     }
   }
 
-  const [creditRow, payoutRow, todayRow, eventRows, pendingRow, latestInFlightRow, hasNullifier] = await Promise.all([
+  const [creditRow, payoutRow, todayRow, eventRows, qualificationRows, pendingRow, latestInFlightRow, hasNullifier] = await Promise.all([
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS credit_cents
@@ -146,6 +179,19 @@ export async function getRewardsSummaryForUser(input: {
         FROM reward_events
         WHERE user_id = ?1
         ORDER BY created_at DESC, reward_event_id DESC
+        LIMIT ?2
+      `,
+      args: [input.userId, recentLimit],
+    }),
+    client.execute({
+      sql: `
+        SELECT reward_pending_qualification_id, reward_qualification_event_id,
+          reward_campaign_id, community_id, post_id, reward_period_key,
+          qualification_basis, conditional_amount_cents, status, terminal_reason,
+          expires_at, credited_reward_event_id, created_at, updated_at
+        FROM reward_pending_qualifications
+        WHERE user_id = ?1
+        ORDER BY updated_at DESC, reward_pending_qualification_id DESC
         LIMIT ?2
       `,
       args: [input.userId, recentLimit],
@@ -189,6 +235,7 @@ export async function getRewardsSummaryForUser(input: {
     balance_cents: balanceCents,
     today_earned_cents: todayEarnedCents,
     recent_events: eventRows.rows.map(serializeRewardEvent),
+    recent_qualifications: qualificationRows.rows.map(serializeRewardQualification),
     pending_verification: {
       count: pendingCount,
       conditional_cents: pendingConditionalCents,

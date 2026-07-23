@@ -232,7 +232,7 @@ async function markPendingQualificationTerminal(input: {
   })
 }
 
-async function createPendingQualification(input: {
+async function ensureQualificationProjection(input: {
   client: { execute: Client["execute"] }
   candidate: RewardQualificationCandidate
   campaignId: string
@@ -249,7 +249,7 @@ async function createPendingQualification(input: {
         expires_at, created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9,
-        'pending_verification', ?10, ?11, ?11
+        'reconciling', ?10, ?11, ?11
       )
       ON CONFLICT DO NOTHING
     `,
@@ -263,6 +263,22 @@ async function createPendingQualification(input: {
   })
 }
 
+async function markQualificationPendingVerification(input: {
+  client: { execute: Client["execute"] }
+  eventId: string
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE reward_pending_qualifications
+      SET status = 'pending_verification', terminal_reason = NULL, updated_at = ?2
+      WHERE reward_qualification_event_id = ?1
+        AND status = 'reconciling'
+    `,
+    args: [input.eventId, input.now],
+  })
+}
+
 export async function creditRewardCampaignQualification(input: {
   env: Env
   client: Client
@@ -270,16 +286,6 @@ export async function creditRewardCampaignQualification(input: {
   now: string
   currentTime?: () => string
 }): Promise<{ result: CreditResult; amountCents: number }> {
-  if (isRewardQualificationExpired(input.candidate.qualifiedAt, input.now)) {
-    await markPendingQualificationTerminal({
-      client: input.client,
-      eventId: input.candidate.eventId,
-      status: "expired",
-      reason: "verification_window_expired",
-      now: input.now,
-    })
-    return { result: "expired", amountCents: 0 }
-  }
   const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   const identity = await resolveActiveRewardIdentity(input.client, input.candidate.userId, provider)
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
@@ -315,6 +321,20 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "no_campaign", amountCents: 0 }
     }
     const campaignRow = campaign as QueryResultRow
+    const campaignId = text(campaignRow, "reward_campaign_id")
+    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new Error("Reward campaign daily reward is invalid")
+    }
+    const projectionNow = input.currentTime?.() ?? input.now
+    await ensureQualificationProjection({
+      client: tx,
+      candidate: input.candidate,
+      campaignId,
+      campaignEndsAt: text(campaignRow, "ends_at"),
+      amountCents: amount,
+      now: projectionNow,
+    })
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
@@ -341,13 +361,11 @@ export async function creditRewardCampaignQualification(input: {
       })
       return { result: "expired", amountCents: 0 }
     }
-    const campaignId = text(campaignRow, "reward_campaign_id")
-    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
     const funded = Number(rowValue(campaignRow, "funded_cents") ?? 0)
     const reserved = Number(rowValue(campaignRow, "reserved_cents") ?? 0)
     const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
     const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
-    if (!Number.isSafeInteger(amount) || amount <= 0 || funded - reserved - credited - refunded < amount) {
+    if (funded - reserved - credited - refunded < amount) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
         reason: "budget_unavailable", now: creditNow,
@@ -355,12 +373,9 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "budget", amountCents: 0 }
     }
     if (!identity) {
-      await createPendingQualification({
+      await markQualificationPendingVerification({
         client: tx,
-        candidate: input.candidate,
-        campaignId,
-        campaignEndsAt: text(campaignRow, "ends_at"),
-        amountCents: amount,
+        eventId: input.candidate.eventId,
         now: creditNow,
       })
       return { result: "identity", amountCents: 0 }
