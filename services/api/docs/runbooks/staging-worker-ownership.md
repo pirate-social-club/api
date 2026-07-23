@@ -78,7 +78,8 @@ anything:
 ## Current holds
 
 - **Codex `/root` — API #760 end-to-end scheduler-budget soak.** Starts
-  2026-07-23T19:01:24Z. Deploy branch head `90dce3bf`; measure sweep/process
+  2026-07-23T19:01:24Z. Deploy PR #760 with runtime changes through `6e6e9786`;
+  measure sweep/process
   phase timing, the 45s end-to-end cutoff, rotated backlog progress, both reward
   watchdogs executing, and connection-pressure errors. Do not deploy over this
   hold until its result and final running SHA are recorded below.
