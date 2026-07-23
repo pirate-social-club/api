@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SignJWT } from "jose"
 import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 type SmokeSession = {
@@ -276,6 +277,7 @@ async function readResponse<T>(response: Response): Promise<ApiResult<T>> {
 async function apiResult<T>(input: {
   apiBaseUrl: string
   body?: unknown
+  headers?: Record<string, string>
   method?: string
   path: string
   token?: string | null
@@ -290,6 +292,7 @@ async function apiResult<T>(input: {
       headers: {
         ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
         ...(input.body == null ? {} : { "content-type": "application/json" }),
+        ...input.headers,
       },
       method,
       signal: controller.signal,
@@ -308,6 +311,7 @@ async function apiResult<T>(input: {
 async function api<T>(input: {
   apiBaseUrl: string
   body?: unknown
+  headers?: Record<string, string>
   method?: string
   ok?: number[]
   path: string
@@ -429,6 +433,7 @@ async function createCommunity(input: {
     method: "POST",
     path: "/communities",
     token: input.host.accessToken,
+    headers: allocationAttributionHeaders("api-script:live-room-paid-staging-smoke"),
   })
 
   if (created.job.status !== "succeeded") {

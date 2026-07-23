@@ -25,6 +25,10 @@ import type {
   HomeFeedTimeRange,
   InternalHomeFeedCommunitySummary,
 } from "./home-feed-types"
+import {
+  decorateHomeFeedItemsWithBookings,
+  listFeedBookingsByHostUserIds,
+} from "./home-feed-booking"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -668,6 +672,13 @@ export async function listHomeFeed(input: {
   phaseTimings.order_items_ms = elapsedMs(phaseStartedAt)
 
   phaseStartedAt = performance.now()
+  const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
+    items: orderedItems,
+    lookup: (hostUserIds) => listFeedBookingsByHostUserIds(getControlPlaneClient(input.env), hostUserIds),
+  })
+  phaseTimings.booking_discovery_ms = elapsedMs(phaseStartedAt)
+
+  phaseStartedAt = performance.now()
   const topCommunities = input.contentKind === "video"
     ? []
     : await resolveTopCommunitiesIdentity({
@@ -693,7 +704,7 @@ export async function listHomeFeed(input: {
       time_filtered_rows: timeFilteredRows.length,
       page_rows: pageRows.length,
       page_communities: rowsByCommunityId.size,
-      returned_items: orderedItems.length,
+      returned_items: bookingDecoratedItems.length,
       top_communities: topCommunities.length,
       phases: phaseTimings,
       slow_communities: summarizeCommunityTimings(communityTimings),
@@ -701,7 +712,7 @@ export async function listHomeFeed(input: {
   }
 
   return withHomeFeedServerTiming({
-    items: orderedItems,
+    items: bookingDecoratedItems,
     top_communities: topCommunities.map(serializeHomeFeedCommunitySummary),
     next_cursor: nextCursor,
   }, {

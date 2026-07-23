@@ -1,4 +1,5 @@
 import { SignJWT } from "jose"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 
 export type Json = Record<string, unknown>
 
@@ -26,6 +27,7 @@ export async function requestJson(input: {
   url: string
   token?: string
   body?: Json
+  headers?: Record<string, string>
   okStatuses?: number[]
   prefix: string
 }): Promise<Json> {
@@ -34,6 +36,7 @@ export async function requestJson(input: {
     headers: {
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
       "content-type": "application/json",
+      ...input.headers,
     },
     body: input.body ? JSON.stringify(input.body) : undefined,
   })
@@ -96,6 +99,7 @@ export async function createSmokeCommunity(input: {
   const created = await requestJson({
     url: `${input.apiBase}/communities`,
     token: input.token,
+    headers: allocationAttributionHeaders("api-script:smoke-staging-community-create"),
     okStatuses: [202],
     prefix: input.prefix,
     body: {
