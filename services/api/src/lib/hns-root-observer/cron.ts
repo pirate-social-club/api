@@ -198,9 +198,16 @@ async function persistSuccessfulObservation(
           failure_code,
           observed_parent_ns_json,
           authority_redundancy_ok,
+          evidence_class,
+          quorum_policy_version,
+          independent_vantage_count,
+          independent_asn_count,
           observed_at,
           created_at
-        ) VALUES (?1, ?2, 'succeeded', ?3, NULL, ?4, ?5, ?6, ?7)
+        ) VALUES (
+          ?1, ?2, 'succeeded', ?3, NULL, ?4, ?5,
+          'local_single_vantage', NULL, 1, 1, ?6, ?7
+        )
       `,
       args: [
         redundancyObservationId,
@@ -250,6 +257,7 @@ async function persistSuccessfulObservation(
             last_parent_observation_outcome = 'succeeded',
             last_parent_observation_attempt_at = ?3,
             authority_redundancy_ok = ?4,
+            authority_redundancy_evidence_class = 'local_single_vantage',
             last_redundancy_observation_id = ?5,
             last_redundancy_observation_outcome = 'succeeded',
             last_redundancy_observation_at = ?3,

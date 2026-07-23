@@ -132,11 +132,21 @@ describe("HNS root observer cron", () => {
         matched_issued_ds_id: "hds_pirate",
       })])
       expect((await database.client.execute(
-        "SELECT outcome, authority_redundancy_ok FROM hns_root_redundancy_observations",
+        `SELECT outcome, authority_redundancy_ok, evidence_class,
+                independent_vantage_count, independent_asn_count
+         FROM hns_root_redundancy_observations`,
       )).rows).toEqual([expect.objectContaining({
         outcome: "succeeded",
         authority_redundancy_ok: 1,
+        evidence_class: "local_single_vantage",
+        independent_vantage_count: 1,
+        independent_asn_count: 1,
       })])
+      expect((await database.client.execute(
+        `SELECT authority_redundancy_evidence_class
+         FROM hns_root_delegation_state
+         WHERE normalized_root_label = 'pirate'`,
+      )).rows[0]?.authority_redundancy_evidence_class).toBe("local_single_vantage")
       expect((await database.client.execute(
         "SELECT COUNT(*) AS count FROM hns_root_redundancy_authority_observations",
       )).rows[0]?.count).toBe(2)
