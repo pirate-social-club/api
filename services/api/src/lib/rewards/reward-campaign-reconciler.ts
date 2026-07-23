@@ -164,8 +164,48 @@ async function ingestCommunity(input: {
           text(row, "qualification_policy_version"), text(row, "evidence_summary_json"), input.now,
         ],
       })
-      if ((result.rowsAffected ?? result.rows.length) > 0) inserted += 1
-      else duplicates += 1
+      if ((result.rowsAffected ?? result.rows.length) > 0) {
+        inserted += 1
+        const campaign = await executeFirst(tx, {
+          sql: `
+            SELECT reward_campaign_id, daily_reward_cents, ends_at
+            FROM reward_campaigns
+            WHERE community_id = ?1 AND post_id = ?2 AND song_artifact_bundle_id = ?3
+              AND status IN ('active', 'ended', 'exhausted')
+              AND starts_at <= ?4 AND ends_at >= ?4
+              AND (eligible_activity = 'either' OR eligible_activity = ?5)
+            ORDER BY starts_at DESC, reward_campaign_id ASC
+            LIMIT 1
+          `,
+          args: [
+            input.communityId, text(row, "post_id"), text(row, "song_artifact_bundle_id"),
+            text(row, "qualified_at"), text(row, "activity"),
+          ],
+        })
+        const amountCents = campaign
+          ? Number(rowValue(campaign as QueryResultRow, "daily_reward_cents") ?? 0)
+          : 0
+        if (campaign && Number.isSafeInteger(amountCents) && amountCents > 0) {
+          await ensureQualificationProjection({
+            client: tx,
+            candidate: {
+              eventId: text(row, "event_id"),
+              userId: text(row, "user_id"),
+              communityId: input.communityId,
+              postId: text(row, "post_id"),
+              artifactBundleId: text(row, "song_artifact_bundle_id"),
+              activity: text(row, "activity") as "study" | "karaoke",
+              qualifiedAt: text(row, "qualified_at"),
+              periodKey: text(row, "reward_period_key"),
+              policyVersion: text(row, "qualification_policy_version"),
+            },
+            campaignId: text(campaign as QueryResultRow, "reward_campaign_id"),
+            campaignEndsAt: text(campaign as QueryResultRow, "ends_at"),
+            amountCents,
+            now: input.now,
+          })
+        }
+      } else duplicates += 1
       lastSequence = sequence
     }
     await tx.execute({
@@ -232,7 +272,7 @@ async function markPendingQualificationTerminal(input: {
   })
 }
 
-async function createPendingQualification(input: {
+async function ensureQualificationProjection(input: {
   client: { execute: Client["execute"] }
   candidate: RewardQualificationCandidate
   campaignId: string
@@ -247,9 +287,12 @@ async function createPendingQualification(input: {
         reward_campaign_id, user_id, community_id, post_id, reward_period_key,
         reward_kind, qualification_basis, conditional_amount_cents, status,
         expires_at, created_at, updated_at
-      ) VALUES (
+      ) SELECT
         ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9,
-        'pending_verification', ?10, ?11, ?11
+        'reconciling', ?10, ?11, ?11
+      WHERE EXISTS (
+        SELECT 1 FROM reward_qualification_events
+        WHERE reward_qualification_event_id = ?2
       )
       ON CONFLICT DO NOTHING
     `,
@@ -260,6 +303,22 @@ async function createPendingQualification(input: {
       pendingQualificationExpiresAt(input.candidate.qualifiedAt, input.campaignEndsAt),
       input.now,
     ],
+  })
+}
+
+async function markQualificationPendingVerification(input: {
+  client: { execute: Client["execute"] }
+  eventId: string
+  now: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE reward_pending_qualifications
+      SET status = 'pending_verification', terminal_reason = NULL, updated_at = ?2
+      WHERE reward_qualification_event_id = ?1
+        AND status = 'reconciling'
+    `,
+    args: [input.eventId, input.now],
   })
 }
 
@@ -315,6 +374,24 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "no_campaign", amountCents: 0 }
     }
     const campaignRow = campaign as QueryResultRow
+    const campaignId = text(campaignRow, "reward_campaign_id")
+    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "budget_unavailable", now: input.now,
+      })
+      return { result: "budget", amountCents: 0 }
+    }
+    const projectionNow = input.currentTime?.() ?? input.now
+    await ensureQualificationProjection({
+      client: tx,
+      candidate: input.candidate,
+      campaignId,
+      campaignEndsAt: text(campaignRow, "ends_at"),
+      amountCents: amount,
+      now: projectionNow,
+    })
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
@@ -341,13 +418,11 @@ export async function creditRewardCampaignQualification(input: {
       })
       return { result: "expired", amountCents: 0 }
     }
-    const campaignId = text(campaignRow, "reward_campaign_id")
-    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
     const funded = Number(rowValue(campaignRow, "funded_cents") ?? 0)
     const reserved = Number(rowValue(campaignRow, "reserved_cents") ?? 0)
     const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
     const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
-    if (!Number.isSafeInteger(amount) || amount <= 0 || funded - reserved - credited - refunded < amount) {
+    if (funded - reserved - credited - refunded < amount) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
         reason: "budget_unavailable", now: creditNow,
@@ -355,12 +430,9 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "budget", amountCents: 0 }
     }
     if (!identity) {
-      await createPendingQualification({
+      await markQualificationPendingVerification({
         client: tx,
-        candidate: input.candidate,
-        campaignId,
-        campaignEndsAt: text(campaignRow, "ends_at"),
-        amountCents: amount,
+        eventId: input.candidate.eventId,
         now: creditNow,
       })
       return { result: "identity", amountCents: 0 }

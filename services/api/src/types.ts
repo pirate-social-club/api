@@ -187,11 +187,44 @@ type RewardPendingVerificationSummary = {
   earliest_expires_at: number | null
 }
 
+export type RewardQualificationStatus =
+  | "checking"
+  | "pending_verification"
+  | "credited"
+  | "expired"
+  | "unavailable"
+
+export type RewardQualificationOutcomeReason =
+  | "campaign_ended"
+  | "budget_unavailable"
+  | "identity_duplicate"
+  | "owner_blocked"
+  | "score"
+  | "verification_window_expired"
+
+export type RewardQualificationSummary = {
+  id: string
+  reward_qualification_event_id: string
+  reward_campaign_id: string
+  community_id: string
+  post_id: string
+  reward_period_key: string
+  qualification_basis: "study" | "karaoke" | "both"
+  amount_cents: number
+  status: RewardQualificationStatus
+  outcome_reason: RewardQualificationOutcomeReason | null
+  expires_at: number
+  credited_reward_event_id: string | null
+  created_at: number
+  updated_at: number
+}
+
 export type RewardsSummaryResponse = {
   chain_id: number
   balance_cents: number
   today_earned_cents: number
   recent_events: RewardEventSummary[]
+  recent_qualifications: RewardQualificationSummary[]
   pending_verification: RewardPendingVerificationSummary
   cashout: RewardsCashoutSummary
   latest_in_flight_cashout: RewardPayoutSummary | null

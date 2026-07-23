@@ -222,6 +222,23 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (user_id, activity_date)
       );
+      CREATE TABLE reward_qualification_events (
+        reward_qualification_event_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        community_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        activity TEXT NOT NULL,
+        qualified_at TIMESTAMPTZ NOT NULL,
+        reward_period_key TEXT NOT NULL,
+        score_bps INTEGER,
+        source_event_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMPTZ,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
       CREATE TABLE reward_pending_qualifications (
         reward_pending_qualification_id TEXT PRIMARY KEY,
         reward_qualification_event_id TEXT NOT NULL UNIQUE,
