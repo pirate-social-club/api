@@ -12,6 +12,9 @@ export type FeedBookingLookup = (
   hostUserIds: string[],
 ) => Promise<Map<string, FeedBooking>>
 
+const DEFAULT_LOOKUP_TIMEOUT_MS = 250
+const LOOKUP_UNAVAILABLE: unique symbol = Symbol("feed-booking-lookup-unavailable")
+
 function uniqueHostUserIds(hostUserIds: string[]): string[] {
   return [...new Set(hostUserIds.filter((hostUserId) => hostUserId.trim().length > 0))]
 }
@@ -65,12 +68,13 @@ function discoverableAuthorUserId(item: HomeFeedItem): string | null {
 }
 
 /**
- * Adds optional booking blocks without changing feed availability. Discovery fails closed so a
- * booking database outage cannot take down the home/video feed.
+ * Adds optional booking blocks without changing feed availability. Booking discovery becomes
+ * unavailable on errors or slowness so it cannot take down the home/video feed.
  */
 export async function decorateHomeFeedItemsWithBookings(input: {
   items: HomeFeedItem[]
   lookup: FeedBookingLookup
+  lookupTimeoutMs?: number
 }): Promise<HomeFeedItem[]> {
   const hostUserIds = uniqueHostUserIds(
     input.items.flatMap((item) => {
@@ -80,10 +84,21 @@ export async function decorateHomeFeedItemsWithBookings(input: {
   )
   if (hostUserIds.length === 0) return input.items
 
-  let bookingByHostUserId: Map<string, FeedBooking>
-  try {
-    bookingByHostUserId = await input.lookup(hostUserIds)
-  } catch {
+  const lookup = input
+    .lookup(hostUserIds)
+    .catch((): typeof LOOKUP_UNAVAILABLE => LOOKUP_UNAVAILABLE)
+  const timeoutMs = Math.max(
+    0,
+    input.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS,
+  )
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<typeof LOOKUP_UNAVAILABLE>((resolve) => {
+    timeoutId = setTimeout(() => resolve(LOOKUP_UNAVAILABLE), timeoutMs)
+  })
+  const bookingByHostUserId = await Promise.race([lookup, timeout])
+  if (timeoutId !== undefined) clearTimeout(timeoutId)
+
+  if (bookingByHostUserId === LOOKUP_UNAVAILABLE) {
     return input.items
   }
 

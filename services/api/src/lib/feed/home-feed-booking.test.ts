@@ -115,6 +115,32 @@ describe("home feed booking discovery", () => {
     expect(result).toEqual([item])
   })
 
+  test("leaves the feed unchanged when booking discovery exceeds its budget", async () => {
+    const item = feedItem()
+    const result = await decorateHomeFeedItemsWithBookings({
+      items: [item],
+      lookup: () => new Promise(() => {}),
+      lookupTimeoutMs: 1,
+    })
+
+    expect(result).toEqual([item])
+  })
+
+  test("absorbs a lookup rejection that arrives after the timeout", async () => {
+    const item = feedItem()
+    const result = await decorateHomeFeedItemsWithBookings({
+      items: [item],
+      lookup: () =>
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("late failure")), 10)
+        }),
+      lookupTimeoutMs: 1,
+    })
+
+    expect(result).toEqual([item])
+    await Bun.sleep(20)
+  })
+
   test("deduplicates repeated authors into one batch lookup", async () => {
     const lookups: string[][] = []
     const result = await decorateHomeFeedItemsWithBookings({
