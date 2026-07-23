@@ -61,6 +61,10 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { checkHnsEdgeHeartbeatFreshness } from "./lib/ops-alerts/hns-edge-heartbeats"
+import {
+  isHnsRootObserverEnabled,
+  observeDueHnsRoots,
+} from "./lib/hns-root-observer/cron"
 import { runStoryRuntimeFundingWatchdog } from "./lib/story/story-runtime-funding-watchdog"
 import { runStorySettlementCoordinatorWatchdog } from "./lib/story/story-settlement-coordinator-watchdog"
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
@@ -985,6 +989,27 @@ async function revalidateScheduledHnsNamespaces(env: Env): Promise<void> {
   }
 }
 
+async function observeScheduledHnsRoots(env: Env): Promise<void> {
+  try {
+    const summary = await observeDueHnsRoots(getControlPlaneClient(env), env)
+    if (summary.attempted > 0) {
+      console.info("[hns-root-observer] observed", JSON.stringify(summary))
+    }
+    if (summary.failed > 0) {
+      await captureScheduledWarning(
+        env,
+        "HNS root observations failed",
+        "hns_root_observer",
+        { ...summary, count: summary.failed },
+        { urgency: "high" },
+      )
+    }
+  } catch (error) {
+    console.error("[hns-root-observer] sweep failed", error)
+    await captureScheduledError(env, error, "hns_root_observer")
+  }
+}
+
 // The cron fires every minute. Each scheduled job opens its OWN control-plane
 // connection (via withRequestControlPlaneClients) — one connection, opened and
 // closed independently, to respect Workers' 15-min waitUntil limit. Running all
@@ -1031,12 +1056,14 @@ type ScheduledPriorityJobName =
   | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
   | "reconcile_d1_provisioning"
+  | "observe_hns_roots"
   | "revalidate_hns_namespaces"
   | "monitor_reward_campaigns"
 
 export function scheduledPriorityJobNames(
   canRunD1Reconciler: boolean,
   canRunHnsNamespaceRevalidation: boolean,
+  canRunHnsRootObserver = false,
 ): ScheduledPriorityJobName[] {
   return [
     "reconcile_reward_payouts",
@@ -1050,18 +1077,24 @@ export function scheduledPriorityJobNames(
     // is the retry engine for every community job, so a deferred start delays
     // user-visible publishing, lyrics, and translations — not just monitoring.
     "process_community_jobs",
-    // When available, extend the protected prefix by one so cross-store
-    // provisioning failures cannot leak pool capacity indefinitely behind slow
-    // settlement work.
+    // When available, extend the protected prefix so cross-store provisioning
+    // cannot strand bindings and root evidence cannot repeatedly miss its
+    // freshness budget behind slower maintenance work.
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
+    ...(canRunHnsRootObserver ? ["observe_hns_roots" as const] : []),
     "monitor_reward_campaign_treasury_solvency",
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
   ]
 }
 
-export function scheduledMinimumPriorityStarts(canRunD1Reconciler: boolean): number {
-  return SCHEDULED_MINIMUM_PRIORITY_STARTS + (canRunD1Reconciler ? 1 : 0)
+export function scheduledMinimumPriorityStarts(
+  canRunD1Reconciler: boolean,
+  canRunHnsRootObserver = false,
+): number {
+  return SCHEDULED_MINIMUM_PRIORITY_STARTS
+    + (canRunD1Reconciler ? 1 : 0)
+    + (canRunHnsRootObserver ? 1 : 0)
 }
 
 const handler: ExportedHandler<Env> = {
@@ -1146,6 +1179,7 @@ const handler: ExportedHandler<Env> = {
       monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
+      observe_hns_roots: () => observeScheduledHnsRoots(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
@@ -1157,6 +1191,7 @@ const handler: ExportedHandler<Env> = {
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
       canRunD1Reconciler,
       isHnsNamespaceRevalidationEnabled(env),
+      isHnsRootObserverEnabled(env),
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
@@ -1213,7 +1248,10 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
         limit: SCHEDULED_JOB_CONCURRENCY,
         lock,
-        minimumStartsBeforeDeadline: scheduledMinimumPriorityStarts(canRunD1Reconciler),
+        minimumStartsBeforeDeadline: scheduledMinimumPriorityStarts(
+          canRunD1Reconciler,
+          isHnsRootObserverEnabled(env),
+        ),
         onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
         onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
         onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),

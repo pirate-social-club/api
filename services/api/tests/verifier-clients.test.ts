@@ -7,7 +7,16 @@ import {
   mintSpacesChallenge,
   verifySpacesFabricPublish,
 } from "../src/lib/verification/spaces-verifier"
-import { assertHnsRootLabel, ensureHnsZone, getHnsVerifierBaseUrl, inspectHnsRoot, isHnsVerifierConfigured, normalizeHnsRootLabel, verifyHnsTxtRecord } from "../src/lib/verification/hns-verifier"
+import {
+  assertHnsRootLabel,
+  ensureHnsZone,
+  getHnsVerifierBaseUrl,
+  inspectHnsRoot,
+  isHnsVerifierConfigured,
+  normalizeHnsRootLabel,
+  observeHnsRootAuthority,
+  verifyHnsTxtRecord,
+} from "../src/lib/verification/hns-verifier"
 import { withMockedFetch } from "./helpers"
 
 function urlFromFetchInput(input: Parameters<typeof fetch>[0]): URL {
@@ -512,6 +521,32 @@ describe("verifyHnsTxtRecord", () => {
       expect(result.expiry_height).toBe(1_250_000)
       expect(result.expiry_observation_provider).toBe("hsd_json_rpc")
       expect(requestedPath).toBe("/verify-txt-public")
+    })
+  })
+})
+
+describe("observeHnsRootAuthority", () => {
+  test("uses the authenticated local-state observation endpoint", async () => {
+    let requestedPath = ""
+    let authorization: string | null = null
+    await withMockedFetch(() => (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlFromFetchInput(input)
+      requestedPath = `${url.pathname}?${url.searchParams.toString()}`
+      authorization = new Headers(init?.headers).get("authorization")
+      return Response.json({
+        root_label: "pirate",
+        parent_ds_matches_live_dnskey: true,
+      })
+    }), async () => {
+      const result = await observeHnsRootAuthority({
+        HNS_VERIFIER_BASE_URL: "http://hns.test",
+        HNS_VERIFIER_AUTH_TOKEN: "observer-token",
+      } as any, {
+        rootLabel: "pirate",
+      })
+      expect(result.parent_ds_matches_live_dnskey).toBe(true)
+      expect(requestedPath).toBe("/observe-root-authority?root_label=pirate")
+      expect(authorization).toBe("Bearer observer-token")
     })
   })
 })
