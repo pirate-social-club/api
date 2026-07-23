@@ -1080,6 +1080,46 @@ describe("KaraokeSessionRuntimeDO", () => {
     expect(sent.at(-1)).toMatchObject({ code: "non_monotonic_sequence", type: "session_error" });
   });
 
+  test("stays silent on a healthy session (no new log volume)", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const errorRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation((record) => {
+      errorRecords.push(record);
+    });
+    try {
+      const { ctx } = makeContext();
+      const adapter = new FakeKaraokeStreamingSttAdapter();
+      const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: adapter,
+      });
+      expect((await do_.fetch(initDoRequest())).status).toBe(200);
+
+      // A full, well-ordered scoring cycle: start -> audio -> playback -> ack.
+      await startAndScore(do_, adapter);
+
+      // Guard against a vacuous pass: prove real traffic actually flowed through
+      // the guarded paths, so "no logs" means "silent", not "did nothing".
+      expect(adapter.frames.length).toBeGreaterThan(0);
+      expect(adapter.startCount).toBe(1);
+
+      // Diagnostics are a rejection-path concern only. A clean session must not
+      // add a single line to Workers Logs, or the signal drowns in volume.
+      expect(warnRecords).toEqual([]);
+      expect(
+        errorRecords.filter((record) => JSON.stringify(record).includes("transport_guard_rejected")),
+      ).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   test("logs a client guard rejection with restored-host and hashed-socket context", async () => {
     resetEnvelopeSequence();
     const warnRecords: unknown[] = [];
