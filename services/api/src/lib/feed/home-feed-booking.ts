@@ -1,5 +1,5 @@
 import type { HomeFeedItem } from "../../types"
-import { requiredNumber, requiredString } from "../sql-row"
+import { boolOrNull, numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import type { InStatement, QueryResult } from "../sql-client"
 
 type FeedBooking = NonNullable<HomeFeedItem["booking"]>
@@ -36,21 +36,14 @@ export async function listFeedBookingsByHostUserIds(
       SELECT
         p.host_user_id,
         p.base_price_cents,
-        LEAST(
-          p.base_price_cents,
-          COALESCE(MIN(pr.price_cents), p.base_price_cents)
-        ) AS starting_price_cents
+        snapshot.has_available_slot,
+        snapshot.starting_price_cents
       FROM bookings.profiles p
-      LEFT JOIN bookings.price_rules pr
-        ON pr.host_user_id = p.host_user_id
+      INNER JOIN bookings.feed_discovery_snapshots snapshot
+        ON snapshot.host_user_id = p.host_user_id
       WHERE p.host_user_id IN (${placeholders})
         AND p.is_published = TRUE
-        AND EXISTS (
-          SELECT 1
-          FROM bookings.availability_rules r
-          WHERE r.host_user_id = p.host_user_id
-        )
-      GROUP BY p.host_user_id, p.base_price_cents
+        AND snapshot.valid_until > NOW()
       ORDER BY p.host_user_id ASC
     `,
     args: uniqueIds,
@@ -59,16 +52,24 @@ export async function listFeedBookingsByHostUserIds(
   return new Map(result.rows.map((row) => {
     const hostUserId = requiredString(row, "host_user_id")
     const basePriceCents = requiredNumber(row, "base_price_cents")
-    const startingPriceCents = requiredNumber(row, "starting_price_cents")
+    const hasAvailableSlot = boolOrNull(rowValue(row, "has_available_slot"))
+    const startingPriceCents = numberOrNull(rowValue(row, "starting_price_cents"))
+    if (hasAvailableSlot === null) {
+      throw new TypeError("Feed booking availability must be a boolean")
+    }
     if (!Number.isSafeInteger(basePriceCents) || basePriceCents < 0) {
       throw new TypeError("Feed booking base price must be a non-negative integer")
     }
-    if (!Number.isSafeInteger(startingPriceCents) || startingPriceCents < 0) {
-      throw new TypeError("Feed booking starting price must be a non-negative integer")
+    if (startingPriceCents !== null && (!Number.isSafeInteger(startingPriceCents) || startingPriceCents < 0)) {
+      throw new TypeError("Feed booking starting price must be null or a non-negative integer")
+    }
+    if (hasAvailableSlot !== (startingPriceCents !== null)) {
+      throw new TypeError("Feed booking availability and starting price are inconsistent")
     }
     return [hostUserId, {
       host_user_id: hostUserId,
       base_price_cents: basePriceCents,
+      has_available_slot: hasAvailableSlot,
       starting_price_cents: startingPriceCents,
       currency: "USDC" as const,
     }]

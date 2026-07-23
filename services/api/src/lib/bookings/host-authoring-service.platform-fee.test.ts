@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
+  setBookingFeedDiscoveryInvalidatorForTests,
   setBookingHostConfigRepositoriesForTests,
   upsertBookingProfile,
 } from "./host-authoring-service"
@@ -10,6 +11,7 @@ import {
 let createdInput: { platformFeeBps?: number; hostUserId?: string } | null = null
 let updatedInput: { platformFeeBps?: number } | null = null
 let existingProfile: unknown = null
+let invalidatedHosts: string[] = []
 
 const fakeReadRepo = {
   getProfile: async () => existingProfile,
@@ -38,13 +40,18 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     createdInput = null
     updatedInput = null
     existingProfile = null
+    invalidatedHosts = []
     setBookingHostConfigRepositoriesForTests({
       read: fakeReadRepo as never,
       write: fakeWriteRepo as never,
     })
+    setBookingFeedDiscoveryInvalidatorForTests(async (hostUserId) => {
+      invalidatedHosts.push(hostUserId)
+    })
   })
 
   afterEach(() => {
+    setBookingFeedDiscoveryInvalidatorForTests(null)
     setBookingHostConfigRepositoriesForTests(null)
   })
 
@@ -56,6 +63,7 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     expect(res.ok).toBe(true)
     expect(createdInput).not.toBeNull()
     expect(createdInput?.platformFeeBps).toBe(1000)
+    expect(invalidatedHosts).toEqual(["host_1"])
   })
 
   test("update never writes a host-supplied platform_fee_bps", async () => {
@@ -74,5 +82,6 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     expect(res.ok).toBe(true)
     expect(updatedInput).not.toBeNull()
     expect(updatedInput?.platformFeeBps).toBeUndefined()
+    expect(invalidatedHosts).toEqual(["host_1"])
   })
 })

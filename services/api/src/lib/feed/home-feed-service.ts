@@ -29,6 +29,7 @@ import {
   decorateHomeFeedItemsWithBookings,
   listFeedBookingsByHostUserIds,
 } from "./home-feed-booking"
+import { refreshBookingFeedDiscoverySnapshotsInBackground } from "../bookings/booking-feed-discovery"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -674,7 +675,19 @@ export async function listHomeFeed(input: {
   phaseStartedAt = performance.now()
   const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
     items: orderedItems,
-    lookup: (hostUserIds) => listFeedBookingsByHostUserIds(getControlPlaneClient(input.env), hostUserIds),
+    lookup: async (hostUserIds) => {
+      const bookingByHost = await listFeedBookingsByHostUserIds(getControlPlaneClient(input.env), hostUserIds)
+      const missingSnapshotHostIds = hostUserIds.filter((hostUserId) => !bookingByHost.has(hostUserId))
+      if (input.waitUntil && missingSnapshotHostIds.length > 0) {
+        input.waitUntil(
+          refreshBookingFeedDiscoverySnapshotsInBackground(input.env, missingSnapshotHostIds)
+            .catch((error: unknown) => {
+              console.error("[home-feed] booking discovery snapshot refresh failed", error)
+            }),
+        )
+      }
+      return bookingByHost
+    },
   })
   phaseTimings.booking_discovery_ms = elapsedMs(phaseStartedAt)
 

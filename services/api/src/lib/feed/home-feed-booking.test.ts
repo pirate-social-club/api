@@ -33,6 +33,7 @@ function feedItem(input: {
 const booking = {
   host_user_id: "usr_host",
   base_price_cents: 3500,
+  has_available_slot: true,
   starting_price_cents: 2500,
   currency: "USDC" as const,
 }
@@ -169,6 +170,7 @@ describe("home feed booking discovery", () => {
           rows: [{
             host_user_id: "usr_host",
             base_price_cents: 3500,
+            has_available_slot: true,
             starting_price_cents: 2500,
           }],
         }
@@ -182,9 +184,31 @@ describe("home feed booking discovery", () => {
       args: ["usr_host", "usr_second"],
     })
     expect(String((statements[0] as { sql: string }).sql)).toContain("p.is_published = TRUE")
-    expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.availability_rules")
-    expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.price_rules")
-    expect(String((statements[0] as { sql: string }).sql)).toContain("MIN(pr.price_cents)")
+    expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.feed_discovery_snapshots")
+    expect(String((statements[0] as { sql: string }).sql)).toContain("snapshot.valid_until > NOW()")
     expect(result.get("usr_host")).toEqual(booking)
+  })
+
+  test("returns a published host with a current empty-window snapshot", async () => {
+    const executor: FeedBookingExecutor = {
+      execute: async () => ({
+        rows: [{
+          host_user_id: "usr_host",
+          base_price_cents: 3500,
+          has_available_slot: false,
+          starting_price_cents: null,
+        }],
+      }),
+    }
+
+    const result = await listFeedBookingsByHostUserIds(executor, ["usr_host"])
+
+    expect(result.get("usr_host")).toEqual({
+      host_user_id: "usr_host",
+      base_price_cents: 3500,
+      has_available_slot: false,
+      starting_price_cents: null,
+      currency: "USDC",
+    })
   })
 })
