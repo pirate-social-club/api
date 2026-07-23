@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test"
-import { processAvailableCommunityJobs } from "./runner"
+import {
+  processAvailableCommunityJobs,
+  processCommunityJobsForCommunity,
+  selectScheduledCommunityJobPollIds,
+} from "./runner"
 import type { Env } from "../../../env"
 import type { CommunityJobRepository } from "./runner-types"
 
@@ -32,6 +36,8 @@ describe("processAvailableCommunityJobs tick deadline", () => {
 
     expect(summary.started_communities).toBe(3)
     expect(summary.deferred_communities).toBe(0)
+    expect(summary.swept_communities).toBe(3)
+    expect(summary.deferred_sweep_communities).toBe(0)
   })
 
   it("defers the remaining communities once the deadline passes", async () => {
@@ -48,13 +54,16 @@ describe("processAvailableCommunityJobs tick deadline", () => {
       },
     })
 
-    expect(summary.started_communities).toBeGreaterThan(0)
-    expect(summary.started_communities).toBeLessThan(5)
+    expect(summary.swept_communities).toBeGreaterThan(0)
+    expect(summary.swept_communities).toBeLessThan(5)
+    expect(summary.swept_communities + summary.deferred_sweep_communities).toBe(5)
+    expect(summary.started_communities).toBe(0)
     expect(summary.started_communities + summary.deferred_communities).toBe(5)
   })
 
-  it("always starts one community even when the budget is already spent", async () => {
-    // The tick starts at t=0 and the very first community exhausts the budget.
+  it("starts no processing work when the stale sweep spends the budget", async () => {
+    // The tick starts at t=0 and the first sweep deadline check sees the budget
+    // already spent. Returning immediately lets later scheduled jobs run.
     let observations = 0
     const summary = await runTick({
       communityIds: ["cmt_1", "cmt_2", "cmt_3"],
@@ -62,7 +71,37 @@ describe("processAvailableCommunityJobs tick deadline", () => {
       now: () => (observations++ === 0 ? 0 : 10_000_000),
     })
 
-    expect(summary.started_communities).toBe(1)
-    expect(summary.deferred_communities).toBe(2)
+    expect(summary.swept_communities).toBe(0)
+    expect(summary.deferred_sweep_communities).toBe(3)
+    expect(summary.started_communities).toBe(0)
+    expect(summary.deferred_communities).toBe(3)
+    expect(summary.processed_jobs).toBe(0)
+  })
+
+  it("does not start another job after the per-job budget expires", async () => {
+    const summary = await processCommunityJobsForCommunity({
+      env,
+      communityId: "cmt_1",
+      communityRepository: repository,
+      deadlineAtMs: 100,
+      now: () => 100,
+    })
+
+    expect(summary.processed_jobs).toBe(0)
+  })
+
+  it("rotates the front of a fully selected poll so truncated sweeps stay fair", () => {
+    const communities = ["cmt_1", "cmt_2", "cmt_3"].map((community_id) => ({ community_id }))
+
+    expect(selectScheduledCommunityJobPollIds(communities, 3, 0)).toEqual([
+      "cmt_1",
+      "cmt_2",
+      "cmt_3",
+    ])
+    expect(selectScheduledCommunityJobPollIds(communities, 3, 60_000)).toEqual([
+      "cmt_2",
+      "cmt_3",
+      "cmt_1",
+    ])
   })
 })

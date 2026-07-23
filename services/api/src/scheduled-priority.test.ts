@@ -29,6 +29,8 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
+      "monitor_reward_campaign_treasury_solvency",
+      "monitor_reward_campaigns",
       "process_community_jobs",
     ])
   })
@@ -51,7 +53,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledMinimumPriorityStarts(false, true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 1)
   })
 
-  test("keeps D1 provisioning ahead of the latency-tolerant reward monitor", () => {
+  test("keeps both reward watchdogs protected ahead of D1 work", () => {
     expect(scheduledPriorityJobNames(true, false)).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
@@ -60,10 +62,10 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
-      "process_community_jobs",
-      "reconcile_d1_provisioning",
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
+      "process_community_jobs",
+      "reconcile_d1_provisioning",
     ])
   })
 
@@ -76,9 +78,9 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
-      "process_community_jobs",
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
+      "process_community_jobs",
     ])
   })
 
@@ -91,11 +93,11 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
+      "monitor_reward_campaign_treasury_solvency",
+      "monitor_reward_campaigns",
       "process_community_jobs",
       "reconcile_d1_provisioning",
-      "monitor_reward_campaign_treasury_solvency",
       "revalidate_hns_namespaces",
-      "monitor_reward_campaigns",
     ])
   })
 
@@ -108,12 +110,12 @@ describe("scheduled priority ordering", () => {
       "reconcile_royalty_allocation_verifications",
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
+      "monitor_reward_campaign_treasury_solvency",
+      "monitor_reward_campaigns",
       "process_community_jobs",
       "reconcile_d1_provisioning",
       "observe_hns_roots",
-      "monitor_reward_campaign_treasury_solvency",
       "revalidate_hns_namespaces",
-      "monitor_reward_campaigns",
     ])
   })
 })

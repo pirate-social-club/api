@@ -667,12 +667,21 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       maxJobsPerCommunity: 25,
       deadlineMs: COMMUNITY_JOB_TICK_DEADLINE_MS,
     })
-    if (summary.processed_jobs > 0 || summary.failed_communities.length > 0 || summary.deferred_communities > 0) {
+    if (
+      summary.processed_jobs > 0
+      || summary.failed_communities.length > 0
+      || summary.deferred_communities > 0
+      || summary.deferred_sweep_communities > 0
+    ) {
       console.info("[community-jobs] scheduled processed", JSON.stringify({
         failed_communities: summary.failed_communities.length,
         processed_jobs: summary.processed_jobs,
+        swept_communities: summary.swept_communities,
+        deferred_sweep_communities: summary.deferred_sweep_communities,
         started_communities: summary.started_communities,
         deferred_communities: summary.deferred_communities,
+        sweep_ms: summary.sweep_ms,
+        process_ms: summary.process_ms,
         communities: summary.communities.map((community) => ({
           community_id: community.community_id,
           processed_jobs: community.processed_jobs,
@@ -1130,10 +1139,9 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // in wall-time too: unstarted communities roll to the next tick, which the poll
 // rotation already accounts for.
 const COMMUNITY_JOB_TICK_DEADLINE_MS = 45_000
-// Protect the seven settlement/money-movement jobs at the front of the ordered
-// batch plus the community job drain. They must receive a start even when D1
-// pressure pushes the batch past its nominal deadline; monitoring work may defer
-// to a later tick without stranding an on-chain transfer or credited obligation.
+// Protect the seven settlement/money-movement jobs, both reward watchdogs, and
+// the community job drain at the front of the ordered batch. They must receive
+// a start even when D1 pressure pushes the batch past its nominal deadline.
 //
 // The drain earns protection because it is not maintenance: it is the retry
 // engine for EVERY community job, so deferring it strands user-visible content,
@@ -1142,7 +1150,7 @@ const COMMUNITY_JOB_TICK_DEADLINE_MS = 45_000
 // 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
 // publish-finalize attempt fails backs off 30s and then waits on this job to get
 // a start, which is why "Preparing song features" could linger for half an hour.
-export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 8
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 10
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
@@ -1177,6 +1185,10 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
+    // Funded reward campaigns must retain their solvency and lifecycle
+    // watchdogs even when community D1 work consumes the nominal batch budget.
+    "monitor_reward_campaign_treasury_solvency",
+    "monitor_reward_campaigns",
     // Inside the protected base prefix: the drain
     // is the retry engine for every community job, so a deferred start delays
     // user-visible publishing, lyrics, and translations — not just monitoring.
@@ -1186,9 +1198,7 @@ export function scheduledPriorityJobNames(
     // freshness budget behind slower maintenance work.
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
     ...(canRunHnsRootObserver ? ["observe_hns_roots" as const] : []),
-    "monitor_reward_campaign_treasury_solvency",
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
-    "monitor_reward_campaigns",
   ]
 }
 
