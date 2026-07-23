@@ -164,8 +164,48 @@ async function ingestCommunity(input: {
           text(row, "qualification_policy_version"), text(row, "evidence_summary_json"), input.now,
         ],
       })
-      if ((result.rowsAffected ?? result.rows.length) > 0) inserted += 1
-      else duplicates += 1
+      if ((result.rowsAffected ?? result.rows.length) > 0) {
+        inserted += 1
+        const campaign = await executeFirst(tx, {
+          sql: `
+            SELECT reward_campaign_id, daily_reward_cents, ends_at
+            FROM reward_campaigns
+            WHERE community_id = ?1 AND post_id = ?2 AND song_artifact_bundle_id = ?3
+              AND status IN ('active', 'ended', 'exhausted')
+              AND starts_at <= ?4 AND ends_at >= ?4
+              AND (eligible_activity = 'either' OR eligible_activity = ?5)
+            ORDER BY starts_at DESC, reward_campaign_id ASC
+            LIMIT 1
+          `,
+          args: [
+            input.communityId, text(row, "post_id"), text(row, "song_artifact_bundle_id"),
+            text(row, "qualified_at"), text(row, "activity"),
+          ],
+        })
+        const amountCents = campaign
+          ? Number(rowValue(campaign as QueryResultRow, "daily_reward_cents") ?? 0)
+          : 0
+        if (campaign && Number.isSafeInteger(amountCents) && amountCents > 0) {
+          await ensureQualificationProjection({
+            client: tx,
+            candidate: {
+              eventId: text(row, "event_id"),
+              userId: text(row, "user_id"),
+              communityId: input.communityId,
+              postId: text(row, "post_id"),
+              artifactBundleId: text(row, "song_artifact_bundle_id"),
+              activity: text(row, "activity") as "study" | "karaoke",
+              qualifiedAt: text(row, "qualified_at"),
+              periodKey: text(row, "reward_period_key"),
+              policyVersion: text(row, "qualification_policy_version"),
+            },
+            campaignId: text(campaign as QueryResultRow, "reward_campaign_id"),
+            campaignEndsAt: text(campaign as QueryResultRow, "ends_at"),
+            amountCents,
+            now: input.now,
+          })
+        }
+      } else duplicates += 1
       lastSequence = sequence
     }
     await tx.execute({
@@ -247,9 +287,12 @@ async function ensureQualificationProjection(input: {
         reward_campaign_id, user_id, community_id, post_id, reward_period_key,
         reward_kind, qualification_basis, conditional_amount_cents, status,
         expires_at, created_at, updated_at
-      ) VALUES (
+      ) SELECT
         ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9,
         'reconciling', ?10, ?11, ?11
+      WHERE EXISTS (
+        SELECT 1 FROM reward_qualification_events
+        WHERE reward_qualification_event_id = ?2
       )
       ON CONFLICT DO NOTHING
     `,
@@ -286,6 +329,16 @@ export async function creditRewardCampaignQualification(input: {
   now: string
   currentTime?: () => string
 }): Promise<{ result: CreditResult; amountCents: number }> {
+  if (isRewardQualificationExpired(input.candidate.qualifiedAt, input.now)) {
+    await markPendingQualificationTerminal({
+      client: input.client,
+      eventId: input.candidate.eventId,
+      status: "expired",
+      reason: "verification_window_expired",
+      now: input.now,
+    })
+    return { result: "expired", amountCents: 0 }
+  }
   const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   const identity = await resolveActiveRewardIdentity(input.client, input.candidate.userId, provider)
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
@@ -324,7 +377,11 @@ export async function creditRewardCampaignQualification(input: {
     const campaignId = text(campaignRow, "reward_campaign_id")
     const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
     if (!Number.isSafeInteger(amount) || amount <= 0) {
-      throw new Error("Reward campaign daily reward is invalid")
+      await markPendingQualificationTerminal({
+        client: tx, eventId: input.candidate.eventId, status: "ineligible",
+        reason: "budget_unavailable", now: input.now,
+      })
+      return { result: "budget", amountCents: 0 }
     }
     const projectionNow = input.currentTime?.() ?? input.now
     await ensureQualificationProjection({

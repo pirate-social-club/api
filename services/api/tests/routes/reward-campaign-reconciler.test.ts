@@ -246,6 +246,47 @@ describe("reward campaign reconciler", () => {
       conditional_amount_cents: 100,
       credited_reward_event_id: expect.stringMatching(/^rew_/),
     })])
+
+    const lowScoreCandidate = {
+      ...candidate,
+      eventId: "rqe_terminal_score",
+      finalScoreBps: 6_500,
+    }
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_qualification_events (
+          reward_qualification_event_id, community_id, shard_sequence, user_id,
+          post_id, song_artifact_bundle_id, activity, qualified_at,
+          reward_period_key, qualification_policy_version, evidence_summary_json,
+          ingested_at
+        ) VALUES (?1, ?2, 2, ?3, ?4, ?5, 'karaoke', ?6, ?7, ?8, ?9, ?6)
+      `,
+      args: [
+        lowScoreCandidate.eventId, lowScoreCandidate.communityId, lowScoreCandidate.userId,
+        lowScoreCandidate.postId, lowScoreCandidate.artifactBundleId, lowScoreCandidate.qualifiedAt,
+        lowScoreCandidate.periodKey, lowScoreCandidate.policyVersion,
+        JSON.stringify({ final_score_bps: lowScoreCandidate.finalScoreBps }),
+      ],
+    })
+    expect(await creditRewardCampaignQualification({
+      env: ctx.env,
+      client: ctx.client,
+      candidate: lowScoreCandidate,
+      now,
+    })).toEqual({ result: "score", amountCents: 0 })
+    const terminalSummary = await getRewardsSummaryForUser({
+      env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
+      userId: session.userId,
+      client: ctx.client,
+      now,
+    })
+    expect(terminalSummary.recent_qualifications.find((item) =>
+      item.reward_qualification_event_id === lowScoreCandidate.eventId
+    )).toMatchObject({
+      reward_qualification_event_id: lowScoreCandidate.eventId,
+      status: "unavailable",
+      outcome_reason: "score",
+    })
   })
 
   test("fails closed unless campaign flags, identity provider, and alert ownership are configured", async () => {
