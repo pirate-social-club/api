@@ -84,6 +84,40 @@ async function insertVerifiedHnsNamespace(input: {
   })
 }
 
+async function insertSecureRootDelegation(
+  ctx: Awaited<ReturnType<typeof createRouteTestContext>>,
+  rootLabel: string,
+  observedAt = new Date(),
+) {
+  const observationId = `obs_${rootLabel}`
+  await ctx.client.execute({
+    sql: `
+      INSERT INTO hns_root_parent_observations (
+        parent_observation_id, normalized_root_label, outcome, provider,
+        observed_delegation_security,
+        parent_ds_matches_live_dnskey, authoritative_dnssec_valid, observed_at,
+        earliest_rrsig_expires_at, created_at
+      ) VALUES (?1, ?2, 'succeeded', 'test', 'secure', 1, 1, ?3, ?4, ?3)
+    `,
+    args: [
+      observationId,
+      rootLabel,
+      observedAt.toISOString(),
+      new Date(Date.now() + 86_400_000).toISOString(),
+    ],
+  })
+  await ctx.client.execute({
+    sql: `
+      INSERT INTO hns_root_delegation_state (
+        normalized_root_label, rollover_state, pending_evidence_kind,
+        last_parent_observation_id, last_parent_observation_outcome,
+        last_parent_observation_attempt_at, state_changed_at, created_at, updated_at
+      ) VALUES (?1, 'none', NULL, ?2, 'succeeded', ?3, ?3, ?3, ?3)
+    `,
+    args: [rootLabel, observationId, observedAt.toISOString()],
+  })
+}
+
 describe("public namespace routes", () => {
   test("resolves verified Pirate-routed HNS roots to their community", async () => {
     const ctx = await createRouteTestContext()
@@ -230,6 +264,87 @@ describe("public namespace routes", () => {
     })
 
     const response = await app.request("http://pirate.test/public-namespaces/xn--pokmon-dva", {}, ctx.env)
+    expect(response.status).toBe(404)
+  })
+
+  test("root delegation gate fails closed when enabled without root state", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+
+    const response = await app.request(
+      "http://pirate.test/public-namespaces/dankmeme",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(404)
+  })
+
+  test("root delegation gate routes only a secure fresh root", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+    await insertSecureRootDelegation(ctx, "dankmeme")
+
+    const response = await app.request(
+      "http://pirate.test/public-namespaces/dankmeme",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+  })
+
+  test("root delegation gate filters the public namespace list", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+
+    const withheldResponse = await app.request(
+      "http://pirate.test/public-namespaces",
+      {},
+      ctx.env,
+    )
+    expect(withheldResponse.status).toBe(200)
+    expect(await json(withheldResponse)).toEqual({ namespaces: [] })
+
+    await insertSecureRootDelegation(ctx, "dankmeme")
+    const routedResponse = await app.request(
+      "http://pirate.test/public-namespaces",
+      {},
+      ctx.env,
+    )
+    expect(routedResponse.status).toBe(200)
+    const body = await json(routedResponse) as {
+      namespaces: Array<{ root_label: string }>
+    }
+    expect(body.namespaces.map((namespace) => namespace.root_label)).toEqual([
+      "dankmeme",
+    ])
+  })
+
+  test("root delegation gate rejects stale observations", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+    await insertSecureRootDelegation(
+      ctx,
+      "dankmeme",
+      new Date(Date.now() - 901_000),
+    )
+
+    const response = await app.request(
+      "http://pirate.test/public-namespaces/dankmeme",
+      {},
+      ctx.env,
+    )
     expect(response.status).toBe(404)
   })
 })

@@ -75,6 +75,7 @@
     "@pirate/api-contracts": "file:../contracts",
     "@pirate/api-shared": "file:../shared",
     "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
+    "@pirate/hns-delegation": "file:../../../core/packages/hns-delegation",
     "@privy-io/node": "^0.11.0",
     "@selfxyz/core": "^1.2.0-beta.1",
     "@story-protocol/core-sdk": "^1.4.4",
