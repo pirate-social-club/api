@@ -79,6 +79,8 @@ export type Env = {
   COMMUNITY_D1_RECONCILER_ONLY?: string
   /** Warn from scheduled cron when allocatable community D1 bindings are at or below this count. Defaults to 2. */
   COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD?: string
+  /** Warn when recent allocation burn predicts pool exhaustion within this many hours. Defaults to 72. */
+  COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS?: string
   /**
    * Region label recorded on D1-native routing rows (satisfies the 0117
    * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set

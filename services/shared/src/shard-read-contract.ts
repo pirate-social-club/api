@@ -235,6 +235,10 @@ export type ShardAdminPoolStatsResponse = {
   allocated: number
   free: number
   quarantined: number
+  /** Net currently-allocated rows claimed during the trailing 24 hours. */
+  allocatedLast24Hours?: number
+  /** Net currently-allocated rows claimed during the trailing 7 days. */
+  allocatedLast7Days?: number
 }
 
 export interface ShardAdminRpc {

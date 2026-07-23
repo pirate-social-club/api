@@ -1043,19 +1043,36 @@ function adminPoolFake(rows: FakePoolRow[]) {
       async first() {
         if (/COUNT\(\*\)\s+AS\s+total/i.test(sql)) {
           const threshold = s._args[0] as string | undefined
+          const allocated24HoursThreshold = s._args[1] as string | undefined
+          const allocated7DaysThreshold = s._args[2] as string | undefined
           let allocated = 0
           let free = 0
           let quarantined = 0
+          let allocatedLast24Hours = 0
+          let allocatedLast7Days = 0
           for (const row of rows) {
             if (row.community_id !== null) {
               allocated += 1
+              if (row.allocated_at && allocated24HoursThreshold && row.allocated_at >= allocated24HoursThreshold) {
+                allocatedLast24Hours += 1
+              }
+              if (row.allocated_at && allocated7DaysThreshold && row.allocated_at >= allocated7DaysThreshold) {
+                allocatedLast7Days += 1
+              }
             } else if (row.released_at !== null && threshold && row.released_at >= threshold) {
               quarantined += 1
             } else {
               free += 1
             }
           }
-          return { total: rows.length, allocated, free, quarantined }
+          return {
+            total: rows.length,
+            allocated,
+            free,
+            quarantined,
+            allocated_last_24_hours: allocatedLast24Hours,
+            allocated_last_7_days: allocatedLast7Days,
+          }
         }
         const binding = s._args[0] as string
         return rows.find((r) => r.binding_name === binding) ?? null
@@ -1464,7 +1481,7 @@ describe("communityD1PoolStats", () => {
       {
         binding_name: "DB_CMTY_ALLOCATED",
         community_id: "cmt_1",
-        allocated_at: "t0",
+        allocated_at: new Date(now - 60 * 60 * 1_000).toISOString(),
         last_loaded_at: "t1",
         last_error: null,
         released_at: null,
@@ -1507,6 +1524,8 @@ describe("communityD1PoolStats", () => {
         allocated: 1,
         free: 2,
         quarantined: 1,
+        allocatedLast24Hours: 1,
+        allocatedLast7Days: 1,
       },
     })
   })
