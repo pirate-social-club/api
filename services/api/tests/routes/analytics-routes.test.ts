@@ -116,6 +116,68 @@ describe("analytics routes", () => {
     expect(result.rows[0]?.properties_json).toBe(JSON.stringify({ tab: "posts" }))
   })
 
+  test("client analytics route queues sanitized video impression signals", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_video_impression",
+        event_name: "video_impression",
+        community_id: "cmt_video",
+        post_id: "pst_video",
+        properties: {
+          completion_ratio: 0.82,
+          duration_seconds: 15,
+          dwell_ms: 13_500,
+          muted: false,
+          orientation: "portrait",
+          playback_seconds: 12.3,
+          position: 4,
+          publisher_kind: "profile",
+          replay_count: 1,
+          sound_on: true,
+          raw_media_url: "must-not-leave-api",
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+    const result = await setup.client.execute({
+      sql: `
+        SELECT event_name, community_id, post_id, properties_json
+        FROM analytics_outbox
+        WHERE analytics_event_id = ?1
+      `,
+      args: ["evt_video_impression"],
+    })
+
+    expect(result.rows[0]?.event_name).toBe("video_impression")
+    expect(result.rows[0]?.community_id).toBe("cmt_video")
+    expect(result.rows[0]?.post_id).toBe("pst_video")
+    expect(JSON.parse(String(result.rows[0]?.properties_json))).toEqual({
+      completion_ratio: 0.82,
+      duration_seconds: 15,
+      dwell_ms: 13_500,
+      muted: false,
+      orientation: "portrait",
+      playback_seconds: 12.3,
+      position: 4,
+      publisher_kind: "profile",
+      replay_count: 1,
+      sound_on: true,
+    })
+  })
+
   test("client analytics route queues community follow contract drift signals", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup
