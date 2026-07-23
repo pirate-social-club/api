@@ -2626,6 +2626,7 @@ export type HomeFeedCommunitySummary = {
 export type FeedBooking = {
   host_user_id: string;
   base_price_cents: number;
+  starting_price_cents: number;
   currency: "USDC";
 };
 

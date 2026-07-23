@@ -33,8 +33,16 @@ export async function listFeedBookingsByHostUserIds(
   const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(", ")
   const result = await executor.execute({
     sql: `
-      SELECT p.host_user_id, p.base_price_cents
+      SELECT
+        p.host_user_id,
+        p.base_price_cents,
+        LEAST(
+          p.base_price_cents,
+          COALESCE(MIN(pr.price_cents), p.base_price_cents)
+        ) AS starting_price_cents
       FROM bookings.profiles p
+      LEFT JOIN bookings.price_rules pr
+        ON pr.host_user_id = p.host_user_id
       WHERE p.host_user_id IN (${placeholders})
         AND p.is_published = TRUE
         AND EXISTS (
@@ -42,6 +50,7 @@ export async function listFeedBookingsByHostUserIds(
           FROM bookings.availability_rules r
           WHERE r.host_user_id = p.host_user_id
         )
+      GROUP BY p.host_user_id, p.base_price_cents
       ORDER BY p.host_user_id ASC
     `,
     args: uniqueIds,
@@ -50,12 +59,17 @@ export async function listFeedBookingsByHostUserIds(
   return new Map(result.rows.map((row) => {
     const hostUserId = requiredString(row, "host_user_id")
     const basePriceCents = requiredNumber(row, "base_price_cents")
+    const startingPriceCents = requiredNumber(row, "starting_price_cents")
     if (!Number.isSafeInteger(basePriceCents) || basePriceCents < 0) {
       throw new TypeError("Feed booking base price must be a non-negative integer")
+    }
+    if (!Number.isSafeInteger(startingPriceCents) || startingPriceCents < 0) {
+      throw new TypeError("Feed booking starting price must be a non-negative integer")
     }
     return [hostUserId, {
       host_user_id: hostUserId,
       base_price_cents: basePriceCents,
+      starting_price_cents: startingPriceCents,
       currency: "USDC" as const,
     }]
   }))
