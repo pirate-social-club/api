@@ -263,6 +263,9 @@ jobs:
           echo "::group::booking confirm service PG"
           timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
           echo "::endgroup::"
+          echo "::group::feed booking discovery PG"
+          timeout 120s bun test src/lib/feed/home-feed-booking.pg.test.ts
+          echo "::endgroup::"
           echo "::group::reward campaign credit PG"
           rm -f "$REWARD_CAMPAIGN_PG_SENTINEL_PATH"
           timeout 120s bun test src/lib/rewards/reward-campaign-reconciler.pg.test.ts
