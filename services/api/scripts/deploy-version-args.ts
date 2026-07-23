@@ -2,6 +2,7 @@ export type BuildVersionMetadata = {
   gitRef: string
   gitSha: string
   timestamp: string
+  communityD1ShardSourceVersion: string
 }
 
 export type RunTextCommand = (command: string, args: string[]) => string
@@ -25,6 +26,22 @@ export function resolveBuildVersionMetadata(
   runText: RunTextCommand,
   now: () => Date = () => new Date(),
 ): BuildVersionMetadata {
+  const dirtyShardSources = runText(
+    "git",
+    [
+      "status",
+      "--porcelain",
+      "--",
+      ":(top)services/community-d1-shard",
+      ":(top)services/shared",
+    ],
+  ).trim()
+  if (dirtyShardSources) {
+    throw new Error(
+      "Refusing to stamp a deploy from dirty community-d1-shard/shared sources; commit the exact source tree first.",
+    )
+  }
+
   const gitSha = firstNonEmpty([
     env.BUILD_GIT_SHA,
     env.PIRATE_BUILD_GIT_SHA,
@@ -44,8 +61,14 @@ export function resolveBuildVersionMetadata(
     env.BUILD_TIMESTAMP,
     env.PIRATE_BUILD_TIMESTAMP,
   ]) ?? now().toISOString()
+  const communityD1ShardTree = runText(
+    "git",
+    ["rev-parse", "HEAD:services/community-d1-shard"],
+  ).trim()
+  const sharedTree = runText("git", ["rev-parse", "HEAD:services/shared"]).trim()
+  const communityD1ShardSourceVersion = `${communityD1ShardTree}.${sharedTree}`
 
-  if (!gitSha || !gitRef || !timestamp) {
+  if (!gitSha || !gitRef || !timestamp || !communityD1ShardTree || !sharedTree) {
     throw new Error("Missing build version metadata")
   }
 
@@ -53,6 +76,7 @@ export function resolveBuildVersionMetadata(
     gitRef,
     gitSha,
     timestamp,
+    communityD1ShardSourceVersion,
   }
 }
 
@@ -69,5 +93,12 @@ export function buildStampedWranglerDeployArgs(
     defineString("__PIRATE_BUILD_GIT_REF__", metadata.gitRef),
     "--define",
     defineString("__PIRATE_BUILD_TIMESTAMP__", metadata.timestamp),
+    "--define",
+    defineString(
+      "__PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__",
+      metadata.communityD1ShardSourceVersion,
+    ),
+    "--tag",
+    metadata.gitSha,
   ]
 }

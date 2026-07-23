@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
 
+const SHARD_SOURCE_VERSION = "shard-tree.shared-tree"
+const shardVersion = {
+  build: {
+    gitRef: "main",
+    gitSha: "shard-commit",
+    timestamp: "2026-07-23T10:00:00.000Z",
+    sourceVersion: SHARD_SOURCE_VERSION,
+  },
+  workerVersion: {
+    id: "worker-version-id",
+    tag: "shard-commit",
+    timestamp: "2026-07-23T10:00:01.000Z",
+  },
+}
+
 describe("health route", () => {
   test("GET /health returns ok", async () => {
     const response = await app.request("http://pirate.test/health")
@@ -15,8 +30,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
@@ -28,6 +45,8 @@ describe("health route", () => {
     expect(await response.json()).toMatchObject({
       ok: true,
       backend: "d1_native",
+      shard_version: shardVersion,
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
       pool_capacity: { free: 10, threshold: 8, healthy: true },
     })
     expect(response.headers.get("cache-control")).toBe("no-store")
@@ -42,8 +61,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 22, free: 8, quarantined: 0 },
@@ -65,8 +86,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 30, free: 0, quarantined: 0 },
@@ -89,8 +112,10 @@ describe("health route", () => {
     const response = await app.request("http://pirate.test/health/provisioning", {}, {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({ ok: false as const, code: "shard_unavailable" }),
       } as never,
     })
@@ -99,6 +124,52 @@ describe("health route", () => {
     expect(await response.json()).toMatchObject({
       ok: false,
       error_code: "d1_pool_stats_unavailable",
+    })
+  })
+
+  test("GET /health/provisioning fails closed when shard attestation is unavailable", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => {
+          throw new Error("RPC method unavailable")
+        },
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error_code: "d1_shard_version_unavailable",
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+    })
+  })
+
+  test("GET /health/provisioning fails closed on shard source skew", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => ({
+          ...shardVersion,
+          build: { ...shardVersion.build, sourceVersion: "stale-shard.stale-shared" },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error_code: "d1_shard_version_mismatch",
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_version: {
+        build: { sourceVersion: "stale-shard.stale-shared" },
+      },
     })
   })
 

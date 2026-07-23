@@ -68,7 +68,25 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc, ShardVersionRpc {}
+
+export type ShardVersionInfo = {
+  build: {
+    gitRef: string | null
+    gitSha: string | null
+    timestamp: string | null
+    sourceVersion: string | null
+  }
+  workerVersion: {
+    id: string | null
+    tag: string | null
+    timestamp: string | null
+  }
+}
+
+export interface ShardVersionRpc {
+  communityD1Version(): Promise<ShardVersionInfo>
+}
 
 /**
  * Step 2 of the D1-native workstream. Allocates a D1 binding from the shard's

@@ -81,7 +81,7 @@ export type ShardEnv = {
    * must never be reachable on a misconfigured shard.
    */
   SHARD_ADMIN_TOKEN?: string
-  [binding: string]: D1Database | string | undefined
+  [binding: string]: D1Database | WorkerVersionMetadata | string | undefined
 }
 
 /**
