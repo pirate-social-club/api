@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 
-const LEGACY_VERIFICATION_WRITERS = [
+const LEGACY_VERIFICATION_WRITERS: string[] = [
   "namespace-revalidation-cron.ts",
   "namespace-verification-policy.ts",
   "namespace-verification-restart.ts",
   "namespace-verification-service.ts",
   "namespace-verification-start.ts",
-] as const
+]
 
 describe("root-delegation authority boundary", () => {
   test.each(LEGACY_VERIFICATION_WRITERS)(
