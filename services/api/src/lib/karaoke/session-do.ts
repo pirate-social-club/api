@@ -12,6 +12,7 @@ import {
   type KaraokeStreamingSttAdapter,
   type ScorableKaraokeLine,
   type StoredKaraokeSessionSnapshot,
+  type KaraokeTransportGuardDiagnostic,
 } from "@pirate-social-club/karaoke-runtime";
 
 import type { Env } from "../../env";
@@ -161,6 +162,24 @@ interface KaraokeWebSocketAttachment {
   connectedAtMs: number;
 }
 
+function hasRestoreState(restore: {
+  lastClientSequence?: number | null;
+  lastSttSequence?: number | null;
+  serverSequence?: number;
+}): boolean {
+  return restore.lastClientSequence !== undefined
+    || restore.lastSttSequence !== undefined
+    || restore.serverSequence !== undefined;
+}
+
+async function socketIdentityHash(nonce: string | null): Promise<string | null> {
+  if (!nonce) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
+}
+
 export interface KaraokeSessionRuntimeDOOptions {
   sttAdapter?: KaraokeStreamingSttAdapter;
   outboxStore?: OutboxStore;
@@ -177,6 +196,13 @@ export class KaraokeSessionRuntimeDO {
   private effectRunner: CloudflareKaraokeEffectRunner | null = null;
   private sttAdapter: KaraokeStreamingSttAdapter | null = null;
   private meta: PersistedRuntimeMeta | null = null;
+  // The socket whose message the host is currently evaluating. Held as a bare
+  // reference (never a hash) so the SHA-256 is computed ONLY when a guard
+  // actually rejects — audio frames arrive ~10x/second and hashing every one to
+  // pre-stage a value that is almost never read would put avoidable async work
+  // on the realtime path. Kept DO-level so socket identity stays out of the
+  // shared protocol package.
+  private activeSocket: WebSocket | null = null;
   private readonly schemaReady: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env);
@@ -237,7 +263,9 @@ export class KaraokeSessionRuntimeDO {
         await this.effectRunner!.reportTransportError(decoded.error, this.host!.snapshot().state);
         return;
       }
-      await this.host!.handleAudioFrame(decoded.frame);
+      await this.withSocketDiagnosticContext(server, async () => {
+        await this.host!.handleAudioFrame(decoded.frame);
+      });
       await this.persistSnapshotIfNeeded();
       return;
     }
@@ -253,7 +281,9 @@ export class KaraokeSessionRuntimeDO {
       await this.sendSessionError(server, "WebSocket message is not a KaraokeClientEvent");
       return;
     }
-    await this.host!.handleClientEvent(clientEvent);
+    await this.withSocketDiagnosticContext(server, async () => {
+      await this.host!.handleClientEvent(clientEvent);
+    });
     await this.persistSnapshotIfNeeded();
   }
 
@@ -577,6 +607,7 @@ export class KaraokeSessionRuntimeDO {
       serverSequence?: number;
     } = {},
   ): Promise<void> {
+    const hostLifecycle = hasRestoreState(restore) ? "restored" : "resident";
     const outbox = this.options.outboxStore ?? new SqliteOutboxStore({ storage: this.ctx.storage });
     const broadcast = this.options.broadcast ?? ((event) => this.broadcastToAttempt(event));
     const effectRunner = new CloudflareKaraokeEffectRunner({
@@ -598,6 +629,57 @@ export class KaraokeSessionRuntimeDO {
         lastClientSequence: restore.lastClientSequence,
         lastSttSequence: restore.lastSttSequence,
       },
+      onTransportGuardFailure: async (diagnostic) => {
+        await this.logTransportGuardFailure(diagnostic, hostLifecycle);
+      },
+    });
+  }
+
+  /**
+   * Marks which socket the host is evaluating, so a guard rejection can be
+   * attributed to a connection. The assignment is deliberately SYNCHRONOUS: an
+   * await here would add a scheduling point to every inbound message and widen
+   * the window in which a concurrently-delivered message could overwrite the
+   * marker.
+   *
+   * Best-effort by construction. The DO input gate can still interleave messages
+   * while the callback awaits provider I/O, so `socketIdentityHash` is a
+   * correlation hint, not a guarantee; nothing depends on it for correctness.
+   */
+  private async withSocketDiagnosticContext<T>(server: WebSocket, callback: () => Promise<T>): Promise<T> {
+    const previousSocket = this.activeSocket;
+    this.activeSocket = server;
+    try {
+      return await callback();
+    } finally {
+      this.activeSocket = previousSocket;
+    }
+  }
+
+  private async logTransportGuardFailure(
+    diagnostic: KaraokeTransportGuardDiagnostic,
+    hostLifecycle: "resident" | "restored",
+  ): Promise<void> {
+    // Hash lazily, on the rejection path only. STT rejections have no client
+    // socket, so they carry no socket identity at all.
+    const activeSocket = this.activeSocket;
+    const socketHash = diagnostic.channel === "client" && activeSocket
+      ? await socketIdentityHash(this.readAttachment(activeSocket)?.nonce ?? null)
+      : null;
+    // Workers Logs indexes object fields, making reset-shaped failures (for
+    // example 1 after a persisted 87) queryable without exposing diagnostics to
+    // the client transport envelope.
+    console.warn({
+      attemptId: diagnostic.attemptId,
+      channel: diagnostic.channel,
+      code: diagnostic.code,
+      event: "karaoke.transport_guard_rejected",
+      hostLifecycle,
+      incomingSequence: diagnostic.incomingSequence,
+      previousSequence: diagnostic.previousSequence,
+      sessionId: diagnostic.sessionId,
+      socketIdentityHash: socketHash,
+      sttStreamGeneration: diagnostic.sttStreamGeneration,
     });
   }
 
