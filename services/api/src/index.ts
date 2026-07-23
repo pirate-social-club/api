@@ -275,7 +275,11 @@ app.get("/health/provisioning", async (c) => {
   // deploy is what kept web off production for a full day on 2026-07-13.
   // Allocation itself still fails loudly on its own path (`d1_pool_exhausted`
   // from the provisioning backend), so nothing is masked by reporting 200 here.
-  const capacity = classifyD1PoolCapacity(result.value, c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD)
+  const capacity = classifyD1PoolCapacity(
+    result.value,
+    c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD,
+    c.env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
+  )
   const exhausted = capacity.free <= 0
   const degraded = !capacity.healthy && !exhausted
   return c.json(

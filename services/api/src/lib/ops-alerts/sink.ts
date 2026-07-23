@@ -99,6 +99,14 @@ function alertDetailsLines(alert: OpsAlert): string[] {
     "processed_jobs",
     "failed",
     "errors",
+    "free",
+    "threshold",
+    "allocatedLast24Hours",
+    "allocatedLast7Days",
+    "burnRatePerHour",
+    "forecastCapacity",
+    "hoursToExhaustion",
+    "exhaustionAlertHours",
   ]
   const lines: string[] = []
   for (const key of summaryKeys) {

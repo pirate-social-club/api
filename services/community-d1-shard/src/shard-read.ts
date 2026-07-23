@@ -1043,16 +1043,20 @@ export async function runShardPoolStats(
   if ("ok" in pool) return pool
 
   const quarantineThreshold = new Date(Date.now() - QUARANTINE_WINDOW_MS).toISOString()
+  const allocated24HoursThreshold = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString()
+  const allocated7DaysThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000).toISOString()
   const row = await pool
     .prepare(
       "SELECT " +
         "COUNT(*) AS total, " +
         "SUM(CASE WHEN community_id IS NOT NULL THEN 1 ELSE 0 END) AS allocated, " +
         "SUM(CASE WHEN community_id IS NULL AND (released_at IS NULL OR released_at < ?1) THEN 1 ELSE 0 END) AS free, " +
-        "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined " +
+        "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined, " +
+        "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?2 THEN 1 ELSE 0 END) AS allocated_last_24_hours, " +
+        "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?3 THEN 1 ELSE 0 END) AS allocated_last_7_days " +
         "FROM d1_pool",
     )
-    .bind(quarantineThreshold)
+    .bind(quarantineThreshold, allocated24HoursThreshold, allocated7DaysThreshold)
     .first()
   const r = row as Record<string, unknown> | null
 
@@ -1063,6 +1067,8 @@ export async function runShardPoolStats(
       allocated: Number(r?.["allocated"] ?? 0),
       free: Number(r?.["free"] ?? 0),
       quarantined: Number(r?.["quarantined"] ?? 0),
+      allocatedLast24Hours: Number(r?.["allocated_last_24_hours"] ?? 0),
+      allocatedLast7Days: Number(r?.["allocated_last_7_days"] ?? 0),
     },
   }
 }
