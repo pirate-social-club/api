@@ -194,6 +194,7 @@ async function resolveCurrentKaraokeTuple(input: {
   payload: SongKaraokePayload
   scoringModel: string
   scoringProvider: string
+  scoringVersion: number
 }> {
   const [payload, scoringPolicy] = await Promise.all([
     getPostKaraokePayload({
@@ -390,7 +391,7 @@ export async function recordKaraokeAttempt(input: {
       input.postId,
       input.communityId,
       input.karaokeRevisionId,
-      KARAOKE_SCORING_VERSION,
+      input.scoringVersion,
       input.scoringProvider,
       input.scoringModel,
       finalScoreBps,
@@ -456,7 +457,7 @@ export async function recordKaraokeAttempt(input: {
       karaokeRevisionId: input.karaokeRevisionId,
       now: input.completedAt,
       postId: input.postId,
-      scoringVersion: KARAOKE_SCORING_VERSION,
+      scoringVersion: input.scoringVersion,
       sessionId: input.sessionId,
       userId: input.userId,
     })
