@@ -19,6 +19,8 @@ describe("root-delegation authority boundary", () => {
       // These modules own session-scoped ownership, attachment, and expiry
       // evidence. Root-delegation freshness has a separate authority. Matching
       // the namespace prefix makes this a ratchet for future root tables too.
+      // A future canonical observer placed here must earn an explicit,
+      // narrowly named exclusion with its root-authority rationale in review.
       expect(source, fileName).not.toMatch(/\bhns_root_[a-z0-9_]+\b/u)
     }
   })
