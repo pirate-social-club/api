@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { SCHEDULED_MINIMUM_PRIORITY_STARTS, scheduledPriorityJobNames } from "./index"
+import {
+  SCHEDULED_MINIMUM_PRIORITY_STARTS,
+  scheduledMinimumPriorityStarts,
+  scheduledPriorityJobNames,
+} from "./index"
 
 describe("scheduled priority ordering", () => {
   // The drain is the retry engine for every community job. Outside the protected
@@ -29,6 +33,15 @@ describe("scheduled priority ordering", () => {
     ])
   })
 
+  test("guarantees D1 reconciliation a start when the binding is configured", () => {
+    const names = scheduledPriorityJobNames(true, false)
+    const reconcilerIndex = names.indexOf("reconcile_d1_provisioning")
+    expect(reconcilerIndex).toBeGreaterThanOrEqual(0)
+    expect(reconcilerIndex).toBeLessThan(scheduledMinimumPriorityStarts(true))
+    expect(scheduledMinimumPriorityStarts(true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 1)
+    expect(scheduledMinimumPriorityStarts(false)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS)
+  })
+
   test("keeps D1 provisioning ahead of the latency-tolerant reward monitor", () => {
     expect(scheduledPriorityJobNames(true, false)).toEqual([
       "reconcile_reward_payouts",
@@ -39,8 +52,8 @@ describe("scheduled priority ordering", () => {
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
       "process_community_jobs",
-      "monitor_reward_campaign_treasury_solvency",
       "reconcile_d1_provisioning",
+      "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
     ])
   })
@@ -70,8 +83,8 @@ describe("scheduled priority ordering", () => {
       "reconcile_reward_campaigns",
       "reconcile_reward_funding_refunds",
       "process_community_jobs",
-      "monitor_reward_campaign_treasury_solvency",
       "reconcile_d1_provisioning",
+      "monitor_reward_campaign_treasury_solvency",
       "revalidate_hns_namespaces",
       "monitor_reward_campaigns",
     ])

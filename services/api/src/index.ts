@@ -1046,15 +1046,22 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
-    // Inside the protected prefix (SCHEDULED_MINIMUM_PRIORITY_STARTS): the drain
+    // Inside the protected base prefix: the drain
     // is the retry engine for every community job, so a deferred start delays
     // user-visible publishing, lyrics, and translations — not just monitoring.
     "process_community_jobs",
-    "monitor_reward_campaign_treasury_solvency",
+    // When available, extend the protected prefix by one so cross-store
+    // provisioning failures cannot leak pool capacity indefinitely behind slow
+    // settlement work.
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
+    "monitor_reward_campaign_treasury_solvency",
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
     "monitor_reward_campaigns",
   ]
+}
+
+export function scheduledMinimumPriorityStarts(canRunD1Reconciler: boolean): number {
+  return SCHEDULED_MINIMUM_PRIORITY_STARTS + (canRunD1Reconciler ? 1 : 0)
 }
 
 const handler: ExportedHandler<Env> = {
@@ -1142,12 +1149,11 @@ const handler: ExportedHandler<Env> = {
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
       monitor_reward_campaigns: () => monitorScheduledRewardCampaigns(env),
     }
-    // Concurrency is two. The protected prefix contains only settlement and
-    // money-movement paths: payout/royalty finalization, booking/purchase
-    // settlement, reward reconciliation, and funding refunds. All seven get a
-    // start even when an earlier D1-backed job consumes the nominal batch
-    // deadline. Monitoring and community maintenance remain ordered after that
-    // prefix and may defer safely to a later tick.
+    // Concurrency is two. The protected prefix contains settlement and
+    // money-movement paths plus the user-visible community-job drain. When the
+    // D1 reconciler is configured, the prefix grows by one: otherwise a slow
+    // fixed prefix can defer it on every tick and strand allocated bindings.
+    // Monitoring and other maintenance may still defer safely.
     const priorityJobs: NamedTask[] = scheduledPriorityJobNames(
       canRunD1Reconciler,
       isHnsNamespaceRevalidationEnabled(env),
@@ -1207,7 +1213,7 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
         limit: SCHEDULED_JOB_CONCURRENCY,
         lock,
-        minimumStartsBeforeDeadline: SCHEDULED_MINIMUM_PRIORITY_STARTS,
+        minimumStartsBeforeDeadline: scheduledMinimumPriorityStarts(canRunD1Reconciler),
         onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
         onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
         onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),
