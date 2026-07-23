@@ -33,6 +33,7 @@ function feedItem(input: {
 const booking = {
   host_user_id: "usr_host",
   base_price_cents: 3500,
+  starting_price_cents: 2500,
   currency: "USDC" as const,
 }
 
@@ -165,7 +166,11 @@ describe("home feed booking discovery", () => {
       execute: async (statement) => {
         statements.push(statement)
         return {
-          rows: [{ host_user_id: "usr_host", base_price_cents: 3500 }],
+          rows: [{
+            host_user_id: "usr_host",
+            base_price_cents: 3500,
+            starting_price_cents: 2500,
+          }],
         }
       },
     }
@@ -178,6 +183,8 @@ describe("home feed booking discovery", () => {
     })
     expect(String((statements[0] as { sql: string }).sql)).toContain("p.is_published = TRUE")
     expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.availability_rules")
+    expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.price_rules")
+    expect(String((statements[0] as { sql: string }).sql)).toContain("MIN(pr.price_cents)")
     expect(result.get("usr_host")).toEqual(booking)
   })
 })

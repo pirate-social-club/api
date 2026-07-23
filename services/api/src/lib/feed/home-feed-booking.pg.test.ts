@@ -75,6 +75,14 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         ('rule_ready', 'host_ready', '{1}', '09:00', '10:00', 1800, NOW(), NOW()),
         ('rule_unpublished', 'host_unpublished', '{2}', '09:00', '10:00', 1800, NOW(), NOW())
     `)
+    await setup.unsafe(`
+      INSERT INTO bookings.price_rules (
+        price_rule_id, host_user_id, match_weekday, match_local_start, match_local_end,
+        match_duration_seconds, price_cents, priority, created_at, updated_at
+      ) VALUES
+        ('price_ready_low', 'host_ready', 1, '09:00', '09:30', 1800, 2500, 20, NOW(), NOW()),
+        ('price_ready_high', 'host_ready', 1, '09:30', '10:00', 1800, 5000, 10, NOW(), NOW())
+    `)
     await setup.end()
     database = connect(TEST_DB)
   })
@@ -102,6 +110,7 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
       {
         host_user_id: "host_ready",
         base_price_cents: 3500,
+        starting_price_cents: 2500,
         currency: "USDC",
       },
     ]])
