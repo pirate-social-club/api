@@ -47,6 +47,7 @@ describe("health route", () => {
       backend: "d1_native",
       shard_version: shardVersion,
       expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_attestation: { healthy: true, status: "verified" },
       pool_capacity: { free: 10, threshold: 8, healthy: true },
     })
     expect(response.headers.get("cache-control")).toBe("no-store")
@@ -77,6 +78,7 @@ describe("health route", () => {
       ok: true,
       degraded: true,
       degraded_reason: "d1_pool_low_capacity",
+      degraded_reasons: ["d1_pool_low_capacity"],
       pool_capacity: { free: 8, threshold: 8, healthy: false },
     })
   })
@@ -127,7 +129,7 @@ describe("health route", () => {
     })
   })
 
-  test("GET /health/provisioning fails closed when shard attestation is unavailable", async () => {
+  test("GET /health/provisioning degrades but stays available when shard RPC is unavailable", async () => {
     const response = await app.request("http://pirate.test/health/provisioning", {}, {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
@@ -137,14 +139,74 @@ describe("health route", () => {
         communityD1Version: async () => {
           throw new Error("RPC method unavailable")
         },
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
       } as never,
     })
 
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({
-      ok: false,
-      error_code: "d1_shard_version_unavailable",
+      ok: true,
       expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_version: null,
+      shard_attestation: { healthy: false, status: "rpc_unavailable" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_rpc_unavailable",
+      degraded_reasons: ["d1_shard_attestation_rpc_unavailable"],
+    })
+  })
+
+  test("GET /health/provisioning degrades but stays available without an expected shard version", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      expected_shard_source_version: null,
+      shard_attestation: { healthy: false, status: "expected_missing" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_expected_missing",
+    })
+  })
+
+  test("GET /health/provisioning degrades but stays available without an actual shard version", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => ({
+          ...shardVersion,
+          build: { ...shardVersion.build, sourceVersion: null },
+        }),
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_attestation: { healthy: false, status: "actual_missing" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_actual_missing",
     })
   })
 
