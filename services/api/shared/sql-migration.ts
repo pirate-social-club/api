@@ -733,32 +733,6 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
-  // Migration 0154 adds four provenance columns in one PostgreSQL ALTER TABLE.
-  // SQLite permits only one ADD COLUMN per statement.
-  if (
-    normalized.startsWith("ALTER TABLE HNS_ROOT_REDUNDANCY_OBSERVATIONS ")
-    && normalized.includes("ADD COLUMN EVIDENCE_CLASS ")
-  ) {
-    return [
-      `ALTER TABLE hns_root_redundancy_observations ADD COLUMN evidence_class TEXT CHECK (evidence_class IS NULL OR evidence_class IN ('local_single_vantage', 'external_multi_vantage'));`,
-      `ALTER TABLE hns_root_redundancy_observations ADD COLUMN quorum_policy_version TEXT;`,
-      `ALTER TABLE hns_root_redundancy_observations ADD COLUMN independent_vantage_count INTEGER CHECK (independent_vantage_count IS NULL OR independent_vantage_count > 0);`,
-      `ALTER TABLE hns_root_redundancy_observations ADD COLUMN independent_asn_count INTEGER CHECK (independent_asn_count IS NULL OR independent_asn_count > 0);`,
-    ]
-  }
-
-  // The same migration replaces a PostgreSQL table constraint while adding the
-  // selected evidence class. SQLite cannot replace the constraint, but the new
-  // column must exist for the following backfill and local readers.
-  if (
-    normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
-    && normalized.includes("ADD COLUMN AUTHORITY_REDUNDANCY_EVIDENCE_CLASS ")
-  ) {
-    return [
-      `ALTER TABLE hns_root_delegation_state ADD COLUMN authority_redundancy_evidence_class TEXT CHECK (authority_redundancy_evidence_class IS NULL OR authority_redundancy_evidence_class IN ('local_single_vantage', 'external_multi_vantage'));`,
-    ]
-  }
-
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
     if (
       normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
