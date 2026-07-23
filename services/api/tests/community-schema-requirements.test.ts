@@ -16,6 +16,8 @@ type RequirementsManifest = {
     rationale?: unknown
     promotion_condition?: unknown
     expires_after?: unknown
+    owner?: unknown
+    tracking_issue?: unknown
     capability_guard?: unknown
     runtime_reference_counts?: unknown
     compatibility_tests?: unknown
@@ -86,7 +88,8 @@ function transitionalDdlViolations(sql: string): string[] {
   const violations: string[] = []
   for (const statement of statements) {
     if (/^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/iu.test(statement)) continue
-    if (/^ALTER\s+TABLE\b[\s\S]*\bADD\s+(?:COLUMN\s+)?\b/iu.test(statement)) {
+    if (/^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\b/iu.test(statement)) continue
+    if (/^ALTER\s+TABLE\b[\s\S]*?\bADD\s+(?:COLUMN\s+)?(?!CONSTRAINT\b)(?:["`]|\[)?[a-zA-Z_][a-zA-Z0-9_]*(?:["`]|\])?\s+[\s\S]+$/iu.test(statement)) {
       if (/\bNOT\s+NULL\b/iu.test(statement) && !/\bDEFAULT\b/iu.test(statement)) {
         violations.push(`NOT NULL column has no DEFAULT: ${statement}`)
       }
@@ -148,6 +151,15 @@ describe("community schema requirements manifest", () => {
         Date.now(),
         `${migration} transitional policy expired at ${String(policy.expires_after)}; promote or explicitly renew it`,
       ).toBeLessThanOrEqual(Date.parse(policy.expires_after as string))
+      expect(
+        typeof policy.owner === "string" && /^[a-zA-Z0-9-]+$/u.test(policy.owner),
+        `${migration} is transitional without a concrete owner`,
+      ).toBe(true)
+      expect(
+        typeof policy.tracking_issue === "string"
+          && /^https:\/\/github\.com\/pirate-social-club\/api\/issues\/\d+$/u.test(policy.tracking_issue),
+        `${migration} is transitional without a dated tracking issue`,
+      ).toBe(true)
       claim(migration, "transitional")
     }
     for (const [migration, policy] of Object.entries(manifest.deferred)) {
@@ -247,11 +259,14 @@ describe("community schema requirements manifest", () => {
   test("transitional DDL permits only additive, backward-compatible statements", () => {
     expect(transitionalDdlViolations(`
       CREATE TABLE IF NOT EXISTS safe_table (id TEXT PRIMARY KEY);
+      CREATE INDEX IF NOT EXISTS idx_safe_table_id ON safe_table(id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_safe_table_id_unique ON safe_table(id);
       ALTER TABLE posts ADD COLUMN nullable_value TEXT;
       ALTER TABLE posts ADD COLUMN required_value INTEGER NOT NULL DEFAULT 0;
     `)).toEqual([])
     expect(transitionalDdlViolations("DROP TABLE posts;")).toHaveLength(1)
     expect(transitionalDdlViolations("ALTER TABLE posts RENAME COLUMN old TO new;")).toHaveLength(1)
+    expect(transitionalDdlViolations("ALTER TABLE posts ADD CONSTRAINT chk CHECK (x > 0);")).toHaveLength(1)
     expect(transitionalDdlViolations("ALTER TABLE posts ADD COLUMN unsafe INTEGER NOT NULL;")).toHaveLength(1)
   })
 

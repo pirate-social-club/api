@@ -49,6 +49,8 @@
       "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
       "promotion_condition": "Promote to unconditional only after the fleet reconciles as 100 applied + 1 quarantined DB_CMTY_0092, DB_CMTY_0092 is resolved through its quarantine process, and 1143 is independently verified in both schema_migrations and physical column presence across the resulting full live denominator. Stage 2 remains blocked until this promotion closes.",
       "expires_after": "2026-08-15T13:44:00Z",
+      "owner": "technohippi3",
+      "tracking_issue": "https://github.com/pirate-social-club/api/issues/746",
       "capability_guard": "hasLyricsLanguageColumns",
       "runtime_reference_counts": {
         "src/lib/posts/community-post-projection.ts": {
