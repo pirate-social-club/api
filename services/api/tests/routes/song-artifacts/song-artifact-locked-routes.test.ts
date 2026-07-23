@@ -2263,6 +2263,77 @@ describe("song artifact locked routes", () => {
     expect(buyerCiphertextAfterPurchase.status).toBe(200)
     expect(buyerCiphertextAfterPurchase.headers.get("content-type")).toBe("application/octet-stream")
     expect(new Uint8Array(await buyerCiphertextAfterPurchase.arrayBuffer())).toEqual(ciphertextBeforePurchase)
+
+    // Legacy unsafe quote: a royalty-native quote whose persisted settlement_mode was downgraded to
+    // delivery-only (as a quote issued before the story-payout guard existed would look). The
+    // settlement-entry guard must reject it at entry — before verifying buyer funding or creating a
+    // settlement attempt — so its story_payout leg can never be recorded settled without a payout.
+    let fundingVerifierCalls = 0
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => {
+      fundingVerifierCalls += 1
+      return {
+        txRef: input.fundingTxRef,
+        fromAddress: input.buyerAddress,
+        toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
+        tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        chainRef: "eip155:84532",
+      }
+    })
+
+    const legacyQuoteCreate = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-quotes`,
+      {
+        listing: listingBody.id,
+        ...routedCheckoutQuoteFields,
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(legacyQuoteCreate.status).toBe(201)
+    const legacyQuoteBody = await json(legacyQuoteCreate) as { id: string; settlement_mode: string }
+    expect(legacyQuoteBody.settlement_mode).toBe("royalty_native_story_payment")
+    const legacyRawQuoteId = legacyQuoteBody.id.replace(/^pq_/, "")
+
+    const legacyDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      await legacyDb.execute({
+        sql: `UPDATE purchase_quotes SET settlement_mode = 'delivery_only_story_settlement' WHERE quote_id = ?1`,
+        args: [legacyRawQuoteId],
+      })
+    } finally {
+      legacyDb.close()
+    }
+
+    const legacySettlement = await requestJson(
+      `http://pirate.test/communities/${communityId}/purchase-settlements`,
+      {
+        quote: legacyQuoteBody.id,
+        settlement_wallet_attachment: settlementWalletAttachmentId,
+        funding_tx_ref: "0xfunding-legacy-unsafe",
+        settlement_tx_ref: "tx-legacy-unsafe",
+      },
+      ctx.env,
+      buyer.accessToken,
+    )
+    expect(legacySettlement.status).toBe(403)
+    expect(JSON.stringify(await json(legacySettlement))).toContain("recipient payout is not configured")
+    // The guard runs before funding verification and before reserving a settlement attempt.
+    expect(fundingVerifierCalls).toBe(0)
+    const attemptDb = createClient({
+      url: `file:${buildLocalCommunityDbPath(ctx.communityDbRoot, communityId)}`,
+    })
+    try {
+      const attempts = await attemptDb.execute({
+        sql: `SELECT COUNT(*) AS count FROM purchase_settlement_attempts WHERE quote_id = ?1`,
+        args: [legacyRawQuoteId],
+      })
+      expect(Number(attempts.rows[0]?.count ?? -1)).toBe(0)
+    } finally {
+      attemptDb.close()
+    }
   }, 15000)
 
 

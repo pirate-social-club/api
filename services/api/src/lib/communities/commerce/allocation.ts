@@ -1,7 +1,8 @@
-import { badRequestError } from "../../errors"
+import { badRequestError, eligibilityFailed } from "../../errors"
 import type {
   PurchaseAllocationLeg,
   PurchaseAllocationLegRow,
+  PurchaseSettlementMode,
   QuoteAllocationSnapshot,
 } from "./row-types"
 import { parseJsonValue } from "./row-types"
@@ -101,6 +102,40 @@ export function assertExecutableQuoteAllocationSnapshot(
 
   if (payableLegCount < 1 || totalShareBps !== TOTAL_SHARE_BPS) {
     throw badRequestError("Purchase quote allocation snapshot is invalid")
+  }
+
+  return snapshot
+}
+
+/**
+ * Fail closed when a quote would create a `story_payout` leg that settlement cannot actually pay.
+ *
+ * At finalization the asset path (settlement-service.ts) requires a confirmed `story_royalty_payment`
+ * effect and adopts THAT on-chain transaction as the leg's settlement_ref — returning `pending`
+ * until the payout has executed. The non-asset path has no such gate: under
+ * `delivery_only_story_settlement` (live-room tickets and paid replays) a `story_payout` leg is
+ * marked `confirmed` using the buyer's funding transaction, so the recipient (host/performer) is
+ * never paid while the ledger records the leg as settled.
+ *
+ * Until non-asset payout execution exists, refuse to create such a quote rather than issue a
+ * checkout that looks successful while funds stay in platform custody. Free targets ($0 legs) and
+ * asset purchases (royalty-native mode) are unaffected.
+ */
+export function assertSettlementModeCanExecuteAllocations(
+  snapshot: QuoteAllocationSnapshot[],
+  settlementMode: PurchaseSettlementMode,
+): QuoteAllocationSnapshot[] {
+  if (settlementMode === "royalty_native_story_payment") {
+    return snapshot
+  }
+
+  const unbackedStoryPayout = snapshot.some((allocation) => (
+    allocation.settlement_strategy === "story_payout" && allocation.amount_usd > 0
+  ))
+  if (unbackedStoryPayout) {
+    throw eligibilityFailed(
+      "This paid purchase is unavailable because recipient payout is not configured",
+    )
   }
 
   return snapshot
