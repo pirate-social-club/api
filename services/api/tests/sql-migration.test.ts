@@ -260,6 +260,211 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
     }
   })
 
+  test("applies verbatim 0153 -> 0154 fixtures with provenance and FK targets intact", async () => {
+    const database = new Database(":memory:")
+    const applyFixture = async (fileName: string) => {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      await applyFixture("0152_control_plane_hns_root_delegation_state.sql")
+      await applyFixture("0153_control_plane_hns_root_authority_redundancy.sql")
+      database.exec(`
+        INSERT INTO hns_root_redundancy_observations (
+          redundancy_observation_id,
+          normalized_root_label,
+          outcome,
+          provider,
+          observed_parent_ns_json,
+          authority_redundancy_ok,
+          observed_at,
+          created_at
+        ) VALUES (
+          'red_local',
+          'dankmeme',
+          'succeeded',
+          'hns_verifier',
+          '["ns1.pirate.","ns2.pirate."]',
+          1,
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z'
+        );
+        INSERT INTO hns_root_redundancy_authority_observations (
+          redundancy_authority_observation_id,
+          redundancy_observation_id,
+          normalized_root_label,
+          nameserver,
+          reachable,
+          soa_serial,
+          serial_in_sync,
+          created_at
+        ) VALUES (
+          'red_authority_local',
+          'red_local',
+          'dankmeme',
+          'ns1.pirate.',
+          1,
+          '2026072203',
+          1,
+          '2026-07-23T00:00:00Z'
+        );
+        INSERT INTO hns_root_delegation_state (
+          normalized_root_label,
+          rollover_state,
+          state_changed_at,
+          created_at,
+          updated_at,
+          authority_redundancy_ok,
+          last_redundancy_observation_id,
+          last_redundancy_observation_outcome,
+          last_redundancy_observation_at
+        ) VALUES (
+          'dankmeme',
+          'none',
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z',
+          1,
+          'red_local',
+          'succeeded',
+          '2026-07-23T00:00:00Z'
+        );
+      `)
+
+      await applyFixture("0154_control_plane_hns_root_redundancy_evidence_provenance.sql")
+
+      const migrated = database.query(`
+        SELECT
+          observation.evidence_class,
+          observation.independent_vantage_count,
+          observation.independent_asn_count,
+          state.authority_redundancy_evidence_class
+        FROM hns_root_redundancy_observations AS observation
+        JOIN hns_root_delegation_state AS state
+          ON state.last_redundancy_observation_id = observation.redundancy_observation_id
+        WHERE observation.redundancy_observation_id = 'red_local'
+      `).get()
+      expect(migrated).toEqual({
+        evidence_class: "local_single_vantage",
+        independent_vantage_count: 1,
+        independent_asn_count: 1,
+        authority_redundancy_evidence_class: "local_single_vantage",
+      })
+
+      const indexes = database.query(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND tbl_name = 'hns_root_redundancy_observations'
+      `).all() as Array<{ name: string }>
+      const indexNames = new Set(indexes.map(({ name }) => name))
+      expect(indexNames.has("idx_hns_root_redundancy_observations_id_root_outcome")).toBe(true)
+      expect(
+        indexNames.has("idx_hns_root_redundancy_observations_id_root_outcome_evidence"),
+      ).toBe(true)
+
+      expect(() => database.exec(`
+        INSERT INTO hns_root_redundancy_observations (
+          redundancy_observation_id,
+          normalized_root_label,
+          outcome,
+          provider,
+          observed_parent_ns_json,
+          authority_redundancy_ok,
+          evidence_class,
+          quorum_policy_version,
+          independent_vantage_count,
+          independent_asn_count,
+          observed_at,
+          created_at
+        ) VALUES (
+          'red_bad_quorum',
+          'dankmeme',
+          'succeeded',
+          'external_probe',
+          '["ns1.pirate.","ns2.pirate."]',
+          1,
+          'external_multi_vantage',
+          'v1',
+          2,
+          1,
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z'
+        )
+      `)).toThrow()
+
+      database.exec(`
+        INSERT INTO hns_root_redundancy_observations (
+          redundancy_observation_id,
+          normalized_root_label,
+          outcome,
+          provider,
+          observed_parent_ns_json,
+          authority_redundancy_ok,
+          evidence_class,
+          quorum_policy_version,
+          independent_vantage_count,
+          independent_asn_count,
+          observed_at,
+          created_at
+        ) VALUES (
+          'red_multi',
+          'dankmeme',
+          'succeeded',
+          'external_probe',
+          '["ns1.pirate.","ns2.pirate."]',
+          1,
+          'external_multi_vantage',
+          'v1',
+          2,
+          2,
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z'
+        )
+      `)
+
+      // The fixture bootstrap intentionally leaves FK checks off while rebuilding
+      // parent tables. Turn them on for the assertion or this test proves nothing.
+      database.exec("PRAGMA foreign_keys = ON")
+      expect(database.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 })
+      expect(database.query("PRAGMA foreign_key_check").all()).toEqual([])
+      expect(() => database.exec(`
+        INSERT INTO hns_root_redundancy_vantage_observations (
+          redundancy_vantage_observation_id,
+          redundancy_observation_id,
+          normalized_root_label,
+          provider,
+          measurement_ref,
+          vantage_id,
+          vantage_asn,
+          observed_at,
+          created_at
+        ) VALUES (
+          'vantage_cross_root',
+          'red_multi',
+          'otherroot',
+          'external_probe',
+          'measurement-1',
+          'probe-1',
+          64500,
+          '2026-07-23T00:00:00Z',
+          '2026-07-23T00:00:00Z'
+        )
+      `)).toThrow()
+    } finally {
+      database.close()
+    }
+  })
+
   test("a ';' inside a block comment does not split the statement", () => {
     const sql = `/* note: run as owner; then grant */ CREATE TABLE t (id TEXT);`
     expect(splitSqlStatements(sql)).toEqual([sql])

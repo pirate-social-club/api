@@ -356,6 +356,322 @@ const SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD = [
   `,
 ]
 
+// Migration 0154 adds provenance columns and table-level constraints to an FK
+// parent. Fixtures intentionally remain byte-identical to Core, so rebuild the
+// SQLite mirror here. Legacy successful rows are classified during the copy,
+// before the new completeness checks begin enforcing the canonical backfill.
+const SQLITE_HNS_ROOT_REDUNDANCY_OBSERVATIONS_PROVENANCE_REBUILD = [
+  `
+    CREATE TABLE hns_root_redundancy_observations_sqlite_rebuild (
+      redundancy_observation_id TEXT PRIMARY KEY,
+      normalized_root_label TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+      provider TEXT NOT NULL,
+      failure_code TEXT,
+      observed_parent_ns_json TEXT,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      evidence_class TEXT CHECK (
+        evidence_class IS NULL OR evidence_class IN (
+          'local_single_vantage',
+          'external_multi_vantage'
+        )
+      ),
+      quorum_policy_version TEXT,
+      independent_vantage_count INTEGER CHECK (
+        independent_vantage_count IS NULL OR independent_vantage_count > 0
+      ),
+      independent_asn_count INTEGER CHECK (
+        independent_asn_count IS NULL OR independent_asn_count > 0
+      ),
+      CONSTRAINT hns_root_redundancy_observations_result_matches_outcome CHECK (
+        (outcome = 'failed'
+          AND failure_code IS NOT NULL
+          AND observed_parent_ns_json IS NULL
+          AND authority_redundancy_ok IS NULL)
+        OR (outcome = 'succeeded'
+          AND failure_code IS NULL
+          AND observed_parent_ns_json IS NOT NULL
+          AND authority_redundancy_ok IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_redundancy_observations_evidence_matches_outcome CHECK (
+        (outcome = 'failed'
+          AND evidence_class IS NULL
+          AND quorum_policy_version IS NULL
+          AND independent_vantage_count IS NULL
+          AND independent_asn_count IS NULL)
+        OR (outcome = 'succeeded'
+          AND evidence_class IS NOT NULL
+          AND independent_vantage_count IS NOT NULL
+          AND independent_asn_count IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_redundancy_observations_multivantage_is_independent CHECK (
+        evidence_class IS DISTINCT FROM 'external_multi_vantage'
+        OR (quorum_policy_version IS NOT NULL
+          AND independent_vantage_count >= 2
+          AND independent_asn_count >= 2)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_redundancy_observations_sqlite_rebuild (
+      redundancy_observation_id,
+      normalized_root_label,
+      outcome,
+      provider,
+      failure_code,
+      observed_parent_ns_json,
+      authority_redundancy_ok,
+      observed_at,
+      created_at,
+      evidence_class,
+      quorum_policy_version,
+      independent_vantage_count,
+      independent_asn_count
+    )
+    SELECT
+      redundancy_observation_id,
+      normalized_root_label,
+      outcome,
+      provider,
+      failure_code,
+      observed_parent_ns_json,
+      authority_redundancy_ok,
+      observed_at,
+      created_at,
+      CASE WHEN outcome = 'succeeded' THEN 'local_single_vantage' END,
+      NULL,
+      CASE WHEN outcome = 'succeeded' THEN 1 END,
+      CASE WHEN outcome = 'succeeded' THEN 1 END
+    FROM hns_root_redundancy_observations;
+  `,
+  `DROP TABLE hns_root_redundancy_observations;`,
+  `ALTER TABLE hns_root_redundancy_observations_sqlite_rebuild RENAME TO hns_root_redundancy_observations;`,
+  `
+    CREATE UNIQUE INDEX idx_hns_root_redundancy_observations_id_root_outcome
+      ON hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_redundancy_observations_root
+      ON hns_root_redundancy_observations(normalized_root_label, observed_at DESC);
+  `,
+]
+
+// The same migration replaces the state-row completeness constraint and adds a
+// composite FK carrying evidence_class. Classify copied established findings
+// in the INSERT so the rebuilt table is coherent before the fixture's UPDATE.
+const SQLITE_HNS_ROOT_DELEGATION_STATE_PROVENANCE_REBUILD = [
+  `
+    CREATE TABLE hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label TEXT PRIMARY KEY,
+      rollover_state TEXT NOT NULL CHECK (
+        rollover_state IN (
+          'none',
+          'required',
+          'new_key_prepublished',
+          'new_ds_pending',
+          'overlap',
+          'old_ds_removal_pending'
+        )
+      ),
+      expected_keyset_id TEXT,
+      expected_ds_derived_at TEXT,
+      pending_keyset_id TEXT,
+      pending_evidence_kind TEXT CHECK (
+        pending_evidence_kind IS NULL OR pending_evidence_kind IN (
+          'wallet_transaction_id',
+          'mempool_observation',
+          'user_acknowledgement'
+        )
+      ),
+      pending_evidence_ref TEXT,
+      pending_evidence_at TEXT,
+      last_parent_observation_id TEXT,
+      last_parent_observation_outcome TEXT CHECK (
+        last_parent_observation_outcome IS NULL
+        OR last_parent_observation_outcome = 'succeeded'
+      ),
+      last_parent_observation_attempt_at TEXT,
+      state_changed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      last_redundancy_observation_id TEXT,
+      last_redundancy_observation_outcome TEXT CHECK (
+        last_redundancy_observation_outcome IS NULL
+        OR last_redundancy_observation_outcome = 'succeeded'
+      ),
+      last_redundancy_observation_at TEXT,
+      last_redundancy_observation_attempt_at TEXT,
+      canonical_routing_eligible INTEGER NOT NULL DEFAULT 0 CHECK (
+        canonical_routing_eligible IN (0, 1)
+      ),
+      routing_hard_denied INTEGER NOT NULL DEFAULT 0 CHECK (
+        routing_hard_denied IN (0, 1)
+      ),
+      authority_redundancy_evidence_class TEXT CHECK (
+        authority_redundancy_evidence_class IS NULL
+        OR authority_redundancy_evidence_class IN (
+          'local_single_vantage',
+          'external_multi_vantage'
+        )
+      ),
+      FOREIGN KEY (expected_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (pending_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (
+        last_parent_observation_id,
+        normalized_root_label,
+        last_parent_observation_outcome
+      ) REFERENCES hns_root_parent_observations(
+        parent_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome,
+        authority_redundancy_evidence_class
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome,
+        evidence_class
+      ),
+      CONSTRAINT hns_root_delegation_state_pending_evidence_complete CHECK (
+        (pending_evidence_kind IS NULL
+          AND pending_evidence_ref IS NULL
+          AND pending_evidence_at IS NULL)
+        OR (pending_evidence_kind IS NOT NULL
+          AND pending_evidence_ref IS NOT NULL
+          AND pending_evidence_at IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_last_observation_complete CHECK (
+        (last_parent_observation_id IS NULL
+          AND last_parent_observation_outcome IS NULL)
+        OR (last_parent_observation_id IS NOT NULL
+          AND last_parent_observation_outcome IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_redundancy_complete CHECK (
+        (authority_redundancy_ok IS NULL
+          AND authority_redundancy_evidence_class IS NULL
+          AND last_redundancy_observation_id IS NULL
+          AND last_redundancy_observation_outcome IS NULL
+          AND last_redundancy_observation_at IS NULL)
+        OR (authority_redundancy_ok IS NOT NULL
+          AND authority_redundancy_evidence_class IS NOT NULL
+          AND last_redundancy_observation_id IS NOT NULL
+          AND last_redundancy_observation_outcome = 'succeeded'
+          AND last_redundancy_observation_at IS NOT NULL)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at,
+      authority_redundancy_ok,
+      last_redundancy_observation_id,
+      last_redundancy_observation_outcome,
+      last_redundancy_observation_at,
+      last_redundancy_observation_attempt_at,
+      canonical_routing_eligible,
+      routing_hard_denied,
+      authority_redundancy_evidence_class
+    )
+    SELECT
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at,
+      authority_redundancy_ok,
+      last_redundancy_observation_id,
+      last_redundancy_observation_outcome,
+      last_redundancy_observation_at,
+      last_redundancy_observation_attempt_at,
+      canonical_routing_eligible,
+      routing_hard_denied,
+      CASE
+        WHEN authority_redundancy_ok IS NOT NULL THEN 'local_single_vantage'
+      END
+    FROM hns_root_delegation_state;
+  `,
+  `DROP TABLE hns_root_delegation_state;`,
+  `ALTER TABLE hns_root_delegation_state_sqlite_rebuild RENAME TO hns_root_delegation_state;`,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_observation_due
+      ON hns_root_delegation_state(
+        (last_parent_observation_attempt_at IS NOT NULL),
+        last_parent_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_last_observation
+      ON hns_root_delegation_state(last_parent_observation_id);
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollover
+      ON hns_root_delegation_state(rollover_state)
+      WHERE rollover_state <> 'none';
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_redundancy_due
+      ON hns_root_delegation_state(
+        (last_redundancy_observation_attempt_at IS NOT NULL),
+        last_redundancy_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollout
+      ON hns_root_delegation_state(
+        routing_hard_denied,
+        canonical_routing_eligible
+      );
+  `,
+]
+
 // Drop leading blank / `--` comment lines so statement-type detection sees the real SQL. The
 // splitter glues a file's leading comment block onto its first statement; without this, a
 // skippable Postgres-only statement (e.g. `ALTER TABLE ... OWNER TO`) preceded by comments would
@@ -418,7 +734,22 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
+    if (
+      normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
+      && normalized.includes("HNS_ROOT_DELEGATION_STATE_REDUNDANCY_COMPLETE")
+      && normalized.includes("AUTHORITY_REDUNDANCY_EVIDENCE_CLASS")
+    ) {
+      return SQLITE_HNS_ROOT_DELEGATION_STATE_PROVENANCE_REBUILD
+    }
     return []
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE HNS_ROOT_REDUNDANCY_OBSERVATIONS ")
+    && normalized.includes("ADD COLUMN EVIDENCE_CLASS ")
+    && normalized.includes("INDEPENDENT_ASN_COUNT")
+  ) {
+    return SQLITE_HNS_ROOT_REDUNDANCY_OBSERVATIONS_PROVENANCE_REBUILD
   }
 
   if (
