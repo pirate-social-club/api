@@ -1,9 +1,10 @@
+import { Glob, file } from "bun"
 import { describe, expect, test } from "bun:test"
 
 describe("root-delegation authority boundary", () => {
   test("verification modules cannot read or write root-delegation tables", async () => {
     const modules: string[] = []
-    for await (const fileName of new Bun.Glob("*.ts").scan({
+    for await (const fileName of new Glob("*.ts").scan({
       cwd: import.meta.dir,
       onlyFiles: true,
     })) {
@@ -14,7 +15,7 @@ describe("root-delegation authority boundary", () => {
     expect(modules.length).toBeGreaterThan(0)
 
     for (const fileName of modules) {
-      const source = await Bun.file(new URL(fileName, import.meta.url)).text()
+      const source = await file(new URL(fileName, import.meta.url)).text()
 
       // These modules own session-scoped ownership, attachment, and expiry
       // evidence. Root-delegation freshness has a separate authority. Matching
