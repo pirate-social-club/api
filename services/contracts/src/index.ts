@@ -2623,9 +2623,16 @@ export type HomeFeedCommunitySummary = {
   view_count?: number | null;
 };
 
+export type FeedBooking = {
+  host_user_id: string;
+  base_price_cents: number;
+  currency: "USDC";
+};
+
 export type HomeFeedItem = {
   community: HomeFeedCommunitySummary;
   post: LocalizedPostResponse;
+  booking?: FeedBooking;
 };
 
 export type HomeFeedResponse = {
@@ -3660,6 +3667,7 @@ type DonationPartnerSummary = {
 type FeedItem = {
   community: HomeFeedCommunitySummary;
   post: LocalizedPostResponse;
+  booking?: FeedBooking;
 };
 
 type GatePolicyEvaluation = {
