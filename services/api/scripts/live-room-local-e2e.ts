@@ -13,6 +13,7 @@ import {
 import { descriptorFromUpload } from "../src/lib/song-artifacts/song-artifact-descriptors"
 import { LOCAL_DEV_SONG_ARTIFACT_STORAGE_PROVIDER } from "../src/lib/song-artifacts/song-artifact-storage-provider"
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 
 type HttpMethod = "GET" | "POST" | "PUT"
@@ -74,6 +75,7 @@ async function requestJson<T>(input: {
   apiUrl: string
   body?: unknown
   contentType?: string
+  headers?: Record<string, string>
   method?: HttpMethod
   ok?: number[]
   path: string
@@ -87,6 +89,7 @@ async function requestJson<T>(input: {
   let body: BodyInit | undefined
 
   if (input.token) headers.authorization = `Bearer ${input.token}`
+  Object.assign(headers, input.headers)
   if (input.body != null) {
     if (input.body instanceof Uint8Array) {
       const binaryBody = new ArrayBuffer(input.body.byteLength)
@@ -441,6 +444,7 @@ async function main(): Promise<void> {
     apiUrl,
     path: "/communities",
     token: accessToken,
+    headers: allocationAttributionHeaders("api-script:live-room-local-e2e"),
     body: {
       display_name: communityName,
       membership_mode: "request",

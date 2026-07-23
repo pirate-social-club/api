@@ -18,6 +18,7 @@
 
 import { SQL } from "bun"
 import { SignJWT } from "jose"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 
 type JsonObject = Record<string, unknown>
 
@@ -141,6 +142,7 @@ async function requestJson<T>(input: {
   path: string
   token?: string
   body?: unknown
+  headers?: Record<string, string>
   ok?: number[]
 }): Promise<T> {
   const method = input.method ?? "POST"
@@ -150,6 +152,7 @@ async function requestJson<T>(input: {
       accept: "application/json",
       ...(input.body == null ? {} : { "content-type": "application/json" }),
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
+      ...input.headers,
     },
     body: input.body == null ? undefined : JSON.stringify(input.body),
   })
@@ -218,6 +221,7 @@ async function createCommunity(input: {
     apiBase: input.apiBase,
     path: "/communities",
     token: input.token,
+    headers: allocationAttributionHeaders("api-script:smoke-d1-provisioning-cutover"),
     ok: [200, 201, 202],
     body: {
       display_name: input.displayName,

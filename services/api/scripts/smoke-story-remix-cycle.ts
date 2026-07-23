@@ -5,6 +5,7 @@ import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
 import { Database } from "bun:sqlite"
 import { join } from "node:path"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 import { STAGING_TEST_JWT_AUDIENCE, STAGING_TEST_JWT_ISSUER } from "../src/lib/auth/staging-test-auth"
 
@@ -302,6 +303,7 @@ async function api<T>(input: {
   body?: unknown
   bytes?: Uint8Array
   contentType?: string
+  headers?: Record<string, string>
   ok?: number[]
 }): Promise<T> {
   const requestBody = input.body == null
@@ -315,6 +317,7 @@ async function api<T>(input: {
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
       ...(input.body == null ? {} : { "content-type": "application/json" }),
       ...(input.bytes == null ? {} : { "content-type": input.contentType ?? "application/octet-stream" }),
+      ...input.headers,
     },
     body: requestBody,
   })
@@ -491,6 +494,7 @@ async function createDisposableCommunity(input: {
     method: "POST",
     path: "/communities",
     token: input.owner.accessToken,
+    headers: allocationAttributionHeaders("api-script:smoke-story-remix-cycle"),
   })
 
   if (created.job.status !== "succeeded") {
