@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   KARAOKE_TRANSPORT_PROTOCOL_VERSION,
   encodeKaraokeBinaryFrame,
@@ -1078,6 +1078,165 @@ describe("KaraokeSessionRuntimeDO", () => {
 
     expect(sttAdapter.frames).toHaveLength(0);
     expect(sent.at(-1)).toMatchObject({ code: "non_monotonic_sequence", type: "session_error" });
+  });
+
+  test("stays silent on a healthy session (no new log volume)", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const errorRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation((record) => {
+      errorRecords.push(record);
+    });
+    try {
+      const { ctx } = makeContext();
+      const adapter = new FakeKaraokeStreamingSttAdapter();
+      const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: adapter,
+      });
+      expect((await do_.fetch(initDoRequest())).status).toBe(200);
+
+      // A full, well-ordered scoring cycle: start -> audio -> playback -> ack.
+      await startAndScore(do_, adapter);
+
+      // Guard against a vacuous pass: prove real traffic actually flowed through
+      // the guarded paths, so "no logs" means "silent", not "did nothing".
+      expect(adapter.frames.length).toBeGreaterThan(0);
+      expect(adapter.startCount).toBe(1);
+
+      // Diagnostics are a rejection-path concern only. A clean session must not
+      // add a single line to Workers Logs, or the signal drowns in volume.
+      expect(warnRecords).toEqual([]);
+      expect(
+        errorRecords.filter((record) => JSON.stringify(record).includes("transport_guard_rejected")),
+      ).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("logs a client guard rejection with restored-host and hashed-socket context", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    try {
+      const { ctx } = makeContext();
+      const initialized = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+      });
+      expect((await initialized.fetch(initDoRequest())).status).toBe(200);
+      expect((await startSession(initialized)).status).toBe(200);
+
+      const restored = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+      });
+      const socket = {
+        deserializeAttachment() {
+          return {
+            attemptId: "attempt-1",
+            connectedAtMs: 1,
+            nonce: "private-socket-nonce",
+            requestId: "request-1",
+            sessionId: "session-1",
+            subjectUserId: "user-1",
+            version: 1,
+          };
+        },
+        send() {},
+      } as unknown as WebSocket;
+
+      await restored.webSocketMessage(socket, JSON.stringify({
+        attemptId: "attempt-1",
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 1,
+        sessionId: "session-1",
+        startedAtAudioMs: 0,
+        type: "start",
+        postId: "post-1",
+      }));
+
+      expect(warnRecords).toEqual([expect.objectContaining({
+        attemptId: "attempt-1",
+        channel: "client",
+        code: "non_monotonic_sequence",
+        event: "karaoke.transport_guard_rejected",
+        hostLifecycle: "restored",
+        incomingSequence: 1,
+        previousSequence: 1,
+        sessionId: "session-1",
+        socketIdentityHash: expect.stringMatching(/^[a-f0-9]{16}$/),
+      })]);
+      expect(JSON.stringify(warnRecords)).not.toContain("private-socket-nonce");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("logs an STT guard rejection without a socket and retains its stream generation", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    try {
+      const adapter = new FakeKaraokeStreamingSttAdapter();
+      const { ctx } = makeContext();
+      const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: adapter,
+      });
+      expect((await do_.fetch(initDoRequest())).status).toBe(200);
+      expect((await startSession(do_)).status).toBe(200);
+
+      await adapter.emit({
+        attemptId: "attempt-1",
+        deliveredAtAudioMs: 400,
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 4,
+        sessionId: "session-1",
+        text: "hold",
+        type: "stt_partial",
+        words: [],
+      } as Parameters<FakeKaraokeStreamingSttAdapter["emit"]>[0]);
+      await adapter.emit({
+        attemptId: "attempt-1",
+        deliveredAtAudioMs: 100,
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 1,
+        sessionId: "session-1",
+        text: "hold",
+        type: "stt_partial",
+        words: [],
+      } as Parameters<FakeKaraokeStreamingSttAdapter["emit"]>[0]);
+      await do_.drainCommitChainForTests();
+
+      expect(warnRecords).toEqual([expect.objectContaining({
+        attemptId: "attempt-1",
+        channel: "stt",
+        code: "non_monotonic_sequence",
+        event: "karaoke.transport_guard_rejected",
+        hostLifecycle: "resident",
+        incomingSequence: 1,
+        previousSequence: 4,
+        sessionId: "session-1",
+        socketIdentityHash: null,
+        sttStreamGeneration: expect.any(String),
+      })]);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
