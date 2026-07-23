@@ -6,6 +6,12 @@
 
 Run API git commands from this directory. The sibling `web/` and `core/` directories are separate Git repositories and must be committed independently.
 
+## Staging Worker
+
+`pirate-api-staging` is a shared fixture: deploying replaces whatever bundle is
+there, and a web release redeploys it at the pinned SHA. Before deploying to it,
+read and update `services/api/docs/runbooks/staging-worker-ownership.md`.
+
 ## Default Checks
 
 Use focused checks first:
