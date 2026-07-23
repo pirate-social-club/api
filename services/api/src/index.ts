@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { WorkerEntrypoint } from "cloudflare:workers"
+import type { ShardVersionInfo } from "@pirate/api-shared"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -265,34 +266,28 @@ app.get("/health/provisioning", async (c) => {
   }
 
   const expectedShardSourceVersion = expectedCommunityD1ShardSourceVersion(c.env)
-  let shardVersion
+  let shardVersion: ShardVersionInfo | null = null
+  let shardAttestationStatus:
+    | "verified"
+    | "rpc_unavailable"
+    | "expected_missing"
+    | "actual_missing" = "verified"
   try {
     shardVersion = await c.env.COMMUNITY_D1_SHARD!.communityD1Version()
   } catch (error) {
+    shardAttestationStatus = "rpc_unavailable"
     console.error(JSON.stringify({
       event: "community_d1_shard_version_unavailable",
       error: error instanceof Error ? error.message : String(error),
+      expectedShardSourceVersion,
     }))
-    return c.json(
-      {
-        ok: false,
-        backend: "d1_native",
-        shard_configured: true,
-        region_configured: true,
-        admin_configured: true,
-        environment: c.env.ENVIRONMENT ?? null,
-        expected_shard_source_version: expectedShardSourceVersion,
-        error_code: "d1_shard_version_unavailable",
-      },
-      503,
-      { "cache-control": "no-store" },
-    )
   }
-  const actualShardSourceVersion = shardVersion.build.sourceVersion
+
+  const actualShardSourceVersion = shardVersion?.build.sourceVersion ?? null
   if (
-    !expectedShardSourceVersion
-    || !actualShardSourceVersion
-    || actualShardSourceVersion !== expectedShardSourceVersion
+    expectedShardSourceVersion
+    && actualShardSourceVersion
+    && actualShardSourceVersion !== expectedShardSourceVersion
   ) {
     console.error(JSON.stringify({
       event: "community_d1_shard_version_mismatch",
@@ -315,6 +310,21 @@ app.get("/health/provisioning", async (c) => {
       503,
       { "cache-control": "no-store" },
     )
+  }
+  if (shardAttestationStatus === "verified" && !expectedShardSourceVersion) {
+    shardAttestationStatus = "expected_missing"
+    console.error(JSON.stringify({
+      event: "community_d1_shard_expected_version_missing",
+      actualShardSourceVersion,
+      shardVersion,
+    }))
+  } else if (shardAttestationStatus === "verified" && !actualShardSourceVersion) {
+    shardAttestationStatus = "actual_missing"
+    console.error(JSON.stringify({
+      event: "community_d1_shard_actual_version_missing",
+      expectedShardSourceVersion,
+      shardVersion,
+    }))
   }
 
   const result = await c.env.COMMUNITY_D1_SHARD!.communityD1PoolStats({
@@ -351,7 +361,13 @@ app.get("/health/provisioning", async (c) => {
     c.env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
   )
   const exhausted = capacity.free <= 0
-  const degraded = !capacity.healthy && !exhausted
+  const degradedReasons = [
+    ...(!capacity.healthy && !exhausted ? ["d1_pool_low_capacity"] : []),
+    ...(shardAttestationStatus !== "verified"
+      ? [`d1_shard_attestation_${shardAttestationStatus}`]
+      : []),
+  ]
+  const degraded = degradedReasons.length > 0
   return c.json(
     {
       ok: !exhausted,
@@ -362,8 +378,18 @@ app.get("/health/provisioning", async (c) => {
       environment: c.env.ENVIRONMENT ?? null,
       shard_version: shardVersion,
       expected_shard_source_version: expectedShardSourceVersion,
+      shard_attestation: {
+        healthy: shardAttestationStatus === "verified",
+        status: shardAttestationStatus,
+      },
       pool_capacity: capacity,
-      ...(degraded ? { degraded: true, degraded_reason: "d1_pool_low_capacity" } : {}),
+      ...(degraded
+        ? {
+          degraded: true,
+          degraded_reason: degradedReasons[0],
+          degraded_reasons: degradedReasons,
+        }
+        : {}),
       ...(exhausted ? { error_code: "d1_pool_exhausted" } : {}),
     },
     exhausted ? 503 : 200,
