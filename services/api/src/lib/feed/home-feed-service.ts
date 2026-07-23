@@ -162,16 +162,17 @@ export function parseVideoFeedCursor(cursor: string | null | undefined, now: num
   return { offset, rankedAt }
 }
 
-export function videoFeedOrderSql(sort: HomeFeedSort, rankedAtPlaceholder: string): string {
+export function videoFeedOrderSql(sort: HomeFeedSort): string {
   const score = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
   if (sort === "new") return "source_created_at DESC, source_post_id DESC"
-  if (sort === "top") {
+  if (sort === "top" || sort === "best") {
+    // The control-plane D1 runtime rejects the date-arithmetic ranking
+    // expression used here previously. The engagement ordering is already
+    // proven on that runtime and remains deterministic until best ranking is
+    // moved to a tested projection/runtime implementation.
     return `CASE WHEN ${score} > 0 THEN 1 ELSE 0 END DESC, ${score} DESC, source_created_at DESC, source_post_id DESC`
   }
-  // D1 does not expose SQLite's optional math extension, so POW() causes the
-  // public `sort=best` endpoint to fail at query time. Keep the decay in SQL,
-  // but use only core SQLite date and scalar functions.
-  return `((${score} + 1.0) / (MAX(0.0, (${rankedAtPlaceholder} - unixepoch(source_created_at) * 1000.0) / 3600000.0) + 2.0)) DESC, source_created_at DESC, source_post_id DESC`
+  return "source_created_at DESC, source_post_id DESC"
 }
 
 async function listVideoHomeFeedProjectionRows(input: {
@@ -196,11 +197,6 @@ async function listVideoHomeFeedProjectionRows(input: {
     args.push(new Date(cutoffMs).toISOString())
     filters.push(`source_created_at >= ?${args.length}`)
   }
-  let rankedAtPlaceholder = "0"
-  if (input.sort === "best") {
-    args.push(cursor.rankedAt)
-    rankedAtPlaceholder = `?${args.length}`
-  }
   args.push(26, cursor.offset)
   const limitPlaceholder = `?${args.length - 1}`
   const offsetPlaceholder = `?${args.length}`
@@ -210,7 +206,7 @@ async function listVideoHomeFeedProjectionRows(input: {
              upvote_count, downvote_count, comment_count, like_count
       FROM community_post_projections
       WHERE ${filters.join("\n        AND ")}
-      ORDER BY ${videoFeedOrderSql(input.sort, rankedAtPlaceholder)}
+      ORDER BY ${videoFeedOrderSql(input.sort)}
       LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
     `,
     args,
