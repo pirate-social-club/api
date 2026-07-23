@@ -138,7 +138,7 @@ describe("home feed booking discovery", () => {
     })
 
     expect(result).toEqual([item])
-    await Bun.sleep(20)
+    await new Promise((resolve) => setTimeout(resolve, 20))
   })
 
   test("deduplicates repeated authors into one batch lookup", async () => {
