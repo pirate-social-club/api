@@ -209,7 +209,7 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
     )).toBeNull()
   })
 
-  test("applies the verbatim 0153 fixture to sqlite and preserves root-state coherence", async () => {
+  test("applies the verbatim 0153/0154 fixtures to sqlite and preserves root-state coherence", async () => {
     const database = new Database(":memory:")
     const applyFixture = async (fileName: string) => {
       const sql = await readFile(resolve(
@@ -237,19 +237,34 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
       `)
 
       await applyFixture("0153_control_plane_hns_root_authority_redundancy.sql")
+      await applyFixture("0154_control_plane_hns_root_redundancy_evidence_provenance.sql")
 
       const migrated = database.query(`
-        SELECT canonical_routing_eligible, routing_hard_denied
+        SELECT canonical_routing_eligible, routing_hard_denied, authority_redundancy_evidence_class
         FROM hns_root_delegation_state
         WHERE normalized_root_label = 'pirate'
       `).get() as {
+        authority_redundancy_evidence_class: string | null;
         canonical_routing_eligible: number;
         routing_hard_denied: number;
       }
       expect(migrated).toEqual({
+        authority_redundancy_evidence_class: null,
         canonical_routing_eligible: 0,
         routing_hard_denied: 0,
       })
+      expect(database.query(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+            'hns_root_redundancy_vantage_observations',
+            'hns_root_redundancy_vantage_authority_observations'
+          )
+        ORDER BY name
+      `).all()).toEqual([
+        { name: "hns_root_redundancy_vantage_authority_observations" },
+        { name: "hns_root_redundancy_vantage_observations" },
+      ])
       expect(() => database.exec(`
         UPDATE hns_root_delegation_state
         SET authority_redundancy_ok = 1
