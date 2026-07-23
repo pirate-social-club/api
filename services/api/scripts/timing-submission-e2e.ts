@@ -10,6 +10,7 @@ import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
 import { Database } from "bun:sqlite"
 import { publicCommunityId } from "../src/lib/public-ids"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 type TimingKind = "song-public" | "song-locked" | "video-public" | "video-locked"
@@ -504,6 +505,7 @@ async function createTimingCommunity(input: {
     apiBaseUrl: input.apiBaseUrl,
     path: "/communities",
     token: input.token,
+    headers: allocationAttributionHeaders("api-script:timing-submission-e2e"),
     body: {
       display_name: `Timing E2E ${input.runId}`,
       description: "Temporary staging timing community for real-file submission measurements.",
