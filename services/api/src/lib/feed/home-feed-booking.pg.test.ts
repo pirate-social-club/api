@@ -1,3 +1,13 @@
+// Real-Postgres tests for home feed booking discovery. Runs only when BOOKINGS_REPO_TEST_ADMIN_URL is
+// set. Applies canonical core booking migrations and exercises the production recompute path
+// (recomputeBookingFeedDiscoverySnapshot -> resolveGlobalBookingAvailability -> domain resolveSlots).
+//
+// Pricing semantics under test (ratified): the first-matching price rule (ordered priority DESC,
+// then price_rule_id ASC) is an OVERRIDE of base_price_cents; base is only the fallback. There is NO
+// clamping in either direction, so floors above AND below base are intended. The fixture therefore
+// includes hosts whose entire available inventory is repriced above base and below base, plus hosts
+// where cheap rules are shadowed, orphaned, blocked, or locked out — each proving the floor is read
+// from the canonical AVAILABLE slots, never approximated from raw rule minima.
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { writeFile } from "node:fs/promises"
@@ -71,30 +81,32 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         platform_fee_bps, is_published, created_at, updated_at
       ) VALUES
         ('host_ready', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_unreachable', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_priority', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_blocked', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
-        ('host_full', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
-        ('host_no_window', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_base', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_above', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
-        ('host_duration', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_dst', 'Europe/Berlin', 3500, 1800, 1000, TRUE, NOW(), NOW()),
         ('host_expired', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
-        ('host_unpublished', 'UTC', 4500, 1800, 1000, FALSE, NOW(), NOW())
+        ('host_unpublished', 'UTC', 4500, 1800, 1000, FALSE, NOW(), NOW()),
+        ('host_above_base', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_below_base', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_priority', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_orphan_rule', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_blocked', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
+        ('host_locked', 'UTC', 3500, 3600, 1000, TRUE, NOW(), NOW()),
+        ('host_no_window', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_no_rules', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_duration', 'UTC', 3500, 1800, 1000, TRUE, NOW(), NOW()),
+        ('host_dst', 'Europe/Berlin', 3500, 1800, 1000, TRUE, NOW(), NOW())
     `)
     await setup.unsafe(`
       INSERT INTO bookings.availability_rules (
         rule_id, host_user_id, by_weekday, start_local, end_local,
         slot_duration_seconds, effective_from_utc, created_at, updated_at
       ) VALUES
-        ('rule_unreachable', 'host_unreachable', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_above_base', 'host_above_base', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_below_base', 'host_below_base', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
         ('rule_priority', 'host_priority', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
+        ('rule_orphan', 'host_orphan_rule', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
         ('rule_blocked', 'host_blocked', '{1}', '09:00', '11:00', 3600, NULL, NOW(), NOW()),
-        ('rule_full', 'host_full', '{1}', '09:00', '10:00', 3600, NULL, NOW(), NOW()),
+        ('rule_locked', 'host_locked', '{1}', '09:00', '11:00', 3600, NULL, NOW(), NOW()),
         ('rule_no_window', 'host_no_window', '{1}', '09:00', '10:00', 1800, '2026-08-04T00:00:00Z', NOW(), NOW()),
-        ('rule_base', 'host_base', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
-        ('rule_above', 'host_above', '{1}', '09:00', '11:00', 3600, NULL, NOW(), NOW()),
+        ('rule_no_rules', 'host_no_rules', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
         ('rule_duration', 'host_duration', '{1}', '09:00', '10:00', 1800, NULL, NOW(), NOW()),
         ('rule_dst', 'host_dst', '{0}', '01:00', '03:00', 1800, NULL, NOW(), NOW())
     `)
@@ -103,11 +115,13 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         price_rule_id, host_user_id, match_weekday, match_local_start, match_local_end,
         match_duration_seconds, price_cents, priority, created_at, updated_at
       ) VALUES
-        ('price_unreachable', 'host_unreachable', '{0}', NULL, NULL, NULL, 1000, 10, NOW(), NOW()),
-        ('price_priority_high', 'host_priority', '{1}', NULL, NULL, 1800, 3000, 20, NOW(), NOW()),
-        ('price_priority_low', 'host_priority', '{1}', NULL, NULL, 1800, 1000, 10, NOW(), NOW()),
+        ('price_above_base', 'host_above_base', '{1}', NULL, NULL, 1800, 5000, 10, NOW(), NOW()),
+        ('price_below_base', 'host_below_base', '{1}', NULL, NULL, 1800, 2000, 10, NOW(), NOW()),
+        ('price_priority_expensive', 'host_priority', '{1}', NULL, NULL, 1800, 6000, 20, NOW(), NOW()),
+        ('price_priority_cheap', 'host_priority', '{1}', NULL, NULL, 1800, 2000, 10, NOW(), NOW()),
+        ('price_orphan', 'host_orphan_rule', '{2}', NULL, NULL, 1800, 1000, 10, NOW(), NOW()),
         ('price_blocked', 'host_blocked', '{1}', '09:00', '10:00', 3600, 2000, 10, NOW(), NOW()),
-        ('price_above', 'host_above', '{1}', '09:00', '10:00', 3600, 6000, 10, NOW(), NOW()),
+        ('price_locked', 'host_locked', '{1}', '09:00', '10:00', 3600, 2000, 10, NOW(), NOW()),
         ('price_duration', 'host_duration', '{1}', NULL, NULL, 3600, 1000, 10, NOW(), NOW()),
         ('price_dst', 'host_dst', '{0}', NULL, NULL, 1800, 2500, 10, NOW(), NOW())
     `)
@@ -123,8 +137,8 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
         price_cents, status, source_community_id, expires_at_utc, created_at, updated_at
       ) VALUES
-        ('hold_1', 'host_full', 'booker_1', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 3500, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW()),
-        ('hold_2', 'host_full', 'booker_2', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', 3500, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW())
+        ('hold_locked_1', 'host_locked', 'booker_1', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 2000, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW()),
+        ('hold_locked_2', 'host_locked', 'booker_2', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', 2000, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW())
     `)
     await setup.unsafe(`
       INSERT INTO bookings.feed_discovery_snapshots (
@@ -174,15 +188,20 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
     ]])
   })
 
-  test("derives floors from canonical available slots rather than raw rule minima", async () => {
+  test("derives floors from canonical available slots with first-match override pricing", async () => {
+    // Every host below has base_price_cents = 3500. A "min(base, rule)" clamp bug (above-base
+    // rules dropped) fails host_above_base and host_priority; a "max(base, rule)" clamp bug
+    // (below-base rules dropped) fails host_below_base; reading raw rule minima instead of
+    // available-slot prices fails host_orphan_rule, host_blocked, host_locked, and host_duration.
     const expected = new Map<string, number | null>([
-      ["host_unreachable", 3500],
-      ["host_priority", 3000],
+      ["host_above_base", 5000],
+      ["host_below_base", 2000],
+      ["host_priority", 6000],
+      ["host_orphan_rule", 3500],
       ["host_blocked", 3500],
-      ["host_full", null],
+      ["host_locked", 3500],
       ["host_no_window", null],
-      ["host_base", 3500],
-      ["host_above", 3500],
+      ["host_no_rules", 3500],
       ["host_duration", 3500],
     ])
 
