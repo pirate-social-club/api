@@ -20,6 +20,7 @@ import { formatEther } from "ethers"
 import type { Env } from "../../env"
 import { resolveDirectTxGasPolicy } from "../evm-direct-tx"
 import { captureScheduledError, captureScheduledWarning } from "../ops-alerts/scheduled"
+import { withRequestControlPlaneClients } from "../runtime-deps"
 import {
   resolveStoryChainId,
   resolveStoryRuntimeSignerMinBalanceWei,
@@ -167,7 +168,9 @@ export async function runStoryRuntimeFundingWatchdog(
       `[${STORY_RUNTIME_FUNDING_WATCHDOG_TASK}] balance check failed (fail-soft)`,
       JSON.stringify({ chain_id: chainId, error: error instanceof Error ? error.message : String(error) }),
     )
-    await captureScheduledError(env, error, STORY_RUNTIME_FUNDING_WATCHDOG_TASK)
+    await withRequestControlPlaneClients(
+      () => captureScheduledError(env, error, STORY_RUNTIME_FUNDING_WATCHDOG_TASK),
+    )
     return { ran: true, reason: "rpc_error", alerts: [] }
   }
 
@@ -224,14 +227,16 @@ export async function runStoryRuntimeFundingWatchdog(
       `[${STORY_RUNTIME_FUNDING_WATCHDOG_TASK}] ${severity === "critical" ? "BELOW FLOOR" : "low runway"}`,
       JSON.stringify(structured),
     )
-    await captureScheduledWarning(
-      env,
-      severity === "critical"
-        ? `Story signer ${balance.name} is BELOW its funding floor — fund ${balance.address}`
-        : `Story signer ${balance.name} funding runway is low — fund ${balance.address}`,
-      STORY_RUNTIME_FUNDING_WATCHDOG_TASK,
-      structured,
-      { signer: balance.name, urgency: severity === "critical" ? "high" : "low" },
+    await withRequestControlPlaneClients(
+      () => captureScheduledWarning(
+        env,
+        severity === "critical"
+          ? `Story signer ${balance.name} is BELOW its funding floor — fund ${balance.address}`
+          : `Story signer ${balance.name} funding runway is low — fund ${balance.address}`,
+        STORY_RUNTIME_FUNDING_WATCHDOG_TASK,
+        structured,
+        { signer: balance.name, urgency: severity === "critical" ? "high" : "low" },
+      ),
     )
   }
 
