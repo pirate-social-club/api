@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 
 import { LitChipotleError, type LitActionExecution } from "./lit-chipotle-client"
-import { createLitRewardVaultExecutor } from "./lit-reward-vault-executor"
+import {
+  createLitRewardVaultExecutor,
+  createProductionLitRewardVaultExecutor,
+} from "./lit-reward-vault-executor"
 import type { RewardVaultActionRequest } from "./reward-vault-transaction"
 
 const REQUEST: RewardVaultActionRequest = {
@@ -67,5 +70,25 @@ describe("createLitRewardVaultExecutor", () => {
       "LitChipotleError: Lit rewards vault action response was invalid",
       "LitChipotleError: Lit rewards vault action did not return a signed transaction",
     ]).toContain(String(thrown))
+  })
+
+  test("production construction permits only a pinned CID", async () => {
+    const executions: LitActionExecution[] = []
+    const client = {
+      execute: async (execution: LitActionExecution) => {
+        executions.push(execution)
+        return { signedTx: "0x1234" }
+      },
+    }
+    expect(() => createProductionLitRewardVaultExecutor(client, "")).toThrow(
+      "Pinned Lit rewards vault action CID is required",
+    )
+    expect(() => createProductionLitRewardVaultExecutor(client, " QmPinned ")).toThrow(
+      "Pinned Lit rewards vault action CID is required",
+    )
+
+    await createProductionLitRewardVaultExecutor(client, "QmPinned")(REQUEST)
+    expect(executions[0]).toMatchObject({ ipfsId: "QmPinned" })
+    expect(executions[0]).not.toHaveProperty("code")
   })
 })
