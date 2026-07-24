@@ -10,7 +10,7 @@ const RETRY_MAX_DELAY_MS = 5 * 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export type OperatorKind = "booking" | "rewards"
-type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
+export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -61,7 +61,16 @@ export interface ChainPrimitives {
   pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   gasParams: (env: Env, operatorKind?: OperatorKind) => Promise<GasParams>
-  signVerifiedTransfer: (env: Env, input: { to: string; amountCents?: number; amountAtomic?: string; nonce: number; gas: GasParams; operatorKind?: OperatorKind }) => Promise<{ signedTx: string; txHash: string }>
+  signVerifiedTransfer: (env: Env, input: {
+    to: string
+    amountCents?: number
+    amountAtomic?: string
+    nonce: number
+    gas: GasParams
+    operatorKind?: OperatorKind
+    effectKind: OperatorEffectKind
+    effectId: string
+  }) => Promise<{ signedTx: string; txHash: string }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
 }
@@ -443,6 +452,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const claimedRow = this.read(row.idempotency_key)!
     try {
       const operatorKind = requestOperatorKind(req)
+      const effectId = canonicalFields(req).bookingId
       const gas = await chain().gasParams(this.env, operatorKind)
       const signed = await chain().signVerifiedTransfer(this.env, {
         to: recipient,
@@ -451,6 +461,8 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         nonce: claimedRow.nonce!,
         gas,
         operatorKind,
+        effectKind: req.effectKind,
+        effectId,
       })
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
       const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, {
