@@ -18,9 +18,28 @@ export const accountMetadataAbi = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, internalType: "address", name: "addr", type: "address" },
+      { indexed: false, internalType: "string", name: "key", type: "string" },
+      { indexed: false, internalType: "bytes", name: "value", type: "bytes" },
+    ],
+    name: "UpdateAccountMetadata",
+    type: "event",
+  },
 ] as const;
 
 export const listRegistryAbi = [
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, internalType: "uint256", name: "tokenId", type: "uint256" },
+      { indexed: false, internalType: "bytes", name: "listStorageLocation", type: "bytes" },
+    ],
+    name: "UpdateListStorageLocation",
+    type: "event",
+  },
   {
     inputs: [{ internalType: "uint256", name: "tokenId", type: "uint256" }],
     name: "getListStorageLocation",
@@ -31,6 +50,15 @@ export const listRegistryAbi = [
 ] as const;
 
 export const listRecordsAbi = [
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, internalType: "uint256", name: "slot", type: "uint256" },
+      { indexed: false, internalType: "bytes", name: "op", type: "bytes" },
+    ],
+    name: "ListOp",
+    type: "event",
+  },
   {
     inputs: [{ internalType: "uint256", name: "slot", type: "uint256" }],
     name: "getAllListOps",

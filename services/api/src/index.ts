@@ -68,6 +68,7 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { checkHnsEdgeHeartbeatFreshness } from "./lib/ops-alerts/hns-edge-heartbeats"
+import { isEfpIndexerEnabled, scanEfpBaseOnce } from "./lib/efp-indexer/scanner"
 import {
   isHnsRootObserverEnabled,
   observeDueHnsRoots,
@@ -601,6 +602,20 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
   } finally {
     db.close?.()
   }
+}
+
+async function scanScheduledEfpBase(env: Env): Promise<void> {
+  const rpcUrl = String(env.BASE_MAINNET_RPC_URL ?? "").trim()
+  if (!rpcUrl) return
+  const summary = await scanEfpBaseOnce({
+    client: getControlPlaneClient(env),
+    rpcUrl,
+  })
+  console.info(JSON.stringify({
+    component: "efp_indexer",
+    operation: "scan_base",
+    ...summary,
+  }))
 }
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
@@ -1406,6 +1421,9 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(isEfpIndexerEnabled(env)
+        ? [{ name: "scan_efp_base", run: () => scanScheduledEfpBase(env) }]
+        : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
