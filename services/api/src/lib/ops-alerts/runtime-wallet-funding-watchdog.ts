@@ -17,6 +17,7 @@ import {
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../communities/commerce/checkout-config"
 import { normalizeDirectSignerPrivateKey } from "../story/story-direct-signer"
+import { withRequestControlPlaneClients } from "../runtime-deps"
 import {
   resolveStoryChainId,
   resolveStoryRpcUrl,
@@ -344,49 +345,54 @@ export async function runRuntimeWalletFundingWatchdog(
           floor: spec.nativeMinWei,
         }
         alerts.push(alert)
-        await captureScheduledWarning(
-          env,
-          `${spec.name} ${spec.nativeSymbol} funding is below floor — fund ${spec.address}`,
-          `${TASK}:${spec.name}:native`,
-          {
-            wallet: spec.name,
-            address: spec.address,
-            explorer_url: explorerAddressUrl(spec.chainId, spec.address),
-            chain_id: spec.chainId,
-            asset: spec.nativeSymbol,
-            balance: formatEther(nativeBalance),
-            funding_floor: formatEther(spec.nativeMinWei),
-          },
-          { urgency: "high" },
-        )
-      }
-
-      if (spec.token) {
-        const tokenBalance = await tokenReader(spec)
-        if (tokenBalance < spec.token.minAtomic) {
-          const alert: RuntimeWalletFundingAlert = {
-            wallet: spec.name,
-            address: spec.address,
-            asset: "USDC",
-            balance: tokenBalance,
-            floor: spec.token.minAtomic,
-          }
-          alerts.push(alert)
-          await captureScheduledWarning(
+        await withRequestControlPlaneClients(
+          () => captureScheduledWarning(
             env,
-            `${spec.name} USDC funding is below floor — fund ${spec.address}`,
-            `${TASK}:${spec.name}:usdc`,
+            `${spec.name} ${spec.nativeSymbol} funding is below floor — fund ${spec.address}`,
+            `${TASK}:${spec.name}:native`,
             {
               wallet: spec.name,
               address: spec.address,
               explorer_url: explorerAddressUrl(spec.chainId, spec.address),
               chain_id: spec.chainId,
-              asset: spec.token.symbol,
-              token_address: spec.token.address,
-              balance: formatUnits(tokenBalance, spec.token.decimals),
-              funding_floor: formatUnits(spec.token.minAtomic, spec.token.decimals),
+              asset: spec.nativeSymbol,
+              balance: formatEther(nativeBalance),
+              funding_floor: formatEther(spec.nativeMinWei),
             },
             { urgency: "high" },
+          ),
+        )
+      }
+
+      if (spec.token) {
+        const token = spec.token
+        const tokenBalance = await tokenReader(spec)
+        if (tokenBalance < token.minAtomic) {
+          const alert: RuntimeWalletFundingAlert = {
+            wallet: spec.name,
+            address: spec.address,
+            asset: "USDC",
+            balance: tokenBalance,
+            floor: token.minAtomic,
+          }
+          alerts.push(alert)
+          await withRequestControlPlaneClients(
+            () => captureScheduledWarning(
+              env,
+              `${spec.name} USDC funding is below floor — fund ${spec.address}`,
+              `${TASK}:${spec.name}:usdc`,
+              {
+                wallet: spec.name,
+                address: spec.address,
+                explorer_url: explorerAddressUrl(spec.chainId, spec.address),
+                chain_id: spec.chainId,
+                asset: token.symbol,
+                token_address: token.address,
+                balance: formatUnits(tokenBalance, token.decimals),
+                funding_floor: formatUnits(token.minAtomic, token.decimals),
+              },
+              { urgency: "high" },
+            ),
           )
         }
       }
