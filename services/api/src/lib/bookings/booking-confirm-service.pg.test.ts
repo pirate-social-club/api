@@ -14,6 +14,7 @@ import {
   type BookingConfirmSqlExecutor,
 } from "./booking-confirm-service";
 import { bookingIdForHold } from "./booking-finalization-repository";
+import { recordBookingPaymentSubmitted } from "./booking-payment-resume-service";
 import { createPaymentIntentRepository, paymentIntentIdForHold } from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
@@ -235,6 +236,117 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       walletAttachmentId: "wal_different",
       nowUtc: "2026-07-01T09:53:00Z",
     })).toEqual({ ok: false, reason: "replay_mismatch" });
+  });
+
+  test("records a broadcast durably, rejects hash replacement, and confirms from a later session", async () => {
+    await seedHold({ holdId: "hold_confirm_resume" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_resume");
+    const quoted = await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_resume",
+      nowUtc: "2026-07-01T09:50:00Z",
+    });
+    expect(quoted.ok).toBe(true);
+
+    const submitted = await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: " 0xRESUME ",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:00Z",
+    });
+    expect(submitted).toEqual({
+      ok: true,
+      paymentIntentId: paymentIntentIdForHold("hold_confirm_resume"),
+      normalizedTxRef: "0xresume",
+    });
+    expect(await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: "0xRESUME",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:01Z",
+    })).toEqual(submitted);
+    expect(await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: "0xdifferent",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:02Z",
+    })).toEqual({ ok: false, reason: "payment_claim_conflict" });
+
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+    const confirmed = await confirmGlobalBookingHold({
+      env,
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      fundingTxRef: "0xresume",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:52:00Z",
+    });
+    expect(confirmed.ok).toBe(true);
+    if (!confirmed.ok) throw new Error("expected resumed confirmation");
+    expect(confirmed.booking.funding_tx_ref).toBe("0xresume");
+  });
+
+  test("concurrent broadcast reporting and confirmation converge on one booking", async () => {
+    await seedHold({ holdId: "hold_confirm_submit_race" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_submit_race");
+    expect((await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_submit_race",
+      nowUtc: "2026-07-01T09:50:00Z",
+    })).ok).toBe(true);
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+
+    const [submitted, confirmed] = await Promise.all([
+      recordBookingPaymentSubmitted({
+        executor,
+        userRepository: wallets,
+        holdId: "hold_confirm_submit_race",
+        bookerUserId: "booker_hold_confirm_submit_race",
+        txRef: "0xSUBMIT_RACE",
+        walletAttachmentId: "wal_confirm_submit_race",
+        nowUtc: "2026-07-01T09:51:00Z",
+      }),
+      confirmGlobalBookingHold({
+        env,
+        executor,
+        userRepository: wallets,
+        holdId: "hold_confirm_submit_race",
+        bookerUserId: "booker_hold_confirm_submit_race",
+        fundingTxRef: "0xSUBMIT_RACE",
+        walletAttachmentId: "wal_confirm_submit_race",
+        nowUtc: "2026-07-01T09:51:00Z",
+      }),
+    ]);
+
+    expect(submitted.ok).toBe(true);
+    expect(confirmed.ok).toBe(true);
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_confirm_submit_race"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
   });
 
   test("pending verification records a retryable failed intent and can later resume with the same tx", async () => {
