@@ -122,6 +122,94 @@ async function uploadAudioToAcrCloudCatalog(input: {
   }
 }
 
+function normalizeCatalogDeleteResult(input: {
+  bucketId: string
+  fileId: string
+  attempted: boolean
+  deleted: boolean
+  alreadyMissing?: boolean
+  error?: string | null
+}): Record<string, unknown> {
+  return {
+    provider: "acrcloud_catalog",
+    bucket_id: Number.parseInt(input.bucketId, 10) || input.bucketId,
+    file_id: input.fileId,
+    attempted: input.attempted,
+    deleted: input.deleted,
+    ...(input.alreadyMissing ? { already_missing: true } : {}),
+    ...(typeof input.error === "string" && input.error ? { error: input.error } : {}),
+  }
+}
+
+// Unenrollment counterpart to the upload path: removes one exact bucket file
+// by file_id. Idempotent — an already-missing entry (404) counts as success —
+// and never throws, so post deletion flows can fire it without blocking.
+export async function deleteVideoAudioSampleFromAcrCloudCatalog(input: {
+  env: Env
+  fileId: string
+}): Promise<Record<string, unknown>> {
+  const token = trimEnv(input.env.ACRCLOUD_PERSONAL_ACCESS_TOKEN)
+  const bucketId = trimEnv(input.env.ACRCLOUD_BUCKET_ID)
+  const baseUrl = trimEnv(input.env.ACRCLOUD_CONSOLE_BASE_URL) || "https://api-v2.acrcloud.com/api"
+  const fileId = input.fileId.trim()
+
+  if (!token || !bucketId) {
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: false,
+      deleted: false,
+      error: "missing_configuration",
+    })
+  }
+
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, "")}/buckets/${bucketId}/files/${encodeURIComponent(fileId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+        },
+      },
+    )
+
+    if (response.status === 404) {
+      return normalizeCatalogDeleteResult({
+        bucketId,
+        fileId,
+        attempted: true,
+        deleted: true,
+        alreadyMissing: true,
+      })
+    }
+    if (!response.ok) {
+      return normalizeCatalogDeleteResult({
+        bucketId,
+        fileId,
+        attempted: true,
+        deleted: false,
+        error: `http_${response.status}`,
+      })
+    }
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: true,
+      deleted: true,
+    })
+  } catch (error) {
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: true,
+      deleted: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 export async function syncVideoAudioSampleToAcrCloudCatalog(input: {
   env: Env
   sampleBytes: ArrayBuffer | Uint8Array

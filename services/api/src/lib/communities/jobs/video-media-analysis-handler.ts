@@ -4,7 +4,10 @@ import { providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import type { Client } from "../../sql-client"
 import { evaluateLyricsModeration, identifyAudioSampleWithAcrCloud } from "../../song-artifacts/song-artifact-analysis"
-import { syncVideoAudioSampleToAcrCloudCatalog } from "../../song-artifacts/song-artifact-catalog"
+import {
+  deleteVideoAudioSampleFromAcrCloudCatalog,
+  syncVideoAudioSampleToAcrCloudCatalog,
+} from "../../song-artifacts/song-artifact-catalog"
 import {
   extractVideoAudioSampleForObject,
   requestVideoAudioSampleFromService,
@@ -13,7 +16,10 @@ import {
 } from "../../song-artifacts/video-audio-sample"
 import {
   computeVideoRightsOutcome,
+  findSyncedVideoAudioCatalogEnrollment,
+  hasSyncedVideoAudioCatalogEnrollment,
   persistVideoAudioCatalogEnrollment,
+  persistVideoAudioCatalogUnenrollment,
   persistVideoRightsAnalysis,
   type VideoAudioSafetyEvaluation,
   type VideoRightsAcrCustomMatch,
@@ -38,6 +44,13 @@ type VideoMediaAnalysisJobPayload = {
   storage_object_key: string
   mime_type?: string | null
   duration_ms?: number | null
+}
+
+type VideoAudioCatalogUnenrollJobPayload = {
+  post_id: string
+  // Author self-deletes redact the uploader identity from the persisted
+  // evidence; moderator removals keep it for moderation review.
+  redact_uploader?: boolean
 }
 
 type VideoAudioSampleExtractor = (input: {
@@ -587,20 +600,28 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       && !acr.providerError
       && !acr.missingConfiguration
     ) {
-      const catalogEnrollment = await syncVideoAudioSampleToAcrCloudCatalog({
-        env: input.env,
-        sampleBytes: sample.bytes,
-        communityId: input.job.community_id,
-        postId,
-        assetId,
-        uploaderUserId,
-        sampleWindow: window,
-      })
-      await persistVideoAudioCatalogEnrollment({
+      // Re-analysis/retry must not enroll a duplicate fingerprint: skip when a
+      // previous run already synced this post's sample to the bucket.
+      const alreadyEnrolled = await hasSyncedVideoAudioCatalogEnrollment({
         client: db.client,
-        mediaAnalysisResultId: persisted.mediaAnalysisResultId,
-        catalogEnrollment,
+        postId,
       })
+      if (!alreadyEnrolled) {
+        const catalogEnrollment = await syncVideoAudioSampleToAcrCloudCatalog({
+          env: input.env,
+          sampleBytes: sample.bytes,
+          communityId: input.job.community_id,
+          postId,
+          assetId,
+          uploaderUserId,
+          sampleWindow: window,
+        })
+        await persistVideoAudioCatalogEnrollment({
+          client: db.client,
+          mediaAnalysisResultId: persisted.mediaAnalysisResultId,
+          catalogEnrollment,
+        })
+      }
     }
     await applyVideoAudioSafetyToPost({
       client: db.client,
@@ -658,6 +679,112 @@ export async function enqueueVideoMediaAnalysisIfEnabled(input: {
     client: input.client,
     communityId: input.communityId,
     jobType: "video_media_analysis",
+    subjectType: "post",
+    subjectId: input.postId,
+    payloadJson: JSON.stringify(payload),
+    createdAt: input.createdAt ?? nowIso(),
+  })
+}
+
+// Core of the video_audio_catalog_unenroll job, exported so tests can drive it
+// directly with a shard client. Deletes the exact bucket file recorded in the
+// post's enrollment evidence, persists the outcome next to the enrollment
+// tombstone, and redacts the uploader identity for author-initiated deletes.
+// Returns the updated media_analysis_results id, or null when the post has no
+// active enrollment (no-op). A failed delete persists the failure evidence and
+// rethrows while attempts remain so the runner retries; missing configuration
+// or a missing file_id is terminal (retrying cannot fix either).
+export async function unenrollVideoAudioCatalogSample(input: {
+  env: Env
+  client: Pick<Client, "execute">
+  postId: string
+  redactUploader?: boolean
+  attemptCount?: number
+  now?: string
+}): Promise<string | null> {
+  const evidence = await findSyncedVideoAudioCatalogEnrollment({
+    client: input.client,
+    postId: input.postId,
+  })
+  if (!evidence) {
+    return null
+  }
+  const at = input.now ?? nowIso()
+  const fileIdValue = evidence.enrollment.file_id
+  const fileId = typeof fileIdValue === "string" || typeof fileIdValue === "number"
+    ? String(fileIdValue).trim()
+    : ""
+  const deletion = fileId
+    ? await deleteVideoAudioSampleFromAcrCloudCatalog({ env: input.env, fileId })
+    : { attempted: false, deleted: false, error: "missing_file_id" }
+  const deleted = deletion.deleted === true
+  const outcome = deleted
+    ? deletion.already_missing === true ? "already_missing" : "deleted"
+    : "failed"
+  const error = typeof deletion.error === "string" && deletion.error ? deletion.error : null
+  await persistVideoAudioCatalogUnenrollment({
+    client: input.client,
+    mediaAnalysisResultId: evidence.mediaAnalysisResultId,
+    unenrollment: {
+      provider: "acrcloud_catalog",
+      file_id: fileId || null,
+      outcome,
+      at,
+      ...(error ? { error } : {}),
+    },
+    redactUploader: input.redactUploader !== false,
+    updatedAt: at,
+  })
+  if (deletion.attempted === true && !deleted && (input.attemptCount ?? 0) < COMMUNITY_JOB_MAX_ATTEMPTS) {
+    throw providerUnavailable(`ACRCloud catalog unenroll failed: ${error ?? "unknown_error"}`)
+  }
+  return evidence.mediaAnalysisResultId
+}
+
+export async function runVideoAudioCatalogUnenroll(input: CommunityJobHandlerInput): Promise<string | null> {
+  const payload = parseJobPayload<VideoAudioCatalogUnenrollJobPayload>(input.job.payload_json)
+  const postId = payload?.post_id?.trim()
+  if (!postId) {
+    return null
+  }
+
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
+  try {
+    return await unenrollVideoAudioCatalogSample({
+      env: input.env,
+      client: db.client,
+      postId,
+      redactUploader: payload?.redact_uploader !== false,
+      attemptCount: input.job.attempt_count,
+    })
+  } finally {
+    db.close()
+  }
+}
+
+// Enqueue-only, called after the deletion write commits: catalog unenrollment
+// must never block or fail the deletion itself, so callers schedule this
+// post-commit and treat an enqueue failure as non-fatal. Gated on the same
+// flag as enrollment.
+export async function enqueueVideoAudioCatalogUnenrollIfEnabled(input: {
+  env: Env
+  client: DbExecutor
+  communityId: string
+  postId: string
+  redactUploader: boolean
+  createdAt?: string
+}): Promise<void> {
+  if (trimEnv(input.env.VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED) !== "1") {
+    return
+  }
+  const payload: VideoAudioCatalogUnenrollJobPayload = {
+    post_id: input.postId,
+    redact_uploader: input.redactUploader,
+  }
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "video_audio_catalog_unenroll",
     subjectType: "post",
     subjectId: input.postId,
     payloadJson: JSON.stringify(payload),
