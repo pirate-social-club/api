@@ -11,6 +11,9 @@ import type { RightsHoldType } from "../rights/rights-review-types"
 // matches drive the attribution outcomes below. Video-audio catalog enrollment
 // evidence lives in authenticity_signals_json; post deletion unenrolls the
 // bucket entry asynchronously and keeps a redacted tombstone for measurement.
+// media_analysis_results is the canonical candidate-signal record for repost
+// detection: a candidate signal never establishes identity, ownership,
+// suppression, or payout entitlement (docs/rights-attribution-remediation.md).
 
 type VideoRightsOutcome =
   | "allow"

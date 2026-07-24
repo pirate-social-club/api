@@ -34,6 +34,20 @@ Map `declared_reference_mismatch` to `author_mod_only` plus a commerce hold. App
 
 Run upload-time fingerprinting as a bounded best-effort preflight. When a custom-catalog match disagrees with the selected source, offer the detected source, keep-and-explain, or cancel. Provider failure must not become a global posting outage; unresolved cases fall back to the coherent post-publish state above.
 
+## Candidate-signal contract
+
+Each community shard's `media_analysis_results` row is the canonical candidate-signal record for repost detection. Its `authenticity_signals_json` carries the raw ACRCloud custom matches plus video-audio catalog enrollment and unenrollment evidence, and `policy_reason_code = platform_video_audio_match` marks an audio-only candidate.
+
+A platform video-audio match is a candidate signal only. It never establishes content identity, ownership, distribution suppression, or payout entitlement, and it must not create rights holds, review cases, or feed effects. Future identity, ownership, and ledger layers may consume these rows as input; no detector writes to those layers directly.
+
+This workstream is parked: `VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED` stays off and no ACR capacity is purchased until a concrete need appears. Reopening triggers:
+
+- Exact-copy abuse becomes common → server-verified content hashes plus a global hash lookup.
+- Re-encoded or cropped reposts become common → perceptual video hashing.
+- Cross-community repost investigation becomes routine → the control-plane observation table below.
+- Ads or payouts launch → Story-linked ownership and suspense accounting.
+- The enrollment flag is enabled → operational counters and alerts for enrollment and candidate matches.
+
 ## Cross-community repost measurement follow-up
 
 Video-audio enrollment/unenrollment evidence currently lives only in each community shard's `media_analysis_results.authenticity_signals_json`. That is sufficient to validate the mechanics (enroll on analysis, unenroll on deletion, redacted tombstones), but not for operational cross-community repost measurement, which needs to query repost relationships across shards.
