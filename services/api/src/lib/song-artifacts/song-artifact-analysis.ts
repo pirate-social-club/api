@@ -481,6 +481,20 @@ export async function identifyAudioSampleWithAcrCloud(input: {
   }
 }
 
+// Custom-bucket entries tagged content_type "video_audio" are platform video
+// audio enrolled as a repost-identity signal; they must not count as a catalog
+// song match. user_defined may come back nested or flattened onto the item.
+function isVideoAudioCustomFile(item: unknown): boolean {
+  if (!item || typeof item !== "object") {
+    return false
+  }
+  const record = item as Record<string, unknown>
+  const userDefined = record.user_defined != null && typeof record.user_defined === "object"
+    ? record.user_defined as Record<string, unknown>
+    : record
+  return userDefined.content_type === "video_audio"
+}
+
 async function evaluateAudioIdentification(input: {
   env: Env
   primaryAudioUpload: SongArtifactUpload
@@ -511,9 +525,11 @@ async function evaluateAudioIdentification(input: {
       custom_files?: unknown[]
     }
   } | null)?.metadata
+  const catalogCustomMatches = (Array.isArray(metadata?.custom_files) ? metadata.custom_files : [])
+    .filter((item) => !isVideoAudioCustomFile(item))
   const matchFound = Boolean(
     (Array.isArray(metadata?.music) && metadata.music.length)
-    || (Array.isArray(metadata?.custom_files) && metadata.custom_files.length),
+    || catalogCustomMatches.length,
   )
 
   return {

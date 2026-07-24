@@ -8,7 +8,7 @@ import {
   type VideoRightsAcrEvaluation,
   type VideoRightsDeclaredReferences,
 } from "./video-rights-analysis"
-import { chooseVideoSampleWindow, mergeVideoAudioSafetyWithPost } from "../communities/jobs/video-media-analysis-handler"
+import { chooseVideoSampleWindow, mergeVideoAudioSafetyWithPost, parseAcrEvaluation } from "../communities/jobs/video-media-analysis-handler"
 
 function acr(overrides: Partial<VideoRightsAcrEvaluation> = {}): VideoRightsAcrEvaluation {
   return {
@@ -47,7 +47,7 @@ describe("computeVideoRightsOutcome", () => {
   test("declared source verified by catalog match allows", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_1"], declaredAssetIds: ["ast_1"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("allow")
@@ -58,7 +58,7 @@ describe("computeVideoRightsOutcome", () => {
   test("catalog match without any declaration requires a reference", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("allow_with_required_reference")
@@ -68,7 +68,7 @@ describe("computeVideoRightsOutcome", () => {
   test("catalog match different from the declared song goes to review", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_1"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("review_required")
@@ -79,11 +79,38 @@ describe("computeVideoRightsOutcome", () => {
   test("unmappable catalog match goes to review", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("review_required")
     expect(decision.policyReasonCode).toBe("unmappable_catalog_match")
+  })
+
+  test("platform video-audio-only match allows as a log-only identity signal", () => {
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, matchSource: "platform_video_audio", raw: {} }] }),
+      audioTrackPresent: true,
+    })
+    expect(decision.outcome).toBe("allow")
+    expect(decision.policyReasonCode).toBe("platform_video_audio_match")
+    expect(decision.caseTrigger).toBeNull()
+  })
+
+  test("platform video-audio match neither suppresses nor exculpates song enforcement", () => {
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr({
+        customMatches: [
+          { song_artifact_bundle_id: null, matchSource: "platform_song", raw: {} },
+          { song_artifact_bundle_id: null, matchSource: "platform_video_audio", raw: {} },
+        ],
+      }),
+      audioTrackPresent: true,
+    })
+    expect(decision.outcome).toBe("review_required")
+    expect(decision.policyReasonCode).toBe("unmappable_catalog_match")
+    expect(decision.caseTrigger).toBe("acrcloud_match")
   })
 
   test("commercial catalog match goes to review by default", () => {
@@ -113,7 +140,7 @@ describe("computeVideoRightsOutcome", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_1"], declaredAssetIds: ["ast_1"] }),
       acr: acr({
-        customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }],
+        customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }],
         musicMatches: [{ title: "Same Song, Commercial Release" }],
       }),
       audioTrackPresent: true,
@@ -183,6 +210,50 @@ describe("computeVideoRightsOutcome", () => {
     })
     expect(decision.outcome).toBe("allow")
     expect(decision.policyReasonCode).toBe("analysis_skipped_source_too_large")
+  })
+})
+
+describe("parseAcrEvaluation", () => {
+  test("classifies custom matches by user_defined content_type", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "song", user_defined: { song_artifact_bundle_id: "sab_1" } },
+          { acr_id: "video", user_defined: { content_type: "video_audio" } },
+        ],
+      },
+    })
+    expect(evaluation.customMatches).toHaveLength(2)
+    expect(evaluation.customMatches[0]).toMatchObject({
+      song_artifact_bundle_id: "sab_1",
+      matchSource: "platform_song",
+    })
+    expect(evaluation.customMatches[1]).toMatchObject({
+      song_artifact_bundle_id: null,
+      matchSource: "platform_video_audio",
+    })
+  })
+
+  test("classifies flattened user_defined fields the same way", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "video", content_type: "video_audio" },
+        ],
+      },
+    })
+    expect(evaluation.customMatches[0]?.matchSource).toBe("platform_video_audio")
+  })
+
+  test("untagged legacy entries classify as platform songs", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "legacy", user_defined: { source: "pirate", content_hash: "0xabc" } },
+        ],
+      },
+    })
+    expect(evaluation.customMatches[0]?.matchSource).toBe("platform_song")
   })
 })
 
@@ -351,7 +422,7 @@ describe("persistVideoRightsAnalysis", () => {
     const client = await createTestClient()
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_up"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: { acr_id: "x" } }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: { acr_id: "x" } }] }),
       audioTrackPresent: true,
     })
     const persisted = await persistVideoRightsAnalysis({
@@ -360,7 +431,7 @@ describe("persistVideoRightsAnalysis", () => {
       postId: "pst_video",
       assetId: "ast_video",
       decision,
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: { acr_id: "x" } }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: { acr_id: "x" } }] }),
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_up"] }),
       sampleWindow: { start_ms: 15_000, duration_ms: 60_000 },
     })
@@ -399,7 +470,7 @@ describe("persistVideoRightsAnalysis", () => {
     const client = await createTestClient()
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     await persistVideoRightsAnalysis({
@@ -408,7 +479,7 @@ describe("persistVideoRightsAnalysis", () => {
       postId: "pst_public_video",
       assetId: null,
       decision,
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       declared: declared(),
       sampleWindow: null,
     })
@@ -433,7 +504,7 @@ describe("persistVideoRightsAnalysis", () => {
       communityId: "cmt_test",
       postId: "pst_video",
       assetId: "ast_video",
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       declared: declared({ declaredBundleIds: [], declaredAssetIds: ["ast_up"], unresolvedRefs: [] }),
       sampleWindow: null,
     }
@@ -550,5 +621,50 @@ describe("persistVideoRightsAnalysis", () => {
     expect(safetySignals.transcript).toBe("explicit transcript")
     expect(safetySignals.content_safety_state).toBe("adult")
     expect(safetySignals.age_gate_policy).toBe("18_plus")
+  })
+
+  test("video-audio-only match persists the log payload without a review case or hold", async () => {
+    const client = await createTestClient()
+    const acrResult = acr({
+      customMatches: [{
+        song_artifact_bundle_id: null,
+        matchSource: "platform_video_audio",
+        raw: { acr_id: "vid_1", user_defined: { content_type: "video_audio" } },
+      }],
+      providerResult: { status: { code: 0 } },
+    })
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acrResult,
+      audioTrackPresent: true,
+    })
+    const persisted = await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_repost_video",
+      assetId: null,
+      decision,
+      acr: acrResult,
+      declared: declared(),
+      sampleWindow: null,
+    })
+
+    expect(persisted.rightsReviewCaseId).toBeNull()
+    const caseRows = await client.execute("SELECT * FROM rights_review_cases")
+    expect(caseRows.rows).toHaveLength(0)
+    const holdRows = await client.execute("SELECT * FROM rights_holds")
+    expect(holdRows.rows).toHaveLength(0)
+
+    const analysisRows = await client.execute(
+      "SELECT outcome, policy_reason_code, acrcloud_custom_match_json FROM media_analysis_results",
+    )
+    expect(analysisRows.rows).toHaveLength(1)
+    expect(analysisRows.rows[0]?.outcome).toBe("allow")
+    expect(analysisRows.rows[0]?.policy_reason_code).toBe("platform_video_audio_match")
+    const loggedMatches = JSON.parse(String(analysisRows.rows[0]?.acrcloud_custom_match_json)) as Array<{
+      user_defined?: { content_type?: string }
+    }>
+    expect(loggedMatches).toHaveLength(1)
+    expect(loggedMatches[0]?.user_defined?.content_type).toBe("video_audio")
   })
 })
