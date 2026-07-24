@@ -66,10 +66,26 @@ export interface OperatorSettleResult {
 }
 
 interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
-type TxLiveness = "success" | "failed" | "pending" | "absent"
+export type TxLiveness = "success" | "failed" | "pending" | "absent"
 export type RewardVaultEventObservation =
   | { status: "matched" }
   | { status: "missing" | "mismatch"; reason: string }
+
+export function assertManualRewardResolutionEvidence(input: {
+  resolution: "confirmed" | "failed_onchain"
+  liveness: TxLiveness
+  vaultEvent?: RewardVaultEventObservation
+}): void {
+  if (input.resolution === "confirmed" && input.liveness !== "success") {
+    throw conflictError("Cannot manually confirm rewards settlement without a successful receipt")
+  }
+  if (input.resolution === "failed_onchain" && input.vaultEvent?.status === "matched") {
+    throw conflictError("Cannot fail rewards settlement after its vault transfer event matched")
+  }
+  if (input.resolution === "failed_onchain" && input.liveness !== "failed") {
+    throw conflictError("Cannot manually fail rewards settlement without a failed receipt")
+  }
+}
 export interface ChainPrimitives {
   pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
@@ -318,6 +334,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!operatorActorId || operatorActorId.length > 200) {
       throw badRequestError("Rewards settlement manual resolver identity is invalid")
     }
+    const liveness = await chain().txLiveness(this.env, expectedTxHash, "rewards")
+    const vaultEvent = liveness === "success" && this.usesLitVault()
+      ? await this.observeRewardVaultEvent(row)
+      : undefined
+    assertManualRewardResolutionEvidence({
+      resolution: input.resolution,
+      liveness,
+      vaultEvent,
+    })
     const resolvedAt = Date.now()
     const resolved = this.cas(row.idempotency_key, row.version, {
       state: input.resolution,
