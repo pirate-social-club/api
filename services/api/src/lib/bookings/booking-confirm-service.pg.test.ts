@@ -583,4 +583,63 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       .listOrphanedVerifiedPaymentIntents("2026-07-01T10:06:00Z", 50);
     expect(orphans.map((intent) => intent.holdId)).toContain("hold_reverify_orphan");
   });
+
+  test("fences client-confirm and sweeper races to one verification and one booking", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status = 'verification_failed'`);
+    await seedHold({ holdId: "hold_reverify_race" });
+    const wallets = userRepository("wal_reverify_race");
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "payment_pending" });
+
+    let releaseVerification: (() => void) | undefined;
+    let reportVerifierEntered: (() => void) | undefined;
+    const verifierEntered = new Promise<void>((resolve) => {
+      reportVerifierEntered = resolve;
+    });
+    const verifierRelease = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let verifierCalls = 0;
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => {
+      verifierCalls += 1;
+      reportVerifierEntered?.();
+      await verifierRelease;
+      return { kind: "verified", senderAddress: BUYER, txRef: fundingTxRef };
+    });
+
+    const sweepPromise = sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    await verifierEntered;
+    const losingClient = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:06:00Z",
+    });
+    expect(losingClient).toEqual({ ok: false, reason: "verification_in_progress" });
+    releaseVerification?.();
+    expect(await sweepPromise).toMatchObject({ checked: 1, booked: 1, errors: 0 });
+    expect(verifierCalls).toBe(1);
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_reverify_race"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
+  });
 });
