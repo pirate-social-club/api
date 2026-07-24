@@ -666,6 +666,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
       deadlineMs: COMMUNITY_JOB_TICK_DEADLINE_MS,
+      sweepDeadlineMs: COMMUNITY_JOB_STALE_SWEEP_DEADLINE_MS,
     })
     if (
       summary.processed_jobs > 0
@@ -1139,6 +1140,10 @@ const SCHEDULED_BATCH_DEADLINE_MS = 30_000
 // in wall-time too: unstarted communities roll to the next tick, which the poll
 // rotation already accounts for.
 const COMMUNITY_JOB_TICK_DEADLINE_MS = 45_000
+// Reserve most of the community-job tick for draining runnable work. On staging,
+// sweeping all 100 selected communities consumes the full 45s budget by itself,
+// leaving the processing phase permanently at zero.
+const COMMUNITY_JOB_STALE_SWEEP_DEADLINE_MS = 15_000
 // Protect the seven settlement/money-movement jobs, both reward watchdogs, and
 // the community job drain at the front of the ordered batch. They must receive
 // a start even when D1 pressure pushes the batch past its nominal deadline.

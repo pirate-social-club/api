@@ -594,6 +594,7 @@ export async function processAvailableCommunityJobs(input: {
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
   deadlineMs?: number | null
+  sweepDeadlineMs?: number | null
   now?: () => number
 }): Promise<CommunityJobProcessingSummary> {
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
@@ -601,6 +602,12 @@ export async function processAvailableCommunityJobs(input: {
   const startedAt = now()
   const deadlineMs = input.deadlineMs != null && input.deadlineMs > 0 ? input.deadlineMs : null
   const deadlineAtMs = deadlineMs == null ? null : startedAt + deadlineMs
+  const sweepDeadlineMs = input.sweepDeadlineMs != null && input.sweepDeadlineMs > 0
+    ? input.sweepDeadlineMs
+    : deadlineMs
+  const sweepDeadlineAtMs = sweepDeadlineMs == null
+    ? null
+    : Math.min(startedAt + sweepDeadlineMs, deadlineAtMs ?? Number.POSITIVE_INFINITY)
   const activeCommunities = input.communityIds?.length
     ? []
     : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
@@ -618,7 +625,7 @@ export async function processAvailableCommunityJobs(input: {
     // Keep all per-tick database work within maxCommunities. Sweeping every
     // active community here made a bounded polling tick perform unbounded I/O.
     communityIds,
-    deadlineAtMs,
+    deadlineAtMs: sweepDeadlineAtMs,
     nowMs: now,
   })
   const sweepFinishedAt = now()
@@ -630,7 +637,7 @@ export async function processAvailableCommunityJobs(input: {
     console.warn("[community-job] stale sweep deadline reached", JSON.stringify({
       swept_communities: sweptCommunities,
       deferred_sweep_communities: deferredSweepCommunities,
-      deadline_ms: deadlineMs,
+      deadline_ms: sweepDeadlineMs,
       sweep_ms: Math.max(0, sweepFinishedAt - sweepStartedAt),
     }))
   }

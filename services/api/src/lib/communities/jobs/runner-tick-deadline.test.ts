@@ -16,6 +16,7 @@ const env = {} as Env
 function runTick(options: {
   communityIds: string[]
   deadlineMs?: number | null
+  sweepDeadlineMs?: number | null
   now?: () => number
 }) {
   return processAvailableCommunityJobs({
@@ -23,6 +24,7 @@ function runTick(options: {
     communityRepository: repository,
     communityIds: options.communityIds,
     deadlineMs: options.deadlineMs,
+    sweepDeadlineMs: options.sweepDeadlineMs,
     now: options.now,
   })
 }
@@ -88,6 +90,26 @@ describe("processAvailableCommunityJobs tick deadline", () => {
     })
 
     expect(summary.processed_jobs).toBe(0)
+  })
+
+  it("reserves processing time when the stale sweep reaches its phase budget", async () => {
+    let clock = 0
+    const summary = await runTick({
+      communityIds: ["cmt_1", "cmt_2", "cmt_3"],
+      deadlineMs: 45_000,
+      sweepDeadlineMs: 15_000,
+      now: () => {
+        const value = clock
+        clock += 5_000
+        return value
+      },
+    })
+
+    expect(summary.swept_communities).toBe(1)
+    expect(summary.deferred_sweep_communities).toBe(2)
+    expect(summary.started_communities).toBe(1)
+    expect(summary.sweep_ms).toBeGreaterThanOrEqual(15_000)
+    expect(summary.process_ms).toBeGreaterThan(0)
   })
 
   it("rotates the front of a fully selected poll so truncated sweeps stay fair", () => {
