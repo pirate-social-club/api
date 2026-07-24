@@ -1273,6 +1273,19 @@ export type PendingBookingPaymentIntent = {
   booking_id: string | null;
 };
 
+export type UnresolvedBookingPaymentIntent = {
+  payment_intent_id: string;
+  hold_id: string;
+  host_user_id: string;
+  booker_user_id: string;
+  intent_status: "verification_failed";
+  hold_status: "active" | "consumed" | "expired";
+  claimed_tx_ref: string;
+  hold_expires_at: string;
+  updated_at: string;
+  unresolved_age_seconds: number;
+};
+
 export type BookingCancellationPreview = {
   object: "booking_cancellation_preview";
   booking_id: string;
@@ -4413,6 +4426,7 @@ export const apiRoutes = {
   bookingHoldConfirm: (holdId: string) => `/bookings/holds/${holdId}/confirm`,
   bookingHoldPaymentSubmitted: (holdId: string) => `/bookings/holds/${holdId}/payment-submitted`,
   bookingPaymentIntentsPending: "/bookings/payment-intents/pending",
+  bookingPaymentIntentsUnresolved: "/bookings/payment-intents/unresolved",
   booking: (bookingId: string) => `/bookings/${bookingId}`,
   bookingCancellationPreview: (bookingId: string) => `/bookings/${bookingId}/cancellation-preview`,
   bookingCancel: (bookingId: string) => `/bookings/${bookingId}/cancel`,

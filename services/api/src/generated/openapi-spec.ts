@@ -5142,6 +5142,245 @@ const spec = {
         ]
       }
     },
+    "/bookings/holds/{hold_id}/payment-submitted": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Durably record a submitted booking payment for later confirmation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitBookingPaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "payment_intent_id",
+                    "status",
+                    "claimed_tx_ref"
+                  ],
+                  "properties": {
+                    "payment_intent_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "recorded"
+                      ]
+                    },
+                    "claimed_tx_ref": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_holds_by_hold_id_payment_submitted",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/booking-holds/{hold_id}/payment-submitted": {
+      "post": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "Durably record a submitted booking payment for later confirmation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitBookingPaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "payment_intent_id",
+                    "status",
+                    "claimed_tx_ref"
+                  ],
+                  "properties": {
+                    "payment_intent_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "recorded"
+                      ]
+                    },
+                    "claimed_tx_ref": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_bookings_booking_holds_by_hold_id_payment_submitted",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/payment-intents/pending": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List the authenticated booker's recent resumable booking payments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PendingBookingPaymentIntent"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings_payment_intents_pending"
+      }
+    },
+    "/bookings/payment-intents/unresolved": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List claimed booking payments awaiting chain resolution",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UnresolvedBookingPaymentIntent"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "operationId": "get_bookings_payment_intents_unresolved"
+      }
+    },
     "/bookings/settlement-review/pending": {
       "get": {
         "tags": [
@@ -15435,6 +15674,155 @@ const spec = {
           }
         }
       },
+      "SubmitBookingPaymentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tx_ref",
+          "wallet_attachment_id"
+        ],
+        "properties": {
+          "tx_ref": {
+            "type": "string"
+          },
+          "wallet_attachment_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PendingBookingPaymentIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hold_id",
+          "payment_intent_id",
+          "intent_status",
+          "resume_state",
+          "claimed_tx_ref",
+          "wallet_attachment_id",
+          "payment",
+          "quote_expires_at",
+          "hold_expires_at",
+          "host_user_id",
+          "slot_start_utc",
+          "slot_end_utc",
+          "booking_id"
+        ],
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          },
+          "payment_intent_id": {
+            "type": "string"
+          },
+          "intent_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "verifying",
+              "verified",
+              "verification_failed",
+              "consumed"
+            ]
+          },
+          "resume_state": {
+            "$ref": "#/BookingPaymentResumeState"
+          },
+          "claimed_tx_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "wallet_attachment_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/BookingPaymentInstructions"
+          },
+          "quote_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hold_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "booking_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "UnresolvedBookingPaymentIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "payment_intent_id",
+          "hold_id",
+          "host_user_id",
+          "booker_user_id",
+          "intent_status",
+          "hold_status",
+          "claimed_tx_ref",
+          "hold_expires_at",
+          "updated_at",
+          "unresolved_age_seconds"
+        ],
+        "properties": {
+          "payment_intent_id": {
+            "type": "string"
+          },
+          "hold_id": {
+            "type": "string"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "booker_user_id": {
+            "type": "string"
+          },
+          "intent_status": {
+            "type": "string",
+            "enum": [
+              "verification_failed"
+            ]
+          },
+          "hold_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "consumed",
+              "expired"
+            ]
+          },
+          "claimed_tx_ref": {
+            "type": "string"
+          },
+          "hold_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unresolved_age_seconds": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "BookingCancellationPreview": {
         "type": "object",
         "additionalProperties": false,
@@ -24211,6 +24599,8 @@ const spec = {
         "required": [
           "host_user_id",
           "base_price_cents",
+          "has_available_slot",
+          "starting_price_cents",
           "currency"
         ],
         "properties": {
@@ -24220,6 +24610,14 @@ const spec = {
           "base_price_cents": {
             "type": "integer",
             "minimum": 0
+          },
+          "has_available_slot": {
+            "type": "boolean"
+          },
+          "starting_price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
           },
           "currency": {
             "type": "string",

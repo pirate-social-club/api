@@ -347,8 +347,6 @@ export async function confirmGlobalBookingHold(input: {
   if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
   // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
   // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
-  const holdExpired = hold.status !== "active" || hold.expiresAtUtc <= input.nowUtc;
-
   const claimToken = crypto.randomUUID();
   const reserved = await intentRepo.reservePaymentIntentForVerification({
     paymentIntentId: intentId,
@@ -382,12 +380,9 @@ export async function confirmGlobalBookingHold(input: {
   });
   if (outcome.kind === "pending") {
     await intentRepo.markPaymentIntentVerificationFailed({ paymentIntentId: intentId, claimToken, nowUtc: input.nowUtc });
-    // No CONFIRMED funds are at risk for a pending (unmined / not-found) tx. If the hold window has
-    // already closed, retire the intent as expired; otherwise let the buyer retry as the tx mines.
-    if (holdExpired) {
-      await intentRepo.expirePaymentIntentIfDue(intentId, input.nowUtc);
-      return { ok: false, reason: "hold_expired" };
-    }
+    // Pending means unresolved, not terminal. The claim may mine after this RPC response, including
+    // after the hold TTL. Preserve the immutable hash so a later client or scheduled re-verification
+    // can salvage the booking or create the durable verified/unconsumed refund obligation.
     return { ok: false, reason: "payment_pending" };
   }
   if (outcome.kind === "rejected") {

@@ -13,6 +13,7 @@ import {
 } from "../lib/bookings/booking-confirm-service"
 import {
   listPendingBookingPaymentIntents as realListPendingBookingPaymentIntents,
+  listUnresolvedBookingPaymentIntentsForOperator as realListUnresolvedBookingPaymentIntentsForOperator,
   recordBookingPaymentSubmitted as realRecordBookingPaymentSubmitted,
 } from "../lib/bookings/booking-payment-resume-service"
 import {
@@ -49,8 +50,9 @@ const SETTLEMENT_REVIEW_RESOLUTIONS = new Set(["completed", "no_show_host", "no_
 
 const bookings = new Hono<AuthenticatedEnv>()
 
-function isSettlementReviewOperatorPath(pathname: string): boolean {
+function isBookingOperatorPath(pathname: string): boolean {
   return pathname.endsWith("/bookings/settlement-review/pending")
+    || pathname.endsWith("/bookings/payment-intents/unresolved")
     || /\/bookings\/[^/]+\/settlement-review(?:\/resolve)?$/u.test(pathname)
 }
 
@@ -61,7 +63,7 @@ function isPublicSlotsRead(method: string, pathname: string): boolean {
 
 bookings.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname
-  if (isSettlementReviewOperatorPath(pathname) || isPublicSlotsRead(c.req.method, pathname)) return next()
+  if (isBookingOperatorPath(pathname) || isPublicSlotsRead(c.req.method, pathname)) return next()
   return authenticateAdminOrUser(c, next)
 })
 
@@ -78,6 +80,7 @@ export type GlobalBookingRouteServices = {
   confirmGlobalBookingHold: typeof realConfirmGlobalBookingHold
   recordBookingPaymentSubmitted: typeof realRecordBookingPaymentSubmitted
   listPendingBookingPaymentIntents: typeof realListPendingBookingPaymentIntents
+  listUnresolvedBookingPaymentIntentsForOperator: typeof realListUnresolvedBookingPaymentIntentsForOperator
   getGlobalBookingForParty: typeof realGetGlobalBookingForParty
   listGlobalBookingsForUser: typeof realListGlobalBookingsForUser
   getGlobalBookingSettlementReview: typeof realGetGlobalBookingSettlementReview
@@ -104,6 +107,7 @@ const realServices: GlobalBookingRouteServices = {
   confirmGlobalBookingHold: realConfirmGlobalBookingHold,
   recordBookingPaymentSubmitted: realRecordBookingPaymentSubmitted,
   listPendingBookingPaymentIntents: realListPendingBookingPaymentIntents,
+  listUnresolvedBookingPaymentIntentsForOperator: realListUnresolvedBookingPaymentIntentsForOperator,
   getGlobalBookingForParty: realGetGlobalBookingForParty,
   listGlobalBookingsForUser: realListGlobalBookingsForUser,
   getGlobalBookingSettlementReview: realGetGlobalBookingSettlementReview,
@@ -322,6 +326,26 @@ bookings.get("/payment-intents/pending", async (c) => {
     nowUtc: new Date().toISOString(),
   })
   return c.json({ object: "list", data, has_more: false }, 200)
+})
+
+bookings.get("/payment-intents/unresolved", async (c) => {
+  const operatorActor = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+  const limitParam = new URL(c.req.url).searchParams.get("limit")
+  const limit = limitParam == null ? undefined : Number(limitParam)
+  if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return c.json({ error: "invalid_limit" }, 400)
+  }
+  const page = await routeServices().listUnresolvedBookingPaymentIntentsForOperator({
+    executor: executor(c),
+    nowUtc: new Date().toISOString(),
+    limit,
+  })
+  return c.json({ object: "list", data: page.data, has_more: page.hasMore }, 200)
 })
 
 bookings.get("/settlement-review/pending", async (c) => {

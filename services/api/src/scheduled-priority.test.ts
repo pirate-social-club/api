@@ -24,6 +24,7 @@ describe("scheduled priority ordering", () => {
     expect(protectedNames).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
+      "reverify_booking_payments",
       "reconcile_booking_settlements",
       "reconcile_purchase_settlements",
       "reconcile_royalty_allocation_verifications",
@@ -57,6 +58,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true, false)).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
+      "reverify_booking_payments",
       "reconcile_booking_settlements",
       "reconcile_purchase_settlements",
       "reconcile_royalty_allocation_verifications",
@@ -73,6 +75,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(false, false)).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
+      "reverify_booking_payments",
       "reconcile_booking_settlements",
       "reconcile_purchase_settlements",
       "reconcile_royalty_allocation_verifications",
@@ -88,6 +91,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true, true)).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
+      "reverify_booking_payments",
       "reconcile_booking_settlements",
       "reconcile_purchase_settlements",
       "reconcile_royalty_allocation_verifications",
@@ -105,6 +109,7 @@ describe("scheduled priority ordering", () => {
     expect(scheduledPriorityJobNames(true, true, true)).toEqual([
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
+      "reverify_booking_payments",
       "reconcile_booking_settlements",
       "reconcile_purchase_settlements",
       "reconcile_royalty_allocation_verifications",
