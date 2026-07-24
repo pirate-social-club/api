@@ -75,6 +75,8 @@ let availabilityResult: unknown
 let createHoldResult: unknown
 let quoteResult: unknown
 let confirmResult: unknown
+let paymentSubmittedResult: unknown
+let pendingPaymentIntentsResult: unknown
 let getBookingResult: unknown
 let cancelResult: unknown
 let cancellationPreviewResult: unknown
@@ -91,6 +93,8 @@ const calls: Record<string, unknown[]> = {
   createHold: [],
   quote: [],
   confirm: [],
+  paymentSubmitted: [],
+  pendingPaymentIntents: [],
   getBooking: [],
   cancel: [],
   cancellationPreview: [],
@@ -155,6 +159,22 @@ function resetMocks(): void {
     },
   }
   confirmResult = { ok: true, already: false, booking: bookingSnapshot }
+  paymentSubmittedResult = { ok: true, paymentIntentId: "bpi_hld_route", normalizedTxRef: "0xfunding" }
+  pendingPaymentIntentsResult = [{
+    hold_id: "hld_route",
+    payment_intent_id: "bpi_hld_route",
+    intent_status: "verifying",
+    resume_state: "confirmable",
+    claimed_tx_ref: "0xfunding",
+    wallet_attachment_id: "wal_route",
+    payment: quoteResult && (quoteResult as { quote: { payment: unknown } }).quote.payment,
+    quote_expires_at: "2026-07-01T09:10:00.000Z",
+    hold_expires_at: "2026-07-01T09:10:00.000Z",
+    host_user_id: "host_route",
+    slot_start_utc: "2026-07-01T10:00:00.000Z",
+    slot_end_utc: "2026-07-01T10:30:00.000Z",
+    booking_id: null,
+  }]
   getBookingResult = bookingView
   cancelResult = { ok: true, already: false, cancelledBy: "booker", booking: lifecycleSnapshot }
   cancellationPreviewResult = {
@@ -217,6 +237,14 @@ function routeServices(): GlobalBookingRouteServices {
     confirmGlobalBookingHold: async (input: unknown) => {
       calls.confirm.push(input)
       return confirmResult
+    },
+    recordBookingPaymentSubmitted: async (input: unknown) => {
+      calls.paymentSubmitted.push(input)
+      return paymentSubmittedResult
+    },
+    listPendingBookingPaymentIntents: async (input: unknown) => {
+      calls.pendingPaymentIntents.push(input)
+      return pendingPaymentIntentsResult
     },
     quoteGlobalBookingHold: async (input: unknown) => {
       calls.quote.push(input)
@@ -482,6 +510,61 @@ describe("/bookings routes", () => {
       bookerUserId: "actor_route",
       fundingTxRef: "0xfunding",
       walletAttachmentId: "wal_route",
+    })
+  })
+
+  test("records submitted payment claims and preserves hidden-hold authorization", async () => {
+    const app = loadApp()
+    const unauth = await app.request("http://pirate.test/bookings/holds/hld_route/payment-submitted", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx_ref: "0xfunding", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(unauth.status).toBe(401)
+
+    const recorded = await app.request("http://pirate.test/bookings/holds/hld_route/payment-submitted", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ tx_ref: " 0xFUNDING ", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(recorded.status).toBe(200)
+    expect(await json(recorded)).toMatchObject({
+      payment_intent_id: "bpi_hld_route",
+      status: "recorded",
+      claimed_tx_ref: "0xfunding",
+    })
+    expect(calls.paymentSubmitted[0]).toMatchObject({
+      executor: dummyExecutor,
+      userRepository: dummyUserRepository,
+      holdId: "hld_route",
+      bookerUserId: "actor_route",
+      txRef: " 0xFUNDING ",
+      walletAttachmentId: "wal_route",
+    })
+
+    paymentSubmittedResult = { ok: false, reason: "hold_not_found" }
+    const hidden = await app.request("http://pirate.test/bookings/holds/hld_foreign/payment-submitted", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ tx_ref: "0xother", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(hidden.status).toBe(404)
+  })
+
+  test("lists only the authenticated booker's server-computed resume views", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings/payment-intents/pending", {
+      headers: adminHeaders(),
+    }, env())
+    expect(res.status).toBe(200)
+    expect(await json(res)).toMatchObject({
+      object: "list",
+      data: [{ hold_id: "hld_route", resume_state: "confirmable", claimed_tx_ref: "0xfunding" }],
+      has_more: false,
+    })
+    expect(calls.pendingPaymentIntents[0]).toMatchObject({
+      executor: dummyExecutor,
+      bookerUserId: "actor_route",
     })
   })
 

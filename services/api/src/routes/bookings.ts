@@ -12,6 +12,10 @@ import {
   quoteGlobalBookingHold as realQuoteGlobalBookingHold,
 } from "../lib/bookings/booking-confirm-service"
 import {
+  listPendingBookingPaymentIntents as realListPendingBookingPaymentIntents,
+  recordBookingPaymentSubmitted as realRecordBookingPaymentSubmitted,
+} from "../lib/bookings/booking-payment-resume-service"
+import {
   createGlobalBookingHold as realCreateGlobalBookingHold,
   resolveGlobalBookingAvailability as realResolveGlobalBookingAvailability,
 } from "../lib/bookings/booking-hold-service"
@@ -72,6 +76,8 @@ export type GlobalBookingRouteServices = {
   createGlobalBookingHold: typeof realCreateGlobalBookingHold
   quoteGlobalBookingHold: typeof realQuoteGlobalBookingHold
   confirmGlobalBookingHold: typeof realConfirmGlobalBookingHold
+  recordBookingPaymentSubmitted: typeof realRecordBookingPaymentSubmitted
+  listPendingBookingPaymentIntents: typeof realListPendingBookingPaymentIntents
   getGlobalBookingForParty: typeof realGetGlobalBookingForParty
   listGlobalBookingsForUser: typeof realListGlobalBookingsForUser
   getGlobalBookingSettlementReview: typeof realGetGlobalBookingSettlementReview
@@ -96,6 +102,8 @@ const realServices: GlobalBookingRouteServices = {
   createGlobalBookingHold: realCreateGlobalBookingHold,
   quoteGlobalBookingHold: realQuoteGlobalBookingHold,
   confirmGlobalBookingHold: realConfirmGlobalBookingHold,
+  recordBookingPaymentSubmitted: realRecordBookingPaymentSubmitted,
+  listPendingBookingPaymentIntents: realListPendingBookingPaymentIntents,
   getGlobalBookingForParty: realGetGlobalBookingForParty,
   listGlobalBookingsForUser: realListGlobalBookingsForUser,
   getGlobalBookingSettlementReview: realGetGlobalBookingSettlementReview,
@@ -243,6 +251,39 @@ async function confirmHoldHandler(c: BookingContext) {
   return c.json({ booking: result.booking, already_confirmed: result.already }, result.already ? 200 : 201)
 }
 
+async function paymentSubmittedHandler(c: BookingContext) {
+  const actor = c.get("actor")
+  const body = await requireJsonBody<{ tx_ref?: string; wallet_attachment_id?: string }>(
+    c,
+    "tx_ref and wallet_attachment_id are required",
+  )
+  if (!body.tx_ref?.trim() || !body.wallet_attachment_id?.trim()) {
+    return c.json({ error: "tx_ref and wallet_attachment_id are required" }, 400)
+  }
+  const result = await routeServices().recordBookingPaymentSubmitted({
+    executor: executor(c),
+    userRepository: routeServices().getUserRepository(c.env),
+    holdId: routeParam(c, "holdId"),
+    bookerUserId: actor.userId,
+    txRef: body.tx_ref,
+    walletAttachmentId: body.wallet_attachment_id,
+    nowUtc: new Date().toISOString(),
+  })
+  if (!result.ok) {
+    const status = result.reason === "hold_not_found"
+      ? 404
+      : result.reason === "invalid_tx_ref" || result.reason === "wallet_attachment_invalid"
+        ? 400
+        : 409
+    return c.json({ error: result.reason }, status)
+  }
+  return c.json({
+    payment_intent_id: result.paymentIntentId,
+    status: "recorded",
+    claimed_tx_ref: result.normalizedTxRef,
+  }, 200)
+}
+
 bookings.get("/", async (c) => {
   const actor = c.get("actor")
   const url = new URL(c.req.url)
@@ -272,6 +313,16 @@ bookings.post("/holds/:holdId/quote", quoteHoldHandler)
 bookings.post("/booking-holds/:holdId/quote", quoteHoldHandler)
 bookings.post("/holds/:holdId/confirm", confirmHoldHandler)
 bookings.post("/booking-holds/:holdId/confirm", confirmHoldHandler)
+bookings.post("/holds/:holdId/payment-submitted", paymentSubmittedHandler)
+bookings.post("/booking-holds/:holdId/payment-submitted", paymentSubmittedHandler)
+bookings.get("/payment-intents/pending", async (c) => {
+  const data = await routeServices().listPendingBookingPaymentIntents({
+    executor: executor(c),
+    bookerUserId: c.get("actor").userId,
+    nowUtc: new Date().toISOString(),
+  })
+  return c.json({ object: "list", data, has_more: false }, 200)
+})
 
 bookings.get("/settlement-review/pending", async (c) => {
   const operatorActor = await authenticateOperatorCredential({

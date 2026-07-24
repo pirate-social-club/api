@@ -33,7 +33,7 @@ export interface CreatePaymentIntentInput {
   updatedAt?: string;
 }
 
-interface ReservePaymentIntentInput {
+export interface ReservePaymentIntentInput {
   paymentIntentId: string;
   claimToken: string;
   claimExpiresAt: string;
@@ -56,9 +56,19 @@ type CreateOrGetPaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "replay-conflict" };
 
-type ReservePaymentIntentResult =
+export type ReservePaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "not-reservable" | "reused-tx" };
+
+export interface PendingPaymentIntentRecord {
+  intent: PaymentIntent;
+  hostUserId: string;
+  bookerUserId: string;
+  slotStartUtc: string;
+  slotEndUtc: string;
+  holdStatus: "active" | "consumed" | "expired";
+  bookingId: string | null;
+}
 
 export function paymentIntentIdForHold(holdId: string): string {
   return `bpi_${holdId}`;
@@ -215,6 +225,47 @@ async function listOrphanedVerifiedPaymentIntents(
     args: [isoUtcToArg(olderThanUtc), intToArg("limit", limit)],
   });
   return res.rows.map(decodePaymentIntent);
+}
+
+async function listRecentPaymentIntentsForBooker(
+  exec: PaymentIntentSqlExecutor,
+  bookerUserId: string,
+  createdSinceUtc: string,
+  limit: number,
+): Promise<PendingPaymentIntentRecord[]> {
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
+                 h.host_user_id, h.booker_user_id, h.slot_start_utc, h.slot_end_utc,
+                 h.status AS hold_status, b.booking_id
+          FROM bookings.payment_intents pi
+          JOIN bookings.holds h ON h.hold_id = pi.hold_id
+          LEFT JOIN bookings.bookings b ON b.hold_id = h.hold_id
+          WHERE h.booker_user_id = ?1
+            AND pi.created_at >= ?2::timestamptz
+            AND pi.status IN ('active', 'verifying', 'verified', 'verification_failed', 'consumed')
+          ORDER BY pi.updated_at DESC, pi.payment_intent_id DESC
+          LIMIT ?3`,
+    args: [
+      textToArg("bookerUserId", bookerUserId),
+      isoUtcToArg(createdSinceUtc),
+      intToArg("limit", limit),
+    ],
+  });
+  return res.rows.map((row) => {
+    const holdStatus = textFromRow(row.hold_status);
+    if (holdStatus !== "active" && holdStatus !== "consumed" && holdStatus !== "expired") {
+      throw new TypeError(`listRecentPaymentIntentsForBooker: bad hold status ${holdStatus}`);
+    }
+    return {
+      intent: decodePaymentIntent(row),
+      hostUserId: textFromRow(row.host_user_id),
+      bookerUserId: textFromRow(row.booker_user_id),
+      slotStartUtc: isoUtcFromRow(row.slot_start_utc),
+      slotEndUtc: isoUtcFromRow(row.slot_end_utc),
+      holdStatus,
+      bookingId: textFromRowNullable(row.booking_id),
+    };
+  });
 }
 
 async function markOrphanedVerifiedPaymentIntentRefunded(
@@ -427,6 +478,11 @@ export interface PaymentIntentRepository {
   getPaymentIntent(paymentIntentId: string): Promise<PaymentIntent | null>;
   getPaymentIntentByHold(holdId: string): Promise<PaymentIntent | null>;
   listOrphanedVerifiedPaymentIntents(olderThanUtc: string, limit: number): Promise<PaymentIntent[]>;
+  listRecentPaymentIntentsForBooker(
+    bookerUserId: string,
+    createdSinceUtc: string,
+    limit: number,
+  ): Promise<PendingPaymentIntentRecord[]>;
 }
 
 export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
@@ -445,6 +501,8 @@ function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepos
     getPaymentIntent: (paymentIntentId) => getPaymentIntent(executor, paymentIntentId),
     getPaymentIntentByHold: (holdId) => getPaymentIntentByHold(executor, holdId),
     listOrphanedVerifiedPaymentIntents: (olderThanUtc, limit) => listOrphanedVerifiedPaymentIntents(executor, olderThanUtc, limit),
+    listRecentPaymentIntentsForBooker: (bookerUserId, createdSinceUtc, limit) =>
+      listRecentPaymentIntentsForBooker(executor, bookerUserId, createdSinceUtc, limit),
   };
 }
 

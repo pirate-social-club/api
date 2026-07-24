@@ -236,6 +236,39 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     }
   });
 
+  test("pending discovery is booker-scoped and bounded by creation time", async () => {
+    await seedHold("hold_pi_pending_own");
+    await seedHold("hold_pi_pending_old");
+    await seedHold("hold_pi_pending_foreign");
+    await repoDb.unsafe(
+      "UPDATE bookings.holds SET booker_user_id = 'booker_foreign' WHERE hold_id = 'hold_pi_pending_foreign'",
+    );
+    const repo = writeRepo();
+    const own = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_own", {
+      createdAt: "2026-06-10T10:00:00Z",
+    }));
+    const old = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_old", {
+      createdAt: "2026-06-07T10:00:00Z",
+    }));
+    const foreign = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_foreign", {
+      createdAt: "2026-06-10T10:00:00Z",
+    }));
+    if (!own.ok || !old.ok || !foreign.ok) throw new Error("expected creates");
+
+    const records = await repo.listRecentPaymentIntentsForBooker(
+      "booker_payment",
+      "2026-06-08T10:00:00Z",
+      50,
+    );
+    expect(records.map((record) => record.intent.holdId)).toEqual(["hold_pi_pending_own"]);
+    expect(records[0]).toMatchObject({
+      bookerUserId: "booker_payment",
+      hostUserId: "host_hold_pi_pending_own",
+      holdStatus: "active",
+      bookingId: null,
+    });
+  });
+
   test("verified, rejected, expired, and consumed transitions are claim/status guarded", async () => {
     await seedHold("hold_pi_verified");
     await seedHold("hold_pi_rejected");

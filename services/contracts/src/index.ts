@@ -1250,6 +1250,29 @@ export type ConfirmBookingHoldRequest = {
   wallet_attachment_id: string;
 };
 
+export type SubmitBookingPaymentRequest = {
+  tx_ref: string;
+  wallet_attachment_id: string;
+};
+
+export type BookingPaymentResumeState = "payable" | "confirmable" | "finalizable" | "booked" | "refund_pending";
+
+export type PendingBookingPaymentIntent = {
+  hold_id: string;
+  payment_intent_id: string;
+  intent_status: "active" | "verifying" | "verified" | "verification_failed" | "consumed";
+  resume_state: BookingPaymentResumeState;
+  claimed_tx_ref: string | null;
+  wallet_attachment_id: string | null;
+  payment: BookingPaymentInstructions;
+  quote_expires_at: string;
+  hold_expires_at: string;
+  host_user_id: string;
+  slot_start_utc: string;
+  slot_end_utc: string;
+  booking_id: string | null;
+};
+
 export type BookingCancellationPreview = {
   object: "booking_cancellation_preview";
   booking_id: string;
@@ -4388,6 +4411,8 @@ export const apiRoutes = {
   bookingHostHolds: (hostUserId: string) => `/bookings/hosts/${hostUserId}/holds`,
   bookingHoldQuote: (holdId: string) => `/bookings/holds/${holdId}/quote`,
   bookingHoldConfirm: (holdId: string) => `/bookings/holds/${holdId}/confirm`,
+  bookingHoldPaymentSubmitted: (holdId: string) => `/bookings/holds/${holdId}/payment-submitted`,
+  bookingPaymentIntentsPending: "/bookings/payment-intents/pending",
   booking: (bookingId: string) => `/bookings/${bookingId}`,
   bookingCancellationPreview: (bookingId: string) => `/bookings/${bookingId}/cancellation-preview`,
   bookingCancel: (bookingId: string) => `/bookings/${bookingId}/cancel`,
