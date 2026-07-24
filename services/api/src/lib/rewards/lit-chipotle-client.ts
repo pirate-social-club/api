@@ -171,6 +171,10 @@ export class LitChipotleClient {
         const classified = this.classify(error)
         lastError = classified
         if (!classified.retryable || attempt === this.maxAttempts) throw classified
+        // Retry safety depends on the caller keeping nonce, gas, and every
+        // transaction field byte-identical across attempts. A timed-out action
+        // may still have completed server-side; never refresh mutable signing
+        // inputs inside this loop.
         await this.sleep(this.retryBaseMs * (2 ** (attempt - 1)))
       }
     }
