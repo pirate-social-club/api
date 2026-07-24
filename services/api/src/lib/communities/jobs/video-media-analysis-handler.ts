@@ -133,7 +133,7 @@ export function chooseVideoSampleWindow(durationMs: number | null | undefined): 
   return { start_ms: startMs, duration_ms: windowMs }
 }
 
-function parseAcrEvaluation(providerResult: Record<string, unknown> | null): VideoRightsAcrEvaluation {
+export function parseAcrEvaluation(providerResult: Record<string, unknown> | null): VideoRightsAcrEvaluation {
   const error = providerResult && typeof providerResult.error === "string" ? providerResult.error : null
   const metadata = (providerResult as {
     metadata?: { music?: unknown[]; custom_files?: unknown[] }
@@ -153,7 +153,13 @@ function parseAcrEvaluation(providerResult: Record<string, unknown> | null): Vid
       const bundleId = typeof userDefined.song_artifact_bundle_id === "string" && userDefined.song_artifact_bundle_id.trim()
         ? userDefined.song_artifact_bundle_id.trim()
         : null
-      return { song_artifact_bundle_id: bundleId, raw: item }
+      // Entries tagged content_type "video_audio" are platform video audio
+      // (repost-identity signal); everything else, including untagged legacy
+      // catalog enrollments, is treated as a platform song.
+      const matchSource: VideoRightsAcrCustomMatch["matchSource"] = userDefined.content_type === "video_audio"
+        ? "platform_video_audio"
+        : "platform_song"
+      return { song_artifact_bundle_id: bundleId, matchSource, raw: item }
     })
   return {
     providerError: error === "missing_configuration" ? null : error,

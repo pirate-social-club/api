@@ -5,7 +5,10 @@ import type { RightsHoldType } from "../rights/rights-review-types"
 
 // Video attribution guardrail: every run records a media_analysis_results row;
 // outcomes that need action open a rights_review_cases row and create a
-// rights_holds row that commerce/delivery gates can enforce.
+// rights_holds row that commerce/delivery gates can enforce. Custom-bucket
+// matches are split by matchSource: platform video-audio entries are a
+// repost-identity signal only (log-only, never enforced); only platform song
+// matches drive the attribution outcomes below.
 
 type VideoRightsOutcome =
   | "allow"
@@ -15,8 +18,11 @@ type VideoRightsOutcome =
 
 type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
 
+export type VideoRightsAcrMatchSource = "platform_song" | "platform_video_audio"
+
 export type VideoRightsAcrCustomMatch = {
   song_artifact_bundle_id: string | null
+  matchSource: VideoRightsAcrMatchSource
   raw: Record<string, unknown>
 }
 
@@ -97,12 +103,16 @@ export function computeVideoRightsOutcome(input: {
   }
 
   const declaredBundleIds = new Set(input.declared.declaredBundleIds)
-  const matchedBundleIds = input.acr.customMatches
+  // Only platform song matches participate in rights enforcement; platform
+  // video-audio matches are a repost-identity signal and stay log-only.
+  const songMatches = input.acr.customMatches.filter((match) => match.matchSource === "platform_song")
+  const videoAudioMatches = input.acr.customMatches.filter((match) => match.matchSource === "platform_video_audio")
+  const matchedBundleIds = songMatches
     .map((match) => match.song_artifact_bundle_id)
     .filter((id): id is string => Boolean(id))
   const undeclaredMatches = matchedBundleIds.filter((id) => !declaredBundleIds.has(id))
   const declarationExists = declaredBundleIds.size > 0 || input.declared.unresolvedRefs.length > 0
-  const hasCustomMatch = input.acr.customMatches.length > 0
+  const hasCustomMatch = songMatches.length > 0
   const hasMusicMatch = input.acr.musicMatches.length > 0
 
   if (hasMusicMatch) {
@@ -119,6 +129,14 @@ export function computeVideoRightsOutcome(input: {
       policyReasonCode: "commercial_catalog_match",
       policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
       caseTrigger: "acrcloud_match",
+    }
+  }
+  if (!hasCustomMatch && videoAudioMatches.length > 0) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "platform_video_audio_match",
+      policyReason: "Soundtrack matches platform video audio; the match is a platform-identity signal only and does not affect rights enforcement.",
+      caseTrigger: null,
     }
   }
   if (hasCustomMatch && matchedBundleIds.length > 0 && undeclaredMatches.length === 0 && declaredBundleIds.size > 0) {
