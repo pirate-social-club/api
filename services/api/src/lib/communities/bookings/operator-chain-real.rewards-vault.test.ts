@@ -96,10 +96,12 @@ describe("real rewards Lit vault signer wiring", () => {
       },
     }
 
-    await realChain.signVerifiedTransfer(env(), input)
-    await realChain.signVerifiedTransfer(env(), input)
+    const first = await realChain.signVerifiedTransfer(env(), input)
+    const second = await realChain.signVerifiedTransfer(env(), input)
 
     expect(deadlines).toEqual(["2000000300", "2000100300"])
     expect(operationIds[0]).toBe(operationIds[1])
+    expect(first.operationId).toBe(operationIds[0])
+    expect(second.operationId).toBe(operationIds[0])
   })
 })

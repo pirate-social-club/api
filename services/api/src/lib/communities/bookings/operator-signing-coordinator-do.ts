@@ -8,6 +8,7 @@ const BROADCAST_RECONCILE_DELAY_MS = 15_000
 const RETRY_BASE_DELAY_MS = 5_000
 const RETRY_MAX_DELAY_MS = 5 * 60_000
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
+const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
@@ -50,6 +51,8 @@ export type OperatorSettleState =
 
 export interface OperatorSettleResult {
   idempotencyKey: string
+  /** Present on real coordinator results; optional for legacy RPC/test adapters. */
+  operationId?: string | null
   txHash: string | null
   nonce: number | null
   state: OperatorSettleState
@@ -70,7 +73,7 @@ export interface ChainPrimitives {
     operatorKind?: OperatorKind
     effectKind: OperatorEffectKind
     effectId: string
-  }) => Promise<{ signedTx: string; txHash: string }>
+  }) => Promise<{ signedTx: string; txHash: string; operationId?: string | null }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
 }
@@ -133,6 +136,7 @@ interface EffectRow {
   amount_cents: number
   amount_atomic: string | null
   recipient_address: string
+  operation_id: string | null
   signed_tx: string | null
   tx_hash: string | null
   nonce: number | null
@@ -175,6 +179,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         this.ctx.storage.transactionSync(() => {
           this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN amount_atomic TEXT")
           this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (3, ?1)", Date.now())
+        })
+      }
+      if (schemaVersion < 4) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN operation_id TEXT")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (4, ?1)", Date.now())
         })
       }
     })
@@ -464,8 +474,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         effectKind: req.effectKind,
         effectId,
       })
+      const operationId = signed.operationId ?? null
+      if (operatorKind === "rewards" && (!operationId || !OPERATION_ID_RE.test(operationId))) {
+        throw new Error("verified rewards signing result is missing a canonical operation ID")
+      }
+      if (operatorKind === "booking" && operationId != null) {
+        throw new Error("booking signing result must not contain a rewards operation ID")
+      }
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
       const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, {
+        operation_id: operationId,
         signed_tx: signed.signedTx,
         tx_hash: signed.txHash,
         state: "prepared",
@@ -531,26 +549,26 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   /** Expected-state CAS on version; returns the new row or null if the row changed concurrently. */
-  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     return this.casInternal(key, fromVersion, null, fields)
   }
-  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     return this.casInternal(key, fromVersion, claimToken, fields)
   }
-  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
     const cur = this.read(key)
     if (!cur) return null
     const next: EffectRow = { ...cur, ...fields }
     const matched = this.ctx.storage.sql.exec(
       `UPDATE effects SET
-         signed_tx = ?2, tx_hash = ?3, nonce = ?4, state = ?5, claim_token = ?6,
-         claim_expires_at = ?7, attempt_count = ?8, next_attempt_at = ?9, last_error = ?10,
-         version = version + 1, updated_at = ?11
-       WHERE idempotency_key = ?1 AND version = ?12${claimToken == null ? "" : " AND claim_token = ?13"}
+         operation_id = ?2, signed_tx = ?3, tx_hash = ?4, nonce = ?5, state = ?6, claim_token = ?7,
+         claim_expires_at = ?8, attempt_count = ?9, next_attempt_at = ?10, last_error = ?11,
+         version = version + 1, updated_at = ?12
+       WHERE idempotency_key = ?1 AND version = ?13${claimToken == null ? "" : " AND claim_token = ?14"}
        RETURNING idempotency_key`,
       ...(claimToken == null
-        ? [key, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion]
-        : [key, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion, claimToken]),
+        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion]
+        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion, claimToken]),
     ).toArray()
     return matched.length === 1 ? this.read(key) : null
   }
@@ -565,6 +583,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       idempotency_key: String(r.idempotency_key), community_id: String(r.community_id), booking_id: String(r.booking_id),
       effect_kind: String(r.effect_kind), amount_cents: Number(r.amount_cents), recipient_address: String(r.recipient_address),
       amount_atomic: r.amount_atomic == null ? null : String(r.amount_atomic),
+      operation_id: r.operation_id == null ? null : String(r.operation_id),
       signed_tx: r.signed_tx == null ? null : String(r.signed_tx), tx_hash: r.tx_hash == null ? null : String(r.tx_hash),
       nonce: r.nonce == null ? null : Number(r.nonce), state: String(r.state) as OperatorSettleState, version: Number(r.version),
       claim_token: r.claim_token == null ? null : String(r.claim_token), claim_expires_at: r.claim_expires_at == null ? null : Number(r.claim_expires_at),
@@ -574,6 +593,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private result(row: EffectRow): OperatorSettleResult {
-    return { idempotencyKey: row.idempotency_key, txHash: row.tx_hash, nonce: row.nonce, state: row.state }
+    return {
+      idempotencyKey: row.idempotency_key,
+      operationId: row.operation_id,
+      txHash: row.tx_hash,
+      nonce: row.nonce,
+      state: row.state,
+    }
   }
 }
