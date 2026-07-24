@@ -769,6 +769,20 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD
   }
 
+  // Migration 0159 adds two nullable admission-policy columns plus a paired
+  // PostgreSQL CHECK in one ALTER TABLE. SQLite only supports one ADD COLUMN
+  // per ALTER and cannot add the table-level constraint after creation.
+  if (
+    normalized.startsWith("ALTER TABLE REWARD_CAMPAIGN_FUNDING_EFFECTS ")
+    && normalized.includes("ADD COLUMN ADMITTED_REFUND_POLICY_VERSION ")
+    && normalized.includes("ADD COLUMN ADMITTED_MAX_REFUND_ATOMIC ")
+  ) {
+    return [
+      "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_refund_policy_version TEXT;",
+      "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_max_refund_atomic TEXT;",
+    ]
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     if (
       normalized.includes("NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_CHECK")

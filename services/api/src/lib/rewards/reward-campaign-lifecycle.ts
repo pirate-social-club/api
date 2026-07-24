@@ -18,11 +18,22 @@ export async function advanceRewardCampaignLifecycle(input: {
       sql: `
         UPDATE reward_campaigns
         SET status = 'ended', ended_at = COALESCE(ended_at, ?1), updated_at = ?1
-        WHERE status IN ('scheduled', 'active', 'paused')
+        WHERE status IN ('scheduled', 'active', 'paused', 'exhausted')
           AND ends_at <= ?1
         RETURNING reward_campaign_id
       `,
       args: [input.now],
+    })
+    await tx.execute({
+      sql: `
+        DELETE FROM reward_song_pools
+        WHERE reward_campaign_id IN (
+          SELECT reward_campaign_id
+          FROM reward_campaigns
+          WHERE status IN ('ended', 'canceled')
+        )
+      `,
+      args: [],
     })
     const activated = await tx.execute({
       sql: `
