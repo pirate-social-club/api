@@ -547,7 +547,9 @@ describe("runPostPublishFinalize integration", () => {
 
     expect(summary).toEqual({
       checked_communities: 1,
+      deferred_communities: 0,
       failed_posts: 1,
+      reconcile_ms: expect.any(Number),
       communities: [{
         community_id: COMMUNITY_ID,
         failed_posts: 1,
@@ -580,7 +582,9 @@ describe("runPostPublishFinalize integration", () => {
 
     expect(summary).toEqual({
       checked_communities: 1,
+      deferred_communities: 0,
       failed_posts: 0,
+      reconcile_ms: expect.any(Number),
       communities: [],
       failed_communities: [],
     })

@@ -21,6 +21,8 @@ import {
   type CommunityJobRepository,
 } from "./runner-types"
 import { recordCommunityJobFailure } from "./runner-failure"
+import { rotateCommunityJobTickIds } from "./tick-rotation"
+export { rotateCommunityJobTickIds } from "./tick-rotation"
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -307,12 +309,6 @@ export function selectScheduledCommunityJobPollIds(
   }
 
   return Array.from(selected)
-}
-
-export function rotateCommunityJobTickIds(ids: string[], nowMs: number): string[] {
-  if (ids.length <= 1) return ids
-  const start = Math.floor(nowMs / 60_000) % ids.length
-  return ids.slice(start).concat(ids.slice(0, start))
 }
 
 /**

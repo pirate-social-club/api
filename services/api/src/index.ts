@@ -599,12 +599,19 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
+  const taskStartedAtMs = Date.now()
+  const taskDeadlineAtMs = taskStartedAtMs + COMMUNITY_JOB_TASK_DEADLINE_MS
+  const preludeDeadlineAtMs = Math.min(
+    taskStartedAtMs + COMMUNITY_JOB_PRELUDE_DEADLINE_MS,
+    taskDeadlineAtMs,
+  )
   try {
     const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
       env,
       communityRepository,
       maxCommunities: 100,
       maxAssetsPerCommunity: 25,
+      deadlineAtMs: preludeDeadlineAtMs,
     })
     if (reconciledLockedDelivery.enqueued_jobs > 0 || reconciledLockedDelivery.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled locked delivery jobs", JSON.stringify(reconciledLockedDelivery))
@@ -622,6 +629,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       env,
       communityRepository,
       maxCommunities: 100,
+      deadlineAtMs: preludeDeadlineAtMs,
     })
     if (reconciledUploadSessions.enqueued_jobs > 0 || reconciledUploadSessions.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stale song artifact upload sessions", JSON.stringify(reconciledUploadSessions))
@@ -640,6 +648,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxPostsPerCommunity: 25,
+      deadlineAtMs: preludeDeadlineAtMs,
     })
     if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
       console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
@@ -665,7 +674,10 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
-      deadlineMs: COMMUNITY_JOB_TICK_DEADLINE_MS,
+      // Clamp the drain's tick to the task deadline; the prelude sub-budget
+      // normally leaves the full 45s, but an overrun must not push the task
+      // past the scheduler lease.
+      deadlineMs: Math.max(1, Math.min(COMMUNITY_JOB_TICK_DEADLINE_MS, taskDeadlineAtMs - Date.now())),
       sweepDeadlineMs: COMMUNITY_JOB_STALE_SWEEP_DEADLINE_MS,
     })
     if (
@@ -712,7 +724,32 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         { urgency: exhausted.length > 5 ? "high" : "low" },
       )
     }
-    await runOpsAlerts({ env, communityRepository, nowMs: Date.now() })
+    const opsAlerts = await runOpsAlerts({
+      env,
+      communityRepository,
+      nowMs: Date.now(),
+      deadlineAtMs: taskDeadlineAtMs,
+    })
+    // Always logged: the staging soak measures each phase from this line rather
+    // than inferring the prelude from the task total.
+    console.info("[community-jobs] scheduled task timing", JSON.stringify({
+      task_ms: Date.now() - taskStartedAtMs,
+      task_deadline_ms: COMMUNITY_JOB_TASK_DEADLINE_MS,
+      locked_delivery_reconcile_ms: reconciledLockedDelivery.reconcile_ms,
+      locked_delivery_checked_communities: reconciledLockedDelivery.checked_communities,
+      locked_delivery_deferred_communities: reconciledLockedDelivery.deferred_communities,
+      song_artifact_session_reconcile_ms: reconciledUploadSessions.reconcile_ms,
+      song_artifact_session_checked_communities: reconciledUploadSessions.checked_communities,
+      song_artifact_session_deferred_communities: reconciledUploadSessions.deferred_communities,
+      post_publish_finalize_reconcile_ms: reconciledPostPublishFinalize.reconcile_ms,
+      post_publish_finalize_checked_communities: reconciledPostPublishFinalize.checked_communities,
+      post_publish_finalize_deferred_communities: reconciledPostPublishFinalize.deferred_communities,
+      sweep_ms: summary.sweep_ms,
+      process_ms: summary.process_ms,
+      ops_alerts_scan_ms: opsAlerts.scan_ms,
+      ops_alerts_scanned_communities: opsAlerts.scanned_communities,
+      ops_alerts_deferred_communities: opsAlerts.deferred_communities,
+    }))
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
     await captureScheduledError(env, error, "community_jobs")
@@ -1144,6 +1181,17 @@ const COMMUNITY_JOB_TICK_DEADLINE_MS = 45_000
 // sweeping all 100 selected communities consumes the full 45s budget by itself,
 // leaving the processing phase permanently at zero.
 const COMMUNITY_JOB_STALE_SWEEP_DEADLINE_MS = 15_000
+// Bound the whole process_community_jobs task, not just the drain. The three
+// prelude reconciles and the ops-alert scan each open per-community clients and
+// ran unbounded, pushing the task to ~235s against the 120s scheduler lease and
+// starving the reward watchdogs queued behind it. 90s keeps the task under the
+// lease with headroom for the slowest in-flight community scan to finish.
+const COMMUNITY_JOB_TASK_DEADLINE_MS = 90_000
+// The three prelude reconciles share one sub-budget so a slow prelude defers
+// its own remaining communities instead of eating the drain's 45s — the same
+// split philosophy as the 15s/45s sweep/process split. 20s of 90s always
+// leaves the drain its full tick budget.
+const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
 // Protect the seven settlement/money-movement jobs, both reward watchdogs, and
 // the community job drain at the front of the ordered batch. They must receive
 // a start even when D1 pressure pushes the batch past its nominal deadline.
