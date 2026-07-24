@@ -1,6 +1,11 @@
 import { Hono, type Context } from "hono"
 import type { Env } from "../env"
-import { authenticateOperatorCredential, requireOperatorScope, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE } from "../lib/operator-credential-auth"
+import {
+  authenticateOperatorCredential,
+  requireOperatorScope,
+  REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_RESOLVE_SCOPE,
+} from "../lib/operator-credential-auth"
 import { getRewardCampaignCapabilities } from "../lib/rewards/reward-campaign-capabilities"
 import { recoverRewardCampaignIncident } from "../lib/rewards/reward-campaign-recovery"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
@@ -26,6 +31,7 @@ import { rowValue, stringOrNull } from "../lib/sql-row"
 import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
 import type { RewardCashoutRequest } from "../types"
 import { inspectKaraokeRewardEligibility } from "../lib/posts/post-karaoke-service"
+import { resolveRewardSettlementManually } from "../lib/rewards/reward-settlement-manual-resolution"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -33,6 +39,7 @@ const operatorRouteDefaults = {
   authenticate: authenticateOperatorCredential,
   recover: recoverRewardCampaignIncident,
   getClient: getControlPlaneClient,
+  resolveSettlement: resolveRewardSettlementManually,
   alertRecovery: async (env: Env, campaignId: string, incidentId: string) => captureScheduledWarning(
     env,
     "Reward campaign operational hold recovered",
@@ -42,6 +49,14 @@ const operatorRouteDefaults = {
   ),
 }
 type RewardOperatorRouteServices = typeof operatorRouteDefaults
+type RewardRecoveryRouteServices = Pick<
+  RewardOperatorRouteServices,
+  "authenticate" | "recover" | "getClient" | "alertRecovery"
+>
+type RewardSettlementResolutionRouteServices = Pick<
+  RewardOperatorRouteServices,
+  "authenticate" | "resolveSettlement" | "getClient"
+>
 
 rewards.use("/me/rewards", authenticate)
 rewards.use("/me/rewards/*", authenticate)
@@ -277,7 +292,7 @@ rewards.post("/reward_campaigns/:campaignId/funding_quotes/:fundingQuoteId/confi
   return c.json(result, 200, { "cache-control": "no-store" })
 })
 
-export function createRewardCampaignRecoveryHandler(services: RewardOperatorRouteServices = operatorRouteDefaults) {
+export function createRewardCampaignRecoveryHandler(services: RewardRecoveryRouteServices = operatorRouteDefaults) {
   return async (c: Context<AuthenticatedEnv>) => {
     const operator = await services.authenticate({
       env: c.env,
@@ -303,9 +318,50 @@ export function createRewardCampaignRecoveryHandler(services: RewardOperatorRout
   }
 }
 
+export function createRewardSettlementResolutionHandler(
+  services: RewardSettlementResolutionRouteServices = operatorRouteDefaults,
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
+    const body = await c.req.json<{
+      effect_kind?: unknown
+      expected_tx_hash?: unknown
+      resolution?: unknown
+      reason?: unknown
+    }>().catch(() => null)
+    const effectKind = body?.effect_kind
+    const resolution = body?.resolution
+    if (effectKind !== "cashout" && effectKind !== "funding_refund") {
+      throw badRequestError("Invalid rewards settlement effect kind")
+    }
+    if (resolution !== "confirmed" && resolution !== "failed_onchain") {
+      throw badRequestError("Invalid rewards settlement resolution")
+    }
+    const result = await services.resolveSettlement({
+      env: c.env,
+      client: services.getClient(c.env),
+      effectKind,
+      effectId: c.req.param("effectId") ?? "",
+      expectedTxHash: typeof body?.expected_tx_hash === "string" ? body.expected_tx_hash : "",
+      resolution,
+      reason: typeof body?.reason === "string" ? body.reason : "",
+      operatorActorId: operator.operatorActorId,
+    })
+    return c.json(result, 200)
+  }
+}
+
 rewards.post(
   "/operator/reward_campaigns/:campaignId/incidents/:incidentId/recover",
   createRewardCampaignRecoveryHandler(),
+)
+rewards.post(
+  "/operator/reward_settlements/:effectId/resolve",
+  createRewardSettlementResolutionHandler(),
 )
 
 export default rewards

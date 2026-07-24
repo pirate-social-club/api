@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { Hono } from "hono"
-import rewards, { createRewardCampaignRecoveryHandler } from "./rewards"
+import rewards, {
+  createRewardCampaignRecoveryHandler,
+  createRewardSettlementResolutionHandler,
+} from "./rewards"
 import type { Env } from "../env"
 import type { Client } from "../lib/sql-client"
-import { BOOKING_SETTLEMENT_RESOLVE_SCOPE, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE } from "../lib/operator-credential-auth"
+import {
+  BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+  REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_RESOLVE_SCOPE,
+} from "../lib/operator-credential-auth"
 
 function withErrors(app: Hono<{ Bindings: Env }>): Hono<{ Bindings: Env }> {
   app.onError((error, c) => {
@@ -67,5 +74,64 @@ describe("reward campaign incident recovery route", () => {
     expect(await response.json()).toEqual({ campaign_id: "rcp_test", status: "active" })
     expect(received).toMatchObject({ campaignId: "rcp_test", incidentId: "rci_test", incidentVersion: 3, resolutionNote: "resolved", operatorActorId: "reward-operator" })
     expect(alerted).toEqual(["rcp_test", "rci_test"])
+  })
+})
+
+function settlementResolutionApp(scope: typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE | typeof REWARD_SETTLEMENT_RESOLVE_SCOPE, resolve: (value: Record<string, unknown>) => Promise<Record<string, unknown>>) {
+  const app = withErrors(new Hono<{ Bindings: Env }>())
+  app.post("/operator/reward_settlements/:effectId/resolve", createRewardSettlementResolutionHandler({
+    authenticate: async () => ({
+      authType: "operator_credential",
+      operatorCredentialId: "opc_test",
+      operatorActorId: "reward-operator",
+      scopes: [scope],
+    }),
+    getClient: (() => ({} as Client)) as typeof import("../lib/runtime-deps").getControlPlaneClient,
+    resolveSettlement: async (value) => resolve(value as unknown as Record<string, unknown>) as never,
+  }))
+  return app
+}
+
+const settlementResolutionRequest = () => new Request(
+  "http://localhost/operator/reward_settlements/rpe_test/resolve",
+  {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Operator test.secret" },
+    body: JSON.stringify({
+      effect_kind: "cashout",
+      expected_tx_hash: `0x${"11".repeat(32)}`,
+      resolution: "confirmed",
+      reason: "Receipt and RewardPaid event independently verified.",
+    }),
+  },
+)
+
+describe("reward settlement manual resolution route", () => {
+  test("requires the dedicated settlement resolution scope", async () => {
+    let called = false
+    const response = await settlementResolutionApp(
+      BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+      async () => { called = true; return {} },
+    ).fetch(settlementResolutionRequest(), {} as Env)
+    expect(response.status).toBe(403)
+    expect(called).toBe(false)
+  })
+
+  test("passes an authenticated, explicit resolution to the service", async () => {
+    let received: Record<string, unknown> | null = null
+    const response = await settlementResolutionApp(
+      REWARD_SETTLEMENT_RESOLVE_SCOPE,
+      async (value) => {
+        received = value
+        return { state: "confirmed", txHash: value.expectedTxHash }
+      },
+    ).fetch(settlementResolutionRequest(), {} as Env)
+    expect(response.status).toBe(200)
+    expect(received).toMatchObject({
+      effectKind: "cashout",
+      effectId: "rpe_test",
+      resolution: "confirmed",
+      operatorActorId: "reward-operator",
+    })
   })
 })

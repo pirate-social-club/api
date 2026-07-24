@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers"
 
 import type { Env } from "../../../env"
 import { badRequestError, conflictError } from "../../errors"
+import { captureScheduledWarning } from "../../ops-alerts/scheduled"
 
 const SIGNING_CLAIM_TTL_MS = 60_000
 const BROADCAST_RECONCILE_DELAY_MS = 15_000
@@ -56,6 +57,12 @@ export interface OperatorSettleResult {
   txHash: string | null
   nonce: number | null
   state: OperatorSettleState
+  manualResolution?: {
+    resolution: "confirmed" | "failed_onchain"
+    reason: string
+    operatorActorId: string
+    resolvedAt: number
+  } | null
 }
 
 interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
@@ -158,6 +165,11 @@ interface EffectRow {
   attempt_count: number
   next_attempt_at: number | null
   last_error: string | null
+  reconciliation_count: number
+  manual_resolution: "confirmed" | "failed_onchain" | null
+  manual_resolution_reason: string | null
+  manual_resolved_by: string | null
+  manual_resolved_at: number | null
 }
 
 export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
@@ -196,6 +208,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         this.ctx.storage.transactionSync(() => {
           this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN operation_id TEXT")
           this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (4, ?1)", Date.now())
+        })
+      }
+      if (schemaVersion < 5) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN reconciliation_count INTEGER NOT NULL DEFAULT 0")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolution TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolution_reason TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolved_by TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolved_at INTEGER")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (5, ?1)", Date.now())
         })
       }
     })
@@ -267,6 +289,68 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return this.result(row)
   }
 
+  async resolveRewardReconciliation(input: {
+    idempotencyKey: string
+    expectedTxHash: string
+    resolution: "confirmed" | "failed_onchain"
+    reason: string
+    operatorActorId: string
+  }): Promise<OperatorSettleResult> {
+    const row = this.read(String(input.idempotencyKey ?? ""))
+    if (!row || this.operatorKind(row) !== "rewards") {
+      throw conflictError("Rewards settlement effect not found")
+    }
+    if (row.state !== "reconciliation_required") {
+      throw conflictError("Rewards settlement effect is not awaiting manual reconciliation")
+    }
+    const expectedTxHash = String(input.expectedTxHash ?? "").trim().toLowerCase()
+    if (!/^0x[0-9a-f]{64}$/.test(expectedTxHash) || row.tx_hash?.toLowerCase() !== expectedTxHash) {
+      throw conflictError("Rewards settlement manual resolution transaction hash mismatch")
+    }
+    if (input.resolution !== "confirmed" && input.resolution !== "failed_onchain") {
+      throw badRequestError("Rewards settlement manual resolution is invalid")
+    }
+    const reason = String(input.reason ?? "").trim()
+    const operatorActorId = String(input.operatorActorId ?? "").trim()
+    if (reason.length < 10 || reason.length > 1_000) {
+      throw badRequestError("Rewards settlement manual resolution reason must be 10-1000 characters")
+    }
+    if (!operatorActorId || operatorActorId.length > 200) {
+      throw badRequestError("Rewards settlement manual resolver identity is invalid")
+    }
+    const resolvedAt = Date.now()
+    const resolved = this.cas(row.idempotency_key, row.version, {
+      state: input.resolution,
+      next_attempt_at: null,
+      last_error: null,
+      manual_resolution: input.resolution,
+      manual_resolution_reason: reason,
+      manual_resolved_by: operatorActorId,
+      manual_resolved_at: resolvedAt,
+    })
+    if (!resolved) throw conflictError("Rewards settlement effect changed during manual resolution")
+    await captureScheduledWarning(
+      this.env,
+      "Rewards settlement reconciliation manually resolved",
+      `reward_settlement_manual_resolution:${row.operation_id ?? row.idempotency_key}`,
+      {
+        operation_id: row.operation_id,
+        tx_hash: row.tx_hash,
+        resolution: input.resolution,
+        operator_actor_id: operatorActorId,
+        reason,
+      },
+      { urgency: "high" },
+    ).catch((error) => {
+      console.error(JSON.stringify({
+        message: "manual rewards settlement resolution alert failed",
+        effect: row.idempotency_key,
+        error: errMsg(error),
+      }))
+    })
+    return this.result(resolved)
+  }
+
   // --- internals -------------------------------------------------------------------------------
 
   /** Atomic durable inbox insert. RPC callers never allocate a nonce or perform external I/O. */
@@ -327,11 +411,35 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
         const observation = await this.observeRewardVaultEvent(row)
         if (observation.status !== "matched") {
-          return this.cas(row.idempotency_key, row.version, {
+          const reconciliationCount = row.reconciliation_count + 1
+          const updated = this.cas(row.idempotency_key, row.version, {
             state: "reconciliation_required",
             next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
             last_error: `reward vault event ${observation.status}: ${observation.reason}`.slice(0, 1_000),
+            reconciliation_count: reconciliationCount,
           }) ?? this.read(row.idempotency_key)!
+          if (updated.reconciliation_count >= 3) {
+            await captureScheduledWarning(
+              this.env,
+              "Rewards vault settlement remains reconciliation-required",
+              `reward_vault_reconciliation_required:${row.operation_id ?? row.idempotency_key}`,
+              {
+                operation_id: row.operation_id,
+                tx_hash: row.tx_hash,
+                effect_kind: row.effect_kind,
+                reconciliation_count: updated.reconciliation_count,
+                reason: updated.last_error,
+              },
+              { urgency: "high" },
+            ).catch((error) => {
+              console.error(JSON.stringify({
+                message: "rewards vault reconciliation alert failed",
+                effect: row.idempotency_key,
+                error: errMsg(error),
+              }))
+            })
+          }
+          return updated
         }
       }
       if (this.operatorKind(row) === "rewards" && row.operation_id == null) {
@@ -609,13 +717,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   /** Expected-state CAS on version; returns the new row or null if the row changed concurrently. */
-  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
     return this.casInternal(key, fromVersion, null, fields)
   }
-  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
     return this.casInternal(key, fromVersion, claimToken, fields)
   }
-  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error">>): EffectRow | null {
+  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
     const cur = this.read(key)
     if (!cur) return null
     const next: EffectRow = { ...cur, ...fields }
@@ -623,12 +731,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       `UPDATE effects SET
          operation_id = ?2, signed_tx = ?3, tx_hash = ?4, nonce = ?5, state = ?6, claim_token = ?7,
          claim_expires_at = ?8, attempt_count = ?9, next_attempt_at = ?10, last_error = ?11,
-         version = version + 1, updated_at = ?12
-       WHERE idempotency_key = ?1 AND version = ?13${claimToken == null ? "" : " AND claim_token = ?14"}
+         reconciliation_count = ?12, manual_resolution = ?13, manual_resolution_reason = ?14,
+         manual_resolved_by = ?15, manual_resolved_at = ?16,
+         version = version + 1, updated_at = ?17
+       WHERE idempotency_key = ?1 AND version = ?18${claimToken == null ? "" : " AND claim_token = ?19"}
        RETURNING idempotency_key`,
       ...(claimToken == null
-        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion]
-        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, Date.now(), fromVersion, claimToken]),
+        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, Date.now(), fromVersion]
+        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, Date.now(), fromVersion, claimToken]),
     ).toArray()
     return matched.length === 1 ? this.read(key) : null
   }
@@ -649,6 +759,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       claim_token: r.claim_token == null ? null : String(r.claim_token), claim_expires_at: r.claim_expires_at == null ? null : Number(r.claim_expires_at),
       attempt_count: Number(r.attempt_count ?? 0), next_attempt_at: r.next_attempt_at == null ? null : Number(r.next_attempt_at),
       last_error: r.last_error == null ? null : String(r.last_error),
+      reconciliation_count: Number(r.reconciliation_count ?? 0),
+      manual_resolution: r.manual_resolution == null
+        ? null
+        : String(r.manual_resolution) as "confirmed" | "failed_onchain",
+      manual_resolution_reason: r.manual_resolution_reason == null ? null : String(r.manual_resolution_reason),
+      manual_resolved_by: r.manual_resolved_by == null ? null : String(r.manual_resolved_by),
+      manual_resolved_at: r.manual_resolved_at == null ? null : Number(r.manual_resolved_at),
     }
   }
 
@@ -659,6 +776,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       txHash: row.tx_hash,
       nonce: row.nonce,
       state: row.state,
+      manualResolution: row.manual_resolution && row.manual_resolution_reason
+        && row.manual_resolved_by && row.manual_resolved_at != null
+        ? {
+            resolution: row.manual_resolution,
+            reason: row.manual_resolution_reason,
+            operatorActorId: row.manual_resolved_by,
+            resolvedAt: row.manual_resolved_at,
+          }
+        : null,
     }
   }
 }
