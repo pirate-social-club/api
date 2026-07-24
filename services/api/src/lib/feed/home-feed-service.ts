@@ -155,6 +155,17 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
 }
 
 type VideoFeedCursor = { offset: number; rankedAt: number }
+const VIDEO_FEED_PAGE_SIZE = 25
+const VIDEO_FEED_MAX_CANDIDATES_SCANNED = 250
+
+export function nextVideoFeedBackfillBatchSize(input: {
+  candidatesScanned: number
+  returnedItems: number
+}): number {
+  const remainingSlots = Math.max(0, VIDEO_FEED_PAGE_SIZE - input.returnedItems)
+  const remainingScanBudget = Math.max(0, VIDEO_FEED_MAX_CANDIDATES_SCANNED - input.candidatesScanned)
+  return Math.min(remainingSlots, remainingScanBudget)
+}
 
 export function parseVideoFeedCursor(cursor: string | null | undefined, now: number): VideoFeedCursor {
   const match = /^v1:(\d+):(\d+)$/u.exec(cursor ?? "")
@@ -185,10 +196,12 @@ async function listVideoHomeFeedProjectionRows(input: {
   cursor?: string | null
   env: Env
   now: number
+  pageSize?: number
   sort: HomeFeedSort
   timeRange: HomeFeedTimeRange
 }): Promise<{ nextCursor: string | null; rows: HomeFeedProjectionRow[] }> {
   const cursor = parseVideoFeedCursor(input.cursor, input.now)
+  const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
   const args: Array<string | number> = [...input.communityIds]
   const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
   const cutoffMs = getTimeRangeCutoffMs(input.timeRange, cursor.rankedAt)
@@ -202,7 +215,7 @@ async function listVideoHomeFeedProjectionRows(input: {
     args.push(new Date(cutoffMs).toISOString())
     filters.push(`source_created_at >= ?${args.length}`)
   }
-  args.push(26, cursor.offset)
+  args.push(pageSize + 1, cursor.offset)
   const limitPlaceholder = `?${args.length - 1}`
   const offsetPlaceholder = `?${args.length}`
   const result = await getControlPlaneClient(input.env).execute({
@@ -217,10 +230,10 @@ async function listVideoHomeFeedProjectionRows(input: {
     args,
   })
   const rows = result.rows.map((row) => toHomeFeedProjectionRow(row))
-  const hasMore = rows.length > 25
+  const hasMore = rows.length > pageSize
   return {
-    rows: rows.slice(0, 25),
-    nextCursor: hasMore ? `v1:${cursor.rankedAt}:${cursor.offset + 25}` : null,
+    rows: rows.slice(0, pageSize),
+    nextCursor: hasMore ? `v1:${cursor.rankedAt}:${cursor.offset + pageSize}` : null,
   }
 }
 
@@ -573,7 +586,7 @@ export async function listHomeFeed(input: {
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
   const timeRange = parseHomeFeedTimeRange(input.timeRange)
-  const videoPage = input.contentKind === "video"
+  let videoPage = input.contentKind === "video"
     ? await listVideoHomeFeedProjectionRows({
         communityIds,
         cursor: input.cursor,
@@ -583,7 +596,7 @@ export async function listHomeFeed(input: {
         timeRange,
       })
     : null
-  const allRows = filterVisibleHomeFeedProjections(
+  let allRows = filterVisibleHomeFeedProjections(
     videoPage?.rows ?? await listHomeFeedProjectionRows({
       env: input.env,
       communityIds,
@@ -628,49 +641,79 @@ export async function listHomeFeed(input: {
   const sortedRows = sortHomeFeedProjectionRows(timeFilteredRows, sort, now)
 
   const offset = videoPage ? 0 : parseOffsetCursor(input.cursor)
-  const pageRows = videoPage ? allRows : sortedRows.slice(offset, offset + 25)
-  const nextCursor = videoPage?.nextCursor ?? (offset + 25 < sortedRows.length ? `o:${offset + 25}` : null)
+  let pageRows = videoPage ? allRows : sortedRows.slice(offset, offset + VIDEO_FEED_PAGE_SIZE)
+  let nextCursor = videoPage?.nextCursor ?? (offset + VIDEO_FEED_PAGE_SIZE < sortedRows.length ? `o:${offset + VIDEO_FEED_PAGE_SIZE}` : null)
   phaseTimings.projections_and_rank_ms = elapsedMs(phaseStartedAt)
 
-  const rowsByCommunityId = new Map<string, HomeFeedProjectionRow[]>()
-  for (const row of pageRows) {
-    const rows = rowsByCommunityId.get(row.community_id) ?? []
-    rows.push(row)
-    rowsByCommunityId.set(row.community_id, rows)
-  }
   const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()
   const communityTimings: HomeFeedCommunityTiming[] = []
 
   phaseStartedAt = performance.now()
-  const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
-    const result = await readHomeFeedCommunityItems({
-      env: input.env,
-      communityId,
-      rows,
-      baseCommunity: communitySummaryById[communityId],
-      memberCommunityIdSet,
-      communityRepository: input.communityRepository,
-      profileRepository: input.profileRepository,
-      userId: input.userId,
-      studyTimezone: input.studyTimezone,
-      locale: input.locale,
-      ageGateState,
-      waitUntil: input.waitUntil,
+  const hydrateRows = async (rowsToHydrate: HomeFeedProjectionRow[]): Promise<HomeFeedItem[]> => {
+    const rowsByCommunityId = new Map<string, HomeFeedProjectionRow[]>()
+    for (const row of rowsToHydrate) {
+      const rows = rowsByCommunityId.get(row.community_id) ?? []
+      rows.push(row)
+      rowsByCommunityId.set(row.community_id, rows)
+    }
+    const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
+      const result = await readHomeFeedCommunityItems({
+        env: input.env,
+        communityId,
+        rows,
+        baseCommunity: communitySummaryById[communityId],
+        memberCommunityIdSet,
+        communityRepository: input.communityRepository,
+        profileRepository: input.profileRepository,
+        userId: input.userId,
+        studyTimezone: input.studyTimezone,
+        locale: input.locale,
+        ageGateState,
+        waitUntil: input.waitUntil,
+      })
+      communityIdentityById.set(communityId, result.identity)
+      communityTimings.push(result.timing)
+      return result.items
     })
-    communityIdentityById.set(communityId, result.identity)
-    communityTimings.push(result.timing)
-    return result.items
-  })
-  phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
-  const items = communityItemGroups.flat()
+    const hydratedItems = communityItemGroups.flat()
+    const itemByPostId = Object.fromEntries(hydratedItems.map((item) => [item.post.post.id.replace(/^post_/, ""), item] as const))
+    return rowsToHydrate
+      .map((row) => itemByPostId[row.source_post_id])
+      .filter((item): item is HomeFeedItem => Boolean(item))
+      .filter((item) => input.contentKind !== "video" || item.post.post.media_refs?.some((media) => Boolean(media.storage_ref?.trim())))
+  }
+  let orderedItems = await hydrateRows(pageRows)
 
-  phaseStartedAt = performance.now()
-  const itemByPostId = Object.fromEntries(items.map((item) => [item.post.post.id.replace(/^post_/, ""), item] as const))
-  const orderedItems = pageRows
-    .map((row) => itemByPostId[row.source_post_id])
-    .filter((item): item is HomeFeedItem => Boolean(item))
-    .filter((item) => input.contentKind !== "video" || item.post.post.media_refs?.some((media) => Boolean(media.storage_ref?.trim())))
-  phaseTimings.order_items_ms = elapsedMs(phaseStartedAt)
+  if (videoPage) {
+    let candidatesScanned = videoPage.rows.length
+    while (
+      orderedItems.length < VIDEO_FEED_PAGE_SIZE
+      && videoPage.nextCursor
+      && candidatesScanned < VIDEO_FEED_MAX_CANDIDATES_SCANNED
+    ) {
+      const nextPageSize = nextVideoFeedBackfillBatchSize({
+        candidatesScanned,
+        returnedItems: orderedItems.length,
+      })
+      videoPage = await listVideoHomeFeedProjectionRows({
+        communityIds,
+        cursor: videoPage.nextCursor,
+        env: input.env,
+        now,
+        pageSize: nextPageSize,
+        sort,
+        timeRange,
+      })
+      const nextRows = filterVisibleHomeFeedProjections(videoPage.rows, memberCommunityIdSet)
+      candidatesScanned += videoPage.rows.length
+      allRows = [...allRows, ...nextRows]
+      pageRows = [...pageRows, ...nextRows]
+      orderedItems = [...orderedItems, ...await hydrateRows(nextRows)].slice(0, VIDEO_FEED_PAGE_SIZE)
+    }
+    nextCursor = videoPage.nextCursor
+  }
+  phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
+  phaseTimings.order_items_ms = 0
 
   phaseStartedAt = performance.now()
   const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
@@ -716,7 +759,7 @@ export async function listHomeFeed(input: {
       projection_rows: allRows.length,
       time_filtered_rows: timeFilteredRows.length,
       page_rows: pageRows.length,
-      page_communities: rowsByCommunityId.size,
+      page_communities: new Set(pageRows.map((row) => row.community_id)).size,
       returned_items: bookingDecoratedItems.length,
       top_communities: topCommunities.length,
       phases: phaseTimings,

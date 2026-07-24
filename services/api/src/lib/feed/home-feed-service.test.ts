@@ -4,6 +4,7 @@ import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
   listHomeFeedCommunityViewCounts,
+  nextVideoFeedBackfillBatchSize,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
   sortCommunitySummariesByViews,
@@ -13,6 +14,17 @@ import {
   videoFeedOrderSql,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
+
+describe("nextVideoFeedBackfillBatchSize", () => {
+  test("requests only enough candidates to fill the remaining response slots", () => {
+    expect(nextVideoFeedBackfillBatchSize({ candidatesScanned: 25, returnedItems: 20 })).toBe(5)
+  })
+
+  test("stops at the bounded candidate scan budget", () => {
+    expect(nextVideoFeedBackfillBatchSize({ candidatesScanned: 248, returnedItems: 20 })).toBe(2)
+    expect(nextVideoFeedBackfillBatchSize({ candidatesScanned: 250, returnedItems: 20 })).toBe(0)
+  })
+})
 
 describe("parseVideoFeedCursor", () => {
   test("keeps one ranking timestamp across candidate pages", () => {
