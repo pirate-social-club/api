@@ -3,6 +3,7 @@ import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-m
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityReadClient, openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
+import { processCommunityJobsForCommunity } from "../lib/communities/jobs/runner"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
 import {
@@ -394,6 +395,34 @@ debugPipeline.get("/video-audio-evidence", async (c) => {
   } finally {
     db.close()
   }
+})
+
+debugPipeline.post("/video-audio-evidence/drain", async (c) => {
+  if (!requireDebugAdmin(c)) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+  if (c.env.ENVIRONMENT !== "staging") {
+    return c.json({ error: "not_found" }, 404)
+  }
+  const rawCommunityId = c.req.query("community_id")
+  if (!rawCommunityId) {
+    return c.json({ error: "community_id query parameter is required" }, 400)
+  }
+  const communityId = rawCommunityId.startsWith("cmt_")
+    ? rawCommunityId
+    : decodePublicCommunityId(rawCommunityId)
+  if (!communityId) {
+    return c.json({ error: "invalid_community_id" }, 400)
+  }
+  const communityRepository = getCommunityRepository(c.env)
+  const result = await processCommunityJobsForCommunity({
+    env: c.env,
+    communityId,
+    communityRepository,
+    maxJobs: 10,
+    deadlineAtMs: Date.now() + 50_000,
+  })
+  return c.json(result)
 })
 
 debugPipeline.post("/community-job/recycle", async (c) => {
