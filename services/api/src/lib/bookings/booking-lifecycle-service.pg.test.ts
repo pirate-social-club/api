@@ -3,6 +3,7 @@
 // BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core booking migrations.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { BookingLifecycleSqlExecutor } from "./booking-lifecycle-repository";
@@ -22,6 +23,9 @@ import {
 import { createSettlementEffectWriteRepository } from "./settlement-effect-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking lifecycle service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_lifecycle_service_test";
 
@@ -175,6 +179,10 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-lifecycle-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("starts confirmed bookings for either party, enforces window, and supports live replay", async () => {

@@ -227,44 +227,69 @@ jobs:
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+          BOOKINGS_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_SENTINEL_PATH: "/tmp/reward-campaign-pg-suite-complete"
         run: |
           echo "::group::host-config repository PG"
-          timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
+          rm -f "/tmp/host-config-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/host-config-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
+          test "$(cat "/tmp/host-config-repository-pg-suite-complete")" = "host-config-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::hold repository PG"
-          timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
+          rm -f "/tmp/hold-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/hold-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
+          test "$(cat "/tmp/hold-repository-pg-suite-complete")" = "hold-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking hold service PG"
-          timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          rm -f "/tmp/booking-hold-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-hold-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          test "$(cat "/tmp/booking-hold-service-pg-suite-complete")" = "booking-hold-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking read service PG"
-          timeout 120s bun test src/lib/bookings/booking-read-service.pg.test.ts
+          rm -f "/tmp/booking-read-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-read-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-read-service.pg.test.ts
+          test "$(cat "/tmp/booking-read-service-pg-suite-complete")" = "booking-read-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::payment-intent repository PG"
-          timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
+          rm -f "/tmp/payment-intent-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/payment-intent-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
+          test "$(cat "/tmp/payment-intent-repository-pg-suite-complete")" = "payment-intent-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking finalization repository PG"
-          timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
+          rm -f "/tmp/booking-finalization-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-finalization-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
+          test "$(cat "/tmp/booking-finalization-repository-pg-suite-complete")" = "booking-finalization-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking lifecycle repository PG"
-          timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          rm -f "/tmp/booking-lifecycle-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-lifecycle-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          test "$(cat "/tmp/booking-lifecycle-repository-pg-suite-complete")" = "booking-lifecycle-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking lifecycle service PG"
-          timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          rm -f "/tmp/booking-lifecycle-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-lifecycle-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          test "$(cat "/tmp/booking-lifecycle-service-pg-suite-complete")" = "booking-lifecycle-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking settlement cron PG"
-          timeout 120s bun test src/lib/bookings/booking-settlement-cron.pg.test.ts
+          rm -f "/tmp/booking-settlement-cron-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-settlement-cron-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-settlement-cron.pg.test.ts
+          test "$(cat "/tmp/booking-settlement-cron-pg-suite-complete")" = "booking-settlement-cron-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::settlement effect repository PG"
-          timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
+          rm -f "/tmp/settlement-effect-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/settlement-effect-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
+          test "$(cat "/tmp/settlement-effect-repository-pg-suite-complete")" = "settlement-effect-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking confirm service PG"
-          timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          rm -f "/tmp/booking-confirm-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-confirm-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          test "$(cat "/tmp/booking-confirm-service-pg-suite-complete")" = "booking-confirm-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::feed booking discovery PG"
-          timeout 120s bun test src/lib/feed/home-feed-booking.pg.test.ts
+          rm -f "/tmp/home-feed-booking-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/home-feed-booking-pg-suite-complete" timeout 120s bun test src/lib/feed/home-feed-booking.pg.test.ts
+          test "$(cat "/tmp/home-feed-booking-pg-suite-complete")" = "home-feed-booking-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::reward campaign credit PG"
           rm -f "$REWARD_CAMPAIGN_PG_SENTINEL_PATH"
@@ -575,7 +600,12 @@ jobs:
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
-        run: bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
+          BOOKINGS_PG_CI_REQUIRED: "true"
+          BOOKINGS_PG_SENTINEL_PATH: "/tmp/host-config-repository-production-path-pg-suite-complete"
+        run: |
+          rm -f "$BOOKINGS_PG_SENTINEL_PATH"
+          bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
+          test "$(cat "$BOOKINGS_PG_SENTINEL_PATH")" = "host-config-repository-production-path-postgres-suite-complete"
 
       - name: Run API coverage report
         # Report-only: this command enforces no threshold, and coverage instrumentation can be flaky/OOM-prone.
@@ -677,6 +707,8 @@ jobs:
     needs:
       - api-core
       - api-route-tests
+      - api-top-level-tests
+      - bookings-repository
       - story-controlled-inclusion-harness
     runs-on: ubuntu-latest
     steps:
@@ -684,10 +716,14 @@ jobs:
         env:
           API_CORE_RESULT: ${{ needs.api-core.result }}
           API_ROUTE_TESTS_RESULT: ${{ needs.api-route-tests.result }}
+          API_TOP_LEVEL_TESTS_RESULT: ${{ needs.api-top-level-tests.result }}
+          BOOKINGS_REPOSITORY_RESULT: ${{ needs.bookings-repository.result }}
           STORY_CONTROLLED_INCLUSION_HARNESS_RESULT: ${{ needs.story-controlled-inclusion-harness.result }}
         run: |
           test "$API_CORE_RESULT" = "success"
           test "$API_ROUTE_TESTS_RESULT" = "success"
+          test "$API_TOP_LEVEL_TESTS_RESULT" = "success"
+          test "$BOOKINGS_REPOSITORY_RESULT" = "success"
           test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "success"
 
   cli:

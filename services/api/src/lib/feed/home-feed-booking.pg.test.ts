@@ -1,5 +1,6 @@
 import { SQL } from "bun"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { writeFile } from "node:fs/promises"
 
 import { recomputeBookingFeedDiscoverySnapshot } from "../bookings/booking-feed-discovery"
 import { applyCanonicalBookingMigrations } from "../bookings/test-migrations"
@@ -9,6 +10,9 @@ import {
 } from "./home-feed-booking"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for home feed booking discovery PostgreSQL CI")
+}
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "feed_booking_discovery_test"
 const MONDAY_WINDOW_START = "2026-07-20T00:00:00.000Z"
@@ -144,6 +148,10 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${role}`).catch(() => {})
     }
     await root.end()
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "home-feed-booking-postgres-suite-complete\n", "utf8")
+    }
   })
 
   test("reads only current snapshots for published hosts", async () => {
