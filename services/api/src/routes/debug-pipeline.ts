@@ -287,6 +287,115 @@ debugPipeline.get("/post-pipeline", async (c) => {
   }
 })
 
+// Narrow staging/operator evidence surface for the video-audio catalog rollout.
+// This deliberately accepts only a post id and fixed read-only queries; it is
+// not a general SQL endpoint. It can remain useful for later silent-measurement
+// audits while evidence is shard-local.
+debugPipeline.get("/video-audio-evidence", async (c) => {
+  if (!requireDebugAdmin(c)) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+
+  const rawPostId = c.req.query("post_id")
+  if (!rawPostId) {
+    return c.json({ error: "post_id query parameter is required" }, 400)
+  }
+  const postId = rawPostId.startsWith("pst_") ? rawPostId : decodePublicPostId(rawPostId)
+  if (!postId) {
+    return c.json({ error: "invalid_post_id" }, 400)
+  }
+
+  const communityRepository = getCommunityRepository(c.env)
+  const projection = await communityRepository.getCommunityPostProjectionByPostId(postId)
+  if (!projection) {
+    return c.json({ error: "post_not_found", post_id: postId }, 404)
+  }
+  const communityId = projection.community_id
+  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
+  try {
+    const post = await db.client.execute({
+      sql: `
+        SELECT post_id, asset_id, author_user_id, status, visibility, created_at, updated_at
+        FROM posts
+        WHERE post_id = ?1
+        LIMIT 1
+      `,
+      args: [postId],
+    })
+    const analyses = await db.client.execute({
+      sql: `
+        SELECT media_analysis_result_id, source_asset_id, outcome, policy_reason_code,
+               acrcloud_custom_match_json, authenticity_signals_json,
+               created_at, updated_at
+        FROM media_analysis_results
+        WHERE source_post_id = ?1
+        ORDER BY created_at DESC, media_analysis_result_id DESC
+      `,
+      args: [postId],
+    })
+    const jobs = await db.client.execute({
+      sql: `
+        SELECT job_id, job_type, status, result_ref, error_code, attempt_count,
+               payload_json, created_at, updated_at
+        FROM community_jobs
+        WHERE subject_id = ?1 OR payload_json LIKE ?2
+        ORDER BY created_at DESC, job_id DESC
+      `,
+      args: [postId, `%${postId}%`],
+    })
+    const cases = await db.client.execute({
+      sql: `
+        SELECT rights_review_case_id, subject_type, subject_id, status,
+               trigger_source, analysis_result_ref, created_at, updated_at
+        FROM rights_review_cases
+        WHERE subject_id = ?1
+           OR subject_id = (SELECT asset_id FROM posts WHERE post_id = ?1)
+        ORDER BY created_at DESC
+      `,
+      args: [postId],
+    })
+    const holds = await db.client.execute({
+      sql: `
+        SELECT rights_hold_id, subject_type, subject_id, hold_type, status,
+               analysis_result_ref, reason_code, created_at, updated_at
+        FROM rights_holds
+        WHERE subject_id = ?1
+           OR subject_id = (SELECT asset_id FROM posts WHERE post_id = ?1)
+        ORDER BY created_at DESC
+      `,
+      args: [postId],
+    })
+    const parseJson = (value: unknown): unknown => {
+      if (typeof value !== "string" || !value) return null
+      try {
+        return JSON.parse(value)
+      } catch {
+        return value
+      }
+    }
+    return c.json({
+      post: post.rows[0] ?? null,
+      community_id: communityId,
+      analyses: analyses.rows.map((row) => ({
+        ...row,
+        acrcloud_custom_match: parseJson(row.acrcloud_custom_match_json),
+        authenticity_signals: parseJson(row.authenticity_signals_json),
+        acrcloud_custom_match_json: undefined,
+        authenticity_signals_json: undefined,
+      })),
+      jobs: jobs.rows.map((row) => ({
+        ...row,
+        payload: parseJson(row.payload_json),
+        payload_json: undefined,
+      })),
+      rights_review_cases: cases.rows,
+      rights_holds: holds.rows,
+    })
+  } finally {
+    db.close()
+  }
+})
+
 debugPipeline.post("/community-job/recycle", async (c) => {
   if (!requireDebugAdmin(c)) {
     return c.json({ error: "unauthorized" }, 401)

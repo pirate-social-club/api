@@ -77,7 +77,14 @@ anything:
 
 ## Current holds
 
-_None._
+- **2026-07-24 — video-audio enrollment E2E (`/root`)**. Holding
+  `pirate-api-staging` from branch `ops/video-audio-staging-e2e-20260724`
+  (based on API main `b7be70f7`) to enable
+  `VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED` on staging and collect an
+  ID-backed enroll → match → delete/unenroll round trip. Evidence collection
+  includes shard rows, job IDs, ACR file IDs, zero hold/case assertions, feed
+  visibility, and the song-path exclusion. Do not redeploy staging until this
+  hold is released.
 
 ## Hold history
 
