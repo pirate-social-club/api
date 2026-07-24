@@ -357,3 +357,48 @@ export async function persistVideoRightsAnalysis(
 
   return { mediaAnalysisResultId, rightsReviewCaseId }
 }
+
+export async function persistVideoAudioCatalogEnrollment(input: {
+  client: Pick<Client, "execute">
+  mediaAnalysisResultId: string
+  catalogEnrollment: Record<string, unknown>
+  updatedAt?: string
+}): Promise<void> {
+  const existing = await input.client.execute({
+    sql: `
+      SELECT authenticity_signals_json
+      FROM media_analysis_results
+      WHERE media_analysis_result_id = ?1
+      LIMIT 1
+    `,
+    args: [input.mediaAnalysisResultId],
+  })
+  const raw = existing.rows[0]?.authenticity_signals_json
+  let authenticitySignals: Record<string, unknown> = {}
+  if (typeof raw === "string" && raw) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        authenticitySignals = parsed as Record<string, unknown>
+      }
+    } catch {
+      // Preserve forward progress if a legacy row contains malformed evidence.
+    }
+  }
+  await input.client.execute({
+    sql: `
+      UPDATE media_analysis_results
+      SET authenticity_signals_json = ?2,
+          updated_at = ?3
+      WHERE media_analysis_result_id = ?1
+    `,
+    args: [
+      input.mediaAnalysisResultId,
+      JSON.stringify({
+        ...authenticitySignals,
+        video_audio_catalog_enrollment: input.catalogEnrollment,
+      }),
+      input.updatedAt ?? nowIso(),
+    ],
+  })
+}

@@ -3,6 +3,7 @@ import { createClient } from "@libsql/client"
 
 import {
   computeVideoRightsOutcome,
+  persistVideoAudioCatalogEnrollment,
   persistVideoRightsAnalysis,
   type VideoAudioSafetyEvaluation,
   type VideoRightsAcrEvaluation,
@@ -666,5 +667,49 @@ describe("persistVideoRightsAnalysis", () => {
     }>
     expect(loggedMatches).toHaveLength(1)
     expect(loggedMatches[0]?.user_defined?.content_type).toBe("video_audio")
+  })
+
+  test("catalog enrollment evidence preserves existing authenticity signals", async () => {
+    const client = await createTestClient()
+    const decision = computeVideoRightsOutcome({
+      declared: declared({ declaredAssetIds: ["ast_upstream"] }),
+      acr: acr(),
+      audioTrackPresent: true,
+    })
+    const persisted = await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_catalog_enrollment",
+      assetId: null,
+      decision,
+      acr: acr({ providerResult: { status: { code: 1001 } } }),
+      declared: declared({ declaredAssetIds: ["ast_upstream"] }),
+      sampleWindow: { start_ms: 6_000, duration_ms: 24_000 },
+    })
+
+    await persistVideoAudioCatalogEnrollment({
+      client,
+      mediaAnalysisResultId: persisted.mediaAnalysisResultId,
+      catalogEnrollment: {
+        provider: "acrcloud_catalog",
+        attempted: true,
+        synced: true,
+        acr_id: "acr_video_123",
+      },
+    })
+
+    const rows = await client.execute(
+      "SELECT authenticity_signals_json FROM media_analysis_results WHERE media_analysis_result_id = ?1",
+      [persisted.mediaAnalysisResultId],
+    )
+    const signals = JSON.parse(String(rows.rows[0]?.authenticity_signals_json)) as {
+      declared_asset_ids?: string[]
+      video_audio_catalog_enrollment?: { synced?: boolean; acr_id?: string }
+    }
+    expect(signals.declared_asset_ids).toEqual(["ast_upstream"])
+    expect(signals.video_audio_catalog_enrollment).toMatchObject({
+      synced: true,
+      acr_id: "acr_video_123",
+    })
   })
 })

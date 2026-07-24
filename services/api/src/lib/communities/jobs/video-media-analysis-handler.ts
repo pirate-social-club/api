@@ -4,6 +4,7 @@ import { providerUnavailable } from "../../errors"
 import { nowIso } from "../../helpers"
 import type { Client } from "../../sql-client"
 import { evaluateLyricsModeration, identifyAudioSampleWithAcrCloud } from "../../song-artifacts/song-artifact-analysis"
+import { syncVideoAudioSampleToAcrCloudCatalog } from "../../song-artifacts/song-artifact-catalog"
 import {
   extractVideoAudioSampleForObject,
   requestVideoAudioSampleFromService,
@@ -12,6 +13,7 @@ import {
 } from "../../song-artifacts/video-audio-sample"
 import {
   computeVideoRightsOutcome,
+  persistVideoAudioCatalogEnrollment,
   persistVideoRightsAnalysis,
   type VideoAudioSafetyEvaluation,
   type VideoRightsAcrCustomMatch,
@@ -485,7 +487,7 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
 
     const postResult = await db.client.execute({
       sql: `
-        SELECT post_id, asset_id, upstream_asset_refs_json, status, content_safety_state, age_gate_policy
+        SELECT post_id, asset_id, author_user_id, upstream_asset_refs_json, status, content_safety_state, age_gate_policy
         FROM posts
         WHERE post_id = ?1
         LIMIT 1
@@ -501,6 +503,9 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       return null
     }
     const assetId = typeof postRow.asset_id === "string" && postRow.asset_id ? postRow.asset_id : null
+    const uploaderUserId = typeof postRow.author_user_id === "string" && postRow.author_user_id
+      ? postRow.author_user_id
+      : null
     const currentContentSafetyState = (
       postRow.content_safety_state === "safe"
       || postRow.content_safety_state === "sensitive"
@@ -576,6 +581,27 @@ export async function runVideoMediaAnalysis(input: CommunityJobHandlerInput): Pr
       audioSafety,
       sampleWindow: sample.kind === "sample" ? window : null,
     })
+    if (
+      trimEnv(input.env.VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED) === "1"
+      && sample.kind === "sample"
+      && !acr.providerError
+      && !acr.missingConfiguration
+    ) {
+      const catalogEnrollment = await syncVideoAudioSampleToAcrCloudCatalog({
+        env: input.env,
+        sampleBytes: sample.bytes,
+        communityId: input.job.community_id,
+        postId,
+        assetId,
+        uploaderUserId,
+        sampleWindow: window,
+      })
+      await persistVideoAudioCatalogEnrollment({
+        client: db.client,
+        mediaAnalysisResultId: persisted.mediaAnalysisResultId,
+        catalogEnrollment,
+      })
+    }
     await applyVideoAudioSafetyToPost({
       client: db.client,
       communityId: input.job.community_id,
