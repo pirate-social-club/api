@@ -6,12 +6,14 @@ import type {
 } from "../communities/db-community-repository"
 import { safeRollback } from "../transactions"
 import { badRequestError, eligibilityFailed, notFoundError } from "../errors"
+import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
 import { logPipelineInfo } from "../observability/pipeline-log"
 import type { Env } from "../../env"
 import type { Post } from "../../types"
 import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
 import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
+import { enqueueVideoAudioCatalogUnenrollIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import {
   markPostDeleted,
   setPostCommentsLocked,
@@ -61,6 +63,28 @@ type DeletePostResult = {
   post: Pick<Post, "post_id" | "status" | "updated_at">
   deletedAt: string
   alreadyDeleted: boolean
+}
+
+// Post-commit scheduling of the ACR catalog unenroll job. The job runner
+// tolerates duplicates, and an enqueue failure must never fail the deletion
+// that already committed, so this is always best-effort.
+async function scheduleVideoAudioCatalogUnenroll(input: {
+  env: Env
+  client: DbExecutor
+  communityId: string
+  postId: string
+  redactUploader: boolean
+}): Promise<void> {
+  try {
+    await enqueueVideoAudioCatalogUnenrollIfEnabled(input)
+  } catch (error) {
+    logPipelineInfo("[posts] Video audio catalog unenroll enqueue failed", {
+      level: "warn",
+      community_id: input.communityId,
+      post_id: input.postId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 export async function deletePost(input: {
@@ -122,6 +146,13 @@ export async function deletePost(input: {
         postId: input.postId,
         status: "deleted",
         updatedAt: deletedAt,
+      })
+      await scheduleVideoAudioCatalogUnenroll({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        postId: input.postId,
+        redactUploader: true,
       })
       schedulePublicPostCachePurge({
         env: input.env,
@@ -200,6 +231,13 @@ export async function removePostAsModerator(input: {
       postId: input.postId,
       status: "removed",
       updatedAt,
+    })
+    await scheduleVideoAudioCatalogUnenroll({
+      env: input.env,
+      client: db.client,
+      communityId: input.communityId,
+      postId: input.postId,
+      redactUploader: false,
     })
     schedulePublicPostCachePurge({
       env: input.env,

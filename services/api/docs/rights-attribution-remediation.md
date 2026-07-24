@@ -33,3 +33,9 @@ Map `declared_reference_mismatch` to `author_mod_only` plus a commerce hold. App
 ## Composer follow-up
 
 Run upload-time fingerprinting as a bounded best-effort preflight. When a custom-catalog match disagrees with the selected source, offer the detected source, keep-and-explain, or cancel. Provider failure must not become a global posting outage; unresolved cases fall back to the coherent post-publish state above.
+
+## Cross-community repost measurement follow-up
+
+Video-audio enrollment/unenrollment evidence currently lives only in each community shard's `media_analysis_results.authenticity_signals_json`. That is sufficient to validate the mechanics (enroll on analysis, unenroll on deletion, redacted tombstones), but not for operational cross-community repost measurement, which needs to query repost relationships across shards.
+
+Migrate to a control-plane observation table in the `core` repo (PlanetScale), keyed by global post/community ids, and mirror enrollment and unenrollment outcomes there. Until that lands, cross-community repost metrics remain unavailable even though shard-local evidence is complete.
