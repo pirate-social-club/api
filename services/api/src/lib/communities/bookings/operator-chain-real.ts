@@ -24,6 +24,7 @@ import {
   type RewardsSettlementBackend,
 } from "../../rewards/reward-vault-lit-config"
 import { executeAndVerifyRewardVaultTransaction } from "../../rewards/reward-vault-transaction"
+import { rewardOperationId } from "../../rewards/reward-operation-id"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
 // the DO module itself has no ethers import — the production worker entry registers this via
@@ -125,7 +126,7 @@ export const realChain: ChainPrimitives = {
       // effect is enqueued. A stale/queued effect can be safely re-signed with
       // fresh calldata because the vault replay key remains the operation ID.
       const deadline = rewardVaultSigningDeadline(Date.now(), lit.signingDeadlineSeconds)
-      return executeAndVerifyRewardVaultTransaction(execute, {
+      const verified = await executeAndVerifyRewardVaultTransaction(execute, {
         effectKind: input.effectKind,
         effectId: input.effectId,
         recipient: to,
@@ -138,6 +139,7 @@ export const realChain: ChainPrimitives = {
         nonce: input.nonce,
         gas: input.gas,
       })
+      return { ...verified, operationId: rewardOperationId(input.effectId) }
     }
     if (!c.privateKey) throw badRequestError("Local settlement signer is not configured")
     const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
@@ -165,7 +167,11 @@ export const realChain: ChainPrimitives = {
     if (getAddress(decoded[0] as string) !== to) throw badRequestError("signed tx recipient mismatch")
     if (BigInt(decoded[1] as bigint) !== amount) throw badRequestError("signed tx amount mismatch")
     if (!parsed.hash) throw badRequestError("signed tx missing hash")
-    return { signedTx, txHash: parsed.hash }
+    return {
+      signedTx,
+      txHash: parsed.hash,
+      operationId: input.operatorKind === "rewards" ? rewardOperationId(input.effectId) : null,
+    }
   },
   broadcast: async (env, input) => { const c = resolveConfig(env, input.operatorKind); await new JsonRpcProvider(c.rpcUrl, c.chainId).broadcastTransaction(input.signedTx) },
   txLiveness: async (env, txHash, operatorKind) => {
