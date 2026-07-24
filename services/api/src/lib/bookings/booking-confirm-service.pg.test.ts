@@ -13,6 +13,7 @@ import {
   setGlobalBookingPaymentVerifierForTests,
   type BookingConfirmSqlExecutor,
 } from "./booking-confirm-service";
+import { sweepClaimedBookingPaymentIntents } from "./booking-payment-reverification-cron";
 import { bookingIdForHold } from "./booking-finalization-repository";
 import { recordBookingPaymentSubmitted } from "./booking-payment-resume-service";
 import { createPaymentIntentRepository, paymentIntentIdForHold } from "./payment-intent-repository";
@@ -39,6 +40,7 @@ const env = {
   PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: BOOKING_OPERATOR,
   PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: BOOKING_TOKEN,
   PIRATE_BOOKING_SETTLEMENT_RPC_URL: BOOKING_RPC_URL,
+  BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED: "true",
 } as Env;
 
 function urlFor(db?: string): string {
@@ -472,8 +474,10 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect(orphans.some((o) => o.holdId === "hold_confirm_orphan")).toBe(true);
   });
 
-  // H2: an UNCONFIRMED payment on an expired hold has no funds at risk, so it retires as hold_expired.
-  test("retires an expired hold as hold_expired when the payment is still pending", async () => {
+  // H2: a claimed hash can mine after the hold expires. It must remain discoverable and
+  // server re-verification must salvage it without relying on another client confirm.
+  test("re-verifies a pending claimed payment after hold expiry and salvages the booking", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status = 'verification_failed'`);
     await seedHold({ holdId: "hold_confirm_pending_expired" });
     setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
 
@@ -486,6 +490,156 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       fundingTxRef: "0xTX_PENDING_EXPIRED",
       walletAttachmentId: "wal_confirm_pending_expired",
       nowUtc: "2026-07-01T10:05:00Z",
-    })).toEqual({ ok: false, reason: "hold_expired" });
+    })).toEqual({ ok: false, reason: "payment_pending" });
+
+    const unresolved = await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listClaimedUnresolvedPaymentIntents(50);
+    expect(unresolved.map((record) => record.intent.holdId)).toContain("hold_confirm_pending_expired");
+    expect(unresolved.find((record) => record.intent.holdId === "hold_confirm_pending_expired")?.intent)
+      .toMatchObject({
+        status: "verification_failed",
+        claimedTxRef: "0xtx_pending_expired",
+        consumedWalletAttachmentId: "wal_confirm_pending_expired",
+      });
+
+    const stillPending = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_pending_expired"),
+      now: () => Date.parse("2026-07-01T10:05:30Z"),
+    });
+    expect(stillPending).toMatchObject({ checked: 1, unresolved: 1, booked: 0, errors: 0 });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_confirm_pending_expired"))).toMatchObject({
+      status: "verification_failed",
+      claimedTxRef: "0xtx_pending_expired",
+    });
+
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+    const summary = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_pending_expired"),
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    expect(summary).toMatchObject({
+      checked: 1,
+      booked: 1,
+      refundPending: 0,
+      unresolved: 0,
+      errors: 0,
+    });
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_confirm_pending_expired"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_confirm_pending_expired"))?.status).toBe("consumed");
+  });
+
+  test("re-verifies an expired claimed payment with no reclaimable slot into a refund obligation", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status = 'verification_failed'`);
+    await seedHold({ holdId: "hold_reverify_orphan" });
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_reverify_orphan"),
+      holdId: "hold_reverify_orphan",
+      bookerUserId: "booker_hold_reverify_orphan",
+      fundingTxRef: "0xTX_REVERIFY_ORPHAN",
+      walletAttachmentId: "wal_reverify_orphan",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "payment_pending" });
+    await repoDb.unsafe(
+      `UPDATE bookings.host_slot_locks SET status = 'released' WHERE hold_id = $1`,
+      ["hold_reverify_orphan"],
+    );
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+
+    const summary = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_reverify_orphan"),
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    expect(summary).toMatchObject({
+      checked: 1,
+      booked: 0,
+      refundPending: 1,
+      errors: 0,
+    });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_reverify_orphan"))?.status).toBe("verified");
+    const orphans = await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listOrphanedVerifiedPaymentIntents("2026-07-01T10:06:00Z", 50);
+    expect(orphans.map((intent) => intent.holdId)).toContain("hold_reverify_orphan");
+  });
+
+  test("fences client-confirm and sweeper races to one verification and one booking", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status = 'verification_failed'`);
+    await seedHold({ holdId: "hold_reverify_race" });
+    const wallets = userRepository("wal_reverify_race");
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "payment_pending" });
+
+    let releaseVerification: (() => void) | undefined;
+    let reportVerifierEntered: (() => void) | undefined;
+    const verifierEntered = new Promise<void>((resolve) => {
+      reportVerifierEntered = resolve;
+    });
+    const verifierRelease = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let verifierCalls = 0;
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => {
+      verifierCalls += 1;
+      reportVerifierEntered?.();
+      await verifierRelease;
+      return { kind: "verified", senderAddress: BUYER, txRef: fundingTxRef };
+    });
+
+    const sweepPromise = sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    await verifierEntered;
+    const losingClient = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:06:00Z",
+    });
+    expect(losingClient).toEqual({ ok: false, reason: "verification_in_progress" });
+    releaseVerification?.();
+    expect(await sweepPromise).toMatchObject({ checked: 1, booked: 1, errors: 0 });
+    expect(verifierCalls).toBe(1);
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_reverify_race"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
   });
 });

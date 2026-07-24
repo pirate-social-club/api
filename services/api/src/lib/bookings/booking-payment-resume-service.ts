@@ -4,6 +4,7 @@ import { createBookingHoldWriteRepository } from "./hold-repository";
 import {
   createPaymentIntentWriteRepository,
   normalizeTxRef,
+  type ClaimedUnresolvedPaymentIntentRecord,
   type PendingPaymentIntentRecord,
 } from "./payment-intent-repository";
 import type { PaymentIntent } from "./types";
@@ -46,6 +47,19 @@ export interface PendingBookingPaymentIntentView {
   slot_start_utc: string;
   slot_end_utc: string;
   booking_id: string | null;
+}
+
+export interface UnresolvedBookingPaymentIntentView {
+  payment_intent_id: string;
+  hold_id: string;
+  host_user_id: string;
+  booker_user_id: string;
+  intent_status: "verification_failed";
+  hold_status: "active" | "consumed" | "expired";
+  claimed_tx_ref: string;
+  hold_expires_at: string;
+  updated_at: string;
+  unresolved_age_seconds: number;
 }
 
 const PENDING_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -213,4 +227,40 @@ export async function listPendingBookingPaymentIntents(input: {
     const resumeState = resolveBookingPaymentResumeState(record, input.nowUtc);
     return resumeState ? [toView(record, resumeState)] : [];
   });
+}
+
+export async function listUnresolvedBookingPaymentIntentsForOperator(input: {
+  executor: BookingPaymentResumeSqlExecutor;
+  nowUtc: string;
+  limit?: number;
+}): Promise<{ data: UnresolvedBookingPaymentIntentView[]; hasMore: boolean }> {
+  const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 50)));
+  const records = await createPaymentIntentWriteRepository(input.executor)
+    .listClaimedUnresolvedPaymentIntents(limit + 1);
+  return {
+    data: records.slice(0, limit).map((record) =>
+      unresolvedBookingPaymentIntentView(record, input.nowUtc)),
+    hasMore: records.length > limit,
+  };
+}
+
+export function unresolvedBookingPaymentIntentView(
+  { intent, hostUserId, bookerUserId, holdStatus }: ClaimedUnresolvedPaymentIntentRecord,
+  nowUtc: string,
+): UnresolvedBookingPaymentIntentView {
+  return {
+    payment_intent_id: intent.paymentIntentId,
+    hold_id: intent.holdId,
+    host_user_id: hostUserId,
+    booker_user_id: bookerUserId,
+    intent_status: "verification_failed",
+    hold_status: holdStatus,
+    claimed_tx_ref: intent.claimedTxRef as string,
+    hold_expires_at: intent.holdExpiresAt,
+    updated_at: intent.updatedAt,
+    unresolved_age_seconds: Math.max(
+      0,
+      Math.floor((Date.parse(nowUtc) - Date.parse(intent.holdExpiresAt)) / 1000),
+    ),
+  };
 }

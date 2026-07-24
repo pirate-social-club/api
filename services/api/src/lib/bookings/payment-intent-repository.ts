@@ -70,6 +70,13 @@ export interface PendingPaymentIntentRecord {
   bookingId: string | null;
 }
 
+export interface ClaimedUnresolvedPaymentIntentRecord {
+  intent: PaymentIntent;
+  hostUserId: string;
+  bookerUserId: string;
+  holdStatus: "active" | "consumed" | "expired";
+}
+
 export function paymentIntentIdForHold(holdId: string): string {
   return `bpi_${holdId}`;
 }
@@ -268,6 +275,36 @@ async function listRecentPaymentIntentsForBooker(
   });
 }
 
+async function listClaimedUnresolvedPaymentIntents(
+  exec: PaymentIntentSqlExecutor,
+  limit: number,
+): Promise<ClaimedUnresolvedPaymentIntentRecord[]> {
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
+                 h.host_user_id, h.booker_user_id, h.status AS hold_status
+          FROM bookings.payment_intents pi
+          JOIN bookings.holds h ON h.hold_id = pi.hold_id
+          WHERE pi.status = 'verification_failed'
+            AND pi.claimed_tx_ref IS NOT NULL
+            AND pi.consumed_wallet_attachment_id IS NOT NULL
+          ORDER BY pi.updated_at ASC, pi.payment_intent_id ASC
+          LIMIT ?1`,
+    args: [intToArg("limit", limit)],
+  });
+  return res.rows.map((row) => {
+    const holdStatus = textFromRow(row.hold_status);
+    if (holdStatus !== "active" && holdStatus !== "consumed" && holdStatus !== "expired") {
+      throw new TypeError(`listClaimedUnresolvedPaymentIntents: bad hold status ${holdStatus}`);
+    }
+    return {
+      intent: decodePaymentIntent(row),
+      hostUserId: textFromRow(row.host_user_id),
+      bookerUserId: textFromRow(row.booker_user_id),
+      holdStatus,
+    };
+  });
+}
+
 async function markOrphanedVerifiedPaymentIntentRefunded(
   exec: PaymentIntentSqlExecutor,
   paymentIntentId: string,
@@ -448,6 +485,7 @@ async function expirePaymentIntentIfDue(
           SET status = 'expired', version = version + 1, updated_at = ?2::timestamptz
           WHERE payment_intent_id = ?1
             AND status IN ('active', 'verifying', 'verification_failed')
+            AND claimed_tx_ref IS NULL
             AND hold_expires_at <= ?2::timestamptz
           RETURNING ${COLUMNS}`,
     args: [textToArg("paymentIntentId", paymentIntentId), isoUtcToArg(nowUtc)],
@@ -483,6 +521,7 @@ export interface PaymentIntentRepository {
     createdSinceUtc: string,
     limit: number,
   ): Promise<PendingPaymentIntentRecord[]>;
+  listClaimedUnresolvedPaymentIntents(limit: number): Promise<ClaimedUnresolvedPaymentIntentRecord[]>;
 }
 
 export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
@@ -503,6 +542,7 @@ function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepos
     listOrphanedVerifiedPaymentIntents: (olderThanUtc, limit) => listOrphanedVerifiedPaymentIntents(executor, olderThanUtc, limit),
     listRecentPaymentIntentsForBooker: (bookerUserId, createdSinceUtc, limit) =>
       listRecentPaymentIntentsForBooker(executor, bookerUserId, createdSinceUtc, limit),
+    listClaimedUnresolvedPaymentIntents: (limit) => listClaimedUnresolvedPaymentIntents(executor, limit),
   };
 }
 

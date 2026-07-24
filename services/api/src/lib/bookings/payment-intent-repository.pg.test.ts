@@ -341,6 +341,50 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     })).toEqual({ ok: false, reason: "not-reservable" });
   });
 
+  test("never expires a claimed unresolved payment and lists it for server re-verification", async () => {
+    await seedHold("hold_pi_claimed_unresolved", { expiresAt: "2026-06-10T10:01:00Z" });
+    const repo = writeRepo();
+    const created = await repo.createOrGetPaymentIntent(inputFor("hold_pi_claimed_unresolved", {
+      quoteExpiresAt: "2026-06-10T10:01:00Z",
+      holdExpiresAt: "2026-06-10T10:01:00Z",
+    }));
+    if (!created.ok) throw new Error("expected create");
+    const reserved = await repo.reservePaymentIntentForVerification({
+      paymentIntentId: created.intent.paymentIntentId,
+      claimToken: "claim_unresolved",
+      claimExpiresAt: "2026-06-10T10:01:30Z",
+      normalizedTxRef: "0xclaimed_unresolved",
+      walletAttachmentId: "wallet_claimed_unresolved",
+      nowUtc: "2026-06-10T10:00:00Z",
+    });
+    if (!reserved.ok) throw new Error("expected reserve");
+    const failed = await repo.markPaymentIntentVerificationFailed({
+      paymentIntentId: created.intent.paymentIntentId,
+      claimToken: "claim_unresolved",
+      nowUtc: "2026-06-10T10:02:00Z",
+    });
+    expect(failed).toMatchObject({
+      status: "verification_failed",
+      claimedTxRef: "0xclaimed_unresolved",
+      consumedWalletAttachmentId: "wallet_claimed_unresolved",
+    });
+
+    expect(await repo.expirePaymentIntentIfDue(
+      created.intent.paymentIntentId,
+      "2026-06-10T10:20:00Z",
+    )).toBeNull();
+    const unresolved = await repo.listClaimedUnresolvedPaymentIntents(50);
+    expect(unresolved.find((record) => record.intent.paymentIntentId === created.intent.paymentIntentId))
+      .toMatchObject({
+        bookerUserId: "booker_payment",
+        holdStatus: "active",
+        intent: {
+          status: "verification_failed",
+          claimedTxRef: "0xclaimed_unresolved",
+        },
+      });
+  });
+
   test("transaction-bound create rolls back the payment intent", async () => {
     await seedHold("hold_pi_rollback");
     await expect(repoDb.begin(async (tx: { unsafe(sql: string, args?: unknown[]): Promise<unknown> }) => {

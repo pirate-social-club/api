@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import type { PendingPaymentIntentRecord } from "./payment-intent-repository";
-import { resolveBookingPaymentResumeState } from "./booking-payment-resume-service";
+import type {
+  ClaimedUnresolvedPaymentIntentRecord,
+  PendingPaymentIntentRecord,
+} from "./payment-intent-repository";
+import {
+  resolveBookingPaymentResumeState,
+  unresolvedBookingPaymentIntentView,
+} from "./booking-payment-resume-service";
 
 const NOW = "2026-07-24T12:00:00.000Z";
 
@@ -73,4 +79,32 @@ describe("resolveBookingPaymentResumeState", () => {
     expect(resolveBookingPaymentResumeState(expiredActive, NOW)).toBeNull();
     expect(resolveBookingPaymentResumeState(record("verification_failed"), NOW)).toBeNull();
   });
+});
+
+test("operator unresolved view exposes durable claim identity and age without payment internals", () => {
+  const pending = record("verification_failed");
+  pending.intent.claimedTxRef = "0xtx";
+  pending.intent.consumedWalletAttachmentId = "wallet_1";
+  pending.intent.holdExpiresAt = "2026-07-24T11:30:00.000Z";
+  const view = unresolvedBookingPaymentIntentView({
+    intent: pending.intent,
+    hostUserId: pending.hostUserId,
+    bookerUserId: pending.bookerUserId,
+    holdStatus: pending.holdStatus,
+  } satisfies ClaimedUnresolvedPaymentIntentRecord, NOW);
+  expect(view).toEqual({
+    payment_intent_id: "bpi_hold_1",
+    hold_id: "hold_1",
+    host_user_id: "host_1",
+    booker_user_id: "booker_1",
+    intent_status: "verification_failed",
+    hold_status: "active",
+    claimed_tx_ref: "0xtx",
+    hold_expires_at: "2026-07-24T11:30:00.000Z",
+    updated_at: "2026-07-24T11:55:00.000Z",
+    unresolved_age_seconds: 1800,
+  });
+  expect(view).not.toHaveProperty("wallet_attachment_id");
+  expect(view).not.toHaveProperty("recipient_address");
+  expect(view).not.toHaveProperty("amount_atomic");
 });

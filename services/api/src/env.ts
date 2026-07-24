@@ -335,6 +335,7 @@ export type Env = {
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
+  BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED?: string
   // Legacy community-scoped booking settlement sweep. The global booking path is canonical; this
   // remains fail-closed unless an operator explicitly opts into sweeping old community D1 rows.
   LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED?: string

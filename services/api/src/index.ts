@@ -45,6 +45,12 @@ import { getCommunityRepository } from "./lib/communities/db-community-repositor
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabled, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
+import {
+  emptyBookingPaymentReverificationSummary,
+  isBookingPaymentReverificationCronEnabled,
+  sweepClaimedBookingPaymentIntents,
+} from "./lib/bookings/booking-payment-reverification-cron"
+import { getUserRepository } from "./lib/auth/repositories"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
@@ -852,6 +858,41 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   }
 }
 
+async function reverifyScheduledBookingPayments(env: Env): Promise<void> {
+  if (!isBookingPaymentReverificationCronEnabled(env)) return
+  let summary = emptyBookingPaymentReverificationSummary(true)
+  try {
+    summary = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: getControlPlaneClient(env),
+      userRepository: getUserRepository(env),
+      maxIntents: 100,
+      deadlineMs: 20_000,
+    })
+    if (summary.fatal) {
+      await captureScheduledError(env, new Error("booking_payment_reverification_sweep_fatal"), "booking_payment_reverification")
+    } else if (summary.stale > 0 || summary.errors > 0 || summary.deadlineReached) {
+      await captureScheduledWarning(
+        env,
+        "Claimed booking payments remain unresolved",
+        "booking_payment_reverification",
+        {
+          stale: summary.stale,
+          errors: summary.errors,
+          unresolved: summary.unresolved,
+          deadlineReached: summary.deadlineReached,
+        },
+      )
+    }
+  } catch (error) {
+    summary.errors += 1
+    summary.fatal = true
+    await captureScheduledError(env, error, "booking_payment_reverification")
+  } finally {
+    console.info("[booking-payment-reverification] swept", JSON.stringify(summary))
+  }
+}
+
 async function reconcileScheduledCommunityMembershipProjections(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
@@ -1192,7 +1233,7 @@ const COMMUNITY_JOB_TASK_DEADLINE_MS = 90_000
 // split philosophy as the 15s/45s sweep/process split. 20s of 90s always
 // leaves the drain its full tick budget.
 const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
-// Protect the seven settlement/money-movement jobs, both reward watchdogs, and
+// Protect the settlement/money-path jobs, both reward watchdogs, and
 // the community job drain at the front of the ordered batch. They must receive
 // a start even when D1 pressure pushes the batch past its nominal deadline.
 //
@@ -1203,7 +1244,7 @@ const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
 // 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
 // publish-finalize attempt fails backs off 30s and then waits on this job to get
 // a start, which is why "Preparing song features" could linger for half an hour.
-export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 10
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 11
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
@@ -1214,6 +1255,7 @@ type ScheduledPriorityJobName =
   | "reconcile_reward_payouts"
   | "reconcile_royalty_claims"
   | "reconcile_booking_settlements"
+  | "reverify_booking_payments"
   | "reconcile_purchase_settlements"
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
@@ -1233,6 +1275,7 @@ export function scheduledPriorityJobNames(
   return [
     "reconcile_reward_payouts",
     "reconcile_royalty_claims",
+    "reverify_booking_payments",
     "reconcile_booking_settlements",
     "reconcile_purchase_settlements",
     "reconcile_royalty_allocation_verifications",
@@ -1338,6 +1381,7 @@ const handler: ExportedHandler<Env> = {
     const priorityJobRuns: Record<ScheduledPriorityJobName, () => Promise<void>> = {
       reconcile_reward_payouts: () => reconcileScheduledRewardPayouts(env),
       reconcile_royalty_claims: () => reconcileScheduledRoyaltyClaims(env),
+      reverify_booking_payments: () => reverifyScheduledBookingPayments(env),
       reconcile_booking_settlements: () => reconcileScheduledBookingSettlements(env),
       reconcile_purchase_settlements: () => reconcileScheduledPurchaseSettlements(env),
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
