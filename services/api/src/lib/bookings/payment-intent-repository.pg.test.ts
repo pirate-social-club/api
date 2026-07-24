@@ -376,7 +376,7 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     const unresolved = await repo.listClaimedUnresolvedPaymentIntents(50);
     expect(unresolved.find((record) => record.intent.paymentIntentId === created.intent.paymentIntentId))
       .toMatchObject({
-        bookerUserId: "booker_hold_pi_claimed_unresolved",
+        bookerUserId: "booker_payment",
         holdStatus: "active",
         intent: {
           status: "verification_failed",
