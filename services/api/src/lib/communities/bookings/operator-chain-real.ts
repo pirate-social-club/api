@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
+import { Contract, Interface, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
@@ -37,6 +37,46 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ] as const
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
+const REWARD_VAULT_EVENTS = new Interface([
+  "event RewardPaid(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
+  "event RewardRefunded(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
+])
+
+export function matchRewardVaultEvent(input: {
+  logs: readonly { address: string; topics: readonly string[]; data: string }[]
+  vaultAddress: string
+  effectKind: "reward_cashout" | "reward_funding_refund"
+  operationId: string
+  recipient: string
+  amount: bigint
+}): { status: "matched" } | { status: "missing" | "mismatch"; reason: string } {
+  const expectedName = input.effectKind === "reward_cashout" ? "RewardPaid" : "RewardRefunded"
+  let sameOperationWrongEvent = false
+  for (const log of input.logs) {
+    if (getAddress(log.address) !== getAddress(input.vaultAddress)) continue
+    let parsed
+    try {
+      parsed = REWARD_VAULT_EVENTS.parseLog(log)
+    } catch {
+      continue
+    }
+    if (!parsed || String(parsed.args.operationId).toLowerCase() !== input.operationId) continue
+    if (parsed.name !== expectedName) {
+      sameOperationWrongEvent = true
+      continue
+    }
+    if (getAddress(String(parsed.args.recipient)) !== getAddress(input.recipient)) {
+      return { status: "mismatch", reason: "recipient does not match the durable effect" }
+    }
+    if (BigInt(parsed.args.amount) !== input.amount) {
+      return { status: "mismatch", reason: "amount does not match the durable effect" }
+    }
+    return { status: "matched" }
+  }
+  return sameOperationWrongEvent
+    ? { status: "mismatch", reason: "event kind does not match the durable effect" }
+    : { status: "missing", reason: "matching operation event was not emitted by the vault" }
+}
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   backend: RewardsSettlementBackend
@@ -180,5 +220,22 @@ export const realChain: ChainPrimitives = {
     const receipt = await provider.getTransactionReceipt(txHash)
     if (receipt) return receipt.status === 1 ? "success" : "failed"
     return (await provider.getTransaction(txHash)) ? "pending" : "absent"
+  },
+  rewardVaultEvent: async (env, input) => {
+    const c = resolveConfig(env, "rewards")
+    if (c.backend !== "lit_vault") {
+      return { status: "mismatch", reason: "rewards backend is not lit_vault" }
+    }
+    const lit = resolveRewardVaultLitConfig(env)
+    const receipt = await new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionReceipt(input.txHash)
+    if (!receipt) return { status: "missing", reason: "transaction receipt is unavailable" }
+    return matchRewardVaultEvent({
+      logs: receipt.logs,
+      vaultAddress: lit.vaultAddress,
+      effectKind: input.effectKind,
+      operationId: input.operationId,
+      recipient: input.recipient,
+      amount: transferAmount(input),
+    })
   },
 }

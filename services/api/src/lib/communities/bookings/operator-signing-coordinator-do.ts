@@ -60,6 +60,9 @@ export interface OperatorSettleResult {
 
 interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
 type TxLiveness = "success" | "failed" | "pending" | "absent"
+export type RewardVaultEventObservation =
+  | { status: "matched" }
+  | { status: "missing" | "mismatch"; reason: string }
 export interface ChainPrimitives {
   pendingNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
   latestNonce: (env: Env, operatorKind?: OperatorKind) => Promise<number>
@@ -76,6 +79,14 @@ export interface ChainPrimitives {
   }) => Promise<{ signedTx: string; txHash: string; operationId?: string | null }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
+  rewardVaultEvent?: (env: Env, input: {
+    txHash: string
+    effectKind: Extract<OperatorEffectKind, "reward_cashout" | "reward_funding_refund">
+    operationId: string
+    recipient: string
+    amountCents?: number
+    amountAtomic?: string
+  }) => Promise<RewardVaultEventObservation>
 }
 
 function normalizeRecipient(raw: string): string {
@@ -312,7 +323,31 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row.tx_hash || row.nonce == null || !row.signed_tx) throw new Error("broadcast effect missing tx fields")
     const operatorKind = this.operatorKind(row)
     const liveness = await chain().txLiveness(this.env, row.tx_hash, operatorKind)
-    if (liveness === "success") return this.cas(row.idempotency_key, row.version, { state: "confirmed", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
+    if (liveness === "success") {
+      if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
+        const observation = await this.observeRewardVaultEvent(row)
+        if (observation.status !== "matched") {
+          return this.cas(row.idempotency_key, row.version, {
+            state: "reconciliation_required",
+            next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+            last_error: `reward vault event ${observation.status}: ${observation.reason}`.slice(0, 1_000),
+          }) ?? this.read(row.idempotency_key)!
+        }
+      }
+      if (this.operatorKind(row) === "rewards" && row.operation_id == null) {
+        // Legacy direct-transfer rows are pre-vault and excluded from event joins.
+        // Seeing one confirm under Lit custody means persistence was bypassed.
+        console.warn(JSON.stringify({
+          message: "confirmed rewards effect is missing operation ID",
+          effect: row.idempotency_key,
+        }))
+      }
+      return this.cas(row.idempotency_key, row.version, {
+        state: "confirmed",
+        next_attempt_at: null,
+        last_error: null,
+      }) ?? this.read(row.idempotency_key)!
+    }
     if (liveness === "failed") return this.cas(row.idempotency_key, row.version, { state: "failed_onchain", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
     if (liveness === "pending") {
       return this.cas(row.idempotency_key, row.version, {
@@ -376,6 +411,31 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
   private operatorKind(row: EffectRow): OperatorKind {
     return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund" ? "rewards" : "booking"
+  }
+
+  private usesLitVault(): boolean {
+    return String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault"
+  }
+
+  private async observeRewardVaultEvent(row: EffectRow): Promise<RewardVaultEventObservation> {
+    if (!row.tx_hash) throw new Error("reward vault event lookup requires a transaction hash")
+    if (!row.operation_id) {
+      console.warn(JSON.stringify({
+        message: "Lit rewards effect reached receipt confirmation without operation ID",
+        effect: row.idempotency_key,
+      }))
+      return { status: "missing", reason: "operation ID was not persisted" }
+    }
+    const observe = chain().rewardVaultEvent
+    if (!observe) throw new Error("reward vault event reconciliation is not configured")
+    return observe(this.env, {
+      txHash: row.tx_hash,
+      effectKind: row.effect_kind as "reward_cashout" | "reward_funding_refund",
+      operationId: row.operation_id,
+      recipient: row.recipient_address,
+      amountCents: row.effect_kind === "reward_cashout" ? row.amount_cents : undefined,
+      amountAtomic: row.effect_kind === "reward_funding_refund" ? row.amount_atomic ?? undefined : undefined,
+    })
   }
 
   private assertAmount(req: OperatorSettleRequest): void {
