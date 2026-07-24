@@ -78,3 +78,22 @@ export function createLitRewardVaultExecutor(
     return { signedTx: signedTransaction(response) }
   }
 }
+
+/**
+ * Production construction intentionally has no inline-code option. The CID is
+ * the on-chain group permission boundary; production wiring must call this
+ * constructor so a compromised Worker cannot substitute action source.
+ */
+export function createProductionLitRewardVaultExecutor(
+  client: LitActionClient,
+  pinnedIpfsId: string,
+): RewardVaultActionExecutor {
+  if (typeof pinnedIpfsId !== "string" || pinnedIpfsId.trim() !== pinnedIpfsId || !pinnedIpfsId) {
+    throw new LitChipotleError(
+      "invalid_request",
+      "Pinned Lit rewards vault action CID is required",
+      false,
+    )
+  }
+  return createLitRewardVaultExecutor(client, { ipfsId: pinnedIpfsId })
+}
