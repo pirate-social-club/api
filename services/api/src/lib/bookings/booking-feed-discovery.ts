@@ -16,6 +16,9 @@ export interface BookingFeedDiscoverySnapshot {
   computedAt: string
 }
 
+type SnapshotRefresh = Promise<BookingFeedDiscoverySnapshot | null>
+const snapshotRefreshesInFlight = new Map<string, SnapshotRefresh>()
+
 function addMilliseconds(isoUtc: string, milliseconds: number): string {
   return new Date(Date.parse(isoUtc) + milliseconds).toISOString()
 }
@@ -100,6 +103,50 @@ export async function recomputeBookingFeedDiscoverySnapshot(input: {
   return snapshot
 }
 
+function trackSnapshotRefresh(hostUserId: string, refresh: SnapshotRefresh): SnapshotRefresh {
+  snapshotRefreshesInFlight.set(hostUserId, refresh)
+  void refresh.finally(() => {
+    if (snapshotRefreshesInFlight.get(hostUserId) === refresh) {
+      snapshotRefreshesInFlight.delete(hostUserId)
+    }
+  }).catch(() => {
+    // The caller observes the original promise. This handler only prevents the cleanup chain from
+    // becoming an unhandled rejection.
+  })
+  return refresh
+}
+
+/** Cold feed requests for the same host share one canonical 14-day resolution. */
+export function recomputeBookingFeedDiscoverySnapshotDeduplicated(input: {
+  executor: Client
+  hostUserId: string
+  nowUtc?: string
+}): SnapshotRefresh {
+  const existing = snapshotRefreshesInFlight.get(input.hostUserId)
+  if (existing) return existing
+  return trackSnapshotRefresh(
+    input.hostUserId,
+    recomputeBookingFeedDiscoverySnapshot(input),
+  )
+}
+
+/**
+ * Host writes must finish with a computation that started after the write. Queue behind any older
+ * cold-feed refresh so stale pre-write work cannot overwrite the newly warmed snapshot.
+ */
+export function recomputeBookingFeedDiscoverySnapshotAfterWrite(input: {
+  executor: Client
+  hostUserId: string
+  nowUtc?: string
+}): SnapshotRefresh {
+  const previous = snapshotRefreshesInFlight.get(input.hostUserId)
+  const refresh = (previous
+    ? previous.catch(() => null)
+    : Promise.resolve(null))
+    .then(() => recomputeBookingFeedDiscoverySnapshot(input))
+  return trackSnapshotRefresh(input.hostUserId, refresh)
+}
+
 export async function refreshBookingFeedDiscoverySnapshotsInBackground(
   env: Env,
   hostUserIds: string[],
@@ -119,7 +166,7 @@ export async function refreshBookingFeedDiscoverySnapshotsInBackground(
       .map((row) => String(row.host_user_id ?? "").trim())
       .filter(Boolean)
     for (const hostUserId of publishedIds) {
-      await recomputeBookingFeedDiscoverySnapshot({ executor, hostUserId })
+      await recomputeBookingFeedDiscoverySnapshotDeduplicated({ executor, hostUserId })
     }
   })
 }

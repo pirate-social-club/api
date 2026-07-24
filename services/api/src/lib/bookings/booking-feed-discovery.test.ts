@@ -5,6 +5,8 @@ import { setGlobalBookingResolveSlotsForTests } from "./booking-hold-service"
 import {
   BOOKING_FEED_DISCOVERY_TTL_MS,
   recomputeBookingFeedDiscoverySnapshot,
+  recomputeBookingFeedDiscoverySnapshotAfterWrite,
+  recomputeBookingFeedDiscoverySnapshotDeduplicated,
 } from "./booking-feed-discovery"
 
 const NOW = "2026-07-20T00:00:00.000Z"
@@ -98,5 +100,83 @@ describe("booking feed discovery snapshots", () => {
     expect(snapshot?.hasAvailableSlot).toBe(false)
     expect(snapshot?.startingPriceCents).toBeNull()
     expect(statements[0]?.args?.slice(0, 3)).toEqual(["host_1", false, null])
+  })
+
+  test("deduplicates concurrent cold-feed recomputes for one host", async () => {
+    const statements: InStatement[] = []
+    const base = executorWithSnapshotCapture(statements)
+    let profileReads = 0
+    let releaseFirstRead!: () => void
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve
+    })
+    const executor = {
+      ...base,
+      async execute(statement: InStatement | string): Promise<QueryResult> {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("to_jsonb(p) AS profile")) {
+          profileReads += 1
+          if (profileReads === 1) await firstRead
+        }
+        return base.execute(statement)
+      },
+    } as Client
+    setGlobalBookingResolveSlotsForTests(() => [])
+
+    const first = recomputeBookingFeedDiscoverySnapshotDeduplicated({
+      executor,
+      hostUserId: "host_1",
+      nowUtc: NOW,
+    })
+    const second = recomputeBookingFeedDiscoverySnapshotDeduplicated({
+      executor,
+      hostUserId: "host_1",
+      nowUtc: NOW,
+    })
+    expect(second).toBe(first)
+    releaseFirstRead()
+    await Promise.all([first, second])
+
+    expect(profileReads).toBe(1)
+    expect(statements).toHaveLength(1)
+  })
+
+  test("queues a post-write recompute after older feed work", async () => {
+    const statements: InStatement[] = []
+    const base = executorWithSnapshotCapture(statements)
+    let profileReads = 0
+    let releaseFirstRead!: () => void
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve
+    })
+    const executor = {
+      ...base,
+      async execute(statement: InStatement | string): Promise<QueryResult> {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("to_jsonb(p) AS profile")) {
+          profileReads += 1
+          if (profileReads === 1) await firstRead
+        }
+        return base.execute(statement)
+      },
+    } as Client
+    setGlobalBookingResolveSlotsForTests(() => [])
+
+    const coldRefresh = recomputeBookingFeedDiscoverySnapshotDeduplicated({
+      executor,
+      hostUserId: "host_1",
+      nowUtc: NOW,
+    })
+    const postWriteRefresh = recomputeBookingFeedDiscoverySnapshotAfterWrite({
+      executor,
+      hostUserId: "host_1",
+      nowUtc: "2026-07-20T00:00:01.000Z",
+    })
+    releaseFirstRead()
+    await Promise.all([coldRefresh, postWriteRefresh])
+
+    expect(profileReads).toBe(2)
+    expect(statements).toHaveLength(2)
+    expect(statements[1]?.args?.at(-1)).toBe("2026-07-20T00:00:01.000Z")
   })
 })

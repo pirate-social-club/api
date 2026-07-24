@@ -20,7 +20,7 @@ import {
   createBookingHostConfigWriteRepository,
 } from "./host-config-repository"
 import type { AvailabilityException, AvailabilityRule, BookingProfile, PriceRule } from "./types"
-import { invalidateBookingFeedDiscoverySnapshot } from "./booking-feed-discovery"
+import { recomputeBookingFeedDiscoverySnapshotAfterWrite } from "./booking-feed-discovery"
 
 export type ServiceOk<T> = { ok: true; data: T }
 export type ServiceErr = { ok: false; reason: string; fields?: ValidationError[] }
@@ -49,7 +49,7 @@ let repositoriesForTests: {
   read: BookingHostConfigReadRepository
   write: BookingHostConfigWriteRepository
 } | null = null
-let feedDiscoveryInvalidatorForTests: ((hostUserId: string) => Promise<void>) | null = null
+let feedDiscoveryRefresherForTests: ((hostUserId: string) => Promise<void>) | null = null
 
 export function setBookingHostConfigRepositoriesForTests(
   repositories: {
@@ -60,10 +60,10 @@ export function setBookingHostConfigRepositoriesForTests(
   repositoriesForTests = repositories
 }
 
-export function setBookingFeedDiscoveryInvalidatorForTests(
-  invalidator: ((hostUserId: string) => Promise<void>) | null,
+export function setBookingFeedDiscoveryRefresherForTests(
+  refresher: ((hostUserId: string) => Promise<void>) | null,
 ): void {
-  feedDiscoveryInvalidatorForTests = invalidator
+  feedDiscoveryRefresherForTests = refresher
 }
 
 function nowIso(): string {
@@ -80,12 +80,15 @@ function writeRepo(env: Env) {
   return createBookingHostConfigWriteRepository(getControlPlaneClient(env))
 }
 
-async function invalidateFeedDiscovery(env: Env, hostUserId: string): Promise<void> {
+async function refreshFeedDiscovery(env: Env, hostUserId: string): Promise<void> {
   if (repositoriesForTests) {
-    await feedDiscoveryInvalidatorForTests?.(hostUserId)
+    await feedDiscoveryRefresherForTests?.(hostUserId)
     return
   }
-  await invalidateBookingFeedDiscoverySnapshot(getControlPlaneClient(env), hostUserId)
+  await recomputeBookingFeedDiscoverySnapshotAfterWrite({
+    executor: getControlPlaneClient(env),
+    hostUserId,
+  })
 }
 
 function validatePayoutWallet(input: BookingProfileInput & { payout_wallet_address?: string | null }): ServiceResult<string | null | undefined> {
@@ -166,12 +169,12 @@ export async function upsertBookingProfile(
       createdAt: now,
       updatedAt: now,
     })
-    await invalidateFeedDiscovery(env, hostUserId)
+    await refreshFeedDiscovery(env, hostUserId)
     return { ok: true, data: { created: true, profile } }
   }
 
   const profile = await repo.updateProfile(hostUserId, toProfileUpdateInput(input, payoutWallet.data, now))
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: { created: false, profile: profile! } }
 }
 
@@ -191,7 +194,7 @@ export async function setProfilePublished(
     ? await repo.publishProfile(hostUserId, nowIso())
     : await repo.unpublishProfile(hostUserId, nowIso())
   if (!profile) return { ok: false, reason: "profile_not_found" }
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: profile }
 }
 
@@ -228,7 +231,7 @@ export async function createAvailabilityRule(
     createdAt: now,
     updatedAt: now,
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: rule }
 }
 
@@ -261,13 +264,13 @@ export async function updateAvailabilityRule(
     ...(input.effective_until_utc !== undefined ? { effectiveUntilUtc: input.effective_until_utc ?? null } : {}),
     updatedAt: nowIso(),
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deleteAvailabilityRule(env: Env, hostUserId: string, ruleId: string): Promise<boolean> {
   const deleted = await writeRepo(env).deleteAvailabilityRule(hostUserId, ruleId)
-  if (deleted) await invalidateFeedDiscovery(env, hostUserId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
   return deleted
 }
 
@@ -295,7 +298,7 @@ export async function createAvailabilityException(
     endUtc: input.end_utc,
     createdAt: nowIso(),
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: exception }
 }
 
@@ -321,13 +324,13 @@ export async function updateAvailabilityException(
     ...(input.start_utc !== undefined ? { startUtc: input.start_utc } : {}),
     ...(input.end_utc !== undefined ? { endUtc: input.end_utc } : {}),
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deleteAvailabilityException(env: Env, hostUserId: string, exceptionId: string): Promise<boolean> {
   const deleted = await writeRepo(env).deleteAvailabilityException(hostUserId, exceptionId)
-  if (deleted) await invalidateFeedDiscovery(env, hostUserId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
   return deleted
 }
 
@@ -361,7 +364,7 @@ export async function createPriceRule(
     createdAt: now,
     updatedAt: now,
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: priceRule }
 }
 
@@ -395,12 +398,12 @@ export async function updatePriceRule(
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
     updatedAt: nowIso(),
   })
-  await invalidateFeedDiscovery(env, hostUserId)
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deletePriceRule(env: Env, hostUserId: string, priceRuleId: string): Promise<boolean> {
   const deleted = await writeRepo(env).deletePriceRule(hostUserId, priceRuleId)
-  if (deleted) await invalidateFeedDiscovery(env, hostUserId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
   return deleted
 }
