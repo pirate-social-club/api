@@ -77,7 +77,12 @@ anything:
 
 ## Current holds
 
-_None._
+- **2026-07-24T10:46:57Z — Codex `/root`, community scheduler soak.**
+  Deploying API commit `2cc78ef5` (the #760 + #768 scheduler changes without
+  later money-path changes) after the active Web release lane settles. Measuring
+  the `[community-jobs] scheduled task timing` phase split, checked/deferred
+  counts, reward-watchdog execution, connection pressure, and backlog progress.
+  Staging will be restored to the authoritative Web API pin after the soak.
 
 ## Hold history
 
