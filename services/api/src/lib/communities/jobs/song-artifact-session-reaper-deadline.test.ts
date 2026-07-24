@@ -141,9 +141,17 @@ describe("reconcileStaleSongArtifactUploadSessionJobs prelude deadline", () => {
 
     expect(firstTick.checked_communities).toBe(1)
     expect(secondTick.checked_communities).toBe(1)
-    // Every start fails fast against the empty repository, so the failure list
-    // records the scan order.
-    expect(firstTick.failed_communities[0]?.community_id).toBe("cmt_1")
-    expect(secondTick.failed_communities[0]?.community_id).toBe("cmt_2")
+    // A checked community lands in exactly one of the two lists: communities on
+    // success, failed_communities on error. Which one depends on the test env
+    // (module mocks from other files in a shared bun process can make the open
+    // succeed), so read the scan order from the union.
+    const scannedCommunityId = (summary: {
+      communities: Array<{ community_id: string }>
+      failed_communities: Array<{ community_id: string }>
+    }) => summary.communities[0]?.community_id ?? summary.failed_communities[0]?.community_id
+    expect(firstTick.communities.length + firstTick.failed_communities.length).toBe(1)
+    expect(secondTick.communities.length + secondTick.failed_communities.length).toBe(1)
+    expect(scannedCommunityId(firstTick)).toBe("cmt_1")
+    expect(scannedCommunityId(secondTick)).toBe("cmt_2")
   })
 })
