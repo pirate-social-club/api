@@ -77,19 +77,23 @@ anything:
 
 ## Current holds
 
-- **2026-07-24 — video-audio enrollment E2E (`/root`)**. Holding
-  `pirate-api-staging` from branch `ops/video-audio-staging-e2e-20260724`
-  (based on API main `b7be70f7`) to enable
-  `VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED` on staging and collect an
-  ID-backed enroll → match → delete/unenroll round trip. Evidence collection
-  includes shard rows, job IDs, ACR file IDs, zero hold/case assertions, feed
-  visibility, and the song-path exclusion. Do not redeploy staging until this
-  hold is released.
+_None._
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-24** — Video-audio enrollment E2E stopped at the ACR capacity
+  gate. Post `pst_cba0726d138a401ebd4aa8ae74dffa2d`, job
+  `cjb_bc8e6378d81f4d11971ca38e06b4e93e`, and analysis
+  `mar_f90a03fdbbd34f0b89fba5e4c8aae5b8` proved the staging job ran, but its
+  enrollment evidence recorded `attempted=true`, `synced=false`,
+  `error=http_400`. A direct catalog probe returned “Your bucket's files
+  exceed limits, Please contact Support for more resources” for bucket 30358.
+  The enrollment flag and temporary staging catalog token were removed.
+  Staging was restored to authoritative Web pin `8461e236` (Worker version
+  `288365f3`). No match, hold/case, feed, song-exclusion, or tombstone claim
+  was made because no ACR file ID was created.
 - **2026-07-24** — API community-prelude bounding. `process_community_jobs`
   gained a 90s task deadline (`COMMUNITY_JOB_TASK_DEADLINE_MS`) and a 20s
   prelude sub-budget (`COMMUNITY_JOB_PRELUDE_DEADLINE_MS`) shared by the three
