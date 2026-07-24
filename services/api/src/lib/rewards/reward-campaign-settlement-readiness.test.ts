@@ -9,6 +9,7 @@ import {
 const PRIVATE_KEY = "0x7000000000000000000000000000000000000000000000000000000000000007"
 const OPERATOR = "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6"
 const TOKEN = "0x1000000000000000000000000000000000000001"
+const VAULT = "0x2000000000000000000000000000000000000002"
 
 function readyEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -50,6 +51,40 @@ describe("reward campaign settlement readiness", () => {
     }))).toThrow("Reward campaign settlement is unavailable")
     expect(() => assertRewardCampaignSettlementReadiness(readyEnv({
       PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x3000000000000000000000000000000000000003",
+    }))).toThrow("Reward campaign settlement is unavailable")
+  })
+
+  test("accepts a complete CID-only Lit vault tuple without a raw signer key", () => {
+    expect(assertRewardCampaignSettlementReadiness(readyEnv({
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      LIT_REWARDS_USAGE_API_KEY: "usage-secret",
+      LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
+    }))).toMatchObject({
+      treasuryAddress: VAULT,
+    })
+  })
+
+  test("fails closed when the Lit vault tuple is incomplete or permits inline HTTP", () => {
+    const lit = {
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      LIT_REWARDS_USAGE_API_KEY: "usage-secret",
+      LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
+    } satisfies Partial<Env>
+    expect(() => assertRewardCampaignSettlementReadiness(readyEnv({
+      ...lit,
+      LIT_REWARDS_ACTION_IPFS_ID: undefined,
+    }))).toThrow("Reward campaign settlement is unavailable")
+    expect(() => assertRewardCampaignSettlementReadiness(readyEnv({
+      ...lit,
+      LIT_REWARDS_API_URL: "http://chipotle.invalid",
     }))).toThrow("Reward campaign settlement is unavailable")
   })
 

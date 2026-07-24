@@ -9,11 +9,21 @@ import {
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
   resolveRewardsSettlementChainId,
+  resolveRewardsSettlementOperatorAddress,
   resolveRewardsSettlementOperatorPrivateKey,
   resolveRewardsSettlementRpcUrl,
   resolveRewardsSettlementUsdcTokenAddress,
 } from "./booking-chain-config"
 import type { ChainPrimitives, OperatorKind } from "./operator-signing-coordinator-do"
+import { LitChipotleClient } from "../../rewards/lit-chipotle-client"
+import { createProductionLitRewardVaultExecutor } from "../../rewards/lit-reward-vault-executor"
+import {
+  resolveRewardsSettlementBackend,
+  resolveRewardVaultLitConfig,
+  rewardVaultSigningDeadline,
+  type RewardsSettlementBackend,
+} from "../../rewards/reward-vault-lit-config"
+import { executeAndVerifyRewardVaultTransaction } from "../../rewards/reward-vault-transaction"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
 // the DO module itself has no ethers import — the production worker entry registers this via
@@ -27,16 +37,27 @@ const ERC20_ABI = [
 ] as const
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 
-function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): { privateKey: string; rpcUrl: string; chainId: number; usdc: string; operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS" } {
-  const privateKey = operatorKind === "rewards"
-    ? resolveRewardsSettlementOperatorPrivateKey(env)
-    : resolveBookingSettlementOperatorPrivateKey(env)
+function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
+  backend: RewardsSettlementBackend
+  privateKey: string | null
+  operatorAddress: string
+  rpcUrl: string
+  chainId: number
+  usdc: string
+  operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
+} {
+  const backend = operatorKind === "rewards" ? resolveRewardsSettlementBackend(env) : "local"
+  const privateKey = backend === "local"
+    ? (operatorKind === "rewards"
+        ? resolveRewardsSettlementOperatorPrivateKey(env)
+        : resolveBookingSettlementOperatorPrivateKey(env))
+    : null
   // Last-line guard on the signing path: if an operator address is configured (it names the nonce DO),
   // the key we are about to sign with MUST derive it — otherwise refuse to sign rather than broadcast
   // from a wallet whose nonce is being tracked under a different DO.
   const operatorAddressField = operatorKind === "rewards" ? "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS" : "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS"
   const expectedOperator = parseExpectedEvmAddress(env[operatorAddressField])
-  if (expectedOperator) {
+  if (expectedOperator && privateKey) {
     assertPrivateKeyMatchesExpectedAddress({
       privateKey,
       expectedAddress: expectedOperator,
@@ -44,7 +65,11 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): { priv
     })
   }
   return {
+    backend,
     privateKey,
+    operatorAddress: operatorKind === "rewards"
+      ? resolveRewardsSettlementOperatorAddress(env)
+      : (privateKey ? getAddress(new Wallet(privateKey).address) : getAddress(expectedOperator!)),
     rpcUrl: operatorKind === "rewards" ? resolveRewardsSettlementRpcUrl(env) : resolveBookingSettlementRpcUrl(env),
     chainId: operatorKind === "rewards" ? resolveRewardsSettlementChainId(env) : resolveBookingSettlementChainId(env),
     usdc: operatorKind === "rewards" ? resolveRewardsSettlementUsdcTokenAddress(env) : resolveBookingSettlementUsdcTokenAddress(env),
@@ -76,8 +101,8 @@ function transferAmount(input: { amountCents?: number; amountAtomic?: string }):
 }
 
 export const realChain: ChainPrimitives = {
-  pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "pending") },
-  latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(new Wallet(c.privateKey).address, "latest") },
+  pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "pending") },
+  latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "latest") },
   gasParams: async (env, operatorKind) => {
     const c = resolveConfig(env, operatorKind)
     const fee = await new JsonRpcProvider(c.rpcUrl, c.chainId).getFeeData()
@@ -85,10 +110,38 @@ export const realChain: ChainPrimitives = {
   },
   signVerifiedTransfer: async (env, input) => {
     const c = resolveConfig(env, input.operatorKind)
-    const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
-    const usdc = new Contract(c.usdc, ERC20_ABI, signer)
     const to = checksumRecipient(input.to)
     const amount = transferAmount(input)
+    if (c.backend === "lit_vault") {
+      const lit = resolveRewardVaultLitConfig(env)
+      const client = new LitChipotleClient({
+        usageApiKey: lit.usageApiKey,
+        baseUrl: lit.apiUrl,
+        timeoutMs: lit.requestTimeoutMs,
+        maxAttempts: lit.requestMaxAttempts,
+      })
+      const execute = createProductionLitRewardVaultExecutor(client, lit.actionIpfsId)
+      // Deadline is intentionally created at the signing attempt, not when the
+      // effect is enqueued. A stale/queued effect can be safely re-signed with
+      // fresh calldata because the vault replay key remains the operation ID.
+      const deadline = rewardVaultSigningDeadline(Date.now(), lit.signingDeadlineSeconds)
+      return executeAndVerifyRewardVaultTransaction(execute, {
+        effectKind: input.effectKind,
+        effectId: input.effectId,
+        recipient: to,
+        amount,
+        deadline,
+        policyVersion: lit.policyVersion,
+        vaultAddress: lit.vaultAddress,
+        signerAddress: c.operatorAddress,
+        chainId: c.chainId,
+        nonce: input.nonce,
+        gas: input.gas,
+      })
+    }
+    if (!c.privateKey) throw badRequestError("Local settlement signer is not configured")
+    const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
+    const usdc = new Contract(c.usdc, ERC20_ABI, signer)
     // The amount math assumes 6 decimals — verify the token actually is, so a misconfigured token
     // address can never transfer the wrong order of magnitude.
     if (Number(await usdc.decimals()) !== 6) throw badRequestError("Booking settlement token must be USDC with 6 decimals")
