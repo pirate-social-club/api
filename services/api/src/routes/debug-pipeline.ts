@@ -312,7 +312,7 @@ debugPipeline.get("/video-audio-evidence", async (c) => {
     return c.json({ error: "post_not_found", post_id: postId }, 404)
   }
   const communityId = projection.community_id
-  const db = await openCommunityReadClient(c.env, communityRepository, communityId)
+  const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
   try {
     const post = await db.client.execute({
       sql: `
