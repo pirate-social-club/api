@@ -41,14 +41,27 @@ export function selectCommunityIdsForOpsAlertScan(input: {
   return { selected, offset, truncated: true }
 }
 
+export type OpsAlertRunSummary = {
+  /** Communities this pass began scanning. */
+  scanned_communities: number
+  /** Selected communities left unscanned because the scan deadline passed. */
+  deferred_communities: number
+  /** Wall time spent scanning communities. */
+  scan_ms: number
+}
+
 export async function runOpsAlerts(input: {
   env: Env
   communityRepository: CommunityJobRepository
   nowMs: number
-}): Promise<void> {
+  deadlineAtMs?: number | null
+  now?: () => number
+}): Promise<OpsAlertRunSummary> {
   const { env } = input
+  const now = input.now ?? (() => Date.now())
+  const scanStartedAtMs = now()
   const kv = env.OPS_ALERT_DEDUPE
-  if (!kv) return
+  if (!kv) return { scanned_communities: 0, deferred_communities: 0, scan_ms: 0 }
 
   const maxCommunities = intFromEnv(env.OPS_ALERT_MAX_COMMUNITIES, DEFAULT_MAX_COMMUNITIES)
   const lookbackMs = intFromEnv(env.OPS_ALERT_LOOKBACK_MS, DEFAULT_LOOKBACK_MS)
@@ -70,7 +83,19 @@ export async function runOpsAlerts(input: {
   const communityIds = scanSelection.selected
 
   const signals: CommunityPublishAlertSignals[] = []
+  let scannedCommunities = 0
   for (const communityId of communityIds) {
+    // The scan deadline stops this pass from starting more communities; it
+    // never interrupts one already open. The rotated window above keeps
+    // truncated passes fair.
+    if (input.deadlineAtMs != null && now() >= input.deadlineAtMs) {
+      console.warn("[ops-alerts] scan deadline reached", JSON.stringify({
+        scanned_communities: scannedCommunities,
+        deferred_communities: communityIds.length - scannedCommunities,
+      }))
+      break
+    }
+    scannedCommunities += 1
     let handle: Awaited<ReturnType<typeof openCommunityReadClient>> | null = null
     try {
       handle = await openCommunityReadClient(env, input.communityRepository, communityId)
@@ -83,6 +108,11 @@ export async function runOpsAlerts(input: {
     } finally {
       await handle?.close?.()
     }
+  }
+  const summary: OpsAlertRunSummary = {
+    scanned_communities: scannedCommunities,
+    deferred_communities: communityIds.length - scannedCommunities,
+    scan_ms: Math.max(0, now() - scanStartedAtMs),
   }
 
   const alerts = buildOpsAlerts(signals)
@@ -109,7 +139,7 @@ export async function runOpsAlerts(input: {
   } finally {
     controlPlane.close?.()
   }
-  if (alerts.length === 0) return
+  if (alerts.length === 0) return summary
 
   const bucketMs = (alert: OpsAlert) => opsAlertBucketMs(env, alert.severity)
   const longestBucketMs = Math.max(...alerts.map(bucketMs))
@@ -120,11 +150,13 @@ export async function runOpsAlerts(input: {
     await markOpsAlertsSent({ alerts: toSend, deduper, nowMs: input.nowMs, bucketMs })
   }
   logPipelineInfo("[ops-alerts] pass complete", {
-    communities: communityIds.length,
+    communities: scannedCommunities,
+    deferred_communities: summary.deferred_communities,
     alerts: alerts.length,
     after_dedupe: toSend.length,
     delivered: delivery.delivered,
     sent: delivery.sent,
     sink: delivery.sink,
   })
+  return summary
 }

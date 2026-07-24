@@ -83,6 +83,17 @@ _None._
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-24** — API community-prelude bounding. `process_community_jobs`
+  gained a 90s task deadline (`COMMUNITY_JOB_TASK_DEADLINE_MS`) and a 20s
+  prelude sub-budget (`COMMUNITY_JOB_PRELUDE_DEADLINE_MS`) shared by the three
+  per-community reconciles (locked delivery, song artifact session reaper, post
+  publish finalize). Each prelude loop now rotates its community order per tick,
+  gates new community starts on the deadline (never cancels in-flight work),
+  and reports `reconcile_ms` plus checked/deferred counts; the drain keeps its
+  45s tick deadline clamped to the task deadline, and `runOpsAlerts` scans with
+  the remaining task time. The next staging soak should record the per-phase
+  timings from the new `[community-jobs] scheduled task timing` log line
+  instead of inferring the prelude from the task total.
 - **2026-07-24** — API #760 scheduler-budget soak. Final candidate
   `8df4904e` bounded two stale sweeps to 15.420s/14.903s, then started processing
   46/43 rotated communities in 3.221s/3.022s; no runnable jobs were present.
