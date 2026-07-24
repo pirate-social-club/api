@@ -171,6 +171,12 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
           slot_duration_seconds: 1800,
         });
         expect(ruleResult.ok).toBe(true);
+        const warmedAfterRule = await repoDb.unsafe(`
+          SELECT has_available_slot, starting_price_cents
+          FROM bookings.feed_discovery_snapshots
+          WHERE host_user_id = $1
+        `, [hostUserId]) as Array<{ has_available_slot: boolean; starting_price_cents: number }>;
+        expect(warmedAfterRule).toEqual([{ has_available_slot: true, starting_price_cents: 5000 }]);
 
         const exceptionResult = await createAvailabilityException(PG_ENV, hostUserId, {
           kind: "block",
@@ -189,6 +195,32 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
         expect((await listAvailabilityRules(PG_ENV, hostUserId)).map((rule) => rule.ruleId)).toHaveLength(1);
         expect((await listAvailabilityExceptions(PG_ENV, hostUserId)).map((exception) => exception.kind)).toEqual(["block"]);
         expect((await listPriceRules(PG_ENV, hostUserId)).map((price) => price.priceCents)).toEqual([6500]);
+
+        // A config write must replace stale discovery data immediately. With base raised to 7000,
+        // Monday resolves to the 6500 override and Tuesday falls back to 7000, so the real floor is 6500.
+        await repoDb.unsafe(`
+          UPDATE bookings.feed_discovery_snapshots
+          SET has_available_slot = TRUE, starting_price_cents = 1234
+          WHERE host_user_id = $1
+        `, [hostUserId]);
+        const updateResult = await upsertBookingProfile(PG_ENV, hostUserId, {
+          base_price_cents: 7000,
+        });
+        expect(updateResult.ok).toBe(true);
+        const warmedAfterProfileWrite = await repoDb.unsafe(`
+          SELECT has_available_slot, starting_price_cents, valid_until > NOW() AS is_valid
+          FROM bookings.feed_discovery_snapshots
+          WHERE host_user_id = $1
+        `, [hostUserId]) as Array<{
+          has_available_slot: boolean;
+          is_valid: boolean;
+          starting_price_cents: number;
+        }>;
+        expect(warmedAfterProfileWrite).toEqual([{
+          has_available_slot: true,
+          starting_price_cents: 6500,
+          is_valid: true,
+        }]);
       });
     } finally {
       setControlPlanePostgresPoolFactoryForTests(null);
