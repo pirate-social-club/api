@@ -3,6 +3,7 @@
 // resolution plus unfinished-intent resume against bookings.* rows.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { Client, InStatement, QueryResult } from "../sql-client";
@@ -14,6 +15,9 @@ import { sweepGlobalBookingSettlements } from "./booking-settlement-cron";
 import { createSettlementEffectWriteRepository } from "./settlement-effect-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking settlement cron PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_settlement_cron_test";
 
@@ -174,6 +178,10 @@ describe.skipIf(!RUN)("global booking settlement cron (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${role}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-settlement-cron-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("initiates due attendance outcomes and resumes unfinished settlement intents", async () => {

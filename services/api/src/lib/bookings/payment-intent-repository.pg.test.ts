@@ -3,6 +3,7 @@
 // against the actual bookings.payment_intents constraints.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createPaymentIntentRepository, createPaymentIntentTxWriteRepository, createPaymentIntentWriteRepository,
@@ -10,6 +11,9 @@ import {
 } from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for bookings payment intent repository PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_payment_intent_repo_test";
 
@@ -101,6 +105,10 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "payment-intent-repository-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("createOrGet is idempotent, replay-validates immutable fields, and preserves uint256 amount strings", async () => {

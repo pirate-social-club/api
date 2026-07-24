@@ -3,6 +3,7 @@
 // the full api cross-repo install; production still loads @pirate/bookings-domain by default.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client";
 import {
@@ -12,6 +13,9 @@ import {
 } from "./booking-hold-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking hold service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_hold_service_test";
 
@@ -109,6 +113,10 @@ describe.skipIf(!RUN)("global booking hold service (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-hold-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("creates a global hold and slot lock from published host config", async () => {

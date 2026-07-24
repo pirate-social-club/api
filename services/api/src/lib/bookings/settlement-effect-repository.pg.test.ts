@@ -3,6 +3,7 @@
 // retry/resume, coordinator mirroring, and tx-bound rollback against real constraints.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createSettlementEffectRepository,
@@ -12,6 +13,9 @@ import {
 } from "./settlement-effect-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for settlement effect repository PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_settlement_effect_repo_test";
 
@@ -88,6 +92,10 @@ describe.skipIf(!RUN)("settlement effect repository (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "settlement-effect-repository-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("begins a submitted effect and treats exact idempotent replay as existing-submitted", async () => {

@@ -3,6 +3,7 @@
 // the same lightweight executor shape used by the host-config repository tests.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createBookingHoldRepository, createBookingHoldTxWriteRepository, createBookingHoldWriteRepository,
@@ -10,6 +11,9 @@ import {
 } from "./hold-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for bookings hold repository PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_hold_repo_test";
 
@@ -75,6 +79,10 @@ describe.skipIf(!RUN)("bookings hold repository (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "hold-repository-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("transaction-bound createHoldWithSlotLock creates an active hold and active lock", async () => {

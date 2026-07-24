@@ -3,6 +3,7 @@
 // through the service seam so the durable state machine is tested without RPC.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import type { UserRepository } from "../auth/repositories";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
@@ -16,6 +17,9 @@ import { bookingIdForHold } from "./booking-finalization-repository";
 import { createPaymentIntentRepository, paymentIntentIdForHold } from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking confirm service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_confirm_service_test";
 const BUYER = "0x7000000000000000000000000000000000000007";
@@ -140,6 +144,10 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-confirm-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("quotes an active global hold with a durable payment intent and fee snapshot", async () => {
