@@ -20,12 +20,47 @@ function extensionFromMimeType(mimeType: string | undefined): string {
   return "bin"
 }
 
+// ACRCloud error bodies carry the real failure reason (for example bucket
+// capacity) that the bare http_<status> code hides. Persist a short sanitized
+// snippet so diagnosis does not need a manual provider probe. JSON bodies
+// contribute only their message/code fields; anything else is truncated raw
+// text. Response headers and request data are never captured.
+const ACR_ERROR_DETAIL_MAX_LENGTH = 300
+
+async function readAcrErrorDetail(response: Response): Promise<string | null> {
+  const text = (await response.text().catch(() => "")).trim()
+  if (!text) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const parts: string[] = []
+      for (const key of ["code", "error", "message", "msg", "detail"]) {
+        const value = (parsed as Record<string, unknown>)[key]
+        if (typeof value === "string" && value.trim()) {
+          parts.push(value.trim())
+        } else if (typeof value === "number" || typeof value === "boolean") {
+          parts.push(`${key}=${value}`)
+        }
+      }
+      if (parts.length > 0) {
+        return parts.join("; ").slice(0, ACR_ERROR_DETAIL_MAX_LENGTH)
+      }
+    }
+  } catch {
+    // Not JSON: fall through to the raw snippet.
+  }
+  return text.replace(/\s+/g, " ").slice(0, ACR_ERROR_DETAIL_MAX_LENGTH)
+}
+
 function normalizeCatalogSyncResult(input: {
   bucketId: string
   synced: boolean
   attempted: boolean
   providerResult?: Record<string, unknown> | null
   error?: string | null
+  errorDetail?: string | null
 }): Record<string, unknown> {
   const providerResult = input.providerResult && typeof input.providerResult === "object"
     ? input.providerResult
@@ -40,6 +75,7 @@ function normalizeCatalogSyncResult(input: {
     attempted: input.attempted,
     synced: input.synced,
     ...(typeof input.error === "string" && input.error ? { error: input.error } : {}),
+    ...(typeof input.errorDetail === "string" && input.errorDetail ? { error_detail: input.errorDetail } : {}),
     ...(data && "id" in data ? { file_id: data.id } : {}),
     ...(data && typeof data.acr_id === "string" ? { acr_id: data.acr_id } : {}),
     ...(data && typeof data.state === "number" ? { state: data.state } : {}),
@@ -93,6 +129,7 @@ async function uploadAudioToAcrCloudCatalog(input: {
         attempted: true,
         synced: false,
         error: `http_${response.status}`,
+        errorDetail: await readAcrErrorDetail(response),
       })
     }
 
@@ -129,6 +166,7 @@ function normalizeCatalogDeleteResult(input: {
   deleted: boolean
   alreadyMissing?: boolean
   error?: string | null
+  errorDetail?: string | null
 }): Record<string, unknown> {
   return {
     provider: "acrcloud_catalog",
@@ -138,6 +176,7 @@ function normalizeCatalogDeleteResult(input: {
     deleted: input.deleted,
     ...(input.alreadyMissing ? { already_missing: true } : {}),
     ...(typeof input.error === "string" && input.error ? { error: input.error } : {}),
+    ...(typeof input.errorDetail === "string" && input.errorDetail ? { error_detail: input.errorDetail } : {}),
   }
 }
 
@@ -191,6 +230,7 @@ export async function deleteVideoAudioSampleFromAcrCloudCatalog(input: {
         attempted: true,
         deleted: false,
         error: `http_${response.status}`,
+        errorDetail: await readAcrErrorDetail(response),
       })
     }
     return normalizeCatalogDeleteResult({

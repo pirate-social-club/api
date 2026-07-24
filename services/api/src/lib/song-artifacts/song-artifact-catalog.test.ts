@@ -135,6 +135,62 @@ describe("syncSongBundleToAcrCloudCatalog", () => {
       sample_window: { start_ms: 6_000, duration_ms: 24_000 },
     })
   })
+
+  test("captures a sanitized provider error detail on enrollment failure", async () => {
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
+      code: 1001,
+      message: "bucket file count reaches the upper limit",
+      authorization: "Bearer should-never-be-captured",
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }))
+
+    const result = await syncVideoAudioSampleToAcrCloudCatalog({
+      env: {
+        ACRCLOUD_BUCKET_ID: "30358",
+        ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+        ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-token",
+      } as any,
+      sampleBytes: new Uint8Array([1, 2, 3]),
+      communityId: "community_123",
+      postId: "post_123",
+      assetId: "asset_123",
+      uploaderUserId: "user_123",
+      sampleWindow: { start_ms: 6_000, duration_ms: 24_000 },
+    })
+
+    expect(result.error).toBe("http_400")
+    expect(result.error_detail).toBe("code=1001; bucket file count reaches the upper limit")
+    expect(JSON.stringify(result)).not.toContain("should-never-be-captured")
+  })
+
+  test("falls back to a truncated raw snippet for non-JSON error bodies", async () => {
+    globalThis.fetch = mockFetch(async () => new Response(
+      `<html>\n  ${"proxy exploded ".repeat(60)}</html>`,
+      { status: 502, headers: { "content-type": "text/html" } },
+    ))
+
+    const result = await syncVideoAudioSampleToAcrCloudCatalog({
+      env: {
+        ACRCLOUD_BUCKET_ID: "30358",
+        ACRCLOUD_CONSOLE_BASE_URL: "https://console-v2.acrcloud.test/api",
+        ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-token",
+      } as any,
+      sampleBytes: new Uint8Array([1, 2, 3]),
+      communityId: "community_123",
+      postId: "post_123",
+      assetId: "asset_123",
+      uploaderUserId: "user_123",
+      sampleWindow: { start_ms: 6_000, duration_ms: 24_000 },
+    })
+
+    expect(result.error).toBe("http_502")
+    expect(typeof result.error_detail).toBe("string")
+    expect(String(result.error_detail).length).toBeLessThanOrEqual(300)
+    expect(String(result.error_detail)).toContain("proxy exploded")
+    expect(String(result.error_detail)).not.toMatch(/\s{2,}/)
+  })
 })
 
 describe("deleteVideoAudioSampleFromAcrCloudCatalog", () => {
@@ -212,7 +268,12 @@ describe("deleteVideoAudioSampleFromAcrCloudCatalog", () => {
   })
 
   test("reports provider failures without throwing", async () => {
-    globalThis.fetch = mockFetch(async () => new Response(null, { status: 500 }))
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
+      message: "file not found in bucket",
+    }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    }))
 
     const result = await deleteVideoAudioSampleFromAcrCloudCatalog({
       env: {
@@ -227,6 +288,7 @@ describe("deleteVideoAudioSampleFromAcrCloudCatalog", () => {
       attempted: true,
       deleted: false,
       error: "http_500",
+      error_detail: "file not found in bucket",
     })
   })
 })
