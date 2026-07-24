@@ -120,6 +120,76 @@ Production enablement is a coordinated release, not a staged campaign/accrual/pa
 
 `REWARDS_REFUNDS_ENABLED` is an independent custody-recovery switch. Leave it true when campaign creation or ordinary payouts are disabled unless the signer itself is suspected compromised. This allows already-owed refunds to drain during a campaign kill-switch event.
 
+## #690 production cash-out proof gate
+
+The scheduler-bounding release remains held until exactly one of the paths below
+is completed and reviewed. A live proof is the preferred path. Do not treat an
+older payout, a backfill, or a reconciler repair as proof of the #689 settlement
+path.
+
+### Path A — live #689 cash-out proof (preferred)
+
+Status: **unresolved**
+
+Run one real cash-out from an authenticated account through the currently
+deployed #689 path before the pending qualification expires. Record only public
+or non-sensitive identifiers; do not put account credentials, identity-provider
+artifacts, or private user data in this runbook.
+
+- Operator:
+- Reviewer:
+- Started at (UTC):
+- Completed at (UTC):
+- Environment and deployed API SHA:
+- Campaign ID:
+- Cash-out intent/effect ID:
+- Amount and asset:
+- On-chain transaction hash:
+- Settlement reference:
+- Payout effect final status:
+- Control-plane verification:
+  - campaign-backed allocation references the credited reward event;
+  - payout effect is confirmed exactly once;
+  - settlement reference matches the on-chain transaction;
+  - `reward_campaigns.paid_cents` advanced by the confirmed campaign slice;
+  - no released allocation, duplicate payout, or unexplained balance delta remains.
+- Evidence links or read-only query references:
+- Reviewer decision: **not reviewed**
+
+The gate clears only when the reviewer records `approved` and confirms this was a
+new live cash-out through #689 rather than a backfill.
+
+### Path B — explicit bounded-risk waiver (fallback only)
+
+Status: **not approved**
+
+Use this path only if the live cash-out cannot reasonably be completed before
+the pending qualification expires. A waiver is a release decision, not evidence
+that the payout path works.
+
+- Decision owner:
+- Reviewer:
+- Decision timestamp (UTC):
+- Why Path A could not be completed:
+- Exact environment and release SHA being waived:
+- Exposure snapshot:
+  - active funded campaigns:
+  - maximum unsettled amount:
+  - asset and network:
+- Safety controls verified:
+  - reward campaign and treasury watchdogs are executing;
+  - campaign, accrual, payout, and refund kill switches remain available;
+  - treasury solvency is confirmed;
+  - no unexpected payout/refund effects are pending.
+- Waiver expiry or removal condition:
+- Follow-up owner and due date:
+- Decision: **not approved**
+
+The gate clears only when an authorized decision owner changes the decision to
+`approved`, a reviewer countersigns it, and the bounded exposure is measured at
+decision time. Do not infer approval from silence, elapsed time, or the current
+pilot balance.
+
 ## Wallet rotation invariant
 
 Before changing the treasury/operator key, address, chain, or token, prove all of the following in the control-plane database:
