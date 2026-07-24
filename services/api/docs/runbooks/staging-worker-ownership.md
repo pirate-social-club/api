@@ -77,17 +77,23 @@ anything:
 
 ## Current holds
 
-- **2026-07-24T10:46:57Z — Codex `/root`, community scheduler soak.**
-  Deploying API commit `2cc78ef5` (the #760 + #768 scheduler changes without
-  later money-path changes) after the active Web release lane settles. Measuring
-  the `[community-jobs] scheduled task timing` phase split, checked/deferred
-  counts, reward-watchdog execution, connection pressure, and backlog progress.
-  Staging will be restored to the authoritative Web API pin after the soak.
+_None._
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-24** — API #760 + #768 scheduler soak passed on isolated candidate
+  `2cc78ef5`. Two acquiring batches completed `process_community_jobs` in
+  93.234s/91.036s against its 90s start-work budget, with only in-flight scan
+  overshoot and both runs below the 120s lease. Prelude/drain phases were
+  locked-delivery 20.440s/20.197s, stale sweep 15.805s/14.753s, processing
+  6.481s/4.039s, and ops alerts 48.396s/49.775s. Rotation advanced between
+  ticks; no runnable community jobs existed. Both reward watchdogs executed in
+  both batches and were absent from the five deferred lower-priority jobs.
+  Existing RPC rate-limit and community-schema errors remained; no new
+  D1/Postgres connection-pressure regression was observed. Staging restored to
+  authoritative Web pin `8461e236` (Worker version `cb047dba`).
 - **2026-07-24** — API community-prelude bounding. `process_community_jobs`
   gained a 90s task deadline (`COMMUNITY_JOB_TASK_DEADLINE_MS`) and a 20s
   prelude sub-budget (`COMMUNITY_JOB_PRELUDE_DEADLINE_MS`) shared by the three
