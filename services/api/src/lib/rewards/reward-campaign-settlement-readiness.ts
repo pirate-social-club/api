@@ -13,6 +13,11 @@ import {
   resolveRewardCampaignAssetConfig,
   type RewardCampaignAssetConfig,
 } from "./reward-campaign-config"
+import { LitChipotleClient } from "./lit-chipotle-client"
+import {
+  resolveRewardsSettlementBackend,
+  resolveRewardVaultLitConfig,
+} from "./reward-vault-lit-config"
 
 const successfulReadiness = new WeakMap<object, RewardCampaignAssetConfig>()
 
@@ -31,7 +36,19 @@ export function assertRewardCampaignSettlementReadiness(env: Env): RewardCampaig
 
   try {
     const campaign = resolveRewardCampaignAssetConfig(env)
-    resolveRewardsSettlementOperatorPrivateKey(env)
+    if (resolveRewardsSettlementBackend(env) === "lit_vault") {
+      const lit = resolveRewardVaultLitConfig(env)
+      // Constructor validation proves the production endpoint and credential
+      // tuple is structurally usable without making a metered external call.
+      new LitChipotleClient({
+        usageApiKey: lit.usageApiKey,
+        baseUrl: lit.apiUrl,
+        timeoutMs: lit.requestTimeoutMs,
+        maxAttempts: lit.requestMaxAttempts,
+      })
+    } else {
+      resolveRewardsSettlementOperatorPrivateKey(env)
+    }
     const settlementRpcUrl = resolveRewardsSettlementRpcUrl(env)
     if (!/^https:\/\//i.test(settlementRpcUrl)) {
       throw new Error('PIRATE_REWARDS_SETTLEMENT_RPC_URL must use HTTPS')

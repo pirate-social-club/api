@@ -161,7 +161,11 @@ export function resolveRewardsSettlementOperatorPrivateKey(env: Env): string {
 function resolveSettlementOperatorAddress(env: Env, kind: SettlementOperatorKind): string {
   const names = envNames(kind)
   const explicit = parseExpectedEvmAddress(env[names.operatorAddress] as string | undefined)
-  const privateKey = normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
+  const usesLitVault = kind === "rewards"
+    && String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault"
+  const privateKey = usesLitVault
+    ? null
+    : normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
 
   if (explicit) {
     const expected = getAddress(explicit)
@@ -194,6 +198,17 @@ export function resolveRewardsSettlementOperatorAddress(env: Env): string {
 export function assertRewardsCampaignTreasuryMatchesSettlementOperator(env: Env): void {
   const treasury = parseExpectedEvmAddress(env.REWARDS_CAMPAIGN_TREASURY_ADDRESS)
   if (!treasury) throw badRequestError("REWARDS_CAMPAIGN_TREASURY_ADDRESS is invalid")
+  if (String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault") {
+    const vault = parseExpectedEvmAddress(env.REWARDS_TREASURY_VAULT_ADDRESS)
+    if (!vault) throw badRequestError("REWARDS_TREASURY_VAULT_ADDRESS is invalid")
+    if (getAddress(treasury) !== getAddress(vault)) {
+      throw badRequestError("Reward campaign treasury must match the rewards treasury vault")
+    }
+    if (getAddress(vault) === resolveRewardsSettlementOperatorAddress(env)) {
+      throw badRequestError("Rewards treasury vault and Lit settlement signer must be distinct")
+    }
+    return
+  }
   if (getAddress(treasury) !== resolveRewardsSettlementOperatorAddress(env)) {
     throw badRequestError("Reward campaign treasury must match the rewards settlement operator")
   }
