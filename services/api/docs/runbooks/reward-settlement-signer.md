@@ -122,19 +122,23 @@ Production enablement is a coordinated release, not a staged campaign/accrual/pa
 
 ## #690 production cash-out proof gate
 
-The scheduler-bounding release remains held until exactly one of the paths below
-is completed and reviewed. A live proof is the preferred path. Do not treat an
-older payout, a backfill, or a reconciler repair as proof of the #689 settlement
-path.
+Changes that expand reward funding, qualification, or payout exposure remain
+held until exactly one of the paths below is completed and reviewed. This gate
+does not block safety or observability changes that reduce existing exposure,
+including promotion of the #760 + #768 scheduler bounds that restore reward
+watchdog execution. A live proof is the preferred path. Do not treat an older
+payout, a backfill, or a reconciler repair as proof of the #689 settlement path.
 
 ### Path A — live #689 cash-out proof (preferred)
 
 Status: **unresolved**
 
 Run one real cash-out from an authenticated account through the currently
-deployed #689 path before the pending qualification expires. Record only public
-or non-sensitive identifiers; do not put account credentials, identity-provider
-artifacts, or private user data in this runbook.
+deployed #689 path before the pending qualification's expected expiry on
+**2026-07-29 UTC**. Verify the exact `earliest_expires_at` immediately before
+the attempt; the stored value, not this planning date, is authoritative. Record
+only public or non-sensitive identifiers; do not put account credentials,
+identity-provider artifacts, or private user data in this runbook.
 
 - Operator:
 - Reviewer:
@@ -177,7 +181,10 @@ that the payout path works.
   - maximum unsettled amount:
   - asset and network:
 - Safety controls verified:
-  - reward campaign and treasury watchdogs are executing;
+  - reward campaign and treasury watchdogs are executing (use the #773 soak
+    evidence recorded in
+    [`staging-worker-ownership.md`](./staging-worker-ownership.md) as the
+    scheduler proof, then re-check the target environment at decision time);
   - campaign, accrual, payout, and refund kill switches remain available;
   - treasury solvency is confirmed;
   - no unexpected payout/refund effects are pending.
