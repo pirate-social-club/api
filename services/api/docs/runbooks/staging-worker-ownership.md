@@ -83,6 +83,13 @@ _None._
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-24** — API #760 scheduler-budget soak. Final candidate
+  `8df4904e` bounded two stale sweeps to 15.420s/14.903s, then started processing
+  46/43 rotated communities in 3.221s/3.022s; no runnable jobs were present.
+  Both reward watchdogs started before the drain and were not deferred. The
+  enclosing `process_community_jobs` task still took 223.227s/212.839s in other
+  prelude/ops-alert work, with existing staging connection errors observed.
+  Staging restored to authoritative Web pin `344ea443` (version `dec8f018`).
 - **2026-07-23** — API #756 scheduler-bounding soak failed. Deployed squash
   `69a6c3e6` as Worker version `b843dfea`; the cutoff reported
   `started_communities=1` and `deferred_communities=99`, but that one community
