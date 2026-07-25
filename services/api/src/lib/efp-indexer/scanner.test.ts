@@ -7,7 +7,12 @@ import {
   EFP_BASE_LIST_REGISTRY,
   EFP_BASE_LIST_RECORDS,
   EFP_BASE_START_BLOCK,
+  EFP_INDEXER_CHAINS,
+  EFP_OPTIMISM_CHAIN_ID,
+  EFP_OPTIMISM_LIST_RECORDS,
+  EFP_OPTIMISM_START_BLOCK,
   scanEfpBaseOnce,
+  scanEfpChainOnce,
 } from "./scanner"
 
 const TARGET = "0xd69e335d0b803f7dac27c130db90f5808a30b559" as Address
@@ -124,5 +129,52 @@ describe("scanEfpBaseOnce", () => {
     expect(Number(cursors.rows[0]?.safe_head_block)).toBe(
       Number(EFP_BASE_START_BLOCK + 936n),
     )
+  })
+
+  test("indexes list records on a storage-only chain without Base control events", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanups.push(database.cleanup)
+    const rawOp = encodePacked(
+      ["uint8", "uint8", "uint8", "uint8", "address"],
+      [1, 1, 1, 1, TARGET],
+    )
+    const reader = {
+      getBlockNumber: async () => EFP_OPTIMISM_START_BLOCK + 100n,
+      getBlock: async () => ({ hash: BLOCK_HASH }),
+      getLogs: async ({ address }: { address: Address }) => {
+        expect(address).toBe(EFP_OPTIMISM_LIST_RECORDS)
+        return [{
+          args: { op: rawOp, slot: 77n },
+          blockHash: BLOCK_HASH,
+          blockNumber: EFP_OPTIMISM_START_BLOCK + 10n,
+          logIndex: 3,
+          transactionHash: TX_HASH,
+          transactionIndex: 2,
+        }]
+      },
+    }
+
+    const summary = await scanEfpChainOnce({
+      client: database.client,
+      rpcUrl: "https://optimism.example.test",
+      config: EFP_INDEXER_CHAINS.optimism,
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:00:00.000Z"),
+    })
+
+    expect(summary).toMatchObject({
+      chainId: EFP_OPTIMISM_CHAIN_ID,
+      listOpCount: 1,
+      primaryListEventCount: 0,
+      storageLocationEventCount: 0,
+    })
+    const ops = await database.client.execute(
+      "SELECT chain_id, contract_address, slot FROM efp_list_ops",
+    )
+    expect(ops.rows).toEqual([expect.objectContaining({
+      chain_id: EFP_OPTIMISM_CHAIN_ID,
+      contract_address: EFP_OPTIMISM_LIST_RECORDS,
+      slot: "77",
+    })])
   })
 })

@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 
 import type { Env } from "../src/env"
-import { scanEfpBaseOnce } from "../src/lib/efp-indexer/scanner"
+import {
+  EFP_INDEXER_CHAINS,
+  scanEfpChainOnce,
+  type EfpIndexerChainConfig,
+} from "../src/lib/efp-indexer/scanner"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../src/lib/runtime-deps"
 
 function positiveBatchLimit(value: string | undefined): number {
@@ -25,9 +29,18 @@ function blockSpan(value: string | undefined): bigint | undefined {
 
 async function main(): Promise<void> {
   const env = process.env as unknown as Env
-  const rpcUrl = String(env.BASE_MAINNET_RPC_URL ?? "").trim()
+  const chainName = String(process.env.EFP_BACKFILL_CHAIN ?? "base").trim()
+  const config = EFP_INDEXER_CHAINS[chainName as EfpIndexerChainConfig["name"]]
+  if (!config) throw new Error("EFP_BACKFILL_CHAIN must be base, optimism, or ethereum")
+  const rpcUrl = String(
+    config.name === "base"
+      ? env.BASE_MAINNET_RPC_URL
+      : config.name === "optimism"
+        ? env.OPTIMISM_MAINNET_RPC_URL
+        : env.ETHEREUM_RPC_URL,
+  ).trim()
   if (!env.CONTROL_PLANE_DATABASE_URL) throw new Error("CONTROL_PLANE_DATABASE_URL is required")
-  if (!rpcUrl) throw new Error("BASE_MAINNET_RPC_URL is required")
+  if (!rpcUrl) throw new Error(`RPC URL is required for EFP ${config.name} backfill`)
   const batchLimit = positiveBatchLimit(process.argv[2])
   const requestedBlockSpan = blockSpan(process.env.EFP_BACKFILL_BLOCK_SPAN) ?? 100_000n
 
@@ -37,7 +50,7 @@ async function main(): Promise<void> {
     for (let batch = 1; batch <= batchLimit;) {
       let summary
       try {
-        summary = await scanEfpBaseOnce({ client, rpcUrl, blockSpan: requestedBlockSpan })
+        summary = await scanEfpChainOnce({ client, rpcUrl, config, blockSpan: requestedBlockSpan })
         consecutiveRateLimits = 0
       } catch (error) {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
@@ -55,7 +68,7 @@ async function main(): Promise<void> {
       }
       console.info(JSON.stringify({
         component: "efp_indexer",
-        operation: "backfill_base",
+        operation: `backfill_${config.name}`,
         batch,
         ...summary,
       }))
