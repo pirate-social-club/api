@@ -318,8 +318,13 @@ async function main(): Promise<void> {
   results.push(await probeEthersSurface())
   results.push(await probeTeeClock())
 
-  const pkpAddress = await createWallet()
-  console.log(`PKP wallet for this run: ${pkpAddress}`)
+  // Prefer a PKP minted out-of-band by the account owner, so the usage key
+  // running these probes never needs `can_create_pkps`.
+  const provided = process.env.LIT_SPIKE_PKP_ADDRESS?.trim()
+  const pkpAddress = provided && provided.length > 0 ? provided : await createWallet()
+  console.log(
+    `PKP wallet for this run: ${pkpAddress}${provided ? " (provided)" : " (created by this run)"}`,
+  )
   results.push(await probeGetPrivateKeyIdentifier(pkpAddress))
   results.push(await probeSignedTransactionRoundTrip(pkpAddress))
 
