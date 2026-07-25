@@ -64,7 +64,7 @@ export function isPublicReadCacheRequest(request: Request): boolean {
   if (url.pathname === "/feed/home") {
     return !request.headers.has("authorization")
   }
-  if (url.pathname === "/feed/home/public") {
+  if (url.pathname === "/feed/home/public" || url.pathname === "/feed/home/videos/public") {
     return true
   }
 
@@ -79,7 +79,11 @@ export function isPublicReadCacheRequest(request: Request): boolean {
 
 function publicReadVaryHeaders(request: Request): string[] {
   const url = new URL(request.url)
-  if (url.pathname === "/feed/home" || url.pathname === "/feed/home/public") {
+  if (
+    url.pathname === "/feed/home"
+    || url.pathname === "/feed/home/public"
+    || url.pathname === "/feed/home/videos/public"
+  ) {
     return []
   }
   return DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES
