@@ -23,6 +23,13 @@ export type Env = {
   PIRATE_ANDROID_KARAOKE_ORIGINS?: string
   MATERIALIZED_PUBLIC_HOME_FEED_LOCALES?: string
   PUBLIC_HOME_FEED_COMPUTE_BUDGET_MS?: string
+  /**
+   * Authenticated video-feed control-plane rollout. `shadow` validates the
+   * projected payload against the shard-hydrated response without serving it.
+   * `serve` is reserved for a later rollout once viewer-specific projections
+   * are complete; it currently behaves as `off`.
+   */
+  AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE?: "off" | "shadow" | "serve"
   PIRATE_ADMIN_TOKEN?: string
   OPS_ALERT_DEDUPE?: KVNamespace
   OPS_ALERT_EMAIL?: SendEmail

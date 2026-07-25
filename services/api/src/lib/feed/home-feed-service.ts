@@ -30,6 +30,10 @@ import {
   listFeedBookingsByHostUserIds,
 } from "./home-feed-booking"
 import { refreshBookingFeedDiscoverySnapshotsInBackground } from "../bookings/booking-feed-discovery"
+import {
+  compareProjectedVideoFeedRows,
+  shouldShadowAuthenticatedVideoFeed,
+} from "./home-feed-control-plane-shadow"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -139,17 +143,23 @@ function getBestProjectionRank(row: HomeFeedProjectionRow, now: number): number 
 }
 
 function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
+  const record = row as Record<string, unknown>
   return {
     community_id: requiredString(row, "community_id"),
     source_post_id: requiredString(row, "source_post_id"),
+    author_user_id: typeof record.author_user_id === "string" ? record.author_user_id : null,
+    identity_mode: record.identity_mode === "public" || record.identity_mode === "anonymous"
+      ? record.identity_mode
+      : undefined,
     source_created_at: requiredString(row, "source_created_at"),
     visibility: requiredString(row, "visibility") as HomeFeedProjectionRow["visibility"],
+    projected_payload_json: record.projected_payload_json,
     upvote_count: requiredNumber(row, "upvote_count"),
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
-    post_type: typeof (row as Record<string, unknown>).post_type === "string"
-      ? (row as Record<string, unknown>).post_type as HomeFeedProjectionRow["post_type"]
+    post_type: typeof record.post_type === "string"
+      ? record.post_type as HomeFeedProjectionRow["post_type"]
       : undefined,
   }
 }
@@ -195,6 +205,7 @@ async function listVideoHomeFeedProjectionRows(input: {
   communityIds: string[]
   cursor?: string | null
   env: Env
+  includeProjectedPayload?: boolean
   now: number
   pageSize?: number
   sort: HomeFeedSort
@@ -218,9 +229,12 @@ async function listVideoHomeFeedProjectionRows(input: {
   args.push(pageSize + 1, cursor.offset)
   const limitPlaceholder = `?${args.length - 1}`
   const offsetPlaceholder = `?${args.length}`
+  const projectedPayloadColumns = input.includeProjectedPayload
+    ? ", author_user_id, identity_mode, projected_payload_json"
+    : ""
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
-      SELECT community_id, source_post_id, source_created_at, visibility, post_type,
+      SELECT community_id, source_post_id, source_created_at, visibility, post_type${projectedPayloadColumns},
              upvote_count, downvote_count, comment_count, like_count
       FROM community_post_projections
       WHERE ${filters.join("\n        AND ")}
@@ -427,7 +441,8 @@ async function listHomeFeedProjectionRows(input: {
 
   const result = await controlPlaneClient.execute({
     sql: `
-      SELECT community_id, source_post_id, source_created_at, visibility, upvote_count, downvote_count, comment_count, like_count
+      SELECT community_id, source_post_id, source_created_at, visibility,
+             upvote_count, downvote_count, comment_count, like_count
       FROM community_post_projections
       WHERE projection_version = 1
         AND status = 'published'
@@ -586,11 +601,17 @@ export async function listHomeFeed(input: {
   const sort = parseHomeFeedSort(input.sort)
   const now = Date.now()
   const timeRange = parseHomeFeedTimeRange(input.timeRange)
+  const shadowControlPlane = shouldShadowAuthenticatedVideoFeed({
+    contentKind: input.contentKind,
+    mode: input.env.AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE,
+    userId: input.userId,
+  })
   let videoPage = input.contentKind === "video"
     ? await listVideoHomeFeedProjectionRows({
         communityIds,
         cursor: input.cursor,
         env: input.env,
+        includeProjectedPayload: shadowControlPlane,
         now,
         sort,
         timeRange,
@@ -699,6 +720,7 @@ export async function listHomeFeed(input: {
         communityIds,
         cursor: videoPage.nextCursor,
         env: input.env,
+        includeProjectedPayload: shadowControlPlane,
         now,
         pageSize: nextPageSize,
         sort,
@@ -714,6 +736,16 @@ export async function listHomeFeed(input: {
   }
   phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
   phaseTimings.order_items_ms = 0
+
+  if (shadowControlPlane) {
+    phaseStartedAt = performance.now()
+    const shadowResult = compareProjectedVideoFeedRows({
+      hydratedItems: orderedItems,
+      rows: pageRows,
+    })
+    phaseTimings.control_plane_shadow_ms = elapsedMs(phaseStartedAt)
+    console.info("[home-feed] control-plane shadow", JSON.stringify(shadowResult))
+  }
 
   phaseStartedAt = performance.now()
   const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
