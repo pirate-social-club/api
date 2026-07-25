@@ -150,21 +150,55 @@ feed.get("/home/public", async (c) => {
 })
 
 feed.get("/home/videos/public", async (c) => {
+  const waitUntil = getWaitUntil(c)
+  const url = new URL(c.req.url)
+  const materializedTarget = buildMaterializedPublicHomeFeedTarget({
+    contentKind: "video",
+    cursor: c.req.query("cursor") ?? null,
+    locale: c.req.query("locale") ?? null,
+    searchParams: url.searchParams,
+    sort: c.req.query("sort") ?? null,
+    timeRange: c.req.query("time_range") ?? null,
+  })
+  const materialized = await readMaterializedPublicHomeFeed({
+    client: getControlPlaneClient(c.env),
+    target: materializedTarget,
+  })
+  if (materialized.result) {
+    if (materialized.state === "stale") {
+      waitUntil?.(refreshMaterializedPublicHomeFeed({
+        env: c.env,
+        target: materializedTarget,
+      }))
+    }
+    setPublicReadCacheHeaders(c)
+    setHomeFeedServerTiming(c, materialized.result)
+    c.header("x-pirate-materialized-feed", materialized.state)
+    return c.json(materialized.result, 200)
+  }
+
   const result = await listHomeFeed({
     env: c.env,
     userId: null,
-    locale: c.req.query("locale") ?? null,
-    sort: c.req.query("sort") ?? null,
-    timeRange: c.req.query("time_range") ?? null,
-    cursor: c.req.query("cursor") ?? null,
+    locale: materializedTarget?.locale ?? c.req.query("locale") ?? null,
+    sort: materializedTarget?.sort ?? c.req.query("sort") ?? null,
+    timeRange: materializedTarget?.timeRange ?? c.req.query("time_range") ?? null,
+    cursor: materializedTarget?.cursor ?? c.req.query("cursor") ?? null,
     contentKind: "video",
     communityRepository: getCommunityRepository(c.env),
     userRepository: null,
     profileRepository: getProfileRepository(c.env),
-    waitUntil: getWaitUntil(c),
+    waitUntil,
+  })
+  await storeMaterializedPublicHomeFeed({
+    client: getControlPlaneClient(c.env),
+    env: c.env,
+    result,
+    target: materializedTarget,
   })
   setPublicReadCacheHeaders(c)
   setHomeFeedServerTiming(c, result)
+  c.header("x-pirate-materialized-feed", materialized.state)
   return c.json(result, 200)
 })
 

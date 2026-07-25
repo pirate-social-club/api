@@ -17,6 +17,7 @@ const DEFAULT_MATERIALIZED_PUBLIC_HOME_FEED_LOCALES = ["en"]
 
 type MaterializedPublicHomeFeedTarget = {
   cacheKey: string
+  contentKind: "video" | null
   locale: string | null
   sort: "best"
   timeRange: "all"
@@ -57,6 +58,7 @@ function normalizeTimeRange(timeRange: string | null | undefined): "all" | "othe
 }
 
 export function buildMaterializedPublicHomeFeedTarget(input: {
+  contentKind?: "video" | null
   cursor?: string | null
   locale?: string | null
   searchParams?: URLSearchParams
@@ -83,14 +85,18 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
 
   const locale = normalizeLocale(input.locale)
   const localeKey = locale ?? "default"
+  const contentKind = input.contentKind ?? null
+  const contentKindCacheKey = contentKind ? [`content_kind=${contentKind}`] : []
   return {
     cacheKey: [
       MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION,
+      ...contentKindCacheKey,
       "sort=best",
       `locale=${localeKey}`,
       "time_range=all",
       "cursor=first",
     ].join(":"),
+    contentKind,
     locale,
     sort: "best",
     timeRange: "all",
@@ -291,6 +297,7 @@ async function refreshMaterializedPublicHomeFeedOnce(input: {
       sort: input.target.sort,
       timeRange: input.target.timeRange,
       cursor: input.target.cursor,
+      contentKind: input.target.contentKind,
       communityRepository,
       userRepository: null,
       profileRepository: getProfileRepository(input.env),

@@ -667,6 +667,63 @@ describe("feed routes", () => {
     expect(Date.parse(String(stored.rows[0]?.stale_at))).toBeGreaterThan(Date.parse(String(stored.rows[0]?.expires_at)))
   })
 
+  test("GET /feed/home/videos/public serves a distinct materialized video feed", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const target = buildMaterializedPublicHomeFeedTarget({
+      contentKind: "video",
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    const mixedTarget = buildMaterializedPublicHomeFeedTarget({
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    if (!target || !mixedTarget) {
+      throw new Error("expected materialized targets")
+    }
+    expect(target.cacheKey).not.toBe(mixedTarget.cacheKey)
+
+    const now = Date.now()
+    const materializedBody = {
+      items: [],
+      top_communities: [],
+      next_cursor: "v1:cached-video-page",
+    }
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO materialized_public_feeds (
+          cache_key,
+          json_body,
+          created_at,
+          refreshed_at,
+          expires_at,
+          stale_at,
+          source_version
+        ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)
+      `,
+      args: [
+        target.cacheKey,
+        JSON.stringify(materializedBody),
+        new Date(now).toISOString(),
+        new Date(now + 60_000).toISOString(),
+        new Date(now + 600_000).toISOString(),
+        "test-materialized-video",
+      ],
+    })
+
+    const response = await app.request("http://pirate.test/feed/home/videos/public?sort=best&locale=en", {}, ctx.env)
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-pirate-materialized-feed")).toBe("hit")
+    expect(response.headers.get("server-timing")).toContain("materialized-public-feed-hit;dur=")
+    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(await json(response)).toEqual(materializedBody)
+  })
+
   test("materialized feed parser accepts Postgres JSONB objects", () => {
     const body = {
       items: [],

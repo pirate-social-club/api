@@ -23,6 +23,7 @@ async function publicReadCacheHeaderResponse(
 describe("public read cache headers", () => {
   test("identifies only cacheable public read GET requests", () => {
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/public"))).toBe(true)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/videos/public"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home", {
       headers: { Authorization: "Bearer token" },
