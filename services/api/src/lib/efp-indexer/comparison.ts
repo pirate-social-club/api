@@ -2,6 +2,7 @@ import { isAddress, type Address, type Hex } from "viem"
 
 import type { Client, QueryResultRow } from "../sql-client"
 import { applyEfpListOp, decodeEfpListOp, isEffectiveEfpFollow } from "./list-op"
+import { isEfpKnownHostedDivergence } from "./known-divergences"
 import { EFP_BASE_CHAIN_ID, EFP_BASE_LIST_RECORDS } from "./scanner"
 
 export type DerivedEfpGraph = {
@@ -204,13 +205,17 @@ async function fetchHostedListStats(apiUrl: string, listId: string): Promise<{
 }
 
 async function fetchHostedPositiveTarget(apiUrl: string, listId: string): Promise<Address | null> {
-  const response = await fetch(`${apiUrl}/api/v1/lists/${listId}/following?limit=1`, {
+  const response = await fetch(`${apiUrl}/api/v1/lists/${listId}/following?limit=20`, {
     headers: { Accept: "application/json" },
   })
   if (!response.ok) throw new Error(`Hosted EFP list following failed (${response.status}) for ${listId}`)
   const payload = await response.json() as HostedFollowingResponse
-  const first = Array.isArray(payload.following) ? payload.following[0] : undefined
-  return normalizedAddress(first?.address) ?? normalizedAddress(first?.data)
+  if (!Array.isArray(payload.following)) return null
+  for (const item of payload.following) {
+    const target = normalizedAddress(item.address) ?? normalizedAddress(item.data)
+    if (target && !isEfpKnownHostedDivergence(listId, target)) return target
+  }
+  return null
 }
 
 export type EfpComparisonMismatch = {
