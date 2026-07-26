@@ -185,6 +185,38 @@ describe("best video candidate selection", () => {
     expect(backfill.hasMore).toBe(true)
   })
 
+  test("keeps diversity caps across the hydration backfill seam", () => {
+    const candidates = [
+      ...Array.from({ length: 4 }, (_, index) => videoCandidateRow({
+        authorUserId: "usr_repeated",
+        communityId: "cmt_repeated",
+        postId: `pst_repeated_${index}`,
+        upvotes: 100 - index,
+      })),
+      ...Array.from({ length: 30 }, (_, index) => videoCandidateRow({
+        authorUserId: `usr_unique_${index}`,
+        communityId: `cmt_unique_${index}`,
+        postId: `pst_unique_${index}`,
+        upvotes: 50 - index,
+      })),
+    ]
+    const first = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: candidates,
+    })
+    const deliveredBeforeBackfill = first.rows.filter((row) => row.source_post_id !== "pst_unique_22")
+    const backfill = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 25, rankedAt },
+      pageSize: 4,
+      priorRows: deliveredBeforeBackfill,
+      rows: candidates,
+    })
+    const delivered = [...deliveredBeforeBackfill, ...backfill.rows]
+    expect(delivered.filter((row) => row.author_user_id === "usr_repeated")).toHaveLength(2)
+    expect(delivered.filter((row) => row.community_id === "cmt_repeated")).toHaveLength(2)
+    expect(backfill.nextOffset).toBeGreaterThan(29)
+  })
+
   test("does not apply a shared internal author cap to anonymous projections", () => {
     const candidates = Array.from({ length: 6 }, (_, index) => videoCandidateRow({
       authorUserId: "usr_hidden_author",
