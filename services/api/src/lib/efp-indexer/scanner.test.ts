@@ -164,6 +164,9 @@ describe("scanEfpBaseOnce", () => {
   })
 
   test("indexes list records on a storage-only chain without Base control events", async () => {
+    expect(EFP_INDEXER_CHAINS.optimism.rpcLogRange).toBe(100_000n)
+    expect(EFP_INDEXER_CHAINS.base.rpcLogRange).toBeUndefined()
+    expect(EFP_INDEXER_CHAINS.ethereum.rpcLogRange).toBeUndefined()
     const database = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanups.push(database.cleanup)
     await ensureProjectionSchema(database.client)

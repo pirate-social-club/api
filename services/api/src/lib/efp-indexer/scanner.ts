@@ -38,6 +38,7 @@ export const EFP_CONFIRMATION_DEPTH = 64n
 export const EFP_REPLAY_BLOCKS = 128n
 export const EFP_SCAN_BLOCK_SPAN = 10_000n
 const EFP_RPC_LOG_RANGE = 10_000n
+const EFP_OPTIMISM_RPC_LOG_RANGE = 100_000n
 const LIST_OP_EVENT = parseAbiItem("event ListOp(uint256 indexed slot, bytes op)")
 const UPDATE_ACCOUNT_METADATA_EVENT = parseAbiItem(
   "event UpdateAccountMetadata(address indexed addr, string key, bytes value)",
@@ -61,6 +62,7 @@ export type EfpIndexerChainConfig = {
   name: "base" | "optimism" | "ethereum"
   listRecordsAddress: Address
   startBlock: bigint
+  rpcLogRange?: bigint
   accountMetadataAddress?: Address
   listRegistryAddress?: Address
 }
@@ -81,6 +83,7 @@ export const EFP_INDEXER_CHAINS: Record<EfpIndexerChainConfig["name"], EfpIndexe
     name: "optimism",
     listRecordsAddress: EFP_OPTIMISM_LIST_RECORDS,
     startBlock: EFP_OPTIMISM_START_BLOCK,
+    rpcLogRange: EFP_OPTIMISM_RPC_LOG_RANGE,
   },
   ethereum: {
     chainId: EFP_ETHEREUM_CHAIN_ID,
@@ -245,15 +248,17 @@ export async function scanEfpChainOnce(input: {
     : safeHead
 
   const ranges: Array<{ fromBlock: bigint; toBlock: bigint }> = []
-  for (let rangeStart = fromBlock; rangeStart <= throughBlock; rangeStart += EFP_RPC_LOG_RANGE) {
-    const rangeEnd = rangeStart + EFP_RPC_LOG_RANGE - 1n
+  const rpcLogRange = config.rpcLogRange ?? EFP_RPC_LOG_RANGE
+  for (let rangeStart = fromBlock; rangeStart <= throughBlock; rangeStart += rpcLogRange) {
+    const rangeEnd = rangeStart + rpcLogRange - 1n
     ranges.push({
       fromBlock: rangeStart,
       toBlock: rangeEnd < throughBlock ? rangeEnd : throughBlock,
     })
   }
-  // Initial backfills may request a wider logical batch, but every provider
-  // call remains within Base's documented/public 10k getLogs ceiling.
+  // Initial backfills may request a wider logical batch. Each provider call
+  // remains within the configured per-chain ceiling: Base/Ethereum keep the
+  // conservative 10k range while the cross-verified OP endpoint accepts 100k.
   const rangeResults = []
   // Keep provider pressure bounded during operator backfills: the three
   // contracts are queried together, while adjacent 10k ranges run in order.
