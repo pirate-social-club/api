@@ -196,8 +196,157 @@ describe("RehearsalRpcReader transport", () => {
 
   it("is a no-op when reads were hash-pinned", async () => {
     const reader = make(happy())
-    await reader.latestConfirmedBlock()
+    const block = await reader.latestConfirmedBlock()
+    await reader.getCode("0x000000000000000000000000000000000000beef", block)
     await reader.assertSnapshotIntact()
     expect(reader.readsWereHashPinned).toBe(true)
+  })
+
+  it("reports hash-pinned only after reads actually completed", async () => {
+    const reader = make(happy())
+    // No reads yet: an initial capability assumption is not evidence.
+    expect(reader.readsWereHashPinned).toBe(false)
+  })
+})
+
+/** Fails the first eth_getCode with a chosen shape, then behaves. */
+const failingCode = (failure: () => Response | Promise<Response>, calls?: Call[]) => {
+  let first = true
+  return (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; id: number }
+    calls?.push({ body: body as unknown as Record<string, unknown>, init: init ?? {} })
+    if (body.method === "eth_getCode" && first) {
+      first = false
+      return await failure()
+    }
+    const map: Record<string, unknown> = {
+      eth_chainId: "0x14a34",
+      eth_getBlockByNumber: { number: "0x10", hash: BLOCK_HASH },
+      eth_getCode: "0x6080",
+      eth_call: `0x${"0".repeat(64)}`,
+      eth_getBalance: "0x1",
+      eth_blockNumber: "0x100",
+    }
+    return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+  }) as unknown as typeof fetch
+}
+
+const rpcErrorResponse = (code: number) =>
+  new Response(JSON.stringify({ jsonrpc: "2.0", id: 2, error: { code, message: "nope" } }), {
+    status: 200,
+  })
+
+describe("degradation is narrow", () => {
+  const VAULT_ADDR = "0x000000000000000000000000000000000000beef"
+
+  it.each([
+    ["HTTP 500", () => new Response("boom", { status: 500 })],
+    ["HTTP 429 rate limit", () => new Response("slow down", { status: 429 })],
+    ["HTTP 401 auth failure", () => new Response("nope", { status: 401 })],
+    ["execution revert (-32000)", () => rpcErrorResponse(-32000)],
+    ["execution revert (3)", () => rpcErrorResponse(3)],
+    ["malformed JSON", () => new Response("{not json", { status: 200 })],
+    ["batch response", () => new Response(JSON.stringify([ok(2, "0x1")]), { status: 200 })],
+  ])("never downgrades on %s", async (_label, failure) => {
+    const reader = make(failingCode(failure))
+    const block = await reader.latestConfirmedBlock()
+    await expect(reader.getCode(VAULT_ADDR, block)).rejects.toThrow(RehearsalRpcError)
+    // Still believes hash tags work; nothing was silently relaxed.
+    expect(reader.readsWereHashPinned).toBe(false)
+  })
+
+  it("never downgrades on a transport failure or timeout", async () => {
+    const reader = make(
+      failingCode(() => {
+        throw new Error("socket hang up")
+      }),
+    )
+    const block = await reader.latestConfirmedBlock()
+    await expect(reader.getCode(VAULT_ADDR, block)).rejects.toThrow(/failed, timed out/u)
+  })
+
+  it.each([-32601, -32602])("downgrades only for capability error %i", async (code) => {
+    const calls: Call[] = []
+    const reader = make(failingCode(() => rpcErrorResponse(code), calls))
+    const block = await reader.latestConfirmedBlock()
+    const code_ = await reader.getCode(VAULT_ADDR, block)
+    expect(code_).toBe("0x6080")
+    expect(reader.readsWereHashPinned).toBe(false)
+    const retried = calls.filter((call) => call.body.method === "eth_getCode")
+    expect((retried[1]!.body.params as unknown[])[1]).toBe("0x10")
+  })
+
+  it("does not fall back to fixed depth on a non-capability finalized failure", async () => {
+    const reader = make(
+      stubFetch((method, id) => {
+        if (method === "eth_getBlockByNumber") {
+          return { jsonrpc: "2.0", id, error: { code: -32000, message: "busy" } }
+        }
+        return ok(id, "0x14a34")
+      }),
+    )
+    await expect(reader.latestConfirmedBlock()).rejects.toThrow(/code -32000/u)
+    expect(reader.confirmationPolicy.kind).toBe("finalized-tag")
+  })
+})
+
+describe("snapshot revalidation checks the captured block", () => {
+  const VAULT_ADDR = "0x000000000000000000000000000000000000beef"
+
+  it("passes when the head advances but the captured block stays canonical", async () => {
+    const calls: Call[] = []
+    let head = 0x10
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+      calls.push({ body: body as unknown as Record<string, unknown>, init: init ?? {} })
+      if (body.method === "eth_getCode" && calls.filter((c) => c.body.method === "eth_getCode").length === 1) {
+        return rpcErrorResponse(-32601)
+      }
+      if (body.method === "eth_getBlockByNumber") {
+        // The head advances between calls, but the finalized block captured at
+        // the start — and the captured height — keep the same hash.
+        head += 5
+        return new Response(
+          JSON.stringify(ok(body.id, { number: "0x10", hash: BLOCK_HASH })),
+          { status: 200 },
+        )
+      }
+      const map: Record<string, unknown> = {
+        eth_chainId: "0x14a34",
+        eth_getCode: "0x6080",
+        eth_blockNumber: `0x${head.toString(16)}`,
+      }
+      return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const reader = make(fetchImpl)
+    const block = await reader.latestConfirmedBlock()
+    await reader.getCode(VAULT_ADDR, block)
+    expect(reader.readsWereHashPinned).toBe(false)
+    await reader.assertSnapshotIntact()
+
+    // Revalidation asked for the ORIGINAL height, not a fresh confirmed block.
+    const blockCalls = calls.filter((call) => call.body.method === "eth_getBlockByNumber")
+    expect((blockCalls.at(-1)!.body.params as unknown[])[0]).toBe("0x10")
+  })
+
+  it("fails when the captured height now holds a different hash", async () => {
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+      if (body.method === "eth_getCode" && String(init?.body).includes("blockHash")) {
+        return rpcErrorResponse(-32601)
+      }
+      if (body.method === "eth_getBlockByNumber") {
+        const hash = body.params[0] === "finalized" ? BLOCK_HASH : `0x${"cd".repeat(32)}`
+        return new Response(JSON.stringify(ok(body.id, { number: "0x10", hash })), { status: 200 })
+      }
+      const map: Record<string, unknown> = { eth_chainId: "0x14a34", eth_getCode: "0x6080" }
+      return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const reader = make(fetchImpl)
+    const block = await reader.latestConfirmedBlock()
+    await reader.getCode(VAULT_ADDR, block)
+    await expect(reader.assertSnapshotIntact()).rejects.toThrow(/reorganised/u)
   })
 })

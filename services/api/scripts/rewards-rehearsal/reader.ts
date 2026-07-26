@@ -8,9 +8,13 @@
  *
  * Reads are pinned by block HASH (EIP-1898), not height. A block number alone
  * is not a snapshot: under a reorg the block at a given height can change
- * between reads. Where the endpoint does not support hash tags, the reader
- * degrades to height tags and the caller must re-verify the head afterwards via
- * {@link RehearsalRpcReader.assertSnapshotIntact}.
+ * between reads.
+ *
+ * Degradation is deliberately narrow. Only a recognized "this capability does
+ * not exist" response may downgrade a hash tag to a height tag, or the
+ * `finalized` tag to a fixed depth. A timeout, HTTP failure, rate limit,
+ * malformed response, contract revert or any other RPC error fails closed —
+ * otherwise a flaky endpoint silently buys itself weaker guarantees.
  *
  * No thrown message ever contains the URL, its query string, response bodies or
  * headers. RPC endpoints routinely carry API keys in the path or query, and an
@@ -20,21 +24,41 @@
 /** Source-controlled. Not caller-supplied, by design. */
 export const ALLOWED_RPC_HOSTS = ["sepolia.base.org"] as const
 
-/**
- * "Confirmed" for this rehearsal. Base Sepolia exposes `finalized`; where it is
- * unavailable the reader falls back to a fixed depth below head. The policy in
- * force is recorded in evidence so a reviewer can see which applied.
- */
 export const CONFIRMATION_TAG = "finalized"
 export const CONFIRMATION_DEPTH_FALLBACK = 8
 
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_RESPONSE_BYTES = 256 * 1024
 
-export class RehearsalRpcError extends Error {}
+/**
+ * JSON-RPC codes that mean "this endpoint does not implement what you asked
+ * for". Only these may trigger a capability downgrade.
+ *
+ * Deliberately excludes -32000 and 3, which providers use for execution
+ * reverts, and every transport/HTTP failure.
+ */
+const CAPABILITY_ERROR_CODES = new Set([-32601, -32602])
 
-function fail(message: string): never {
-  throw new RehearsalRpcError(`rehearsal rpc: ${message}`)
+export type RpcFailureKind = "transport" | "http" | "protocol" | "rpc" | "capability"
+
+export class RehearsalRpcError extends Error {
+  readonly kind: RpcFailureKind
+  readonly rpcErrorCode: number | null
+
+  constructor(message: string, kind: RpcFailureKind, rpcErrorCode: number | null = null) {
+    super(message)
+    this.kind = kind
+    this.rpcErrorCode = rpcErrorCode
+  }
+}
+
+function fail(message: string, kind: RpcFailureKind, code: number | null = null): never {
+  throw new RehearsalRpcError(`rehearsal rpc: ${message}`, kind, code)
+}
+
+/** Only a capability error may relax a guarantee. */
+function isCapabilityFailure(error: unknown): boolean {
+  return error instanceof RehearsalRpcError && error.kind === "capability"
 }
 
 const HEX_DATA_RE = /^0x(?:[0-9a-fA-F]{2})*$/u
@@ -48,21 +72,17 @@ export type ConfirmationPolicy = {
   depth: number | null
 }
 
-/**
- * Validates an endpoint against the source-controlled allow-list.
- * Exported for tests; the reader calls it itself and callers cannot bypass it.
- */
 export function assertAllowedRpcUrl(rpcUrl: string): { host: string } {
   let parsed: URL
   try {
     parsed = new URL(rpcUrl)
   } catch {
-    fail("endpoint is not a valid URL")
+    fail("endpoint is not a valid URL", "protocol")
   }
-  if (parsed.protocol !== "https:") fail("endpoint must be HTTPS")
+  if (parsed.protocol !== "https:") fail("endpoint must be HTTPS", "protocol")
   if (!(ALLOWED_RPC_HOSTS as readonly string[]).includes(parsed.host)) {
     // Host only. Never the full URL — it may carry a key.
-    fail(`endpoint host ${parsed.host} is not on the source-controlled allow-list`)
+    fail(`endpoint host ${parsed.host} is not on the source-controlled allow-list`, "protocol")
   }
   return { host: parsed.host }
 }
@@ -71,30 +91,71 @@ type FetchLike = typeof fetch
 
 export class RehearsalRpcReader {
   readonly host: string
-  readonly confirmationPolicy: ConfirmationPolicy
   #url: string
   #fetch: FetchLike
   #nextId = 1
   #snapshot: BlockRef | null = null
-  #supportsBlockHashTag = true
+  #hashTagSupported = true
+  #completedReads = 0
+  #downgradedReads = 0
+  #confirmationPolicy: ConfirmationPolicy = { kind: "finalized-tag", depth: null }
 
-  private constructor(url: string, host: string, fetchImpl: FetchLike, policy: ConfirmationPolicy) {
+  private constructor(url: string, host: string, fetchImpl: FetchLike) {
     this.#url = url
     this.host = host
     this.#fetch = fetchImpl
-    this.confirmationPolicy = policy
   }
 
-  /** The only constructor. Validates before anything exists or connects. */
   static create(options: { rpcUrl: string; fetchImpl?: FetchLike }): RehearsalRpcReader {
     const { host } = assertAllowedRpcUrl(options.rpcUrl)
-    return new RehearsalRpcReader(options.rpcUrl, host, options.fetchImpl ?? fetch, {
-      kind: "finalized-tag",
-      depth: null,
-    })
+    return new RehearsalRpcReader(options.rpcUrl, host, options.fetchImpl ?? fetch)
   }
 
-  async #rpc(method: string, params: unknown[]): Promise<unknown> {
+  get confirmationPolicy(): ConfirmationPolicy {
+    return this.#confirmationPolicy
+  }
+
+  /**
+   * True only when reads actually happened AND none of them degraded. An
+   * initial capability assumption is not evidence.
+   */
+  get readsWereHashPinned(): boolean {
+    return this.#completedReads > 0 && this.#downgradedReads === 0
+  }
+
+  /** Streams the body with a hard BYTE ceiling; never allocates it whole first. */
+  async #readBodyLimited(response: Response, method: string): Promise<string> {
+    const declared = response.headers.get("content-length")
+    if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
+      fail(`${method} response exceeds the size ceiling`, "protocol")
+    }
+    const body = response.body
+    if (body === null) fail(`${method} response had no body`, "protocol")
+
+    const reader = body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      total += value.byteLength
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {})
+        fail(`${method} response exceeds the size ceiling`, "protocol")
+      }
+      chunks.push(value)
+    }
+    const merged = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+      merged.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return new TextDecoder("utf-8").decode(merged)
+  }
+
+  async #rpc(method: string, params: unknown[], options: { allowNullResult?: boolean } = {}) {
     const id = this.#nextId++
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -108,105 +169,122 @@ export class RehearsalRpcReader {
         signal: controller.signal,
       })
     } catch {
-      // Deliberately opaque: the underlying error can embed the URL.
-      fail(`${method} request failed or was redirected`)
+      // Opaque on purpose: the underlying error can embed the URL.
+      fail(`${method} request failed, timed out, or was redirected`, "transport")
     } finally {
       clearTimeout(timer)
     }
 
-    if (!response.ok) fail(`${method} returned HTTP ${response.status}`)
+    if (!response.ok) fail(`${method} returned HTTP ${response.status}`, "http")
 
-    const declared = response.headers.get("content-length")
-    if (declared !== null && Number(declared) > MAX_RESPONSE_BYTES) {
-      fail(`${method} response exceeds the size ceiling`)
-    }
-    const text = await response.text()
-    if (text.length > MAX_RESPONSE_BYTES) fail(`${method} response exceeds the size ceiling`)
+    const text = await this.#readBodyLimited(response, method)
 
     let body: unknown
     try {
       body = JSON.parse(text)
     } catch {
-      fail(`${method} response was not valid JSON`)
+      fail(`${method} response was not valid JSON`, "protocol")
     }
-    if (Array.isArray(body)) fail(`${method} returned a batch response`)
-    if (typeof body !== "object" || body === null) fail(`${method} response was not an object`)
+    if (Array.isArray(body)) fail(`${method} returned a batch response`, "protocol")
+    if (typeof body !== "object" || body === null) fail(`${method} response was not an object`, "protocol")
 
     const envelope = body as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown }
-    if (envelope.jsonrpc !== "2.0") fail(`${method} response had a bad jsonrpc version`)
-    if (envelope.id !== id) fail(`${method} response id did not match the request`)
+    if (envelope.jsonrpc !== "2.0") fail(`${method} response had a bad jsonrpc version`, "protocol")
+    if (envelope.id !== id) fail(`${method} response id did not match the request`, "protocol")
     if (envelope.error !== undefined) {
-      const code = (envelope.error as { code?: unknown } | null)?.code
+      const rawCode = (envelope.error as { code?: unknown } | null)?.code
+      const code = typeof rawCode === "number" ? rawCode : null
       // Code only. Provider error messages routinely echo the request URL.
-      fail(`${method} returned a JSON-RPC error (code ${String(code ?? "unknown")})`)
+      fail(
+        `${method} returned a JSON-RPC error (code ${String(code ?? "unknown")})`,
+        code !== null && CAPABILITY_ERROR_CODES.has(code) ? "capability" : "rpc",
+        code,
+      )
     }
-    if (!("result" in envelope) || envelope.result === undefined || envelope.result === null) {
-      fail(`${method} returned no result`)
+    if (!("result" in envelope) || envelope.result === undefined) {
+      fail(`${method} returned no result`, "protocol")
+    }
+    if (envelope.result === null) {
+      if (options.allowNullResult === true) return null
+      fail(`${method} returned a null result`, "protocol")
     }
     return envelope.result
   }
 
   #hexData(value: unknown, method: string): string {
     if (typeof value !== "string" || !HEX_DATA_RE.test(value)) {
-      fail(`${method} returned malformed hex data`)
+      fail(`${method} returned malformed hex data`, "protocol")
     }
     return value
   }
 
   #hexQuantity(value: unknown, method: string): bigint {
     if (typeof value !== "string" || !HEX_QUANTITY_RE.test(value)) {
-      fail(`${method} returned a malformed hex quantity`)
+      fail(`${method} returned a malformed hex quantity`, "protocol")
     }
     return BigInt(value)
+  }
+
+  #decodeBlock(raw: unknown, method: string): BlockRef {
+    const block = raw as { number?: unknown; hash?: unknown }
+    const number = this.#hexQuantity(block.number, method)
+    if (typeof block.hash !== "string" || !BLOCK_HASH_RE.test(block.hash)) {
+      fail(`${method} returned a malformed block hash`, "protocol")
+    }
+    return { number: Number(number), hash: block.hash.toLowerCase() }
   }
 
   /** Chain identity is proven before any other RPC work. */
   async chainId(): Promise<number> {
     const value = this.#hexQuantity(await this.#rpc("eth_chainId", []), "eth_chainId")
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) fail("eth_chainId is implausibly large")
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) fail("eth_chainId is implausibly large", "protocol")
     return Number(value)
   }
 
   async latestConfirmedBlock(): Promise<BlockRef> {
     let raw: unknown
     try {
-      raw = await this.#rpc("eth_getBlockByNumber", [CONFIRMATION_TAG, false])
-    } catch {
-      // Endpoint does not support the finalized tag; fall back to a fixed depth.
+      raw = await this.#rpc("eth_getBlockByNumber", [CONFIRMATION_TAG, false], {
+        allowNullResult: true,
+      })
+    } catch (error) {
+      // ONLY a capability error means the tag is unsupported. A timeout, 429 or
+      // malformed response must not silently weaken the confirmation policy.
+      if (!isCapabilityFailure(error)) throw error
+      raw = null
+    }
+    if (raw === null) {
+      this.#confirmationPolicy = { kind: "fixed-depth", depth: CONFIRMATION_DEPTH_FALLBACK }
       const head = this.#hexQuantity(await this.#rpc("eth_blockNumber", []), "eth_blockNumber")
       const target = head - BigInt(CONFIRMATION_DEPTH_FALLBACK)
-      if (target < 0n) fail("chain head is shallower than the confirmation depth")
-      ;(this.confirmationPolicy as ConfirmationPolicy) = {
-        kind: "fixed-depth",
-        depth: CONFIRMATION_DEPTH_FALLBACK,
-      }
+      if (target < 0n) fail("chain head is shallower than the confirmation depth", "protocol")
       raw = await this.#rpc("eth_getBlockByNumber", [`0x${target.toString(16)}`, false])
     }
-    const block = raw as { number?: unknown; hash?: unknown }
-    const number = this.#hexQuantity(block.number, "eth_getBlockByNumber")
-    if (typeof block.hash !== "string" || !BLOCK_HASH_RE.test(block.hash)) {
-      fail("eth_getBlockByNumber returned a malformed block hash")
-    }
-    const ref = { number: Number(number), hash: block.hash.toLowerCase() }
+    const ref = this.#decodeBlock(raw, "eth_getBlockByNumber")
     this.#snapshot = ref
     return ref
   }
 
-  /** EIP-1898 hash tag where supported, height otherwise. */
   #blockTag(block: BlockRef): unknown {
-    return this.#supportsBlockHashTag
+    return this.#hashTagSupported
       ? { blockHash: block.hash, requireCanonical: true }
       : `0x${block.number.toString(16)}`
   }
 
   async #withBlockTag<T>(block: BlockRef, run: (tag: unknown) => Promise<T>): Promise<T> {
     try {
-      return await run(this.#blockTag(block))
+      const value = await run(this.#blockTag(block))
+      this.#completedReads += 1
+      if (!this.#hashTagSupported) this.#downgradedReads += 1
+      return value
     } catch (error) {
-      if (!this.#supportsBlockHashTag) throw error
-      // One downgrade, then the caller must re-verify the head afterwards.
-      this.#supportsBlockHashTag = false
-      return await run(this.#blockTag(block))
+      // Downgrade ONLY on a recognized capability error, and only once.
+      if (!this.#hashTagSupported || !isCapabilityFailure(error)) throw error
+      this.#hashTagSupported = false
+      const value = await run(this.#blockTag(block))
+      this.#completedReads += 1
+      this.#downgradedReads += 1
+      return value
     }
   }
 
@@ -228,29 +306,30 @@ export class RehearsalRpcReader {
     )
   }
 
-  /** True when every read was pinned by block hash and no reorg is possible. */
-  get readsWereHashPinned(): boolean {
-    return this.#supportsBlockHashTag
-  }
-
   /**
    * Re-verifies the snapshot after all reads.
    *
-   * Only meaningful when the endpoint lacked hash tags and reads were pinned by
-   * height. Re-fetches the confirmed block and requires the same hash; a
-   * different hash means the height was reorganised mid-preflight, so the
-   * evidence describes a state that never coherently existed and is discarded.
+   * Fetches THE ORIGINAL captured block number and requires the same hash.
+   * Re-deriving the confirmed block instead would select a later block as the
+   * head advances and report a false reorg on every degraded run.
+   *
+   * A no-op when every read was hash-pinned, since EIP-1898 with
+   * requireCanonical already guarantees it.
    */
   async assertSnapshotIntact(): Promise<void> {
-    if (this.#snapshot === null) fail("no snapshot was captured")
-    if (this.#supportsBlockHashTag) return
-    const before = this.#snapshot
-    const after = await this.latestConfirmedBlock()
-    if (after.hash !== before.hash || after.number !== before.number) {
+    const captured = this.#snapshot
+    if (captured === null) fail("no snapshot was captured", "protocol")
+    if (this.#downgradedReads === 0) return
+    const raw = await this.#rpc("eth_getBlockByNumber", [
+      `0x${captured.number.toString(16)}`,
+      false,
+    ])
+    const observed = this.#decodeBlock(raw, "eth_getBlockByNumber")
+    if (observed.hash !== captured.hash) {
       fail(
-        `snapshot was reorganised during the preflight`
-          + ` (block ${before.number} ${before.hash} became ${after.number} ${after.hash});`
-          + " discard this evidence",
+        `snapshot was reorganised during the preflight (block ${captured.number}`
+          + ` ${captured.hash} is now ${observed.hash}); discard this evidence`,
+        "protocol",
       )
     }
   }
