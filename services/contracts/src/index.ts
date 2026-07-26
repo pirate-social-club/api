@@ -3002,6 +3002,30 @@ export type RewardCampaignFundingConfirmRequest = {
   tx_hash: string;
 };
 
+export type RewardPoolRefundPolicyReadiness = {
+  largest_outstanding_lot_remainder_cents: number;
+  largest_outstanding_lot_remainder_atomic: string;
+  proposed_max_refund_atomic: string | null;
+  proposal_safe: boolean | null;
+};
+
+export type RewardBackendFlipReadiness = {
+  ready: boolean;
+  non_terminal_cashouts: number;
+  non_terminal_refunds: number;
+  reconciliation_required: number;
+};
+
+export type RewardSolvencyReadiness = {
+  enabled: boolean;
+  admitting: boolean;
+  reason: "disabled" | "healthy" | "unknown_observation" | "stale_observation" | "insufficient_float";
+  observedAt: string | null;
+  ageSeconds: number | null;
+  balanceAtomic: string | null;
+  liabilityAtomic: string | null;
+};
+
 export type ClaimableRoyaltyItem = {
   ip: string;
   claimable_wip_wei: string;
@@ -4521,6 +4545,9 @@ export const apiRoutes = {
   publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
   publicRewardCampaigns: "/public/reward_campaigns",
   operatorRewardCampaignIncidentRecovery: (campaignId: string, incidentId: string) => `/operator/reward_campaigns/${campaignId}/incidents/${incidentId}/recover`,
+  operatorRewardPoolRefundPolicyReadiness: "/operator/reward_pools/refund_policy_readiness",
+  operatorRewardSettlementBackendFlipReadiness: "/operator/reward_settlements/backend_flip_readiness",
+  operatorRewardSettlementSolvencyReadiness: "/operator/reward_settlements/solvency_readiness",
   rewardCampaignFundingQuotes: (campaignId: string) => `/reward_campaigns/${campaignId}/funding_quotes`,
   rewardCampaignFundingQuoteConfirm: (campaignId: string, fundingQuoteId: string) => `/reward_campaigns/${campaignId}/funding_quotes/${fundingQuoteId}/confirm`,
 } as const
