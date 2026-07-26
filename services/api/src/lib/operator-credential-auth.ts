@@ -7,6 +7,7 @@ import type { DbExecutor } from "./db-helpers"
 
 export const BOOKING_SETTLEMENT_RESOLVE_SCOPE = "bookings:settlement:resolve"
 export const REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE = "rewards:campaign-incidents:resolve"
+export const REWARD_SETTLEMENT_READ_SCOPE = "rewards:settlement:read"
 export const REWARD_SETTLEMENT_RESOLVE_SCOPE = "rewards:settlement:resolve"
 export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
@@ -14,6 +15,7 @@ export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
 const ALLOWED_OPERATOR_SCOPES = new Set<string>([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
@@ -24,6 +26,7 @@ const LAST_USED_TOUCH_INTERVAL_MS = 5 * 60 * 1000
 export type OperatorScope =
   | typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE
   | typeof REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE
+  | typeof REWARD_SETTLEMENT_READ_SCOPE
   | typeof REWARD_SETTLEMENT_RESOLVE_SCOPE
   | typeof STORY_SETTLEMENT_REPAIR_SCOPE
   | typeof STORY_SETTLEMENT_FEE_REPLACE_SCOPE
