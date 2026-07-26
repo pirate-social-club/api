@@ -30,6 +30,9 @@ export type Env = {
    * are complete; it currently behaves as `off`.
    */
   AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE?: "off" | "shadow" | "serve"
+  /** Sample percentage (0-100) for non-blocking owned-vs-hosted EFP read comparisons. */
+  EFP_FOLLOW_SHADOW_SAMPLE_PERCENT?: string
+  EFP_HOSTED_API_URL?: string
   PIRATE_ADMIN_TOKEN?: string
   OPS_ALERT_DEDUPE?: KVNamespace
   OPS_ALERT_EMAIL?: SendEmail
