@@ -193,6 +193,7 @@ export async function scanEfpChainOnce(input: {
   reader?: EfpChainReader
   now?: () => Date
   blockSpan?: bigint
+  deferProjection?: boolean
 }): Promise<EfpScanSummary> {
   const { config } = input
   const reader = input.reader ?? createEfpChainReader(input.rpcUrl, config)
@@ -361,15 +362,17 @@ export async function scanEfpChainOnce(input: {
     storageLocationEvents,
     scanStartedAt,
     scanCompletedAt,
-    onRangeReplaced: async (affected) => {
-      await rebuildEfpProjectionAfterRangeReplacement({
-        ...affected,
-        chainId: config.chainId,
-        appliedThroughBlock: throughBlock,
-        appliedThroughBlockHash: requiredHex(through.hash, "through block hash"),
-        now: scanCompletedAt,
-      })
-    },
+    onRangeReplaced: input.deferProjection
+      ? undefined
+      : async (affected) => {
+          await rebuildEfpProjectionAfterRangeReplacement({
+            ...affected,
+            chainId: config.chainId,
+            appliedThroughBlock: throughBlock,
+            appliedThroughBlockHash: requiredHex(through.hash, "through block hash"),
+            now: scanCompletedAt,
+          })
+        },
   })
   await refreshEfpProjectionAvailability({
     client: input.client,
