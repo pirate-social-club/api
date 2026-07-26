@@ -7,10 +7,13 @@ import {
   type EfpIndexerChainConfig,
 } from "../src/lib/efp-indexer/scanner"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../src/lib/runtime-deps"
-import { rebuildEfpProjectionAfterRangeReplacement, refreshEfpProjectionAvailability } from "../src/lib/efp-indexer/materializer"
+import {
+  findEfpFollowersAffectedByChain,
+  rebuildEfpProjectionAfterRangeReplacement,
+  refreshEfpProjectionAvailability,
+} from "../src/lib/efp-indexer/materializer"
 import { readEfpIndexerCursor } from "../src/lib/efp-indexer/repository"
 import { withTransaction } from "../src/lib/transactions"
-import type { Address } from "viem"
 
 function positiveBatchLimit(value: string | undefined): number {
   if (value == null) return 10_000
@@ -41,27 +44,26 @@ async function finalizeDeferredProjection(input: {
   }
   const slots = await input.client.execute({
     sql: `
-      SELECT DISTINCT contract_address, slot
-      FROM efp_list_ops
-      WHERE chain_id = ?1
-      ORDER BY contract_address, slot
+      SELECT COUNT(*) AS slot_count
+      FROM (
+        SELECT DISTINCT contract_address, slot
+        FROM efp_list_ops
+        WHERE chain_id = ?1
+      ) distinct_slots
     `,
     args: [input.config.chainId],
   })
+  const slotCount = Number(slots.rows[0]?.slot_count ?? 0)
   const now = new Date().toISOString()
   await withTransaction(input.client, "write", async (tx) => {
+    const affectedAccounts = await findEfpFollowersAffectedByChain({
+      tx,
+      chainId: input.config.chainId,
+    })
     await rebuildEfpProjectionAfterRangeReplacement({
       tx,
-      affectedSlots: slots.rows.flatMap((row) =>
-        typeof row.contract_address === "string" && typeof row.slot === "string"
-          ? [{
-              chainId: input.config.chainId,
-              contractAddress: row.contract_address.toLowerCase() as Address,
-              slot: BigInt(row.slot),
-            }]
-          : []
-      ),
-      affectedAccounts: [],
+      affectedSlots: [],
+      affectedAccounts,
       affectedListIds: [],
       chainId: input.config.chainId,
       appliedThroughBlock: cursor.indexedThroughBlock,
@@ -73,7 +75,7 @@ async function finalizeDeferredProjection(input: {
   console.info(JSON.stringify({
     component: "efp_indexer",
     operation: `finalize_${input.config.name}_projection`,
-    slot_count: slots.rows.length,
+    slot_count: slotCount,
     applied_through_block: cursor.indexedThroughBlock.toString(),
   }))
 }

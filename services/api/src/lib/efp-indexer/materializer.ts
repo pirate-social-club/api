@@ -409,6 +409,49 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
   })
 }
 
+export async function findEfpFollowersAffectedByChain(input: {
+  tx: Transaction
+  chainId: number
+}): Promise<Address[]> {
+  const result = await input.tx.execute({
+    sql: `
+      WITH latest_primary AS (
+        SELECT account_address, list_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY account_address
+                 ORDER BY block_number DESC, transaction_index DESC, log_index DESC
+               ) AS rank
+        FROM efp_primary_list_events
+      ), latest_storage AS (
+        SELECT list_id, storage_chain_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY list_id
+                 ORDER BY block_number DESC, transaction_index DESC, log_index DESC
+               ) AS rank
+        FROM efp_list_storage_location_events
+      ), affected_followers AS (
+        SELECT follower_address
+        FROM efp_effective_follows
+        WHERE list_chain_id = ?1
+        UNION
+        SELECT primary_list.account_address AS follower_address
+        FROM latest_primary primary_list
+        JOIN latest_storage storage ON storage.list_id = primary_list.list_id
+        WHERE primary_list.rank = 1 AND storage.rank = 1
+          AND storage.storage_chain_id = ?1
+      )
+      SELECT DISTINCT follower_address
+      FROM affected_followers
+      ORDER BY follower_address
+    `,
+    args: [input.chainId],
+  })
+  return result.rows.flatMap((row) => {
+    const followerAddress = address(row, "follower_address")
+    return followerAddress ? [followerAddress] : []
+  })
+}
+
 export async function refreshEfpProjectionAvailability(input: {
   client: Client
   projectionRevision?: bigint
