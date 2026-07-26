@@ -174,11 +174,29 @@ describe("scanEfpBaseOnce", () => {
       ["uint8", "uint8", "uint8", "uint8", "address"],
       [1, 1, 1, 1, TARGET],
     )
+    const getLogRanges: Array<[bigint, bigint]> = []
     const reader = {
-      getBlockNumber: async () => EFP_OPTIMISM_START_BLOCK + 100n,
+      getBlockNumber: async () => EFP_OPTIMISM_START_BLOCK + 100_063n,
       getBlock: async () => ({ hash: BLOCK_HASH }),
-      getLogs: async ({ address }: { address: Address }) => {
+      getLogs: async ({
+        address,
+        fromBlock,
+        toBlock,
+      }: {
+        address: Address
+        fromBlock: bigint
+        toBlock: bigint
+      }) => {
         expect(address).toBe(EFP_OPTIMISM_LIST_RECORDS)
+        getLogRanges.push([fromBlock, toBlock])
+        if (toBlock - fromBlock + 1n === 100_000n) {
+          const error = new Error("Invalid parameters")
+          Object.assign(error, {
+            data: "Query returned more than 50000 results. Try with this block range.",
+          })
+          throw error
+        }
+        if (fromBlock !== EFP_OPTIMISM_START_BLOCK) return []
         return Array.from({ length: 101 }, (_, index) => ({
           args: { op: rawOp, slot: 77n },
           blockHash: BLOCK_HASH,
@@ -196,6 +214,7 @@ describe("scanEfpBaseOnce", () => {
       config: EFP_INDEXER_CHAINS.optimism,
       reader: reader as never,
       now: () => new Date("2026-07-25T00:00:00.000Z"),
+      blockSpan: 100_000n,
       deferProjection: true,
     })
 
@@ -205,6 +224,11 @@ describe("scanEfpBaseOnce", () => {
       primaryListEventCount: 0,
       storageLocationEventCount: 0,
     })
+    expect(getLogRanges).toEqual([
+      [EFP_OPTIMISM_START_BLOCK, EFP_OPTIMISM_START_BLOCK + 99_999n],
+      [EFP_OPTIMISM_START_BLOCK, EFP_OPTIMISM_START_BLOCK + 49_999n],
+      [EFP_OPTIMISM_START_BLOCK + 50_000n, EFP_OPTIMISM_START_BLOCK + 99_999n],
+    ])
     const ops = await database.client.execute(
       "SELECT chain_id, contract_address, slot FROM efp_list_ops",
     )
