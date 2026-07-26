@@ -58,8 +58,10 @@ export type EfpAffectedListSlot = {
   slot: bigint
 }
 
-const EFP_LIST_OP_INSERT_BATCH_SIZE = 100
+const EFP_EVENT_INSERT_BATCH_SIZE = 100
 const EFP_LIST_OP_INSERT_COLUMN_COUNT = 16
+const EFP_PRIMARY_LIST_INSERT_COLUMN_COUNT = 12
+const EFP_STORAGE_LOCATION_INSERT_COLUMN_COUNT = 13
 
 function integer(row: QueryResultRow | undefined, key: string): bigint | null {
   const value = row?.[key]
@@ -197,9 +199,9 @@ export async function replaceEfpIndexerRange(input: {
     for (
       let batchStart = 0;
       batchStart < input.listOps.length;
-      batchStart += EFP_LIST_OP_INSERT_BATCH_SIZE
+      batchStart += EFP_EVENT_INSERT_BATCH_SIZE
     ) {
-      const batch = input.listOps.slice(batchStart, batchStart + EFP_LIST_OP_INSERT_BATCH_SIZE)
+      const batch = input.listOps.slice(batchStart, batchStart + EFP_EVENT_INSERT_BATCH_SIZE)
       const args: Array<bigint | number | string | null> = []
       const values = batch.map((item) => {
         const firstPlaceholder = args.length + 1
@@ -239,21 +241,23 @@ export async function replaceEfpIndexerRange(input: {
       })
     }
 
-    for (const item of input.primaryListEvents) {
-      await tx.execute({
-        sql: `
-          INSERT INTO efp_primary_list_events (
-            chain_id, contract_address, account_address, metadata_key,
-            raw_value, list_id, block_number, block_hash, transaction_hash,
-            transaction_index, log_index, created_at
-          ) VALUES (
-            ?1, ?2, ?3, 'primary-list', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
-          )
-        `,
-        args: [
+    for (
+      let batchStart = 0;
+      batchStart < input.primaryListEvents.length;
+      batchStart += EFP_EVENT_INSERT_BATCH_SIZE
+    ) {
+      const batch = input.primaryListEvents.slice(
+        batchStart,
+        batchStart + EFP_EVENT_INSERT_BATCH_SIZE,
+      )
+      const args: Array<bigint | number | string | null> = []
+      const values = batch.map((item) => {
+        const firstPlaceholder = args.length + 1
+        args.push(
           item.chainId,
           item.contractAddress,
           item.accountAddress,
+          "primary-list",
           item.rawValue,
           item.listId?.toString() ?? null,
           Number(item.blockNumber),
@@ -262,23 +266,37 @@ export async function replaceEfpIndexerRange(input: {
           item.transactionIndex,
           item.logIndex,
           input.scanCompletedAt,
-        ],
+        )
+        return `(${Array.from(
+          { length: EFP_PRIMARY_LIST_INSERT_COLUMN_COUNT },
+          (_, index) => `?${firstPlaceholder + index}`,
+        ).join(", ")})`
+      })
+      await tx.execute({
+        sql: `
+          INSERT INTO efp_primary_list_events (
+            chain_id, contract_address, account_address, metadata_key,
+            raw_value, list_id, block_number, block_hash, transaction_hash,
+            transaction_index, log_index, created_at
+          ) VALUES ${values.join(", ")}
+        `,
+        args,
       })
     }
 
-    for (const item of input.storageLocationEvents) {
-      await tx.execute({
-        sql: `
-          INSERT INTO efp_list_storage_location_events (
-            chain_id, registry_address, list_id, raw_storage_location,
-            storage_chain_id, storage_contract_address, storage_slot,
-            block_number, block_hash, transaction_hash, transaction_index,
-            log_index, created_at
-          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
-          )
-        `,
-        args: [
+    for (
+      let batchStart = 0;
+      batchStart < input.storageLocationEvents.length;
+      batchStart += EFP_EVENT_INSERT_BATCH_SIZE
+    ) {
+      const batch = input.storageLocationEvents.slice(
+        batchStart,
+        batchStart + EFP_EVENT_INSERT_BATCH_SIZE,
+      )
+      const args: Array<bigint | number | string | null> = []
+      const values = batch.map((item) => {
+        const firstPlaceholder = args.length + 1
+        args.push(
           item.chainId,
           item.registryAddress,
           item.listId.toString(),
@@ -292,7 +310,22 @@ export async function replaceEfpIndexerRange(input: {
           item.transactionIndex,
           item.logIndex,
           input.scanCompletedAt,
-        ],
+        )
+        return `(${Array.from(
+          { length: EFP_STORAGE_LOCATION_INSERT_COLUMN_COUNT },
+          (_, index) => `?${firstPlaceholder + index}`,
+        ).join(", ")})`
+      })
+      await tx.execute({
+        sql: `
+          INSERT INTO efp_list_storage_location_events (
+            chain_id, registry_address, list_id, raw_storage_location,
+            storage_chain_id, storage_contract_address, storage_slot,
+            block_number, block_hash, transaction_hash, transaction_index,
+            log_index, created_at
+          ) VALUES ${values.join(", ")}
+        `,
+        args,
       })
     }
 
