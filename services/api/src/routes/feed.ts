@@ -41,6 +41,24 @@ function emptyPublicHomeFeed(): HomeFeedResponse {
   return { items: [], top_communities: [], next_cursor: null }
 }
 
+async function racePublicHomeFeedCompute(
+  computePromise: ReturnType<typeof listHomeFeed>,
+  budgetMs: number,
+): Promise<Awaited<ReturnType<typeof listHomeFeed>> | typeof PUBLIC_HOME_FEED_DEGRADED> {
+  if (budgetMs === 0) return PUBLIC_HOME_FEED_DEGRADED
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      computePromise,
+      new Promise<typeof PUBLIC_HOME_FEED_DEGRADED>((resolve) => {
+        budgetTimer = setTimeout(() => resolve(PUBLIC_HOME_FEED_DEGRADED), budgetMs)
+      }),
+    ])
+  } finally {
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer)
+  }
+}
+
 function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
   let waitUntil: ((promise: Promise<void>) => void) | undefined
   try {
@@ -99,14 +117,7 @@ feed.get("/home/public", async (c) => {
     waitUntil,
   })
   const budgetMs = resolvePublicHomeFeedComputeBudgetMs(c.env)
-  let budgetTimer: ReturnType<typeof setTimeout> | undefined
-  const raced = budgetMs === 0 ? PUBLIC_HOME_FEED_DEGRADED : await Promise.race([
-    computePromise,
-    new Promise<typeof PUBLIC_HOME_FEED_DEGRADED>((resolve) => {
-      budgetTimer = setTimeout(() => resolve(PUBLIC_HOME_FEED_DEGRADED), budgetMs)
-    }),
-  ])
-  if (budgetTimer !== undefined) clearTimeout(budgetTimer)
+  const raced = await racePublicHomeFeedCompute(computePromise, budgetMs)
   if (raced === PUBLIC_HOME_FEED_DEGRADED) {
     console.error("[public-home-feed] live compute exceeded budget; serving degraded empty feed", JSON.stringify({
       budget_ms: budgetMs,
@@ -178,7 +189,7 @@ feed.get("/home/videos/public", async (c) => {
     return c.json(materialized.result, 200)
   }
 
-  const result = await listHomeFeed({
+  const computePromise = listHomeFeed({
     env: c.env,
     userId: null,
     locale: materializedTarget?.locale ?? c.req.query("locale") ?? null,
@@ -191,6 +202,37 @@ feed.get("/home/videos/public", async (c) => {
     profileRepository: getProfileRepository(c.env),
     waitUntil,
   })
+  const budgetMs = resolvePublicHomeFeedComputeBudgetMs(c.env)
+  const raced = await racePublicHomeFeedCompute(computePromise, budgetMs)
+  if (raced === PUBLIC_HOME_FEED_DEGRADED) {
+    console.error("[public-video-home-feed] live compute exceeded budget; serving degraded empty feed", JSON.stringify({
+      budget_ms: budgetMs,
+      cache_key: materializedTarget?.cacheKey ?? null,
+    }))
+    const degraded = emptyPublicHomeFeed()
+    await storeMaterializedPublicHomeFeed({
+      client: getControlPlaneClient(c.env),
+      env: c.env,
+      result: degraded,
+      target: materializedTarget,
+    })
+    const lateStore = computePromise
+      .then((late) => storeMaterializedPublicHomeFeed({
+        client: getControlPlaneClient(c.env),
+        env: c.env,
+        result: late,
+        target: materializedTarget,
+      }))
+      .catch((error: unknown) => {
+        console.error("[public-video-home-feed] late compute after degraded response failed", error)
+      })
+    waitUntil?.(lateStore)
+    // Match the mixed public feed: do not let a degraded empty body enter the
+    // CDN cache while the control-plane stale-refresh path repairs it.
+    c.header("x-pirate-materialized-feed", "degraded")
+    return c.json(degraded, 200)
+  }
+  const result = raced
   await storeMaterializedPublicHomeFeed({
     client: getControlPlaneClient(c.env),
     env: c.env,
