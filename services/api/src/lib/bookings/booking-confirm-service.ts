@@ -360,7 +360,7 @@ export async function confirmGlobalBookingHold(input: {
   if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
   if (intent.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
   if (intent.status === "custody_operator_incident") return { ok: false, reason: "payment_review_required" };
-  if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
+  if (intent.status === "expired") return { ok: false, reason: "hold_expired" };
   // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
   // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
   const claimToken = crypto.randomUUID();

@@ -203,8 +203,7 @@ export type PaymentIntentStatus =
   | "custody_operator_incident"
   | "consumed"
   | "expired"
-  | "refunded"
-  | "superseded";
+  | "refunded";
 
 export interface PaymentIntent {
   paymentIntentId: string;
