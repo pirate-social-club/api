@@ -25,10 +25,42 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()))
 })
 
+async function ensureProjectionSchema(client: Awaited<ReturnType<typeof createControlPlaneTestClient>>["client"]) {
+  await client.batch([
+    { sql: `CREATE TABLE IF NOT EXISTS efp_effective_follows (
+      follower_address TEXT NOT NULL, followed_address TEXT NOT NULL,
+      list_chain_id INTEGER NOT NULL, list_contract_address TEXT NOT NULL,
+      list_slot TEXT NOT NULL, source_block_number INTEGER NOT NULL,
+      source_transaction_hash TEXT NOT NULL, source_transaction_index INTEGER NOT NULL,
+      source_log_index INTEGER NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (follower_address, followed_address))` },
+    { sql: `CREATE TABLE IF NOT EXISTS efp_follow_counts (
+      wallet_address TEXT PRIMARY KEY, follower_count INTEGER NOT NULL,
+      following_count INTEGER NOT NULL, projection_revision INTEGER NOT NULL,
+      updated_at TEXT NOT NULL)` },
+    { sql: `CREATE TABLE IF NOT EXISTS efp_follow_projection_state (
+      projection_key TEXT PRIMARY KEY, status TEXT NOT NULL,
+      projection_revision INTEGER NOT NULL, last_successful_at TEXT,
+      status_changed_at TEXT NOT NULL, last_error TEXT, updated_at TEXT NOT NULL,
+      last_reconciled_at TEXT, last_reconciliation_error TEXT)` },
+    { sql: `INSERT OR IGNORE INTO efp_follow_projection_state VALUES (
+      'effective-graph', 'initializing', 0, NULL, '2026-07-25T00:00:00.000Z',
+      NULL, '2026-07-25T00:00:00.000Z', NULL, NULL)` },
+    { sql: `CREATE TABLE IF NOT EXISTS efp_follow_projection_expected_chains (
+      chain_id INTEGER PRIMARY KEY, confirmation_buffer_blocks INTEGER NOT NULL,
+      enabled INTEGER NOT NULL, updated_at TEXT NOT NULL)` },
+    { sql: `CREATE TABLE IF NOT EXISTS efp_follow_projection_chain_watermarks (
+      chain_id INTEGER PRIMARY KEY, applied_through_block INTEGER NOT NULL,
+      applied_through_block_hash TEXT NOT NULL, projection_revision INTEGER NOT NULL,
+      last_successful_at TEXT NOT NULL, updated_at TEXT NOT NULL)` },
+  ], "write")
+}
+
 describe("scanEfpBaseOnce", () => {
   test("persists confirmed raw ops, primary-list pointers, and cursor atomically", async () => {
     const database = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanups.push(database.cleanup)
+    await ensureProjectionSchema(database.client)
     const blockNumber = EFP_BASE_START_BLOCK + 10n
     const rawOp = encodePacked(
       ["uint8", "uint8", "uint8", "uint8", "address"],
@@ -134,6 +166,7 @@ describe("scanEfpBaseOnce", () => {
   test("indexes list records on a storage-only chain without Base control events", async () => {
     const database = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanups.push(database.cleanup)
+    await ensureProjectionSchema(database.client)
     const rawOp = encodePacked(
       ["uint8", "uint8", "uint8", "uint8", "address"],
       [1, 1, 1, 1, TARGET],

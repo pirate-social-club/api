@@ -12,6 +12,10 @@ import { base, mainnet, optimism, type Chain } from "viem/chains"
 import type { Client } from "../sql-client"
 import { decodeEfpListOp } from "./list-op"
 import {
+  rebuildEfpProjectionAfterRangeReplacement,
+  refreshEfpProjectionAvailability,
+} from "./materializer"
+import {
   readEfpIndexerCursor,
   replaceEfpIndexerRange,
   type PersistedEfpListOp,
@@ -357,6 +361,19 @@ export async function scanEfpChainOnce(input: {
     storageLocationEvents,
     scanStartedAt,
     scanCompletedAt,
+    onRangeReplaced: async (affected) => {
+      await rebuildEfpProjectionAfterRangeReplacement({
+        ...affected,
+        chainId: config.chainId,
+        appliedThroughBlock: throughBlock,
+        appliedThroughBlockHash: requiredHex(through.hash, "through block hash"),
+        now: scanCompletedAt,
+      })
+    },
+  })
+  await refreshEfpProjectionAvailability({
+    client: input.client,
+    now: scanCompletedAt,
   })
 
   return {
