@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 
 import {
+  PINNED_STAGING_ACTION_CID,
   PINNED_STAGING_GROUP_ID,
   PINNED_STAGING_PKP_ADDRESS,
   parseRehearsalManifest,
@@ -11,10 +12,15 @@ import {
 
 const STAGING_PKP = PINNED_STAGING_PKP_ADDRESS
 const PROD_PKP = "0x00000000000000000000000000000000000000aa"
-const GROUP = "grp_rewards_staging"
+const GROUP = "1"
+const ACTION_CID = "QmReviewedStagingRewardVaultAction"
 
 const NOW = new Date("2026-07-26T12:00:00.000Z")
-const PINS: ReviewedStagingPins = { groupId: GROUP, pkpAddress: STAGING_PKP }
+const PINS: ReviewedStagingPins = {
+  groupId: GROUP,
+  pkpAddress: STAGING_PKP,
+  actionCid: ACTION_CID,
+}
 
 const valid = () => ({
   attestation: {
@@ -28,7 +34,7 @@ const valid = () => ({
     usageKeyExecuteInGroups: [GROUP],
     stagingGroupId: GROUP,
     stagingGroupPkpAddresses: [STAGING_PKP],
-    stagingGroupActionCids: ["QmStagingRehearsalActionCid"],
+    stagingGroupActionCids: [ACTION_CID],
     knownProductionPkpAddresses: [PROD_PKP],
   },
   vault: {
@@ -75,17 +81,27 @@ describe("parseRehearsalManifest", () => {
 
   describe("pins are source-controlled, never manifest-supplied", () => {
     it("refuses while the staging group ID is unpinned", () => {
-      expect(() => parse(valid(), { groupId: null, pkpAddress: STAGING_PKP })).toThrow(
-        /not pinned/u,
+      expect(() => parse(valid(), { ...PINS, groupId: null })).toThrow(/not pinned/u)
+    })
+
+    it("pins the captured staging group", () => {
+      expect(PINNED_STAGING_GROUP_ID).toBe("1")
+    })
+
+    it("ships with NO action CID pinned, so the drill cannot yet run", () => {
+      // The group currently permits the [0] CID wildcard. Until a reviewed CID
+      // is registered and the wildcard replaced, no manifest may be produced.
+      expect(PINNED_STAGING_ACTION_CID).toBeNull()
+    })
+
+    it("refuses while the action CID is unpinned", () => {
+      expect(() => parse(valid(), { ...PINS, actionCid: null })).toThrow(
+        /reviewed staging action CID is not pinned/u,
       )
     })
 
-    it("ships unpinned, so the drill cannot run until a reviewed value lands", () => {
-      expect(PINNED_STAGING_GROUP_ID).toBeNull()
-    })
-
     it("refuses a captured group that disagrees with the pin", () => {
-      expect(() => parse(withSection("lit", { stagingGroupId: "grp_other", usageKeyExecuteInGroups: ["grp_other"] })))
+      expect(() => parse(withSection("lit", { stagingGroupId: "7", usageKeyExecuteInGroups: ["7"] })))
         .toThrow(/does not match the reviewed pin/u)
     })
 
@@ -147,13 +163,56 @@ describe("parseRehearsalManifest", () => {
     })
 
     it("rejects any group beyond the pinned one", () => {
-      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "grp_other"] })))
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "7"] })))
         .toThrow(/must be exactly the pinned staging group/u)
     })
+
+    it("normalizes the API's numeric group id to the pinned string", () => {
+      // The Lit API returns can_execute_in_groups: [1]; the pin is "1".
+      const manifest = parse(
+        withSection("lit", { usageKeyExecuteInGroups: [1], stagingGroupId: 1 }),
+      )
+      expect(manifest.lit.usageKeyExecuteInGroups).toEqual(["1"])
+    })
+
+    it.each([1.5, -1, Number.MAX_SAFE_INTEGER + 2])(
+      "rejects the unsafe numeric group id %p rather than coercing it",
+      (groupId) => {
+        expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [groupId] }))).toThrow(
+          /safe non-negative integer group id/u,
+        )
+      },
+    )
 
     it("rejects an empty group entry", () => {
       expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [""] }))).toThrow(
         RehearsalManifestError,
+      )
+    })
+  })
+
+  describe("action CID scoping", () => {
+    it.each(["0", "*"])("rejects the CID wildcard %p", (wildcard) => {
+      expect(() => parse(withSection("lit", { stagingGroupActionCids: [wildcard] }))).toThrow(
+        /permits every action/u,
+      )
+    })
+
+    it("rejects a wildcard alongside the reviewed CID", () => {
+      expect(() =>
+        parse(withSection("lit", { stagingGroupActionCids: [ACTION_CID, "0"] })),
+      ).toThrow(/permits every action/u)
+    })
+
+    it("rejects any CID beyond the reviewed one", () => {
+      expect(() =>
+        parse(withSection("lit", { stagingGroupActionCids: [ACTION_CID, "QmOther"] })),
+      ).toThrow(/exactly the reviewed action CID/u)
+    })
+
+    it("rejects a CID that disagrees with the pin", () => {
+      expect(() => parse(withSection("lit", { stagingGroupActionCids: ["QmOther"] }))).toThrow(
+        /exactly the reviewed action CID/u,
       )
     })
   })

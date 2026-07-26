@@ -44,8 +44,18 @@ export const REHEARSAL_LIMITS = {
  * cannot run. That is the intended blocker, expressed in code rather than
  * relying on someone remembering.
  */
-export const PINNED_STAGING_GROUP_ID: string | null = null
+export const PINNED_STAGING_GROUP_ID: string | null = "1"
 export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
+
+/**
+ * The reviewed action CID the staging group must permit — and permit ALONE.
+ *
+ * Ships null: the group is currently configured with the `[0]` CID wildcard,
+ * which permits every action and is the leading explanation for arbitrary code
+ * having executed during the runtime probes. Until a reviewed CID is registered
+ * and the wildcard replaced, no executable manifest can be produced.
+ */
+export const PINNED_STAGING_ACTION_CID: string | null = null
 
 /** A capture older than this is refused; topology drifts. */
 export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
@@ -54,7 +64,7 @@ export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
  * The Lit wildcard group. A usage key scoped to `[0]` can execute in every
  * group. Its presence is disqualifying regardless of what else is listed.
  */
-const WILDCARD_GROUP_IDS = new Set(["0", "*"])
+const WILDCARD_SENTINELS = new Set(["0", "*"])
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -136,6 +146,29 @@ function requirePositiveBigInt(value: unknown, field: string): bigint {
   return value
 }
 
+/**
+ * The Lit API returns group IDs as JSON numbers (`[1]`) while pins are strings.
+ * Normalizes safe non-negative integers to their canonical decimal form so the
+ * comparison is exact rather than accidentally type-sensitive. Floats, negative
+ * and unsafe values are rejected rather than coerced.
+ */
+function normalizeGroupId(value: unknown, field: string): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(`${field} must be a safe non-negative integer group id`)
+    }
+    return String(value)
+  }
+  return requireNonEmptyString(value, field)
+}
+
+function requireGroupIdArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail(`${field} must be a non-empty array; an empty list cannot prove a check was performed`)
+  }
+  return value.map((entry, index) => normalizeGroupId(entry, `${field}[${index}]`))
+}
+
 function requireStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     fail(`${field} must be a non-empty array; an empty list cannot prove a check was performed`)
@@ -162,6 +195,7 @@ function requireUtcTimestamp(value: unknown, field: string): string {
 export type ReviewedStagingPins = {
   groupId: string | null
   pkpAddress: string
+  actionCid: string | null
 }
 
 /**
@@ -217,13 +251,16 @@ export function parseRehearsalManifest(
   }
   const pinnedGroupId = options.pins.groupId
   const pinnedPkpAddress = requireAddress(options.pins.pkpAddress, "pins.pkpAddress")
-  const executeInGroups = requireStringArray(lit.usageKeyExecuteInGroups, "lit.usageKeyExecuteInGroups")
-  const stagingGroupId = requireNonEmptyString(lit.stagingGroupId, "lit.stagingGroupId")
+  const executeInGroups = requireGroupIdArray(
+    lit.usageKeyExecuteInGroups,
+    "lit.usageKeyExecuteInGroups",
+  )
+  const stagingGroupId = normalizeGroupId(lit.stagingGroupId, "lit.stagingGroupId")
   if (stagingGroupId !== pinnedGroupId) {
     fail("lit.stagingGroupId does not match the reviewed pin")
   }
   for (const group of executeInGroups) {
-    if (WILDCARD_GROUP_IDS.has(group.trim())) {
+    if (WILDCARD_SENTINELS.has(group.trim())) {
       fail(`lit.usageKeyExecuteInGroups contains the wildcard "${group}"; the key can reach every group`)
     }
   }
@@ -248,7 +285,29 @@ export function parseRehearsalManifest(
   if (overlap.length > 0) {
     fail(`staging group contains production-capable PKPs: ${overlap.join(", ")}`)
   }
+  // A non-empty list is NOT sufficient: the captured wildcard ["0"] is
+  // non-empty and permits every action.
+  if (options.pins.actionCid === null) {
+    fail(
+      "the reviewed staging action CID is not pinned; register it and replace the group's"
+        + " [0] CID wildcard before any executable manifest is produced",
+    )
+  }
+  const pinnedActionCid = requireNonEmptyString(options.pins.actionCid, "pins.actionCid")
   const actionCids = requireStringArray(lit.stagingGroupActionCids, "lit.stagingGroupActionCids")
+  for (const cid of actionCids) {
+    if (WILDCARD_SENTINELS.has(cid.trim())) {
+      fail(
+        `lit.stagingGroupActionCids contains the wildcard "${cid}"; the group permits every action`,
+      )
+    }
+  }
+  if (actionCids.length !== 1 || actionCids[0] !== pinnedActionCid) {
+    fail(
+      "lit.stagingGroupActionCids must be exactly the reviewed action CID;"
+        + ` captured ${JSON.stringify(actionCids)}`,
+    )
+  }
 
   // --- Gate 3: vault identity, chain, and source-controlled tiny policy.
   if (vault.chainId !== REHEARSAL_CHAIN_ID) {
@@ -439,7 +498,11 @@ export type ExecutableRehearsalManifest = RehearsalManifest & {
 export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsalManifest {
   const parsed = parseRehearsalManifest(raw, {
     now: new Date(),
-    pins: { groupId: PINNED_STAGING_GROUP_ID, pkpAddress: PINNED_STAGING_PKP_ADDRESS },
+    pins: {
+      groupId: PINNED_STAGING_GROUP_ID,
+      pkpAddress: PINNED_STAGING_PKP_ADDRESS,
+      actionCid: PINNED_STAGING_ACTION_CID,
+    },
   })
   return parsed as ExecutableRehearsalManifest
 }
