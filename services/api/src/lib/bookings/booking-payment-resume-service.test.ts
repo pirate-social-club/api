@@ -41,6 +41,15 @@ function record(
       verifiedAt: null,
       consumedWalletAttachmentId: null,
       consumedAt: null,
+      custodyObservedAmountAtomic: null,
+      custodySenderAddress: null,
+      custodyReason: null,
+      custodyDetectedAt: null,
+      refundTxRef: null,
+      refundAttemptCount: 0,
+      refundLastAttemptAt: null,
+      refundLastErrorCode: null,
+      refundedAt: null,
       createdAt: "2026-07-24T11:55:00.000Z",
       updatedAt: "2026-07-24T11:55:00.000Z",
     },
@@ -66,6 +75,15 @@ describe("resolveBookingPaymentResumeState", () => {
     }
 
     expect(resolveBookingPaymentResumeState(record("verified"), NOW)).toBe("finalizable");
+
+    const custodyRefund = record("custody_refund_pending", { holdStatus: "expired" });
+    custodyRefund.intent.claimedTxRef = "0xtx";
+    custodyRefund.intent.consumedWalletAttachmentId = "wallet_1";
+    custodyRefund.intent.custodyObservedAmountAtomic = "51000000";
+    custodyRefund.intent.custodySenderAddress = "0xsender";
+    custodyRefund.intent.custodyReason = "wrong_transfer_amount";
+    custodyRefund.intent.custodyDetectedAt = NOW;
+    expect(resolveBookingPaymentResumeState(custodyRefund, NOW)).toBe("refund_pending");
 
     const expiredVerified = record("verified", { holdStatus: "expired" });
     expect(resolveBookingPaymentResumeState(expiredVerified, NOW)).toBe("refund_pending");
@@ -103,6 +121,7 @@ test("operator unresolved view exposes durable claim identity and age without pa
     hold_expires_at: "2026-07-24T11:30:00.000Z",
     updated_at: "2026-07-24T11:55:00.000Z",
     unresolved_age_seconds: 1800,
+    custody_refund: null,
   });
   expect(view).not.toHaveProperty("wallet_attachment_id");
   expect(view).not.toHaveProperty("recipient_address");

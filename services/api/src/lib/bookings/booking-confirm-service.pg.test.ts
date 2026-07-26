@@ -557,6 +557,83 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect((await repoDb.unsafe(`SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`, ["hold_confirm_no_payout"]) as Record<string, unknown>[])[0].n).toBe(0);
   });
 
+  test("custody mismatch persists one refund obligation and releases inventory", async () => {
+    await seedHold({ holdId: "hold_confirm_custody" });
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+      observedAmountAtomic: "36000000",
+    }));
+
+    const input = {
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_custody"),
+      holdId: "hold_confirm_custody",
+      bookerUserId: "booker_hold_confirm_custody",
+      fundingTxRef: "0xTX_CUSTODY",
+      walletAttachmentId: "wal_confirm_custody",
+      nowUtc: "2026-07-01T09:51:00Z",
+    };
+    expect(await confirmGlobalBookingHold(input)).toEqual({
+      ok: false,
+      reason: "payment_refund_pending",
+    });
+    expect(await confirmGlobalBookingHold(input)).toEqual({
+      ok: false,
+      reason: "payment_refund_pending",
+    });
+
+    const intents = await repoDb.unsafe(`SELECT status, claimed_tx_ref,
+        custody_observed_amount_atomic::text AS custody_observed_amount_atomic,
+        custody_sender_address, custody_reason, custody_detected_at
+      FROM bookings.payment_intents WHERE payment_intent_id = $1`, [
+      paymentIntentIdForHold("hold_confirm_custody"),
+    ]) as Record<string, unknown>[];
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toMatchObject({
+      status: "custody_refund_pending",
+      claimed_tx_ref: "0xtx_custody",
+      custody_observed_amount_atomic: "36000000",
+      custody_sender_address: BUYER,
+      custody_reason: "wrong_transfer_amount",
+    });
+    expect(intents[0].custody_detected_at).not.toBeNull();
+
+    const holds = await repoDb.unsafe(`SELECT status FROM bookings.holds WHERE hold_id = $1`, [
+      "hold_confirm_custody",
+    ]) as Record<string, unknown>[];
+    expect(holds[0].status).toBe("expired");
+    const locks = await repoDb.unsafe(`SELECT status FROM bookings.host_slot_locks WHERE hold_id = $1`, [
+      "hold_confirm_custody",
+    ]) as Record<string, unknown>[];
+    expect(locks[0].status).toBe("released");
+
+    const repo = createPaymentIntentRepository(makeExecutor(repoDb));
+    expect((await repo.listRecentPaymentIntentsForBooker(
+      "booker_hold_confirm_custody",
+      "2026-06-30T00:00:00Z",
+      50,
+    )).map((row) => row.intent.status)).toContain("custody_refund_pending");
+    expect((await repo.listClaimedUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).not.toContain(
+      paymentIntentIdForHold("hold_confirm_custody"),
+    );
+    expect((await repo.listOperatorUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).toContain(
+      paymentIntentIdForHold("hold_confirm_custody"),
+    );
+    expect((await repo.listCustodyRefundPendingPaymentIntents(50)).map(
+      (intent) => intent.paymentIntentId,
+    )).toContain(paymentIntentIdForHold("hold_confirm_custody"));
+  });
+
   // H2: verify-before-expire. A real payment that lands after the hold TTL must be salvaged into a
   // booking when the slot is still held — never discarded as hold_expired.
   test("salvages a verified payment on an expired hold when the slot lock is still active", async () => {
@@ -605,6 +682,22 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect(intentRows[0].status).toBe("verified");
     const orphans = await createPaymentIntentRepository(makeExecutor(repoDb)).listOrphanedVerifiedPaymentIntents("2026-07-01T10:05:00Z", 50);
     expect(orphans.some((o) => o.holdId === "hold_confirm_orphan")).toBe(true);
+    const orphanIntent = orphans.find((o) => o.holdId === "hold_confirm_orphan");
+    if (!orphanIntent) throw new Error("expected orphan intent");
+    const refunded = await createPaymentIntentWriteRepository(makeExecutor(repoDb))
+      .markOrphanedVerifiedPaymentIntentRefunded(
+        orphanIntent.paymentIntentId,
+        "0xORPHAN_REFUND",
+        "2026-07-01T10:06:00Z",
+      );
+    expect(refunded).toMatchObject({
+      status: "refunded",
+      refundTxRef: "0xorphan_refund",
+      refundedAt: "2026-07-01T10:06:00.000Z",
+    });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listOrphanedVerifiedPaymentIntents("2026-07-01T10:07:00Z", 50))
+      .some((o) => o.holdId === "hold_confirm_orphan")).toBe(false);
   });
 
   // H2: a claimed hash can mine after the hold expires. It must remain discoverable and

@@ -572,9 +572,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private assertAmount(req: OperatorSettleRequest): void {
-    if (req.effectKind === "reward_funding_refund") {
+    if (
+      req.effectKind === "reward_funding_refund"
+      || (req.effectKind === "booking_refund" && req.amountAtomic != null)
+    ) {
       if (req.amountCents != null || normalizeAtomicAmount(req.amountAtomic) == null) {
-        throw badRequestError("Reward funding refund requires only an atomic amount")
+        throw badRequestError("Atomic refund requires only an atomic amount")
       }
       return
     }

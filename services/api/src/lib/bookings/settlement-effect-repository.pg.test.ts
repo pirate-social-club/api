@@ -62,6 +62,29 @@ describe.skipIf(!RUN)("settlement effect repository (real Postgres)", () => {
       )`, [bookingId, hostUserId, `booker_${bookingId}`, `0xfunding_${bookingId}`]);
   }
 
+  async function seedPaymentIntent(paymentIntentId: string): Promise<void> {
+    const holdId = `hold_${paymentIntentId}`;
+    const hostUserId = `host_${paymentIntentId}`;
+    await repoDb.unsafe(`INSERT INTO bookings.profiles
+      (host_user_id, host_timezone, base_price_cents, default_slot_duration_seconds, created_at, updated_at)
+      VALUES ($1, 'UTC', 5000, 1800, now(), now())`, [hostUserId]);
+    await repoDb.unsafe(`INSERT INTO bookings.holds
+      (hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc, price_cents, status, expires_at_utc, created_at, updated_at)
+      VALUES ($1, $2, $3, '2026-07-01T10:00:00Z', '2026-07-01T11:00:00Z', 5000, 'expired', '2026-07-01T09:00:00Z',
+        '2026-07-01T08:00:00Z', '2026-07-01T09:00:00Z')`,
+    [holdId, hostUserId, `booker_${paymentIntentId}`]);
+    await repoDb.unsafe(`INSERT INTO bookings.payment_intents
+      (payment_intent_id, hold_id, chain_id, token_address, token_decimals, token_symbol,
+       recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at,
+       platform_fee_bps, platform_fee_cents, host_payout_cents, status, claimed_tx_ref,
+       consumed_wallet_attachment_id, verified_sender_address, custody_observed_amount_atomic,
+       custody_sender_address, custody_reason, custody_detected_at, created_at, updated_at)
+      VALUES ($1, $2, 84532, '0xtoken', 6, 'USDC', '0xoperator', 35000000, 3500,
+       '2026-07-01T09:00:00Z', '2026-07-01T09:00:00Z', 1000, 350, 3150,
+       'custody_refund_pending', '0xincoming', 'wallet_1', '0xfunder', 1,
+       '0xfunder', 'wrong_transfer_amount', now(), now(), now())`, [paymentIntentId, holdId]);
+  }
+
   function writeRepo() {
     return createSettlementEffectWriteRepository(makeExecutor(repoDb));
   }
@@ -136,6 +159,35 @@ describe.skipIf(!RUN)("settlement effect repository (real Postgres)", () => {
       recipientAddress: "0xpayout",
       nowUtc: "2026-07-01T11:02:00Z",
     })).toEqual({ ok: false, reason: "replay-conflict" });
+  });
+
+  test("persists an exact atomic refund effect owned by a payment intent", async () => {
+    await seedPaymentIntent("pi_effect_atomic");
+    const repo = writeRepo();
+    const created = await repo.beginSettlementEffectAttempt({
+      paymentIntentId: "pi_effect_atomic",
+      effectKind: "booking_refund",
+      idempotencyKey: "booking:payment-intent-refund:pi_effect_atomic",
+      amountAtomic: "1",
+      recipientAddress: "0xfunder",
+      nowUtc: "2026-07-01T11:00:00Z",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error("expected atomic refund effect");
+    expect(created.effect).toMatchObject({
+      bookingId: null,
+      paymentIntentId: "pi_effect_atomic",
+      amountCents: null,
+      amountAtomic: "1",
+    });
+    expect((await repo.beginSettlementEffectAttempt({
+      paymentIntentId: "pi_effect_atomic",
+      effectKind: "booking_refund",
+      idempotencyKey: "booking:payment-intent-refund:pi_effect_atomic",
+      amountAtomic: "2",
+      recipientAddress: "0xfunder",
+      nowUtc: "2026-07-01T11:01:00Z",
+    }))).toEqual({ ok: false, reason: "replay-conflict" });
   });
 
   test("failed unbroadcast effects retry, while broadcast effects require reconciliation", async () => {
