@@ -67,6 +67,20 @@ const BLOCK_HASH_RE = /^0x[0-9a-fA-F]{64}$/u
 
 export type BlockRef = { number: number; hash: string }
 
+/** Archived selection-time evidence that an endpoint can support the drill. */
+export type ProviderQualification = {
+  host: string
+  chainId: number
+  confirmationPolicy: ConfirmationPolicy
+  probedBlockNumber: number
+  probedBlockHash: string
+  supportsBlockHashTags: boolean
+  supportsDebugTrace: boolean
+  historicalBlockReadable: boolean
+  qualified: boolean
+  failures: string[]
+}
+
 export type ConfirmationPolicy = {
   kind: "finalized-tag" | "fixed-depth"
   depth: number | null
@@ -304,6 +318,88 @@ export class RehearsalRpcReader {
     return await this.#withBlockTag(block, async (tag) =>
       this.#hexQuantity(await this.#rpc("eth_getBalance", [address, tag]), "eth_getBalance"),
     )
+  }
+
+  /**
+   * Proves the endpoint can actually support the rehearsal, and refuses it
+   * otherwise.
+   *
+   * `debug_traceTransaction` is the one that fails QUIETLY if unchecked: the
+   * capacity-deferral classifier fails closed to `reconciliation_required`
+   * without it, so every capacity revert would land in reconciliation and the
+   * fairness measurement would silently measure nothing rather than erroring.
+   *
+   * Deliberately not part of {@link PreflightChainReader}: the preflight must
+   * never gain the ability to trace. This is a selection-time capability.
+   */
+  async qualifyProvider(expectedChainId: number): Promise<ProviderQualification> {
+    const failures: string[] = []
+
+    const chainId = await this.chainId()
+    if (chainId !== expectedChainId) {
+      failures.push(`chain id is ${chainId}, expected ${expectedChainId}`)
+    }
+
+    const block = await this.latestConfirmedBlock()
+    const confirmationPolicy = this.confirmationPolicy
+
+    // EIP-1898 probed directly, not inferred from the downgrade flag.
+    let supportsBlockHashTags = true
+    try {
+      await this.#rpc("eth_getCode", [
+        "0x0000000000000000000000000000000000000001",
+        { blockHash: block.hash, requireCanonical: true },
+      ])
+    } catch (error) {
+      if (!isCapabilityFailure(error)) throw error
+      supportsBlockHashTags = false
+      failures.push("endpoint does not support EIP-1898 block-hash tags")
+    }
+
+    // A capability error means the method is absent. Any other error means the
+    // method exists and merely disliked our arguments, which is what we want.
+    let supportsDebugTrace = true
+    try {
+      await this.#rpc("debug_traceTransaction", [`0x${"0".repeat(64)}`, {}], {
+        allowNullResult: true,
+      })
+    } catch (error) {
+      if (isCapabilityFailure(error)) {
+        supportsDebugTrace = false
+        failures.push("endpoint does not expose debug_traceTransaction")
+      }
+      // Any other failure: the method exists. Not a qualification failure.
+    }
+
+    // Retention: the confirmed block must still be readable by height.
+    let historicalBlockReadable = true
+    try {
+      await this.#rpc("eth_getBlockByNumber", [`0x${block.number.toString(16)}`, false])
+    } catch {
+      historicalBlockReadable = false
+      failures.push(`endpoint could not re-read confirmed block ${block.number}`)
+    }
+
+    const qualification: ProviderQualification = {
+      host: this.host,
+      chainId,
+      confirmationPolicy,
+      probedBlockNumber: block.number,
+      probedBlockHash: block.hash,
+      supportsBlockHashTags,
+      supportsDebugTrace,
+      historicalBlockReadable,
+      qualified: failures.length === 0,
+      failures,
+    }
+
+    if (!qualification.qualified) {
+      throw new RehearsalRpcError(
+        `rehearsal rpc: provider ${this.host} is not qualified: ${failures.join("; ")}`,
+        "protocol",
+      )
+    }
+    return qualification
   }
 
   /**

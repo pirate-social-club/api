@@ -350,3 +350,83 @@ describe("snapshot revalidation checks the captured block", () => {
     await expect(reader.assertSnapshotIntact()).rejects.toThrow(/reorganised/u)
   })
 })
+
+describe("provider qualification", () => {
+  const errorFor = (id: number, code: number) =>
+    new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: "nope" } }), {
+      status: 200,
+    })
+
+  const qualifying = (overrides: Record<string, (id: number) => Response> = {}) =>
+    (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number }
+      const override = overrides[body.method]
+      if (override) return override(body.id)
+      const map: Record<string, unknown> = {
+        eth_chainId: "0x14a34",
+        eth_getBlockByNumber: { number: "0x10", hash: BLOCK_HASH },
+        eth_getCode: "0x6080",
+        debug_traceTransaction: { failed: false },
+      }
+      return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+    }) as unknown as typeof fetch
+
+  it("qualifies an endpoint with every required capability", async () => {
+    const q = await make(qualifying()).qualifyProvider(84532)
+    expect(q.qualified).toBe(true)
+    expect(q.supportsBlockHashTags).toBe(true)
+    expect(q.supportsDebugTrace).toBe(true)
+    expect(q.historicalBlockReadable).toBe(true)
+    expect(q.host).toBe("sepolia.base.org")
+    expect(q.probedBlockHash).toBe(BLOCK_HASH)
+    expect(q.failures).toEqual([])
+  })
+
+  it("REFUSES an endpoint without debug_traceTransaction", async () => {
+    // The quiet failure: without this, capacity deferrals silently become
+    // reconciliation cases and the fairness measurement measures nothing.
+    await expect(
+      make(qualifying({ debug_traceTransaction: (id) => errorFor(id, -32601) })).qualifyProvider(
+        84532,
+      ),
+    ).rejects.toThrow(/debug_traceTransaction/u)
+  })
+
+  it("treats a non-capability trace error as the method being present", async () => {
+    // "transaction not found" means the method exists and disliked our args.
+    const q = await make(
+      qualifying({ debug_traceTransaction: (id) => errorFor(id, -32000) }),
+    ).qualifyProvider(84532)
+    expect(q.supportsDebugTrace).toBe(true)
+    expect(q.qualified).toBe(true)
+  })
+
+  it("refuses an endpoint without EIP-1898 block-hash tags", async () => {
+    await expect(
+      make(qualifying({ eth_getCode: (id) => errorFor(id, -32602) })).qualifyProvider(84532),
+    ).rejects.toThrow(/EIP-1898/u)
+  })
+
+  it("refuses an endpoint on the wrong chain", async () => {
+    await expect(
+      make(
+        qualifying({
+          eth_chainId: (id) =>
+            new Response(JSON.stringify({ jsonrpc: "2.0", id, result: "0x2105" }), { status: 200 }),
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/chain id is 8453/u)
+  })
+
+  it("propagates a transport failure rather than reporting unqualified", async () => {
+    await expect(
+      make(
+        qualifying({
+          eth_getCode: () => {
+            throw new Error("socket hang up")
+          },
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/failed, timed out/u)
+  })
+})
