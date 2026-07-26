@@ -55,6 +55,7 @@ import {
   isBookingPaymentReverificationCronEnabled,
   sweepClaimedBookingPaymentIntents,
 } from "./lib/bookings/booking-payment-reverification-cron"
+import { createBookingHoldWriteRepository } from "./lib/bookings/hold-repository"
 import { getUserRepository } from "./lib/auth/repositories"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
 import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
@@ -889,6 +890,18 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
 }
 
 async function reverifyScheduledBookingPayments(env: Env): Promise<void> {
+  // Hold expiry is lifecycle hygiene, not money movement. Run it on every scheduled
+  // invocation even when payment re-verification is disabled, so hold rows cannot
+  // remain `active` forever merely because an independent payment gate is off.
+  try {
+    const expired = await createBookingHoldWriteRepository(getControlPlaneClient(env))
+      .expireDueHolds(new Date().toISOString())
+    if (expired.length > 0) {
+      console.info("[booking-holds] expired due holds", JSON.stringify({ expired: expired.length }))
+    }
+  } catch (error) {
+    await captureScheduledError(env, error, "booking_hold_expiry")
+  }
   if (!isBookingPaymentReverificationCronEnabled(env)) return
   let summary = emptyBookingPaymentReverificationSummary(true)
   try {
