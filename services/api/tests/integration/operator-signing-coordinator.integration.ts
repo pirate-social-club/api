@@ -17,6 +17,7 @@ interface ChainConfig {
   latest: number
   liveness: Record<string, Liveness>
   broadcastError?: string
+  encodeAtomicAmountInHash?: boolean
 }
 
 type Stub = ReturnType<typeof env.OPERATOR_SIGNING_COORDINATOR.getByName>
@@ -30,7 +31,12 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
       pendingNonce: async () => config.pending,
       latestNonce: async () => config.latest,
       gasParams: async () => ({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, gasLimit: 1n }),
-      signVerifiedTransfer: async (_e, input) => ({ signedTx: `signed_${input.nonce}`, txHash: `0xhash_${input.nonce}` }),
+      signVerifiedTransfer: async (_e, input) => ({
+        signedTx: `signed_${input.nonce}`,
+        txHash: config.encodeAtomicAmountInHash && input.amountAtomic != null
+          ? `0xhash_${input.nonce}_${input.amountAtomic}`
+          : `0xhash_${input.nonce}`,
+      }),
       broadcast: async () => {
         if (config.broadcastError) throw new Error(config.broadcastError)
       },
@@ -148,6 +154,30 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     })
     await expect(stub.settle(rewardRefundReq({ amountAtomic: "12345679" }))).rejects.toThrow()
     await expect(stub.settle(rewardRefundReq({ amountCents: 123, amountAtomic: undefined }))).rejects.toThrow()
+  })
+
+  it("reconstructs a persisted atomic booking refund when the alarm signs it", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 32,
+      latest: 32,
+      liveness: {},
+      encodeAtomicAmountInHash: true,
+    })
+    const atomicRefund = req({ amountCents: undefined, amountAtomic: "12345678" })
+
+    expect((await stub.settle(atomicRefund)).state).toBe("reserving")
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      amount_cents: 0,
+      amount_atomic: "12345678",
+      nonce: 32,
+      tx_hash: "0xhash_32_12345678",
+      state: "broadcast",
+      attempt_count: 0,
+    })
   })
 
   it("does not let polling bypass alarm retry backoff", async () => {
