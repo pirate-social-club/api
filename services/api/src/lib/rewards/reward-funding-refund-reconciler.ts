@@ -171,6 +171,10 @@ export async function reconcileRewardFundingRefunds(input: {
         summary.rejected_finality += 1
         continue
       }
+      if (verification.kind === "custody_incident") {
+        summary.rejected_finality += 1
+        continue
+      }
       const observed = verification.kind === "custody_mismatch"
         ? verification.observedAmountAtomic
         : receivedAmountAtomic

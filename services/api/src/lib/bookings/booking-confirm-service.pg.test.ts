@@ -634,6 +634,63 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     )).toContain(paymentIntentIdForHold("hold_confirm_custody"));
   });
 
+  test("multi-sender custody becomes one operator-owned incident and never enters a refund worklist", async () => {
+    await seedHold({ holdId: "hold_confirm_custody_incident" });
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "custody_incident",
+      reason: "multiple_senders",
+      txRef: fundingTxRef,
+      transfers: [
+        { senderAddress: BUYER, observedAmountAtomic: "35000000", transferCount: 1 },
+        { senderAddress: "0x8000000000000000000000000000000000000008", observedAmountAtomic: "1", transferCount: 1 },
+      ],
+    }));
+
+    const result = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_custody_incident"),
+      holdId: "hold_confirm_custody_incident",
+      bookerUserId: "booker_hold_confirm_custody_incident",
+      fundingTxRef: "0xTX_CUSTODY_INCIDENT",
+      walletAttachmentId: "wal_confirm_custody_incident",
+      nowUtc: "2026-07-01T09:51:00Z",
+    });
+    expect(result).toEqual({ ok: false, reason: "payment_review_required" });
+
+    const repo = createPaymentIntentRepository(makeExecutor(repoDb));
+    const intent = await repo.getPaymentIntent(paymentIntentIdForHold("hold_confirm_custody_incident"));
+    expect(intent).toMatchObject({
+      status: "custody_operator_incident",
+      claimedTxRef: "0xtx_custody_incident",
+      custodyReason: "multiple_senders",
+      custodyEvidence: {
+        transfers: [
+          { senderAddress: BUYER, observedAmountAtomic: "35000000", transferCount: 1 },
+          { senderAddress: "0x8000000000000000000000000000000000000008", observedAmountAtomic: "1", transferCount: 1 },
+        ],
+      },
+    });
+    expect((await repo.listOperatorUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).toContain(
+      paymentIntentIdForHold("hold_confirm_custody_incident"),
+    );
+    expect((await repo.listCustodyRefundPendingPaymentIntents(50)).map(
+      (candidate) => candidate.paymentIntentId,
+    )).not.toContain(paymentIntentIdForHold("hold_confirm_custody_incident"));
+
+    const [hold] = await repoDb.unsafe(`SELECT status FROM bookings.holds WHERE hold_id = $1`, [
+      "hold_confirm_custody_incident",
+    ]) as Record<string, unknown>[];
+    expect(hold.status).toBe("expired");
+    const [lock] = await repoDb.unsafe(`SELECT status FROM bookings.host_slot_locks WHERE hold_id = $1`, [
+      "hold_confirm_custody_incident",
+    ]) as Record<string, unknown>[];
+    expect(lock.status).toBe("released");
+  });
+
   // H2: verify-before-expire. A real payment that lands after the hold TTL must be salvaged into a
   // booking when the slot is still held — never discarded as hold_expired.
   test("salvages a verified payment on an expired hold when the slot lock is still active", async () => {

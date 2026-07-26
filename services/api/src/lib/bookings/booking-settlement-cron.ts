@@ -258,7 +258,7 @@ async function refundOneCustodyMismatch(
       || !intent.custodyObservedAmountAtomic
       || !intent.custodySenderAddress
       || !intent.verifiedSenderAddress
-      || intent.custodyReason !== "wrong_transfer_amount"
+      || (intent.custodyReason !== "wrong_transfer_amount" && intent.custodyReason !== "unexpected_sender")
       || intent.custodySenderAddress.toLowerCase() !== intent.verifiedSenderAddress.toLowerCase()
     ) {
       throw new Error("booking_custody_refund_evidence_invalid");
@@ -280,10 +280,17 @@ async function refundOneCustodyMismatch(
         preferSafeBlock: true,
       },
     });
+    const observedAmountAtomic = verification.kind === "verified"
+      ? intent.amountAtomic
+      : verification.kind === "custody_mismatch"
+        ? verification.observedAmountAtomic
+        : null;
+    const senderAddress = verification.kind === "verified" || verification.kind === "custody_mismatch"
+      ? verification.senderAddress
+      : null;
     if (
-      verification.kind !== "custody_mismatch"
-      || verification.observedAmountAtomic !== intent.custodyObservedAmountAtomic
-      || verification.senderAddress.toLowerCase() !== intent.custodySenderAddress.toLowerCase()
+      observedAmountAtomic !== intent.custodyObservedAmountAtomic
+      || senderAddress?.toLowerCase() !== intent.custodySenderAddress.toLowerCase()
     ) {
       throw new Error(`booking_custody_refund_finality_${verification.kind}`);
     }

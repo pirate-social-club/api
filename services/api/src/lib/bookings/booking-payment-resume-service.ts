@@ -50,7 +50,7 @@ export interface PendingBookingPaymentIntentView {
   custody_refund: {
     observed_amount_atomic: string;
     sender_address: string;
-    reason: "wrong_transfer_amount";
+    reason: "wrong_transfer_amount" | "unexpected_sender";
     detected_at: string;
     refund_tx_ref: string | null;
     refunded_at: string | null;
@@ -62,13 +62,22 @@ export interface UnresolvedBookingPaymentIntentView {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending";
+  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending" | "custody_operator_incident";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
   updated_at: string;
   unresolved_age_seconds: number;
   custody_refund: PendingBookingPaymentIntentView["custody_refund"];
+  custody_incident: {
+    reason: "multiple_senders";
+    transfers: Array<{
+      sender_address: string;
+      observed_amount_atomic: string;
+      transfer_count: number;
+    }>;
+    detected_at: string;
+  } | null;
 }
 
 const PENDING_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -232,6 +241,7 @@ function custodyRefundView(intent: PaymentIntent): PendingBookingPaymentIntentVi
     !intent.custodyObservedAmountAtomic
     || !intent.custodySenderAddress
     || !intent.custodyReason
+    || intent.custodyReason === "multiple_senders"
     || !intent.custodyDetectedAt
   ) {
     throw new TypeError(`custodyRefundView: incomplete custody evidence for ${intent.paymentIntentId}`);
@@ -284,6 +294,7 @@ export function unresolvedBookingPaymentIntentView(
     && intent.status !== "verified"
     && intent.status !== "verification_failed"
     && intent.status !== "custody_refund_pending"
+    && intent.status !== "custody_operator_incident"
   ) {
     throw new TypeError(`unresolvedBookingPaymentIntentView: bad intent status ${intent.status}`);
   }
@@ -302,5 +313,16 @@ export function unresolvedBookingPaymentIntentView(
       Math.floor((Date.parse(nowUtc) - Date.parse(intent.holdExpiresAt)) / 1000),
     ),
     custody_refund: custodyRefundView(intent),
+    custody_incident: intent.status === "custody_operator_incident"
+      ? {
+          reason: "multiple_senders",
+          transfers: (intent.custodyEvidence?.transfers ?? []).map((transfer) => ({
+            sender_address: transfer.senderAddress,
+            observed_amount_atomic: transfer.observedAmountAtomic,
+            transfer_count: transfer.transferCount,
+          })),
+          detected_at: intent.custodyDetectedAt as string,
+        }
+      : null,
   };
 }

@@ -227,13 +227,19 @@ export interface BookingPaymentExpectation {
   amountAtomic: bigint
   senderAddress: string
 }
+export type BookingCustodyTransfer = {
+  senderAddress: string
+  observedAmountAtomic: string
+  transferCount: number
+}
 export type BookingPaymentVerification =
   // blockTimestamp lets a caller judge WHEN the transfer was mined, not merely that it was.
   // Reward funding uses it to honour a transfer broadcast before its quote expired even when
   // confirmation only arrives afterwards, without letting a genuinely late transfer revive
   // stale terms.
   | { kind: "verified"; senderAddress: string; txRef: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
-  | { kind: "custody_mismatch"; reason: "wrong_transfer_amount"; senderAddress: string; txRef: string; observedAmountAtomic: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
+  | { kind: "custody_mismatch"; reason: "wrong_transfer_amount" | "unexpected_sender"; senderAddress: string; txRef: string; observedAmountAtomic: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
+  | { kind: "custody_incident"; reason: "multiple_senders"; txRef: string; transfers: BookingCustodyTransfer[]; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
   | { kind: "pending"; reason?: string } // not yet final / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
 
@@ -317,7 +323,7 @@ async function classifyFinalizedPaymentReceipt(input: {
     }
   }
   const evaluated = evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
-  return evaluated.kind === "verified" || evaluated.kind === "custody_mismatch"
+  return evaluated.kind === "verified" || evaluated.kind === "custody_mismatch" || evaluated.kind === "custody_incident"
     ? {
         ...evaluated,
         blockNumber: receipt.blockNumber,
@@ -338,40 +344,57 @@ export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, ex
   if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
   const expectedToken = getAddress(expected.tokenAddress)
   const expectedRecipientTopic = zeroPadValue(getAddress(expected.recipientAddress), 32).toLowerCase()
-  const expectedSenderTopic = zeroPadValue(getAddress(expected.senderAddress), 32).toLowerCase()
-  let strictTransferCount = 0
-  let observedAmountAtomic = 0n
-  let observedSenderAddress: string | null = null
+  const expectedSender = getAddress(expected.senderAddress)
+  const transfersBySender = new Map<string, { senderAddress: string; amount: bigint; count: number }>()
   for (const log of receipt.logs) {
     if (getAddress(log.address) !== expectedToken) continue
     const [topic0, fromTopic, toTopic] = log.topics
     if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
     if (String(toTopic).toLowerCase() !== expectedRecipientTopic) continue
-    if (String(fromTopic).toLowerCase() !== expectedSenderTopic) continue
     const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
     const amount = parsed?.args.value as bigint | undefined
-    if (amount == null) continue
+    if (amount == null || amount <= 0n) continue
     const sender = topicAddress(String(fromTopic))
     if (sender == null) continue
-    strictTransferCount += 1
-    observedAmountAtomic += amount
-    observedSenderAddress = getAddress(sender)
+    const senderAddress = getAddress(sender)
+    const key = senderAddress.toLowerCase()
+    const current = transfersBySender.get(key)
+    transfersBySender.set(key, {
+      senderAddress,
+      amount: (current?.amount ?? 0n) + amount,
+      count: (current?.count ?? 0) + 1,
+    })
   }
+  const transfers = [...transfersBySender.values()]
+    .sort((left, right) => left.senderAddress.toLowerCase().localeCompare(right.senderAddress.toLowerCase()))
+    .map((transfer) => ({
+      senderAddress: transfer.senderAddress,
+      observedAmountAtomic: transfer.amount.toString(),
+      transferCount: transfer.count,
+    }))
+  if (transfers.length > 1) {
+    return { kind: "custody_incident", reason: "multiple_senders", txRef, transfers }
+  }
+  const [observed] = transfers
+  if (!observed) return { kind: "rejected", reason: "no_matching_transfer" }
   // EXACTLY one exact transfer satisfies the intent. Multiple matching transfers are treated as
   // custody mismatch even when one is exact, so excess funds cannot disappear from refund work.
-  if (strictTransferCount === 1 && observedAmountAtomic === expected.amountAtomic && observedSenderAddress) {
-    return { kind: "verified", senderAddress: observedSenderAddress, txRef }
+  if (
+    observed.transferCount === 1
+    && BigInt(observed.observedAmountAtomic) === expected.amountAtomic
+    && observed.senderAddress.toLowerCase() === expectedSender.toLowerCase()
+  ) {
+    return { kind: "verified", senderAddress: observed.senderAddress, txRef }
   }
-  if (strictTransferCount > 0 && observedAmountAtomic > 0n && observedSenderAddress) {
-    return {
-      kind: "custody_mismatch",
-      reason: "wrong_transfer_amount",
-      senderAddress: observedSenderAddress,
-      txRef,
-      observedAmountAtomic: observedAmountAtomic.toString(),
-    }
+  return {
+    kind: "custody_mismatch",
+    reason: observed.senderAddress.toLowerCase() === expectedSender.toLowerCase()
+      ? "wrong_transfer_amount"
+      : "unexpected_sender",
+    senderAddress: observed.senderAddress,
+    txRef,
+    observedAmountAtomic: observed.observedAmountAtomic,
   }
-  return { kind: "rejected", reason: "no_matching_transfer" }
 }
 
 export async function classifyBookingPaymentReceipt(input: {
