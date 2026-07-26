@@ -218,7 +218,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install API dependencies
-        id: install-api-dependencies
         working-directory: services/api
         run: bun install --frozen-lockfile
 
@@ -341,6 +340,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install API dependencies
+        id: install-api-dependencies
         working-directory: services/api
         run: bun install --frozen-lockfile
 
@@ -573,29 +573,28 @@ jobs:
         working-directory: services/api
         run: bun install --frozen-lockfile
 
-      - name: Audit API dependencies
-        working-directory: services/api
-        # Wrangler/Vitest Miniflare development-tool exception. The deployed
-        # Worker bundle does not ship this Node dependency tree. Expires
-        # 2026-08-05; remove via #699.
-        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
-
       - name: Typecheck API service
+        id: typecheck-api
         working-directory: services/api
         run: bun run check
 
       - name: Lint API service
+        id: lint-api
         working-directory: services/api
         run: bun run lint
 
       - name: Run API unit tests
+        id: test-api-unit
         working-directory: services/api
         run: bun run test:unit
 
       - name: Run bookings production-path real-Postgres test
+        id: test-bookings-production-path
         # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
         # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
-        if: always() && steps.install-api-dependencies.outcome == 'success'
+        # If dependency installation failed, this test also fails explicitly
+        # instead of disappearing from the required product signal.
+        if: always()
         working-directory: services/api
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
@@ -613,6 +612,42 @@ jobs:
         timeout-minutes: 10
         working-directory: services/api
         run: bun run coverage
+
+      - name: Audit API dependencies
+        id: audit-api-dependencies
+        continue-on-error: true
+        working-directory: services/api
+        # Run after product verification so an advisory-service outage cannot
+        # erase typecheck, lint, and unit-test signal. The explicit required-step
+        # assertion below keeps this audit a hard merge gate.
+        #
+        # Wrangler/Vitest Miniflare development-tool exception. The deployed
+        # Worker bundle does not ship this Node dependency tree. Expires
+        # 2026-08-05; remove via #699.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
+
+      - name: Verify required API core steps
+        if: always()
+        env:
+          API_AUDIT_OUTCOME: ${{ steps.audit-api-dependencies.outcome }}
+          API_BOOKINGS_TEST_OUTCOME: ${{ steps.test-bookings-production-path.outcome }}
+          API_LINT_OUTCOME: ${{ steps.lint-api.outcome }}
+          API_TYPECHECK_OUTCOME: ${{ steps.typecheck-api.outcome }}
+          API_UNIT_TEST_OUTCOME: ${{ steps.test-api-unit.outcome }}
+        run: |
+          test "$API_TYPECHECK_OUTCOME" = "success"
+          test "$API_LINT_OUTCOME" = "success"
+          test "$API_UNIT_TEST_OUTCOME" = "success"
+          test "$API_BOOKINGS_TEST_OUTCOME" = "success"
+
+          # TEMPORARY — registry audit transport incident (Bun receives raw gzip).
+          # Tracking: #802. Expires 2026-07-28; on and after that date this
+          # enforces again automatically. Do not extend without asking the user.
+          if [ "$(date -u +%Y%m%d)" -lt 20260728 ] && [ "$API_AUDIT_OUTCOME" != "success" ]; then
+            echo "::warning::API dependency audit bypassed under incident exception; expires 2026-07-28"
+          else
+            test "$API_AUDIT_OUTCOME" = "success"
+          fi
 
       - name: Show iron-proxy egress summary
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
