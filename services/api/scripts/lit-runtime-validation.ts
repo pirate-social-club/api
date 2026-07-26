@@ -313,6 +313,18 @@ async function main(): Promise<void> {
       "LIT_SPIKE_API_KEY is not set. Run under `infisical run --env=dev --path=/spikes/lit-runtime-validation`.",
     )
   }
+  if (API_KEY.startsWith("REPLACE_ME")) {
+    throw new SpikeError(
+      "LIT_SPIKE_API_KEY still holds its placeholder. Replace it in Infisical"
+        + " (dev, /spikes/lit-runtime-validation) with the usage key from the Lit dashboard.",
+    )
+  }
+  if (process.env.LIT_SPIKE_PKP_ADDRESS?.startsWith("REPLACE_ME")) {
+    throw new SpikeError(
+      "LIT_SPIKE_PKP_ADDRESS still holds its placeholder. Replace it in Infisical with the"
+        + " minted PKP address, or unset it to let this run mint one.",
+    )
+  }
 
   const results: ProbeResult[] = []
   results.push(await probeEthersSurface())
