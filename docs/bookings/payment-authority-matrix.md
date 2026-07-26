@@ -56,7 +56,6 @@ cross-transaction top-up.
 | `consumed` | Booking id and consumed proof | `booked` during recent window | No | History | Booking lifecycle only | Yes for intake |
 | `refunded` | Confirmed outbound tx proof | History | No | History | No | Yes |
 | `expired` | Unpaid intent only; written when an unclaimed/reclaimable payment intent and its hold lapse with no custody evidence | Excluded | No | No | No | Yes; deliberately readerless |
-| `superseded` | No bookings writer is currently known; retained schema state with no claim or custody authority | Excluded | No | No | No | Yes; deliberately readerless, remove or document its external writer before use |
 
 No non-terminal claimed state may be visible only to the client. Every such
 state must have a server-owned reader so recovery does not depend on the user

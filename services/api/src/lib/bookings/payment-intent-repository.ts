@@ -141,8 +141,7 @@ function decodeStatus(value: unknown): PaymentIntentStatus {
     status !== "custody_operator_incident" &&
     status !== "consumed" &&
     status !== "expired" &&
-    status !== "refunded" &&
-    status !== "superseded"
+    status !== "refunded"
   ) {
     throw new TypeError(`decodeStatus: bad status ${status}`);
   }
