@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  disapprovalRate,
   explicitEngagement,
+  finiteCount,
   freshnessBonus,
   posteriorRate,
   scoreVideoCandidate,
@@ -25,6 +27,7 @@ function candidate(overrides: Partial<VideoCandidateInput> = {}): VideoCandidate
     createdAtMs: NOW - 24 * HOUR,
     durationSeconds: 20,
     upvotes: 0,
+    downvotes: 0,
     comments: 0,
     stats: null,
     ...overrides,
@@ -37,7 +40,7 @@ function stats(overrides: Partial<VideoCandidateStats> = {}): VideoCandidateStat
     validPlays: 0,
     completions: 0,
     longWatches: 0,
-    replays: 0,
+    playsWithReplay: 0,
     fastSkips: 0,
     ...overrides,
   }
@@ -101,6 +104,137 @@ describe("explicitEngagement", () => {
   })
 })
 
+describe("disapprovalRate", () => {
+  test("rises with downvote share and stays inside [0,1]", () => {
+    const clean = disapprovalRate({ upvotes: 30, downvotes: 0 })
+    const mixed = disapprovalRate({ upvotes: 30, downvotes: 30 })
+    const hated = disapprovalRate({ upvotes: 30, downvotes: 300 })
+    expect(clean).toBeLessThan(mixed)
+    expect(mixed).toBeLessThan(hated)
+    expect(hated).toBeLessThan(1)
+    expect(clean).toBeGreaterThan(0)
+  })
+
+  test("distinguishes reception that a net vote score collapses", () => {
+    // `upvotes - downvotes` scores 130-up/100-down the same as 30-up/0-down.
+    // A share keeps its denominator, so it does not.
+    expect(disapprovalRate({ upvotes: 130, downvotes: 100 }))
+      .toBeGreaterThan(disapprovalRate({ upvotes: 30, downvotes: 0 }))
+  })
+
+  test("returns the prior with no votes cast, so it cannot rank unvoted posts", () => {
+    expect(disapprovalRate({ upvotes: 0, downvotes: 0 })).toBeCloseTo(0.15, 10)
+  })
+})
+
+describe("downvote semantics", () => {
+  const at = (overrides: Partial<VideoCandidateInput>) =>
+    scoreVideoCandidate(candidate({ createdAtMs: NOW - 12 * HOUR, ...overrides }), NOW).score
+
+  test("more downvotes at equal upvotes scores strictly lower", () => {
+    // The regression this guards: the outgoing SQL score carried
+    // (upvote_count - downvote_count), so dropping downvotes from the scorer
+    // would have made these two posts identical.
+    expect(at({ upvotes: 30, downvotes: 100 })).toBeLessThan(at({ upvotes: 30, downvotes: 0 }))
+  })
+
+  test("a net-negative post ranks below a comparable post with no votes", () => {
+    expect(at({ upvotes: 5, downvotes: 30 })).toBeLessThan(at({ upvotes: 0, downvotes: 0 }))
+  })
+
+  test("comment volume cannot erase overwhelming negative feedback", () => {
+    // `explicit` saturates, so comments alone must not buy a way past the
+    // disapproval term's reach.
+    expect(at({ upvotes: 0, downvotes: 100, comments: 1_000 }))
+      .toBeLessThan(at({ upvotes: 0, downvotes: 0, comments: 0 }))
+  })
+
+  test("downvotes do not invert a genuinely well-received post", () => {
+    expect(at({ upvotes: 500, downvotes: 20 })).toBeGreaterThan(at({ upvotes: 0, downvotes: 0 }))
+  })
+})
+
+describe("finite input enforcement", () => {
+  test("finiteCount rejects NaN, infinities, negatives, and nullish input", () => {
+    expect(finiteCount(Number.NaN)).toBe(0)
+    expect(finiteCount(Number.POSITIVE_INFINITY)).toBe(0)
+    expect(finiteCount(Number.NEGATIVE_INFINITY)).toBe(0)
+    expect(finiteCount(-7)).toBe(0)
+    expect(finiteCount(null)).toBe(0)
+    expect(finiteCount(undefined)).toBe(0)
+    expect(finiteCount(3.5)).toBe(3.5)
+  })
+
+  test("a fully poisoned candidate still yields a finite in-range feature vector", () => {
+    // Phase 2 feeds this module externally aggregated stats across a network
+    // boundary — the boundary where a null, a string, or a divide-by-zero
+    // becomes NaN. A NaN feature also breaks the sort comparator, which is why
+    // this is enforced rather than merely documented.
+    const poisoned = candidate({
+      createdAtMs: Number.NaN,
+      durationSeconds: Number.NaN,
+      upvotes: Number.NaN,
+      downvotes: Number.POSITIVE_INFINITY,
+      comments: Number.NaN,
+      stats: {
+        validImpressions: Number.NaN,
+        validPlays: Number.NEGATIVE_INFINITY,
+        completions: Number.NaN,
+        longWatches: Number.NaN,
+        playsWithReplay: Number.NaN,
+        fastSkips: Number.NaN,
+      },
+    })
+    const features = videoScorerFeatures(poisoned, NOW)
+    for (const [name, value] of Object.entries(features)) {
+      expect(Number.isFinite(value), `${name} is not finite`).toBe(true)
+      expect(value, `${name} below range`).toBeGreaterThanOrEqual(0)
+      expect(value, `${name} above range`).toBeLessThanOrEqual(1)
+    }
+    expect(Number.isFinite(scoreVideoCandidate(poisoned, NOW).score)).toBe(true)
+  })
+
+  test("a poisoned candidate cannot destroy the total order of a page", () => {
+    const ranked = scoreVideoCandidates([
+      candidate({ postId: "pst_ok_a", upvotes: 10 }),
+      candidate({ postId: "pst_nan", upvotes: Number.NaN, createdAtMs: Number.NaN }),
+      candidate({ postId: "pst_ok_b", upvotes: 5 }),
+    ], NOW)
+    expect(ranked).toHaveLength(3)
+    expect(ranked.every((entry) => Number.isFinite(entry.score))).toBe(true)
+    expect(new Set(ranked.map((entry) => entry.candidate.postId)).size).toBe(3)
+  })
+
+  test("a non-finite clock does not produce a non-finite score", () => {
+    expect(Number.isFinite(scoreVideoCandidate(candidate(), Number.NaN).score)).toBe(true)
+  })
+})
+
+describe("replay aggregation semantics", () => {
+  test("replay is a rate of plays that replayed, not a count of loops", () => {
+    // playsWithReplay is countIf(replay_count > 0), not sum(replay_count).
+    // Summing would make two loops on one play indistinguishable from one loop
+    // on every play once the value is clamped to the denominator.
+    const everyPlayLoopedOnce = videoScorerFeatures(
+      candidate({ stats: stats({ validPlays: 100, playsWithReplay: 100 }) }),
+      NOW,
+    )
+    const onePlayLoopedTwice = videoScorerFeatures(
+      candidate({ stats: stats({ validPlays: 100, playsWithReplay: 1 }) }),
+      NOW,
+    )
+    expect(everyPlayLoopedOnce.replay).toBeGreaterThan(onePlayLoopedTwice.replay)
+  })
+
+  test("a summed replay_count that overruns the denominator cannot exceed the contract", () => {
+    const features = videoScorerFeatures(
+      candidate({ stats: stats({ validPlays: 10, playsWithReplay: 400 }) }),
+      NOW,
+    )
+    expect(features.replay).toBeLessThanOrEqual(1)
+  })
+})
+
 describe("freshnessBonus and uncertaintyBonus", () => {
   test("freshness decays but never inverts, and is bounded", () => {
     expect(freshnessBonus(0)).toBeCloseTo(0.15, 10)
@@ -142,7 +276,7 @@ describe("videoScorerFeatures", () => {
           validPlays: 900,
           completions: 900,
           longWatches: 900,
-          replays: 900,
+          playsWithReplay: 900,
           fastSkips: 1_000,
         }),
       }),
@@ -203,7 +337,7 @@ describe("scoreVideoCandidate", () => {
           validPlays: 400,
           completions: 320,
           longWatches: 340,
-          replays: 60,
+          playsWithReplay: 60,
           fastSkips: 20,
         }),
       }),
@@ -218,7 +352,7 @@ describe("scoreVideoCandidate", () => {
           validPlays: 400,
           completions: 10,
           longWatches: 15,
-          replays: 0,
+          playsWithReplay: 0,
           fastSkips: 300,
         }),
       }),

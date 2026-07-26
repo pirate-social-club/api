@@ -24,7 +24,18 @@ export type VideoCandidateStats = {
   validPlays: number
   completions: number
   longWatches: number
-  replays: number
+  /**
+   * Impressions that replayed at least once — NOT the sum of `replay_count`.
+   *
+   * The client emits `replay_count` per impression and it can exceed one, so a
+   * Phase 2 pipe that sums it would make two loops on a single play
+   * indistinguishable from one loop on every play once the value is clamped to
+   * the denominator. The Tinybird pipe must therefore compute
+   * `countIf(replay_count > 0)`. If replay *intensity* turns out to be worth
+   * ranking on, it needs its own separately bounded feature rather than
+   * overloading this one.
+   */
+  playsWithReplay: number
   fastSkips: number
 }
 
@@ -35,6 +46,7 @@ export type VideoCandidateInput = {
   createdAtMs: number
   durationSeconds: number | null
   upvotes: number
+  downvotes: number
   comments: number
   stats: VideoCandidateStats | null
 }
@@ -52,6 +64,7 @@ export type VideoScorerFeatures = {
   replay: number
   negative: number
   explicit: number
+  disapproval: number
   freshness: number
   uncertainty: number
 }
@@ -67,6 +80,15 @@ const WEIGHT_LONG_WATCH = 0.30
 const WEIGHT_REPLAY = 0.15
 const WEIGHT_EXPLICIT = 0.10
 const WEIGHT_NEGATIVE = 0.45
+
+// Explicit disapproval is weighted well above explicit approval on purpose.
+// `explicit` saturates, so a post can buy its way to the term's ceiling with
+// comment volume alone; without a heavier disapproval weight that ceiling would
+// let a heavily-downvoted post out-rank a neutral one. It also has to stand in
+// for `negative` during Phase 1, where behavioral stats do not exist and the
+// fast-skip term is the same constant for every item.
+const WEIGHT_DISAPPROVAL = 0.35
+const DISAPPROVAL_PRIOR = 0.15
 
 // Additive and bounded, never multiplicative. A multiplicative decay term such
 // as the surviving `(score + 1) / (age + 2)^1.5` drives evergreen content
@@ -117,6 +139,21 @@ const LONG_WATCH_PRIOR: Record<VideoDurationBucket, number> = {
 const REPLAY_PRIOR = 0.06
 const NEGATIVE_PRIOR = 0.35
 
+/**
+ * Coerces any numeric input to a finite, non-negative value.
+ *
+ * The [0,1] feature contract is only as good as its inputs: NaN and Infinity
+ * propagate through every arithmetic path here and, worse, poison the sort
+ * comparator — a NaN comparison returns false in both directions and silently
+ * destroys the total-order guarantee that makes a page reproducible. Phase 1
+ * reads counters that are already parsed, but Phase 2 feeds this module
+ * externally aggregated stats over a network boundary, which is exactly where
+ * a null, a string, or a division by zero turns into NaN.
+ */
+export function finiteCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0
+}
+
 export function videoDurationBucket(durationSeconds: number | null): VideoDurationBucket {
   // Unknown duration takes the short-form bucket rather than a bucket of its
   // own: it is the modal case for this surface, and an unknown-duration bucket
@@ -139,9 +176,27 @@ export function posteriorRate(
   priorMean: number,
   priorWeight: number = PRIOR_WEIGHT,
 ): number {
-  const safeTrials = Math.max(0, trials)
-  const safeSuccesses = Math.min(Math.max(0, successes), safeTrials)
-  return (safeSuccesses + priorMean * priorWeight) / (safeTrials + priorWeight)
+  const safeTrials = finiteCount(trials)
+  const safeSuccesses = Math.min(finiteCount(successes), safeTrials)
+  const safePriorMean = Math.min(1, finiteCount(priorMean))
+  const safePriorWeight = Math.max(1, finiteCount(priorWeight))
+  return (safeSuccesses + safePriorMean * safePriorWeight) / (safeTrials + safePriorWeight)
+}
+
+/**
+ * Downvote share among cast votes, smoothed toward a global prior.
+ *
+ * Modelled as its own bounded feature rather than by netting votes off against
+ * each other: `upvotes - downvotes` throws away the denominator, so 30-up/0-down
+ * and 130-up/100-down collapse to the same number despite describing very
+ * different reception. Unlike `explicit`, this one has a real denominator —
+ * total votes cast — so a plain smoothed rate is correct here and saturation is
+ * unnecessary.
+ */
+export function disapprovalRate(input: { upvotes: number; downvotes: number }): number {
+  const downvotes = finiteCount(input.downvotes)
+  const upvotes = finiteCount(input.upvotes)
+  return posteriorRate(downvotes, upvotes + downvotes, DISAPPROVAL_PRIOR)
 }
 
 /**
@@ -158,17 +213,17 @@ export function explicitEngagement(input: {
   comments: number
   validImpressions: number
 }): number {
-  const points = Math.max(0, input.upvotes) + 2 * Math.max(0, input.comments)
-  const ratio = points / (Math.max(0, input.validImpressions) + PRIOR_WEIGHT)
+  const points = finiteCount(input.upvotes) + 2 * finiteCount(input.comments)
+  const ratio = points / (finiteCount(input.validImpressions) + PRIOR_WEIGHT)
   return ratio / (ratio + EXPLICIT_SATURATION_K)
 }
 
 export function freshnessBonus(ageHours: number): number {
-  return FRESHNESS_MAX * Math.exp(-Math.max(0, ageHours) / FRESHNESS_TAU_HOURS)
+  return FRESHNESS_MAX * Math.exp(-finiteCount(ageHours) / FRESHNESS_TAU_HOURS)
 }
 
 export function uncertaintyBonus(validImpressions: number): number {
-  const impressions = Math.max(0, validImpressions)
+  const impressions = finiteCount(validImpressions)
   return UNCERTAINTY_MAX * (1 - impressions / (impressions + UNCERTAINTY_K))
 }
 
@@ -178,19 +233,27 @@ export function videoScorerFeatures(
 ): VideoScorerFeatures {
   const bucket = videoDurationBucket(candidate.durationSeconds)
   const stats = candidate.stats
-  const validPlays = stats?.validPlays ?? 0
-  const validImpressions = stats?.validImpressions ?? 0
-  const ageHours = Math.max(0, (nowMs - candidate.createdAtMs) / 3_600_000)
+  const validPlays = finiteCount(stats?.validPlays)
+  const validImpressions = finiteCount(stats?.validImpressions)
+  // A non-finite createdAtMs must not become a non-finite age. Treating it as
+  // maximally old is the safe direction: an unparseable timestamp forfeits the
+  // freshness bonus rather than winning the whole feed with NaN.
+  const createdAtMs = Number.isFinite(candidate.createdAtMs) ? candidate.createdAtMs : 0
+  const ageHours = Math.max(0, (finiteCount(nowMs) - createdAtMs) / 3_600_000)
 
   return {
     completion: posteriorRate(stats?.completions ?? 0, validPlays, COMPLETION_PRIOR[bucket]),
     longWatch: posteriorRate(stats?.longWatches ?? 0, validPlays, LONG_WATCH_PRIOR[bucket]),
-    replay: posteriorRate(stats?.replays ?? 0, validPlays, REPLAY_PRIOR),
+    replay: posteriorRate(stats?.playsWithReplay ?? 0, validPlays, REPLAY_PRIOR),
     negative: posteriorRate(stats?.fastSkips ?? 0, validImpressions, NEGATIVE_PRIOR),
     explicit: explicitEngagement({
       comments: candidate.comments,
       upvotes: candidate.upvotes,
       validImpressions,
+    }),
+    disapproval: disapprovalRate({
+      downvotes: candidate.downvotes,
+      upvotes: candidate.upvotes,
     }),
     freshness: freshnessBonus(ageHours) / FRESHNESS_MAX,
     uncertainty: uncertaintyBonus(validImpressions) / UNCERTAINTY_MAX,
@@ -201,10 +264,12 @@ export function videoScorerFeatures(
  * Until Phase 2 supplies behavioral denominators every candidate carries
  * `stats: null`, so completion/longWatch/replay/negative all collapse onto
  * their shared priors and contribute an identical constant to every score.
- * Ranking in Phase 1 is therefore driven by `explicit` and `freshness` — which
- * is precisely the decayed-engagement ordering this phase is meant to deliver.
- * The behavioral terms start discriminating on their own the moment real
- * denominators arrive, with no interface change.
+ * Ranking in Phase 1 is therefore driven by `explicit`, `disapproval`, and
+ * `freshness` — which is precisely the decayed-engagement ordering this phase
+ * is meant to deliver, and which preserves the downvote signal the outgoing
+ * `(upvote_count - downvote_count)` SQL score carried. The behavioral terms
+ * start discriminating on their own the moment real denominators arrive, with
+ * no interface change.
  */
 export function scoreVideoCandidate(
   candidate: VideoCandidateInput,
@@ -216,10 +281,13 @@ export function scoreVideoCandidate(
     + WEIGHT_REPLAY * features.replay
     + WEIGHT_EXPLICIT * features.explicit
     - WEIGHT_NEGATIVE * features.negative
+    - WEIGHT_DISAPPROVAL * features.disapproval
   const score = quality
     + FRESHNESS_MAX * features.freshness
     + UNCERTAINTY_MAX * features.uncertainty
-  return { candidate, features, score }
+  // Belt and braces over the input sanitisation: a non-finite score would
+  // break the comparator's total order rather than merely misrank one item.
+  return { candidate, features, score: Number.isFinite(score) ? score : 0 }
 }
 
 export function scoreVideoCandidates(
