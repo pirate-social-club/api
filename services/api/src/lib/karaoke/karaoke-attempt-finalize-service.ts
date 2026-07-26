@@ -41,6 +41,58 @@ function isSummary(value: unknown): value is KaraokeSessionSummary {
     && (summary.timingTrend === "early" || summary.timingTrend === "late" || summary.timingTrend === "mixed" || summary.timingTrend === "on_time")
 }
 
+/**
+ * Emits the take's timing-calibration verdict as a structured log line.
+ *
+ * Timing was pulled from grading in v3 precisely because we could not see, from
+ * production, WHY it was producing nonsense — the attempt row keeps only a null
+ * timing score and a coarse trend, and the per-line measurements die with the
+ * session. This is the cheapest durable fix: the offset the scorer estimated,
+ * the residual spread, and the reason it did or did not count, on every
+ * finalize, with no schema change and no raw audio/transcript.
+ *
+ * Read defensively: a client (or an API bundling an older karaoke-runtime) may
+ * send a summary with no calibration block at all.
+ */
+function logTimingCalibration(input: {
+  summary: KaraokeSessionSummary
+  sessionId: string
+  attemptId: string
+  communityId: string
+  postId: string
+}): void {
+  const calibration = (input.summary as Partial<KaraokeSessionSummary> & {
+    timingCalibration?: {
+      state?: unknown
+      reason?: unknown
+      offsetMs?: unknown
+      rawOffsetMs?: unknown
+      residualSpreadMs?: unknown
+      measuredLineCount?: unknown
+      matchedWordCount?: unknown
+    }
+  }).timingCalibration
+
+  console.info("[karaoke-scoring] timing calibration", {
+    attempt_id: input.attemptId,
+    community_id: input.communityId,
+    matched_word_count: calibration?.matchedWordCount ?? null,
+    measured_line_count: calibration?.measuredLineCount ?? null,
+    offset_ms: calibration?.offsetMs ?? null,
+    post_id: input.postId,
+    raw_offset_ms: calibration?.rawOffsetMs ?? null,
+    residual_spread_ms: calibration?.residualSpreadMs ?? null,
+    scored_line_count: input.summary.scoredLineCount,
+    session_id: input.sessionId,
+    // "absent" distinguishes a pre-v4 client from a v4 client that failed to
+    // calibrate — without it the two look identical in the logs.
+    state: calibration?.state ?? "absent",
+    timing_reason: calibration?.reason ?? null,
+    timing_score: input.summary.timingScore,
+    timing_trend: input.summary.timingTrend,
+  })
+}
+
 function requireDateString(value: unknown, field: string): string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
     throw new HttpError(400, "invalid_karaoke_finalize_payload", `${field} must be a UTC date`, false)
@@ -170,6 +222,14 @@ export async function finalizeKaraokeAttempt(input: {
         streak_credited: false,
       }
     }
+
+    logTimingCalibration({
+      attemptId: input.payload.attemptId,
+      communityId: creation.communityId,
+      postId: creation.postId,
+      sessionId: input.payload.sessionId,
+      summary: input.payload.summary,
+    })
 
     const tx = await db.client.transaction("write")
     try {
