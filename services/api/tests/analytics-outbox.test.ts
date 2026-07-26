@@ -5,6 +5,7 @@ import {
   flushAnalyticsOutbox,
   hmacUserId,
   isAnalyticsEnabled,
+  pruneAnalyticsOutbox,
 } from "../src/lib/analytics"
 import { app } from "../src/index"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "./helpers"
@@ -106,6 +107,61 @@ describe("analytics outbox", () => {
     expect(row.rows[0]?.status).toBe("failed")
     expect(row.rows[0]?.attempt_count).toBe(1)
     expect(String(row.rows[0]?.last_error)).toContain("network_down")
+  })
+
+  test("prunes only sent events beyond retention in bounded batches", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const now = Date.parse("2026-07-26T12:00:00.000Z")
+    const env = buildTestEnv({
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+    for (const eventId of ["evt_old_sent_1", "evt_old_sent_2", "evt_recent_sent", "evt_old_failed"]) {
+      await enqueueAnalyticsEvent(setup.client, await buildAnalyticsEvent(env, {
+        eventId,
+        eventName: "post_created",
+        source: "api",
+        appSurface: "api",
+      }))
+    }
+    await setup.client.execute({
+      sql: `
+        UPDATE analytics_outbox
+        SET status = 'sent', sent_at = ?1
+        WHERE analytics_event_id IN ('evt_old_sent_1', 'evt_old_sent_2')
+      `,
+      args: ["2026-07-01T00:00:00.000Z"],
+    })
+    await setup.client.execute({
+      sql: `
+        UPDATE analytics_outbox
+        SET status = 'sent', sent_at = ?1
+        WHERE analytics_event_id = 'evt_recent_sent'
+      `,
+      args: ["2026-07-25T00:00:00.000Z"],
+    })
+    await setup.client.execute({
+      sql: `
+        UPDATE analytics_outbox
+        SET status = 'failed', sent_at = ?1
+        WHERE analytics_event_id = 'evt_old_failed'
+      `,
+      args: ["2026-07-01T00:00:00.000Z"],
+    })
+
+    expect(await pruneAnalyticsOutbox(setup.client, { limit: 1, now })).toBe(1)
+    expect(await pruneAnalyticsOutbox(setup.client, { limit: 1, now })).toBe(1)
+    expect(await pruneAnalyticsOutbox(setup.client, { limit: 1, now })).toBe(0)
+
+    const remaining = await setup.client.execute({
+      sql: "SELECT analytics_event_id FROM analytics_outbox ORDER BY analytics_event_id",
+      args: [],
+    })
+    expect(remaining.rows.map((row) => row.analytics_event_id)).toEqual([
+      "evt_old_failed",
+      "evt_recent_sent",
+    ])
   })
 
   test("accepts allowlisted client events through the API proxy", async () => {

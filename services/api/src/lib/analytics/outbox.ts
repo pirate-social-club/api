@@ -8,6 +8,9 @@ type AnalyticsFlushResult = {
   failed: number
 }
 
+export const ANALYTICS_OUTBOX_SENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+export const ANALYTICS_OUTBOX_PRUNE_BATCH_SIZE = 1_000
+
 type AnalyticsOutboxRow = {
   analytics_event_id: string
   event_name: string
@@ -300,4 +303,40 @@ export async function flushAnalyticsOutbox(
     error: errorText.slice(0, 500),
   })
   return { attempted: rows.length, sent: 0, failed: rows.length }
+}
+
+/**
+ * The outbox is a delivery buffer; Tinybird is the durable analytics store.
+ * Delete only rows whose delivery succeeded, in bounded batches. Unsent rows
+ * remain available for retry and incident recovery regardless of age.
+ */
+export async function pruneAnalyticsOutbox(
+  db: DbExecutor,
+  options: {
+    limit?: number
+    now?: number
+    retentionMs?: number
+  } = {},
+): Promise<number> {
+  const limit = Math.max(1, Math.min(
+    options.limit ?? ANALYTICS_OUTBOX_PRUNE_BATCH_SIZE,
+    ANALYTICS_OUTBOX_PRUNE_BATCH_SIZE,
+  ))
+  const retentionMs = Math.max(0, options.retentionMs ?? ANALYTICS_OUTBOX_SENT_RETENTION_MS)
+  const cutoff = new Date((options.now ?? Date.now()) - retentionMs).toISOString()
+  const result = await db.execute({
+    sql: `
+      DELETE FROM analytics_outbox
+      WHERE analytics_event_id IN (
+        SELECT analytics_event_id
+        FROM analytics_outbox
+        WHERE status = 'sent'
+          AND sent_at <= ?1
+        ORDER BY sent_at ASC
+        LIMIT ?2
+      )
+    `,
+    args: [cutoff, limit],
+  })
+  return Number(result.rowsAffected ?? 0)
 }

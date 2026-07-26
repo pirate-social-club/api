@@ -9,6 +9,7 @@ export {
 export {
   enqueueAnalyticsEvent,
   flushAnalyticsOutbox,
+  pruneAnalyticsOutbox,
   trackServerEvent,
 } from "./outbox"
 
