@@ -179,14 +179,14 @@ describe("scanEfpBaseOnce", () => {
       getBlock: async () => ({ hash: BLOCK_HASH }),
       getLogs: async ({ address }: { address: Address }) => {
         expect(address).toBe(EFP_OPTIMISM_LIST_RECORDS)
-        return [{
+        return Array.from({ length: 101 }, (_, index) => ({
           args: { op: rawOp, slot: 77n },
           blockHash: BLOCK_HASH,
           blockNumber: EFP_OPTIMISM_START_BLOCK + 10n,
-          logIndex: 3,
+          logIndex: index,
           transactionHash: TX_HASH,
           transactionIndex: 2,
-        }]
+        }))
       },
     }
 
@@ -201,18 +201,19 @@ describe("scanEfpBaseOnce", () => {
 
     expect(summary).toMatchObject({
       chainId: EFP_OPTIMISM_CHAIN_ID,
-      listOpCount: 1,
+      listOpCount: 101,
       primaryListEventCount: 0,
       storageLocationEventCount: 0,
     })
     const ops = await database.client.execute(
       "SELECT chain_id, contract_address, slot FROM efp_list_ops",
     )
-    expect(ops.rows).toEqual([expect.objectContaining({
+    expect(ops.rows).toHaveLength(101)
+    expect(ops.rows[0]).toEqual(expect.objectContaining({
       chain_id: EFP_OPTIMISM_CHAIN_ID,
       contract_address: EFP_OPTIMISM_LIST_RECORDS,
       slot: "77",
-    })])
+    }))
     const watermarks = await database.client.execute(
       "SELECT chain_id FROM efp_follow_projection_chain_watermarks WHERE chain_id = 10",
     )
