@@ -268,6 +268,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SONG_SLOTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(`
+      CREATE TABLE reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
+        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
+        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TIMESTAMPTZ
+      );
+    `)
     await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
@@ -277,11 +284,6 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         ADD COLUMN operational_held_by TEXT,
         ADD COLUMN operational_recovered_at TIMESTAMPTZ,
         ADD COLUMN operational_recovered_by TEXT;
-      CREATE TABLE reward_campaign_funding_effects (
-        reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
-        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
-        confirmed_block_number BIGINT, confirmed_block_hash TEXT
-      );
       CREATE TABLE reward_campaign_incidents (
         reward_campaign_incident_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
         incident_kind TEXT NOT NULL, reason TEXT NOT NULL, details_json JSONB NOT NULL,
