@@ -1,6 +1,6 @@
 import type { Address, Hex } from "viem"
 
-import type { Client, QueryResultRow } from "../sql-client"
+import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import type { DecodedEfpListOp } from "./list-op"
 
@@ -50,6 +50,12 @@ export type PersistedListStorageLocationEvent = {
   transactionHash: Hex
   transactionIndex: number
   logIndex: number
+}
+
+export type EfpAffectedListSlot = {
+  chainId: number
+  contractAddress: Address
+  slot: bigint
 }
 
 function integer(row: QueryResultRow | undefined, key: string): bigint | null {
@@ -104,8 +110,74 @@ export async function replaceEfpIndexerRange(input: {
   storageLocationEvents: readonly PersistedListStorageLocationEvent[]
   scanStartedAt: string
   scanCompletedAt: string
+  onRangeReplaced?: (input: {
+    tx: Transaction
+    affectedSlots: readonly EfpAffectedListSlot[]
+    affectedAccounts: readonly Address[]
+    affectedListIds: readonly bigint[]
+  }) => Promise<void>
 }): Promise<void> {
   await withTransaction(input.client, "write", async (tx) => {
+    const oldSlots = await tx.execute({
+      sql: `
+        SELECT DISTINCT contract_address, slot
+        FROM efp_list_ops
+        WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
+      `,
+      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+    })
+    const oldAccounts = await tx.execute({
+      sql: `
+        SELECT DISTINCT account_address
+        FROM efp_primary_list_events
+        WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
+      `,
+      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+    })
+    const oldListIds = await tx.execute({
+      sql: `
+        SELECT DISTINCT list_id
+        FROM efp_list_storage_location_events
+        WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
+      `,
+      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+    })
+    const affectedSlots = new Map<string, EfpAffectedListSlot>()
+    for (const row of oldSlots.rows) {
+      if (typeof row.contract_address !== "string" || typeof row.slot !== "string") continue
+      const item = {
+        chainId: input.chainId,
+        contractAddress: row.contract_address.toLowerCase() as Address,
+        listSlot: BigInt(row.slot),
+      }
+      affectedSlots.set(`${item.chainId}:${item.contractAddress}:${item.listSlot}`, {
+        chainId: item.chainId,
+        contractAddress: item.contractAddress,
+        slot: item.listSlot,
+      })
+    }
+    for (const item of input.listOps) {
+      affectedSlots.set(`${item.chainId}:${item.contractAddress}:${item.slot}`, {
+        chainId: item.chainId,
+        contractAddress: item.contractAddress.toLowerCase() as Address,
+        slot: item.slot,
+      })
+    }
+    const affectedAccounts = new Set<Address>()
+    for (const row of oldAccounts.rows) {
+      if (typeof row.account_address === "string") {
+        affectedAccounts.add(row.account_address.toLowerCase() as Address)
+      }
+    }
+    for (const item of input.primaryListEvents) {
+      affectedAccounts.add(item.accountAddress.toLowerCase() as Address)
+    }
+    const affectedListIds = new Set<bigint>()
+    for (const row of oldListIds.rows) {
+      if (typeof row.list_id === "string") affectedListIds.add(BigInt(row.list_id))
+    }
+    for (const item of input.storageLocationEvents) affectedListIds.add(item.listId)
+
     await tx.execute({
       sql: "DELETE FROM efp_list_ops WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3",
       args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
@@ -231,6 +303,13 @@ export async function replaceEfpIndexerRange(input: {
         input.scanStartedAt,
         input.scanCompletedAt,
       ],
+    })
+
+    await input.onRangeReplaced?.({
+      tx,
+      affectedSlots: [...affectedSlots.values()],
+      affectedAccounts: [...affectedAccounts],
+      affectedListIds: [...affectedListIds],
     })
   })
 }
