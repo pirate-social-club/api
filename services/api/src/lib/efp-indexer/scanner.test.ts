@@ -193,6 +193,7 @@ describe("scanEfpBaseOnce", () => {
       config: EFP_INDEXER_CHAINS.optimism,
       reader: reader as never,
       now: () => new Date("2026-07-25T00:00:00.000Z"),
+      deferProjection: true,
     })
 
     expect(summary).toMatchObject({
@@ -209,5 +210,9 @@ describe("scanEfpBaseOnce", () => {
       contract_address: EFP_OPTIMISM_LIST_RECORDS,
       slot: "77",
     })])
+    const watermarks = await database.client.execute(
+      "SELECT chain_id FROM efp_follow_projection_chain_watermarks WHERE chain_id = 10",
+    )
+    expect(watermarks.rows).toHaveLength(0)
   })
 })

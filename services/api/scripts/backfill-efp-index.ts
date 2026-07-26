@@ -7,6 +7,10 @@ import {
   type EfpIndexerChainConfig,
 } from "../src/lib/efp-indexer/scanner"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../src/lib/runtime-deps"
+import { rebuildEfpProjectionAfterRangeReplacement, refreshEfpProjectionAvailability } from "../src/lib/efp-indexer/materializer"
+import { readEfpIndexerCursor } from "../src/lib/efp-indexer/repository"
+import { withTransaction } from "../src/lib/transactions"
+import type { Address } from "viem"
 
 function positiveBatchLimit(value: string | undefined): number {
   if (value == null) return 10_000
@@ -27,6 +31,53 @@ function blockSpan(value: string | undefined): bigint | undefined {
   return parsed
 }
 
+async function finalizeDeferredProjection(input: {
+  client: ReturnType<typeof getControlPlaneClient>
+  config: EfpIndexerChainConfig
+}): Promise<void> {
+  const cursor = await readEfpIndexerCursor(input.client, input.config.chainId)
+  if (!cursor || cursor.indexedThroughBlock < cursor.safeHeadBlock) {
+    throw new Error(`Cannot finalize EFP ${input.config.name}: raw index is not caught up`)
+  }
+  const slots = await input.client.execute({
+    sql: `
+      SELECT DISTINCT contract_address, slot
+      FROM efp_list_ops
+      WHERE chain_id = ?1
+      ORDER BY contract_address, slot
+    `,
+    args: [input.config.chainId],
+  })
+  const now = new Date().toISOString()
+  await withTransaction(input.client, "write", async (tx) => {
+    await rebuildEfpProjectionAfterRangeReplacement({
+      tx,
+      affectedSlots: slots.rows.flatMap((row) =>
+        typeof row.contract_address === "string" && typeof row.slot === "string"
+          ? [{
+              chainId: input.config.chainId,
+              contractAddress: row.contract_address.toLowerCase() as Address,
+              slot: BigInt(row.slot),
+            }]
+          : []
+      ),
+      affectedAccounts: [],
+      affectedListIds: [],
+      chainId: input.config.chainId,
+      appliedThroughBlock: cursor.indexedThroughBlock,
+      appliedThroughBlockHash: cursor.indexedThroughBlockHash,
+      now,
+    })
+  })
+  await refreshEfpProjectionAvailability({ client: input.client, now })
+  console.info(JSON.stringify({
+    component: "efp_indexer",
+    operation: `finalize_${input.config.name}_projection`,
+    slot_count: slots.rows.length,
+    applied_through_block: cursor.indexedThroughBlock.toString(),
+  }))
+}
+
 async function main(): Promise<void> {
   const env = process.env as unknown as Env
   const chainName = String(process.env.EFP_BACKFILL_CHAIN ?? "base").trim()
@@ -43,6 +94,7 @@ async function main(): Promise<void> {
   if (!rpcUrl) throw new Error(`RPC URL is required for EFP ${config.name} backfill`)
   const batchLimit = positiveBatchLimit(process.argv[2])
   const requestedBlockSpan = blockSpan(process.env.EFP_BACKFILL_BLOCK_SPAN) ?? 100_000n
+  const deferProjection = String(process.env.EFP_BACKFILL_DEFER_PROJECTION ?? "").trim().toLowerCase() === "true"
 
   await withRequestControlPlaneClients(async () => {
     const client = getControlPlaneClient(env)
@@ -50,7 +102,13 @@ async function main(): Promise<void> {
     for (let batch = 1; batch <= batchLimit;) {
       let summary
       try {
-        summary = await scanEfpChainOnce({ client, rpcUrl, config, blockSpan: requestedBlockSpan })
+        summary = await scanEfpChainOnce({
+          client,
+          rpcUrl,
+          config,
+          blockSpan: requestedBlockSpan,
+          deferProjection,
+        })
         consecutiveRateLimits = 0
       } catch (error) {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
@@ -72,7 +130,10 @@ async function main(): Promise<void> {
         batch,
         ...summary,
       }))
-      if (summary.status === "caught_up" || summary.throughBlock === summary.safeHeadBlock) return
+      if (summary.status === "caught_up" || summary.throughBlock === summary.safeHeadBlock) {
+        if (deferProjection) await finalizeDeferredProjection({ client, config })
+        return
+      }
       batch += 1
     }
     throw new Error(`EFP backfill stopped after ${batchLimit} batches before reaching safe head`)
