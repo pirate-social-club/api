@@ -504,6 +504,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe("DELETE FROM reward_events WHERE post_id = $1", [postId])
     await db.unsafe("DELETE FROM reward_song_pools WHERE post_id = $1", [postId])
     await db.unsafe(`
+      DELETE FROM reward_campaign_reservation_funding_allocations a
+      USING reward_campaign_reservations r, reward_campaigns c
+      WHERE a.reward_campaign_reservation_id = r.reward_campaign_reservation_id
+        AND c.reward_campaign_id = r.reward_campaign_id
+        AND c.post_id = $1
+    `, [postId])
+    await db.unsafe(`
       DELETE FROM reward_campaign_reservations r
       USING reward_campaigns c
       WHERE c.reward_campaign_id = r.reward_campaign_id AND c.post_id = $1
@@ -595,7 +602,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     expect(campaigns).toEqual([{ funded_cents: 100, reserved_cents: 0, credited_cents: 40 }])
     expect(allocations).toEqual([{
       amount_cents: 40,
-      reward_campaign_funding_effect_id: "rcf_reward_pg",
+      reward_campaign_funding_effect_id: "rcf_seed_rcp_reward_pg",
     }])
   })
 
