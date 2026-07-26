@@ -25,6 +25,27 @@ describe("sql migration helpers", () => {
       CREATE TRIGGER immutable_terms BEFORE UPDATE ON campaigns
       FOR EACH ROW EXECUTE FUNCTION reject_term_changes();
     `)).toEqual([])
+    expect(toSqliteCompatibleStatements(`
+      CREATE OR REPLACE FUNCTION enforce_projection_coverage()
+      RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$;
+    `)).toEqual([])
+    expect(toSqliteCompatibleStatements(`
+      CREATE CONSTRAINT TRIGGER projection_coverage
+      AFTER UPDATE ON projection_state
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION enforce_projection_coverage();
+    `)).toEqual([])
+  })
+
+  test("splits PostgreSQL multi-column projection state changes for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE efp_follow_projection_state
+        ADD COLUMN last_reconciled_at TIMESTAMPTZ,
+        ADD COLUMN last_reconciliation_error TEXT;
+    `)).toEqual([
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciled_at TEXT;",
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciliation_error TEXT;",
+    ])
   })
 
   test("keeps dollar-quoted DO blocks intact so they can be skipped later", () => {

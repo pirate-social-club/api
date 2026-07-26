@@ -15795,6 +15795,8 @@ const spec = {
           "intent_status": {
             "type": "string",
             "enum": [
+              "verifying",
+              "verified",
               "verification_failed"
             ]
           },

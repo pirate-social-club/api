@@ -108,3 +108,18 @@ test("operator unresolved view exposes durable claim identity and age without pa
   expect(view).not.toHaveProperty("recipient_address");
   expect(view).not.toHaveProperty("amount_atomic");
 });
+
+test("operator unresolved view preserves each recoverable intent status", () => {
+  for (const status of ["verifying", "verified", "verification_failed"] as const) {
+    const pending = record(status);
+    pending.intent.claimedTxRef = "0xtx";
+    pending.intent.consumedWalletAttachmentId = "wallet_1";
+    const view = unresolvedBookingPaymentIntentView({
+      intent: pending.intent,
+      hostUserId: pending.hostUserId,
+      bookerUserId: pending.bookerUserId,
+      holdStatus: pending.holdStatus,
+    }, NOW);
+    expect(view.intent_status).toBe(status);
+  }
+});

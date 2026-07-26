@@ -1278,7 +1278,7 @@ export type UnresolvedBookingPaymentIntent = {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verification_failed";
+  intent_status: "verifying" | "verified" | "verification_failed";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
