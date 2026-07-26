@@ -724,6 +724,47 @@ describe("feed routes", () => {
     expect(await json(response)).toEqual(materializedBody)
   })
 
+  test("GET /feed/home/videos/public bounds a cold miss and stores a degraded fallback", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const target = buildMaterializedPublicHomeFeedTarget({
+      contentKind: "video",
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+      cursor: null,
+    })
+    if (!target) {
+      throw new Error("expected materialized video target")
+    }
+
+    ctx.env.PUBLIC_HOME_FEED_COMPUTE_BUDGET_MS = "0"
+    const response = await app.request(
+      "http://pirate.test/feed/home/videos/public?sort=best&locale=en",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-pirate-materialized-feed")).toBe("degraded")
+    expect(response.headers.get("cdn-cache-control")).toBeNull()
+    expect(await json(response)).toEqual({
+      items: [],
+      top_communities: [],
+      next_cursor: null,
+    })
+
+    const stored = await ctx.client.execute({
+      sql: `
+        SELECT json_body
+        FROM materialized_public_feeds
+        WHERE cache_key = ?1
+        LIMIT 1
+      `,
+      args: [target.cacheKey],
+    })
+    expect(stored.rows).toHaveLength(1)
+  })
+
   test("materialized feed parser accepts Postgres JSONB objects", () => {
     const body = {
       items: [],
