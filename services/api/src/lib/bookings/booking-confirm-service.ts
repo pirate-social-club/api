@@ -119,6 +119,13 @@ interface BookingPaymentExpectation {
 
 type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
+  | {
+    kind: "custody_mismatch";
+    reason: "wrong_transfer_amount";
+    senderAddress: string;
+    txRef: string;
+    observedAmountAtomic: string;
+  }
   | { kind: "pending" }
   | { kind: "rejected"; reason: string };
 
@@ -137,12 +144,7 @@ export function setGlobalBookingPaymentVerifierForTests(verifier: PaymentVerifie
 async function verifyPayment(input: Parameters<PaymentVerifier>[0]): Promise<BookingPaymentVerification> {
   if (paymentVerifierForTests) return paymentVerifierForTests(input);
   const mod = await import("../communities/commerce/funding-proof-service");
-  const result = await mod.classifyBookingPaymentReceipt(input);
-  // Bookings retain their existing terminal rejection semantics. Reward campaigns opt into
-  // custody/refund handling because their treasury refund executor owns that worklist.
-  return result.kind === "custody_mismatch"
-    ? { kind: "rejected", reason: "no_matching_transfer" }
-    : result;
+  return mod.classifyBookingPaymentReceipt(input);
 }
 
 async function resolveWalletAttachmentAddress(input: {
@@ -275,6 +277,7 @@ export type ConfirmGlobalBookingResult =
       | "host_payout_unconfigured"
       | "payment_pending"
       | "payment_rejected"
+      | "payment_refund_pending"
       | "transaction_already_used"
       | "verification_in_progress"
       | "replay_mismatch"
@@ -344,6 +347,7 @@ export async function confirmGlobalBookingHold(input: {
   if (intent.status === "consumed") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
   if (intent.status === "verified") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
   if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
+  if (intent.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
   if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
   // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
   // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
@@ -363,6 +367,7 @@ export async function confirmGlobalBookingHold(input: {
       return finalizeFromVerifiedIntent(input, hold, current, buyerAddress, normalizedTxRef);
     }
     if (current?.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
+    if (current?.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
     return { ok: false, reason: "verification_in_progress" };
   }
 
@@ -388,6 +393,28 @@ export async function confirmGlobalBookingHold(input: {
   if (outcome.kind === "rejected") {
     await intentRepo.markPaymentIntentRejected({ paymentIntentId: intentId, claimToken, nowUtc: input.nowUtc });
     return { ok: false, reason: "payment_rejected" };
+  }
+  if (outcome.kind === "custody_mismatch") {
+    const transitioned = await intentRepo.markPaymentIntentCustodyRefundPending({
+      paymentIntentId: intentId,
+      claimToken,
+      observedAmountAtomic: outcome.observedAmountAtomic,
+      senderAddress: outcome.senderAddress,
+      reason: outcome.reason,
+      nowUtc: input.nowUtc,
+    });
+    if (transitioned) return { ok: false, reason: "payment_refund_pending" };
+    const current = await intentRepo.getPaymentIntent(intentId);
+    if (
+      current?.status === "custody_refund_pending"
+      && current.claimedTxRef === normalizedTxRef
+      && current.custodyObservedAmountAtomic === outcome.observedAmountAtomic
+      && sameAddress(current.custodySenderAddress, outcome.senderAddress)
+      && current.custodyReason === outcome.reason
+    ) {
+      return { ok: false, reason: "payment_refund_pending" };
+    }
+    return { ok: false, reason: "verification_in_progress" };
   }
 
   const transitioned = await intentRepo.markPaymentIntentVerified({

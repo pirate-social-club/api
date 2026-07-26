@@ -1260,7 +1260,7 @@ export type BookingPaymentResumeState = "payable" | "confirmable" | "finalizable
 export type PendingBookingPaymentIntent = {
   hold_id: string;
   payment_intent_id: string;
-  intent_status: "active" | "verifying" | "verified" | "verification_failed" | "consumed";
+  intent_status: "active" | "verifying" | "verified" | "verification_failed" | "custody_refund_pending" | "consumed";
   resume_state: BookingPaymentResumeState;
   claimed_tx_ref: string | null;
   wallet_attachment_id: string | null;
@@ -1271,6 +1271,7 @@ export type PendingBookingPaymentIntent = {
   slot_start_utc: string;
   slot_end_utc: string;
   booking_id: string | null;
+  custody_refund?: BookingCustodyRefund | null;
 };
 
 export type UnresolvedBookingPaymentIntent = {
@@ -1278,12 +1279,13 @@ export type UnresolvedBookingPaymentIntent = {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verifying" | "verified" | "verification_failed";
+  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
   updated_at: string;
   unresolved_age_seconds: number;
+  custody_refund?: BookingCustodyRefund | null;
 };
 
 export type BookingCancellationPreview = {
@@ -3077,6 +3079,15 @@ type BookingCounterparty = {
   public_handle: string | null;
   display_name: string | null;
   avatar_ref: string | null;
+};
+
+type BookingCustodyRefund = {
+  observed_amount_atomic: string;
+  sender_address: string;
+  reason: "wrong_transfer_amount";
+  detected_at: string;
+  refund_tx_ref: string | null;
+  refunded_at: string | null;
 };
 
 type BookingOutcome = "completed" | "no_show_host" | "no_show_booker" | "cancelled_by_host" | "cancelled_by_booker" | null;

@@ -37,6 +37,11 @@ export function atomicFromRow(value: unknown): string {
   return positiveUint256("atomicFromRow", value);
 }
 
+/** Nullable NUMERIC(78,0) from a row. */
+export function atomicFromRowNullable(value: unknown): string | null {
+  return value === null || value === undefined ? null : atomicFromRow(value);
+}
+
 /** NUMERIC(78,0) to a query arg — validates a positive uint256 decimal string. */
 export function atomicToArg(value: string): string {
   return positiveUint256("atomicToArg", value);

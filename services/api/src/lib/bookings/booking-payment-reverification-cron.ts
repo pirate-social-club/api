@@ -90,7 +90,10 @@ export async function sweepClaimedBookingPaymentIntents(input: {
         });
         if (result.ok) {
           summary.booked += 1;
-        } else if (result.reason === "hold_expired_refund_pending") {
+        } else if (
+          result.reason === "hold_expired_refund_pending"
+          || result.reason === "payment_refund_pending"
+        ) {
           summary.refundPending += 1;
         } else if (result.reason === "payment_rejected") {
           summary.rejected += 1;

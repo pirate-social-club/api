@@ -23,7 +23,7 @@ export type BookingPaymentResumeState =
 export interface PendingBookingPaymentIntentView {
   hold_id: string;
   payment_intent_id: string;
-  intent_status: "active" | "verifying" | "verified" | "verification_failed" | "consumed";
+  intent_status: "active" | "verifying" | "verified" | "verification_failed" | "custody_refund_pending" | "consumed";
   resume_state: BookingPaymentResumeState;
   claimed_tx_ref: string | null;
   wallet_attachment_id: string | null;
@@ -47,6 +47,14 @@ export interface PendingBookingPaymentIntentView {
   slot_start_utc: string;
   slot_end_utc: string;
   booking_id: string | null;
+  custody_refund: {
+    observed_amount_atomic: string;
+    sender_address: string;
+    reason: "wrong_transfer_amount";
+    detected_at: string;
+    refund_tx_ref: string | null;
+    refunded_at: string | null;
+  } | null;
 }
 
 export interface UnresolvedBookingPaymentIntentView {
@@ -54,12 +62,13 @@ export interface UnresolvedBookingPaymentIntentView {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verifying" | "verified" | "verification_failed";
+  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
   updated_at: string;
   unresolved_age_seconds: number;
+  custody_refund: PendingBookingPaymentIntentView["custody_refund"];
 }
 
 const PENDING_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -162,6 +171,7 @@ export function resolveBookingPaymentResumeState(
       ? "finalizable"
       : "refund_pending";
   }
+  if (intent.status === "custody_refund_pending") return "refund_pending";
   if (
     (intent.status === "verifying" || intent.status === "verification_failed")
     && intent.claimedTxRef
@@ -212,6 +222,27 @@ function toView(
     slot_start_utc: record.slotStartUtc,
     slot_end_utc: record.slotEndUtc,
     booking_id: record.bookingId,
+    custody_refund: custodyRefundView(intent),
+  };
+}
+
+function custodyRefundView(intent: PaymentIntent): PendingBookingPaymentIntentView["custody_refund"] {
+  if (intent.status !== "custody_refund_pending" && intent.status !== "refunded") return null;
+  if (
+    !intent.custodyObservedAmountAtomic
+    || !intent.custodySenderAddress
+    || !intent.custodyReason
+    || !intent.custodyDetectedAt
+  ) {
+    throw new TypeError(`custodyRefundView: incomplete custody evidence for ${intent.paymentIntentId}`);
+  }
+  return {
+    observed_amount_atomic: intent.custodyObservedAmountAtomic,
+    sender_address: intent.custodySenderAddress,
+    reason: intent.custodyReason,
+    detected_at: intent.custodyDetectedAt,
+    refund_tx_ref: intent.refundTxRef,
+    refunded_at: intent.refundedAt,
   };
 }
 
@@ -236,7 +267,7 @@ export async function listUnresolvedBookingPaymentIntentsForOperator(input: {
 }): Promise<{ data: UnresolvedBookingPaymentIntentView[]; hasMore: boolean }> {
   const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 50)));
   const records = await createPaymentIntentWriteRepository(input.executor)
-    .listClaimedUnresolvedPaymentIntents(input.nowUtc, limit + 1);
+    .listOperatorUnresolvedPaymentIntents(input.nowUtc, limit + 1);
   return {
     data: records.slice(0, limit).map((record) =>
       unresolvedBookingPaymentIntentView(record, input.nowUtc)),
@@ -252,6 +283,7 @@ export function unresolvedBookingPaymentIntentView(
     intent.status !== "verifying"
     && intent.status !== "verified"
     && intent.status !== "verification_failed"
+    && intent.status !== "custody_refund_pending"
   ) {
     throw new TypeError(`unresolvedBookingPaymentIntentView: bad intent status ${intent.status}`);
   }
@@ -269,5 +301,6 @@ export function unresolvedBookingPaymentIntentView(
       0,
       Math.floor((Date.parse(nowUtc) - Date.parse(intent.holdExpiresAt)) / 1000),
     ),
+    custody_refund: custodyRefundView(intent),
   };
 }

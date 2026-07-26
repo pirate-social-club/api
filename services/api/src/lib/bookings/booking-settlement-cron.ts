@@ -7,6 +7,10 @@ import {
 import { bookingIdFromRow, resolveGlobalDueBooking, type ResolveGlobalDueBookingResult } from "./booking-settlement-evaluator";
 import { createPaymentIntentRepository, createPaymentIntentWriteRepository } from "./payment-intent-repository";
 import type { PaymentIntent } from "./types";
+import { classifyBookingPaymentReceipt } from "../communities/commerce/funding-proof-service";
+import {
+  resolveBookingSettlementRpcUrl,
+} from "./booking-settlement-config";
 
 export function isGlobalBookingSettlementCronEnabled(env: Env): boolean {
   return String(env.BOOKINGS_SETTLEMENT_CRON_ENABLED ?? "").trim().toLowerCase() === "true";
@@ -195,6 +199,17 @@ async function processGlobalBookingSettlements(input: ProcessGlobalBookingSettle
     input.summary.orphanRefundsChecked += 1;
     await refundOneOrphanedPaymentIntent(input, intent);
   }
+
+  const custodyRefunds = await createPaymentIntentRepository(input.client)
+    .listCustodyRefundPendingPaymentIntents(input.maxBookings);
+  for (const intent of custodyRefunds) {
+    if (input.shouldStop()) {
+      input.summary.deadlineReached = true;
+      return;
+    }
+    input.summary.orphanRefundsChecked += 1;
+    await refundOneCustodyMismatch(input, intent);
+  }
 }
 
 async function refundOneOrphanedPaymentIntent(
@@ -204,14 +219,17 @@ async function refundOneOrphanedPaymentIntent(
   try {
     if (!intent.verifiedSenderAddress) throw new Error("booking_orphan_payment_verified_sender_missing");
     const { executeGlobalBookingOrphanPaymentRefund } = await import("./booking-custody-adapter");
-    await executeGlobalBookingOrphanPaymentRefund({
+    const refund = await executeGlobalBookingOrphanPaymentRefund({
       env: input.env,
+      executor: input.client,
       paymentIntentId: intent.paymentIntentId,
       recipientAddress: intent.verifiedSenderAddress,
       amountCents: intent.grossCents,
       confirmPollMs: [...input.confirmPollMs],
+      nowUtc: input.nowUtc,
     });
-    await createPaymentIntentWriteRepository(input.client).markOrphanedVerifiedPaymentIntentRefunded(intent.paymentIntentId, input.nowUtc);
+    await createPaymentIntentWriteRepository(input.client)
+      .markOrphanedVerifiedPaymentIntentRefunded(intent.paymentIntentId, refund.txRef, input.nowUtc);
     input.summary.orphanRefundsConfirmed += 1;
   } catch (error) {
     const { globalBookingSettlementErrorKind: custodySettlementErrorKind } = await import("./booking-custody-adapter");
@@ -226,6 +244,78 @@ async function refundOneOrphanedPaymentIntent(
     }
     input.summary.errors += 1;
     logSettlementFailure("orphan_payment_refund", intent.paymentIntentId, error);
+  }
+}
+
+async function refundOneCustodyMismatch(
+  input: ProcessGlobalBookingSettlementsInput,
+  intent: PaymentIntent,
+): Promise<void> {
+  const repo = createPaymentIntentWriteRepository(input.client);
+  try {
+    if (
+      !intent.claimedTxRef
+      || !intent.custodyObservedAmountAtomic
+      || !intent.custodySenderAddress
+      || !intent.verifiedSenderAddress
+      || intent.custodyReason !== "wrong_transfer_amount"
+      || intent.custodySenderAddress.toLowerCase() !== intent.verifiedSenderAddress.toLowerCase()
+    ) {
+      throw new Error("booking_custody_refund_evidence_invalid");
+    }
+    const verification = await classifyBookingPaymentReceipt({
+      env: input.env,
+      fundingTxRef: intent.claimedTxRef,
+      expected: {
+        chainId: intent.chainId,
+        tokenAddress: intent.tokenAddress,
+        recipientAddress: intent.recipientAddress,
+        amountAtomic: BigInt(intent.amountAtomic),
+        senderAddress: intent.custodySenderAddress,
+      },
+      rpcUrl: resolveBookingSettlementRpcUrl(input.env),
+      finality: {
+        expectedChainId: intent.chainId,
+        fallbackConfirmations: 30,
+        preferSafeBlock: true,
+      },
+    });
+    if (
+      verification.kind !== "custody_mismatch"
+      || verification.observedAmountAtomic !== intent.custodyObservedAmountAtomic
+      || verification.senderAddress.toLowerCase() !== intent.custodySenderAddress.toLowerCase()
+    ) {
+      throw new Error(`booking_custody_refund_finality_${verification.kind}`);
+    }
+    const { executeGlobalBookingOrphanPaymentRefund } = await import("./booking-custody-adapter");
+    const refund = await executeGlobalBookingOrphanPaymentRefund({
+      env: input.env,
+      executor: input.client,
+      paymentIntentId: intent.paymentIntentId,
+      recipientAddress: intent.custodySenderAddress,
+      amountAtomic: intent.custodyObservedAmountAtomic,
+      confirmPollMs: [...input.confirmPollMs],
+      nowUtc: input.nowUtc,
+    });
+    if (!await repo.markCustodyRefundPaymentIntentRefunded(intent.paymentIntentId, refund.txRef, input.nowUtc)) {
+      throw new Error("booking_custody_refund_transition_conflict");
+    }
+    input.summary.orphanRefundsConfirmed += 1;
+  } catch (error) {
+    const code = sanitizeSettlementError(error).code;
+    await repo.recordCustodyRefundAttemptFailure(intent.paymentIntentId, code, input.nowUtc).catch(() => null);
+    const { globalBookingSettlementErrorKind: custodySettlementErrorKind } = await import("./booking-custody-adapter");
+    const kind = globalSettlementErrorKind(error) ?? custodySettlementErrorKind(error);
+    if (kind === "pending") {
+      input.summary.pending += 1;
+      return;
+    }
+    if (kind === "terminal") {
+      input.summary.terminal += 1;
+      return;
+    }
+    input.summary.errors += 1;
+    logSettlementFailure("custody_mismatch_refund", intent.paymentIntentId, error);
   }
 }
 
