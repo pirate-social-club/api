@@ -621,10 +621,11 @@ jobs:
         # erase typecheck, lint, and unit-test signal. The explicit required-step
         # assertion below keeps this audit a hard merge gate.
         #
-        # Wrangler/Vitest Miniflare development-tool exception. The deployed
-        # Worker bundle does not ship this Node dependency tree. Expires
-        # 2026-08-05; remove via #699.
-        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
+        run: |
+          node ../../.cross-repo/web/scripts/ci/dependency-audit.mjs \
+            --mode scheduled \
+            --baseline ../../.cross-repo/web/.github/dependency-audit-baseline.json \
+            --target .:bun
 
       - name: Verify required API core steps
         if: always()
