@@ -83,9 +83,15 @@ export async function deriveAuthoritativeFollowerEdges(
     sourceLogIndex: number
   }>()
   for (const row of result.rows) {
-    if (typeof row.raw_op !== "string") continue
+    if (typeof row.raw_op !== "string") {
+      throw new Error("EFP authoritative slot contains an unreadable raw operation")
+    }
     const decoded = decodeEfpListOp(row.raw_op as Hex)
-    if (!decoded.valid || !decoded.targetAddress || decoded.opcode == null) continue
+    if (!decoded.valid || !decoded.targetAddress || decoded.opcode == null) {
+      throw new Error(
+        `EFP authoritative slot contains an unsupported or malformed operation at block ${String(row.block_number)}`,
+      )
+    }
     const current = entries.get(decoded.targetAddress) ?? {
       followed: false,
       tags: new Set<string>(),
@@ -264,11 +270,12 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
     sql: `
       UPDATE efp_follow_projection_state
       SET status = 'rebuilding',
+          projection_revision = ?2,
           status_changed_at = CASE WHEN status <> 'rebuilding' THEN ?1 ELSE status_changed_at END,
           updated_at = ?1
       WHERE projection_key = 'effective-graph'
     `,
-    args: [input.now],
+    args: [input.now, projectionRevision.toString()],
   })
 
   const followers = new Set<Address>(
@@ -342,15 +349,34 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
     }
   }
 
+  let blockedReason: string | null = null
   for (const follower of followers) {
-    const edges = await deriveAuthoritativeFollowerEdges(input.tx, follower)
-    await replaceFollowerEffectiveEdgesInTransaction({
-      tx: input.tx,
-      followerAddress: follower,
-      edges,
-      projectionRevision,
-      now: input.now,
+    try {
+      const edges = await deriveAuthoritativeFollowerEdges(input.tx, follower)
+      await replaceFollowerEffectiveEdgesInTransaction({
+        tx: input.tx,
+        followerAddress: follower,
+        edges,
+        projectionRevision,
+        now: input.now,
+      })
+    } catch (error) {
+      blockedReason = error instanceof Error ? error.message : String(error)
+    }
+  }
+  if (blockedReason) {
+    await input.tx.execute({
+      sql: `
+        UPDATE efp_follow_projection_state
+        SET status = 'unavailable',
+            last_error = ?1,
+            status_changed_at = ?2,
+            updated_at = ?2
+        WHERE projection_key = 'effective-graph'
+      `,
+      args: [blockedReason, input.now],
     })
+    return
   }
   await input.tx.execute({
     sql: `
@@ -373,34 +399,60 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
       input.now,
     ],
   })
+  await input.tx.execute({
+    sql: `
+      UPDATE efp_follow_projection_state
+      SET last_error = NULL, updated_at = ?1
+      WHERE projection_key = 'effective-graph'
+    `,
+    args: [input.now],
+  })
 }
 
 export async function refreshEfpProjectionAvailability(input: {
   client: Client
   projectionRevision?: bigint
   now: string
-}): Promise<"current" | "stale"> {
+  maxCursorAgeMs?: number
+}): Promise<"current" | "stale" | "unavailable"> {
   return await withTransaction(input.client, "write", async (tx) => {
     const state = await tx.execute(
-      "SELECT projection_revision FROM efp_follow_projection_state WHERE projection_key = 'effective-graph'",
+      `SELECT status, projection_revision, last_error
+       FROM efp_follow_projection_state
+       WHERE projection_key = 'effective-graph'`,
     )
+    if (
+      state.rows[0]?.status === "unavailable"
+      && typeof state.rows[0]?.last_error === "string"
+    ) return "unavailable"
     const projectionRevision = input.projectionRevision
       ?? BigInt(String(state.rows[0]?.projection_revision ?? "0"))
-    const missing = await tx.execute(`
-      SELECT expected.chain_id
+    const coverage = await tx.execute(`
+      SELECT
+        expected.chain_id,
+        cursor.safe_head_block,
+        cursor.last_scan_completed_at,
+        watermark.applied_through_block
       FROM efp_follow_projection_expected_chains expected
       LEFT JOIN efp_indexer_cursors cursor ON cursor.chain_id = expected.chain_id
       LEFT JOIN efp_follow_projection_chain_watermarks watermark
         ON watermark.chain_id = expected.chain_id
       WHERE expected.enabled
-        AND (
-          cursor.chain_id IS NULL
-          OR watermark.chain_id IS NULL
-          OR watermark.applied_through_block < cursor.safe_head_block
-        )
-      LIMIT 1
     `)
-    const status = missing.rows.length === 0 ? "current" : "stale"
+    const nowMs = Date.parse(input.now)
+    const maxCursorAgeMs = input.maxCursorAgeMs ?? 15 * 60 * 1_000
+    const incomplete = coverage.rows.some((row) => {
+      const scannedAt = typeof row.last_scan_completed_at === "string"
+        ? Date.parse(row.last_scan_completed_at)
+        : Number.NaN
+      return row.safe_head_block == null
+        || row.applied_through_block == null
+        || BigInt(String(row.applied_through_block)) < BigInt(String(row.safe_head_block))
+        || !Number.isFinite(scannedAt)
+        || !Number.isFinite(nowMs)
+        || nowMs - scannedAt > maxCursorAgeMs
+    })
+    const status = coverage.rows.length === 0 || incomplete ? "stale" : "current"
     await tx.execute({
       sql: `
         UPDATE efp_follow_projection_state
@@ -432,8 +484,11 @@ export async function reconcileEfpFollowCounts(input: {
   now: string
   systemicDriftThreshold?: number
 }): Promise<FollowCountDrift[]> {
-  const filter = input.walletAddresses?.length
-    ? `WHERE wallet_address IN (${input.walletAddresses.map((_, index) => `?${index + 1}`).join(", ")})`
+  const requestedWallets = input.walletAddresses
+    ? [...new Set(input.walletAddresses.map((item) => item.toLowerCase() as Address))]
+    : undefined
+  const filter = requestedWallets?.length
+    ? `WHERE wallets.wallet_address IN (${requestedWallets.map((_, index) => `?${index + 1}`).join(", ")})`
     : ""
   const wallets = await input.client.execute({
     sql: `
@@ -456,7 +511,7 @@ export async function reconcileEfpFollowCounts(input: {
       LEFT JOIN efp_follow_counts counts ON counts.wallet_address = wallets.wallet_address
       ${filter}
     `,
-    args: input.walletAddresses ? [...input.walletAddresses] : [],
+    args: requestedWallets ?? [],
   })
   const drift: FollowCountDrift[] = []
   for (const row of wallets.rows) {

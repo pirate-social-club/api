@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import type { Address, Hex } from "viem"
 
 import { createControlPlaneTestClient } from "../../../tests/helpers"
+import { decodeEfpListOp } from "./list-op"
 import {
   deriveAuthoritativeFollowerEdges,
   rebuildEfpProjectionAfterRangeReplacement,
@@ -148,7 +149,7 @@ describe("EFP follow materializer", () => {
 
   test("reorg rewind full-replays affected slots instead of range-deleting projection state", async () => {
     const client = await setup()
-    const rawRemove = `0x01010102${NEW_TARGET.slice(2)}`.toLowerCase()
+    const rawRemove = `0x01020101${NEW_TARGET.slice(2)}`.toLowerCase()
     const rawAdd = `0x01010101${NEW_TARGET.slice(2)}`.toLowerCase()
     await client.batch([
       {
@@ -219,6 +220,11 @@ describe("EFP follow materializer", () => {
       "SELECT block_number FROM efp_list_ops ORDER BY block_number",
     )
     expect(raw.rows).toEqual([{ block_number: 90 }])
+    const state = await client.execute(
+      `SELECT status, projection_revision, last_error
+       FROM efp_follow_projection_state WHERE projection_key = 'effective-graph'`,
+    )
+    expect(state.rows[0]?.last_error).toBeNull()
     const projected = await client.execute("SELECT * FROM efp_effective_follows")
     expect(projected.rows).toHaveLength(0)
     const counts = await client.execute({
@@ -226,10 +232,133 @@ describe("EFP follow materializer", () => {
       args: [FOLLOWER],
     })
     expect(counts.rows[0]).toEqual({ follower_count: 0, following_count: 0 })
-    const state = await client.execute(
-      "SELECT status FROM efp_follow_projection_state WHERE projection_key = 'effective-graph'",
+    expect(state.rows[0]).toEqual({
+      status: "rebuilding",
+      projection_revision: 2,
+      last_error: null,
+    })
+
+    await replaceEfpIndexerRange({
+      client,
+      chainId: 8453,
+      fromBlock: 121n,
+      throughBlock: 121n,
+      throughBlockHash: HASH,
+      safeHeadBlock: 121n,
+      listOps: [],
+      primaryListEvents: [],
+      storageLocationEvents: [],
+      scanStartedAt: NOW,
+      scanCompletedAt: NOW,
+      onRangeReplaced: async (affected) => {
+        await rebuildEfpProjectionAfterRangeReplacement({
+          ...affected,
+          chainId: 8453,
+          appliedThroughBlock: 121n,
+          appliedThroughBlockHash: HASH,
+          now: NOW,
+        })
+      },
+    })
+    const advanced = await client.execute(
+      `SELECT state.projection_revision, watermark.projection_revision AS watermark_revision
+       FROM efp_follow_projection_state state
+       JOIN efp_follow_projection_chain_watermarks watermark ON watermark.chain_id = 8453
+       WHERE state.projection_key = 'effective-graph'`,
     )
-    expect(state.rows[0]?.status).toBe("rebuilding")
+    expect(advanced.rows[0]).toEqual({
+      projection_revision: 3,
+      watermark_revision: 3,
+    })
+  })
+
+  test("retains an unknown raw op but makes its projection unavailable", async () => {
+    const client = await setup()
+    const rawAdd = `0x01010101${NEW_TARGET.slice(2)}`.toLowerCase() as Hex
+    const unknown = "0x05" as Hex
+    await client.batch([
+      {
+        sql: `INSERT INTO efp_primary_list_events (
+          chain_id, contract_address, account_address, metadata_key, raw_value,
+          list_id, block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?2, ?1, 'primary-list', '0x08', '8', 20, ?3, ?3, 0, 0, ?4)`,
+        args: [FOLLOWER, CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_storage_location_events (
+          chain_id, registry_address, list_id, raw_storage_location,
+          storage_chain_id, storage_contract_address, storage_slot,
+          block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?1, '8', '0x', 8453, ?1, '77', 21, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_ops (
+          chain_id, contract_address, slot, block_number, block_hash,
+          transaction_hash, transaction_index, log_index, raw_op
+        ) VALUES (8453, ?1, '77', 90, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, rawAdd],
+      },
+    ], "write")
+    await replaceFollowerEffectiveEdges({
+      client,
+      followerAddress: FOLLOWER,
+      edges: [edge(NEW_TARGET, 77n)],
+      projectionRevision: 1n,
+      now: NOW,
+    })
+
+    await replaceEfpIndexerRange({
+      client,
+      chainId: 8453,
+      fromBlock: 100n,
+      throughBlock: 120n,
+      throughBlockHash: HASH,
+      safeHeadBlock: 120n,
+      listOps: [{
+        chainId: 8453,
+        contractAddress: CONTRACT,
+        slot: 77n,
+        blockNumber: 110n,
+        blockHash: HASH,
+        transactionHash: HASH,
+        transactionIndex: 0,
+        logIndex: 0,
+        rawOp: unknown,
+        decoded: decodeEfpListOp(unknown),
+      }],
+      primaryListEvents: [],
+      storageLocationEvents: [],
+      scanStartedAt: NOW,
+      scanCompletedAt: NOW,
+      onRangeReplaced: async (affected) => {
+        await rebuildEfpProjectionAfterRangeReplacement({
+          ...affected,
+          chainId: 8453,
+          appliedThroughBlock: 120n,
+          appliedThroughBlockHash: HASH,
+          projectionRevision: 2n,
+          now: NOW,
+        })
+      },
+    })
+
+    expect(await refreshEfpProjectionAvailability({ client, now: NOW })).toBe("unavailable")
+    const raw = await client.execute(
+      "SELECT raw_op FROM efp_list_ops WHERE block_number = 110",
+    )
+    expect(raw.rows).toEqual([{ raw_op: unknown }])
+    const state = await client.execute(
+      `SELECT status, projection_revision, last_error
+       FROM efp_follow_projection_state WHERE projection_key = 'effective-graph'`,
+    )
+    expect(state.rows[0]).toEqual({
+      status: "unavailable",
+      projection_revision: 2,
+      last_error: expect.stringContaining("unsupported or malformed"),
+    })
   })
 
   test("requires every runtime-configured chain and detects counter drift", async () => {
@@ -257,28 +386,46 @@ describe("EFP follow materializer", () => {
     expect(await refreshEfpProjectionAvailability({
       client, projectionRevision: 1n, now: NOW,
     })).toBe("current")
+    await client.execute({
+      sql: "UPDATE efp_indexer_cursors SET last_scan_completed_at = ?1 WHERE chain_id = 10",
+      args: ["2026-07-25T00:00:00.000Z"],
+    })
+    expect(await refreshEfpProjectionAvailability({
+      client,
+      projectionRevision: 1n,
+      now: NOW,
+      maxCursorAgeMs: 60_000,
+    })).toBe("stale")
+    await client.execute({
+      sql: "UPDATE efp_indexer_cursors SET last_scan_completed_at = ?1 WHERE chain_id = 10",
+      args: [NOW],
+    })
 
     await replaceFollowerEffectiveEdges({
-      client, followerAddress: FOLLOWER, edges: [edge(NEW_TARGET, 2n)],
+      client, followerAddress: FOLLOWER, edges: [edge(CONTRACT, 2n)],
       projectionRevision: 2n, now: NOW,
     })
     await client.execute({
       sql: "UPDATE efp_follow_counts SET follower_count = 9 WHERE wallet_address = ?1",
-      args: [NEW_TARGET],
+      args: [CONTRACT],
     })
-    const drift = await reconcileEfpFollowCounts({ client, now: NOW })
+    const checksummedContract = "0x41AA48Ef3c0446b46a5b1cc6337FF3d3716E2A33" as Address
+    const drift = await reconcileEfpFollowCounts({
+      client,
+      walletAddresses: [checksummedContract],
+      now: NOW,
+    })
     expect(drift).toHaveLength(1)
-    expect(drift[0]?.walletAddress).toBe(NEW_TARGET)
+    expect(drift[0]?.walletAddress).toBe(CONTRACT)
     const state = await client.execute(
       "SELECT status, last_reconciliation_error FROM efp_follow_projection_state",
     )
-    expect(state.rows[0]).toEqual({
-      status: "current",
-      last_reconciliation_error: "follow count drift repaired: 1 wallet(s)",
-    })
+    expect(state.rows[0]?.status).toBe("stale")
+    expect(state.rows[0]?.last_reconciliation_error)
+      .toBe("follow count drift repaired: 1 wallet(s)")
     const repaired = await client.execute({
       sql: "SELECT follower_count FROM efp_follow_counts WHERE wallet_address = ?1",
-      args: [NEW_TARGET],
+      args: [CONTRACT],
     })
     expect(repaired.rows[0]?.follower_count).toBe(1)
   })
