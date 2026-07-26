@@ -46,6 +46,7 @@ export type OperatorSettleState =
   | "broadcast"
   | "confirmed"
   | "failed_preparation"
+  | "capacity_deferred"
   | "reconciliation_required"
   | "replaced"
   | "failed_onchain"
@@ -102,6 +103,20 @@ export interface ChainPrimitives {
   }) => Promise<{ signedTx: string; txHash: string; operationId?: string | null }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
+  rewardVaultFailureEvidence?: (env: Env, input: {
+    signedTx: string
+    txHash: string
+    effectKind: Extract<OperatorEffectKind, "reward_cashout" | "reward_funding_refund">
+    effectId: string
+    recipient: string
+    amountCents?: number
+    amountAtomic?: string
+  }) => Promise<{
+    disposition: "capacity_deferred" | "reconciliation_required"
+    reason: string
+    retryAfterMs: number | null
+    compactEvidence: Record<string, string> | null
+  }>
   rewardVaultEvent?: (env: Env, input: {
     txHash: string
     effectKind: Extract<OperatorEffectKind, "reward_cashout" | "reward_funding_refund">
@@ -418,6 +433,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
   private async advance(input: EffectRow): Promise<EffectRow> {
     let row = input
+    if (row.state === "capacity_deferred") {
+      row = this.cas(row.idempotency_key, row.version, {
+        signed_tx: null,
+        tx_hash: null,
+        nonce: null,
+        state: "reserving",
+        next_attempt_at: null,
+        last_error: null,
+      }) ?? this.read(row.idempotency_key)!
+    }
     if (row.state === "reserving" || row.state === "failed_preparation") {
       row = await this.reserveNonce(row)
       if (row.nonce == null) return row
@@ -481,7 +506,47 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         last_error: null,
       }) ?? this.read(row.idempotency_key)!
     }
-    if (liveness === "failed") return this.cas(row.idempotency_key, row.version, { state: "failed_onchain", next_attempt_at: null, last_error: null }) ?? this.read(row.idempotency_key)!
+    if (liveness === "failed") {
+      if (operatorKind === "rewards" && this.usesLitVault()) {
+        const observe = chain().rewardVaultFailureEvidence
+        if (!observe) {
+          return this.cas(row.idempotency_key, row.version, {
+            state: "reconciliation_required",
+            next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+            last_error: "rewards vault failure evidence is not configured",
+          }) ?? this.read(row.idempotency_key)!
+        }
+        const request = this.requestFromRow(row)
+        const evidence = await observe(this.env, {
+          signedTx: row.signed_tx,
+          txHash: row.tx_hash,
+          effectKind: row.effect_kind as "reward_cashout" | "reward_funding_refund",
+          effectId: row.booking_id,
+          recipient: row.recipient_address,
+          amountCents: request.amountCents,
+          amountAtomic: request.amountAtomic,
+        })
+        const capacityDeferred = evidence.disposition === "capacity_deferred"
+          && evidence.retryAfterMs != null
+          && Number.isSafeInteger(evidence.retryAfterMs)
+          && evidence.retryAfterMs > Date.now()
+        return this.cas(row.idempotency_key, row.version, {
+          state: capacityDeferred ? "capacity_deferred" : "reconciliation_required",
+          next_attempt_at: capacityDeferred
+            ? evidence.retryAfterMs
+            : Date.now() + BROADCAST_RECONCILE_DELAY_MS,
+          last_error: JSON.stringify({
+            reason: evidence.reason,
+            evidence: evidence.compactEvidence,
+          }).slice(0, 1_000),
+        }) ?? this.read(row.idempotency_key)!
+      }
+      return this.cas(row.idempotency_key, row.version, {
+        state: "failed_onchain",
+        next_attempt_at: null,
+        last_error: null,
+      }) ?? this.read(row.idempotency_key)!
+    }
     if (liveness === "pending") {
       return this.cas(row.idempotency_key, row.version, {
         state: "broadcast",
@@ -707,7 +772,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
       if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
       const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
-      const next: OperatorSettleState = liveness === "success" || liveness === "pending" ? "broadcast" : (liveness === "failed" ? "failed_onchain" : "reconciliation_required")
+      const rewardsVaultFailure = this.operatorKind(row) === "rewards"
+        && this.usesLitVault()
+        && liveness === "failed"
+      const next: OperatorSettleState = liveness === "success" || liveness === "pending"
+        ? "broadcast"
+        : (liveness === "failed" && !rewardsVaultFailure ? "failed_onchain" : "reconciliation_required")
       return this.cas(row.idempotency_key, fromVersion, {
         state: next,
         next_attempt_at: next === "failed_onchain" ? null : Date.now() + BROADCAST_RECONCILE_DELAY_MS,
