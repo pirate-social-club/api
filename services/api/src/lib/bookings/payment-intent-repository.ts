@@ -275,21 +275,31 @@ async function listRecentPaymentIntentsForBooker(
   });
 }
 
+export function paymentIntentReclaimablePredicate(
+  tableAlias: string,
+  nowPlaceholder: string,
+): string {
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  return `(${prefix}status = 'verification_failed' OR (${prefix}status = 'verifying' AND ${prefix}verification_claim_expires_at <= ${nowPlaceholder}::timestamptz))`;
+}
+
 async function listClaimedUnresolvedPaymentIntents(
   exec: PaymentIntentSqlExecutor,
+  nowUtc: string,
   limit: number,
 ): Promise<ClaimedUnresolvedPaymentIntentRecord[]> {
+  const reclaimable = paymentIntentReclaimablePredicate("pi", "?1");
   const res = await exec.execute({
     sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
                  h.host_user_id, h.booker_user_id, h.status AS hold_status
           FROM bookings.payment_intents pi
           JOIN bookings.holds h ON h.hold_id = pi.hold_id
-          WHERE pi.status = 'verification_failed'
+          WHERE (${reclaimable} OR (pi.status = 'verified' AND pi.consumed_at IS NULL))
             AND pi.claimed_tx_ref IS NOT NULL
             AND pi.consumed_wallet_attachment_id IS NOT NULL
           ORDER BY pi.updated_at ASC, pi.payment_intent_id ASC
-          LIMIT ?1`,
-    args: [intToArg("limit", limit)],
+          LIMIT ?2`,
+    args: [isoUtcToArg(nowUtc), intToArg("limit", limit)],
   });
   return res.rows.map((row) => {
     const holdStatus = textFromRow(row.hold_status);
@@ -375,6 +385,7 @@ async function reservePaymentIntentForVerification(
   exec: PaymentIntentSqlExecutor,
   input: ReservePaymentIntentInput,
 ): Promise<ReservePaymentIntentResult> {
+  const reclaimable = paymentIntentReclaimablePredicate("", "?6");
   try {
     const res = await exec.execute({
       sql: `UPDATE bookings.payment_intents
@@ -386,7 +397,7 @@ async function reservePaymentIntentForVerification(
                 version = version + 1,
                 updated_at = ?6::timestamptz
             WHERE payment_intent_id = ?1
-              AND (status IN ('active', 'verification_failed') OR (status = 'verifying' AND verification_claim_expires_at <= ?6::timestamptz))
+              AND (status = 'active' OR ${reclaimable})
               AND (claimed_tx_ref IS NULL OR claimed_tx_ref = ?4)
               AND (consumed_wallet_attachment_id IS NULL OR consumed_wallet_attachment_id = ?5)
             RETURNING ${COLUMNS}`,
@@ -521,7 +532,10 @@ export interface PaymentIntentRepository {
     createdSinceUtc: string,
     limit: number,
   ): Promise<PendingPaymentIntentRecord[]>;
-  listClaimedUnresolvedPaymentIntents(limit: number): Promise<ClaimedUnresolvedPaymentIntentRecord[]>;
+  listClaimedUnresolvedPaymentIntents(
+    nowUtc: string,
+    limit: number,
+  ): Promise<ClaimedUnresolvedPaymentIntentRecord[]>;
 }
 
 export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
@@ -542,7 +556,8 @@ function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepos
     listOrphanedVerifiedPaymentIntents: (olderThanUtc, limit) => listOrphanedVerifiedPaymentIntents(executor, olderThanUtc, limit),
     listRecentPaymentIntentsForBooker: (bookerUserId, createdSinceUtc, limit) =>
       listRecentPaymentIntentsForBooker(executor, bookerUserId, createdSinceUtc, limit),
-    listClaimedUnresolvedPaymentIntents: (limit) => listClaimedUnresolvedPaymentIntents(executor, limit),
+    listClaimedUnresolvedPaymentIntents: (nowUtc, limit) =>
+      listClaimedUnresolvedPaymentIntents(executor, nowUtc, limit),
   };
 }
 

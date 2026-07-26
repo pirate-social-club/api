@@ -60,10 +60,11 @@ export async function sweepClaimedBookingPaymentIntents(input: {
   const startedAt = now();
   const maxIntents = Math.max(1, Math.trunc(input.maxIntents ?? DEFAULT_LIMIT));
   const deadlineMs = Math.max(1, Math.trunc(input.deadlineMs ?? DEFAULT_DEADLINE_MS));
+  const worklistNowUtc = new Date(startedAt).toISOString();
 
   try {
     const records = await createPaymentIntentRepository(input.client)
-      .listClaimedUnresolvedPaymentIntents(maxIntents);
+      .listClaimedUnresolvedPaymentIntents(worklistNowUtc, maxIntents);
     for (const record of records) {
       if (now() - startedAt >= deadlineMs) {
         summary.deadlineReached = true;
