@@ -420,7 +420,9 @@ async function listCustodyRefundPendingPaymentIntents(
   const res = await exec.execute({
     sql: `SELECT ${COLUMNS} FROM bookings.payment_intents
           WHERE status = 'custody_refund_pending'
-          ORDER BY custody_detected_at ASC, payment_intent_id ASC
+          ORDER BY COALESCE(refund_last_attempt_at, custody_detected_at) ASC,
+                   custody_detected_at ASC,
+                   payment_intent_id ASC
           LIMIT ?1`,
     args: [intToArg("limit", limit)],
   });

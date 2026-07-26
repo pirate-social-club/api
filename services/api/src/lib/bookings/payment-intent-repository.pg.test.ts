@@ -275,6 +275,48 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     });
   });
 
+  test("custody refund worklist rotates failed attempts behind untouched obligations", async () => {
+    await seedHold("hold_pi_refund_fairness_old");
+    await seedHold("hold_pi_refund_fairness_new");
+    const repo = writeRepo();
+    const old = await repo.createOrGetPaymentIntent(inputFor("hold_pi_refund_fairness_old"));
+    const fresh = await repo.createOrGetPaymentIntent(inputFor("hold_pi_refund_fairness_new"));
+    if (!old.ok || !fresh.ok) throw new Error("expected creates");
+
+    for (const [intent, suffix, detectedAt] of [
+      [old.intent, "old", "2026-06-10T10:00:00Z"],
+      [fresh.intent, "new", "2026-06-10T10:10:00Z"],
+    ] as const) {
+      const reserved = await repo.reservePaymentIntentForVerification({
+        paymentIntentId: intent.paymentIntentId,
+        claimToken: `claim_fairness_${suffix}`,
+        claimExpiresAt: "2026-06-10T10:30:00Z",
+        normalizedTxRef: `0xfairness_${suffix}`,
+        walletAttachmentId: `wallet_fairness_${suffix}`,
+        nowUtc: detectedAt,
+      });
+      if (!reserved.ok) throw new Error(`expected reserve for ${suffix}`);
+      const pending = await repo.markPaymentIntentCustodyRefundPending({
+        paymentIntentId: intent.paymentIntentId,
+        claimToken: `claim_fairness_${suffix}`,
+        observedAmountAtomic: "50000001",
+        senderAddress: "0x0000000000000000000000000000000000000003",
+        reason: "wrong_transfer_amount",
+        nowUtc: detectedAt,
+      });
+      if (!pending) throw new Error(`expected custody obligation for ${suffix}`);
+    }
+
+    await repo.recordCustodyRefundAttemptFailure(
+      old.intent.paymentIntentId,
+      "receipt_pending",
+      "2026-06-10T10:20:00Z",
+    );
+
+    const selected = await repo.listCustodyRefundPendingPaymentIntents(1);
+    expect(selected.map((intent) => intent.paymentIntentId)).toEqual([fresh.intent.paymentIntentId]);
+  });
+
   test("verified, rejected, expired, and consumed transitions are claim/status guarded", async () => {
     await seedHold("hold_pi_verified");
     await seedHold("hold_pi_rejected");
