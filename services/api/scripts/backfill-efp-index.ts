@@ -24,12 +24,12 @@ function positiveBatchLimit(value: string | undefined): number {
   return parsed
 }
 
-function blockSpan(value: string | undefined): bigint | undefined {
+function blockSpan(value: string | undefined, variableName = "EFP_BACKFILL_BLOCK_SPAN"): bigint | undefined {
   if (!value) return undefined
-  if (!/^\d+$/u.test(value)) throw new Error("EFP_BACKFILL_BLOCK_SPAN must be a positive integer")
+  if (!/^\d+$/u.test(value)) throw new Error(`${variableName} must be a positive integer`)
   const parsed = BigInt(value)
   if (parsed <= 0n || parsed > 1_000_000n) {
-    throw new Error("EFP_BACKFILL_BLOCK_SPAN must be between 1 and 1000000")
+    throw new Error(`${variableName} must be between 1 and 1000000`)
   }
   return parsed
 }
@@ -96,6 +96,13 @@ async function main(): Promise<void> {
   if (!rpcUrl) throw new Error(`RPC URL is required for EFP ${config.name} backfill`)
   const batchLimit = positiveBatchLimit(process.argv[2])
   const requestedBlockSpan = blockSpan(process.env.EFP_BACKFILL_BLOCK_SPAN) ?? 100_000n
+  const requestedRpcLogRange = blockSpan(
+    process.env.EFP_BACKFILL_RPC_LOG_RANGE,
+    "EFP_BACKFILL_RPC_LOG_RANGE",
+  )
+  const scanConfig = requestedRpcLogRange
+    ? { ...config, rpcLogRange: requestedRpcLogRange }
+    : config
   const deferProjection = String(process.env.EFP_BACKFILL_DEFER_PROJECTION ?? "").trim().toLowerCase() === "true"
 
   await withRequestControlPlaneClients(async () => {
@@ -107,7 +114,7 @@ async function main(): Promise<void> {
         summary = await scanEfpChainOnce({
           client,
           rpcUrl,
-          config,
+          config: scanConfig,
           blockSpan: requestedBlockSpan,
           deferProjection,
         })
@@ -133,7 +140,7 @@ async function main(): Promise<void> {
         ...summary,
       }))
       if (summary.status === "caught_up" || summary.throughBlock === summary.safeHeadBlock) {
-        if (deferProjection) await finalizeDeferredProjection({ client, config })
+        if (deferProjection) await finalizeDeferredProjection({ client, config: scanConfig })
         return
       }
       batch += 1
