@@ -617,15 +617,16 @@ jobs:
         id: audit-api-dependencies
         continue-on-error: true
         working-directory: services/api
-        # Run after product verification so an advisory-service outage cannot
-        # erase typecheck, lint, and unit-test signal. The explicit required-step
-        # assertion below keeps this audit a hard merge gate.
+        # Run after product verification so an audit-client or advisory-service
+        # failure cannot erase typecheck, lint, and unit-test signal. The
+        # explicit required-step assertion below keeps this audit a hard merge
+        # gate.
         #
         run: |
-          node ../../.cross-repo/web/scripts/ci/dependency-audit.mjs \
+          bun run scripts/audit-bun-lock.ts \
             --mode scheduled \
-            --baseline ../../.cross-repo/web/.github/dependency-audit-baseline.json \
-            --target .:bun
+            --lockfile bun.lock \
+            --baseline ../../.cross-repo/web/.github/dependency-audit-baseline.json
 
       - name: Verify required API core steps
         if: always()
@@ -640,15 +641,7 @@ jobs:
           test "$API_LINT_OUTCOME" = "success"
           test "$API_UNIT_TEST_OUTCOME" = "success"
           test "$API_BOOKINGS_TEST_OUTCOME" = "success"
-
-          # TEMPORARY — registry audit transport incident (Bun receives raw gzip).
-          # Tracking: #802. Expires 2026-07-28; on and after that date this
-          # enforces again automatically. Do not extend without asking the user.
-          if [ "$(date -u +%Y%m%d)" -lt 20260728 ] && [ "$API_AUDIT_OUTCOME" != "success" ]; then
-            echo "::warning::API dependency audit bypassed under incident exception; expires 2026-07-28"
-          else
-            test "$API_AUDIT_OUTCOME" = "success"
-          fi
+          test "$API_AUDIT_OUTCOME" = "success"
 
       - name: Show iron-proxy egress summary
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
