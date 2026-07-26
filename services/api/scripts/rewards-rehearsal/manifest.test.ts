@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 
 import {
   PINNED_STAGING_ACTION_CID_HASH,
+  PINNED_STAGING_ACTION_SOURCE_CID,
   PINNED_STAGING_GROUP_ID,
   PINNED_STAGING_PKP_ADDRESS,
   parseRehearsalManifest,
@@ -21,6 +22,7 @@ const PINS: ReviewedStagingPins = {
   groupId: GROUP,
   pkpAddress: STAGING_PKP,
   actionCidHash: ACTION_CID_HASH,
+  actionSourceCid: ACTION_SOURCE_CID,
 }
 
 const valid = () => ({
@@ -95,6 +97,24 @@ describe("parseRehearsalManifest", () => {
       // until the staging vault is deployed. The group also still permits the
       // [0] wildcard.
       expect(PINNED_STAGING_ACTION_CID_HASH).toBeNull()
+    })
+
+    it("ships with NO raw source CID pinned either", () => {
+      expect(PINNED_STAGING_ACTION_SOURCE_CID).toBeNull()
+    })
+
+    it("refuses while the raw source CID is unpinned", () => {
+      expect(() => parse(valid(), { ...PINS, actionSourceCid: null })).toThrow(
+        /action source CID is not pinned/u,
+      )
+    })
+
+    it("refuses a source CID that disagrees with its pin", () => {
+      // The correct hash with an unrelated source CID is misleading evidence
+      // and could diverge from the executor's configuration.
+      expect(() => parse(withSection("lit", { stagingActionSourceCid: "QmSomethingElse" }))).toThrow(
+        /does not match the reviewed source-CID pin/u,
+      )
     })
 
     it("refuses while the action CID hash is unpinned", () => {

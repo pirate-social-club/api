@@ -62,6 +62,17 @@ export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b63168644
  */
 export const PINNED_STAGING_ACTION_CID_HASH: string | null = null
 
+/**
+ * The raw IPFS CID of the reviewed action — the identifier the production
+ * executor is configured with.
+ *
+ * Pinned alongside the hash so the two cannot diverge: a manifest carrying the
+ * correct permitted hash but an unrelated source CID would produce misleading
+ * evidence and could disagree with the executor's configuration. Commit both
+ * from the SAME action-registration record.
+ */
+export const PINNED_STAGING_ACTION_SOURCE_CID: string | null = null
+
 /** A capture older than this is refused; topology drifts. */
 export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
 
@@ -211,6 +222,7 @@ export type ReviewedStagingPins = {
   groupId: string | null
   pkpAddress: string
   actionCidHash: string | null
+  actionSourceCid: string | null
 }
 
 /**
@@ -330,10 +342,23 @@ export function parseRehearsalManifest(
         + ` captured ${JSON.stringify(normalizedHashes)}`,
     )
   }
+  if (options.pins.actionSourceCid === null) {
+    fail(
+      "the reviewed staging action source CID is not pinned; commit it and its hash from the"
+        + " same action-registration record so the two cannot diverge",
+    )
+  }
+  const pinnedSourceCid = requireNonEmptyString(
+    options.pins.actionSourceCid,
+    "pins.actionSourceCid",
+  )
   const stagingActionSourceCid = requireNonEmptyString(
     lit.stagingActionSourceCid,
     "lit.stagingActionSourceCid",
   )
+  if (stagingActionSourceCid !== pinnedSourceCid) {
+    fail("lit.stagingActionSourceCid does not match the reviewed source-CID pin")
+  }
 
   // --- Gate 3: vault identity, chain, and source-controlled tiny policy.
   if (vault.chainId !== REHEARSAL_CHAIN_ID) {
@@ -529,6 +554,7 @@ export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsal
       groupId: PINNED_STAGING_GROUP_ID,
       pkpAddress: PINNED_STAGING_PKP_ADDRESS,
       actionCidHash: PINNED_STAGING_ACTION_CID_HASH,
+      actionSourceCid: PINNED_STAGING_ACTION_SOURCE_CID,
     },
   })
   return parsed as ExecutableRehearsalManifest
