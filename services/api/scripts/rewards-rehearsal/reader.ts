@@ -88,6 +88,8 @@ export type ProviderQualification = {
   probedBlockHash: string
   supportsBlockHashTags: boolean
   supportsDebugTrace: boolean
+  /** The real confirmed transaction actually traced, proving usable entitlement. */
+  tracedTransactionHash: string | null
   historicalBlockReadable: boolean
   /** Source-controlled depth the endpoint had to satisfy. */
   requiredRetentionBlocks: number
@@ -296,6 +298,32 @@ export class RehearsalRpcReader {
     return ref
   }
 
+  /**
+   * Finds a confirmed transaction to trace, walking back from the confirmed
+   * block until a non-empty one is found. Preferred over a hard-coded hash,
+   * which would fall outside the retention horizon and start failing.
+   */
+  async #findProbeTransaction(fromBlock: number, maxLookback = 25): Promise<string> {
+    for (let height = fromBlock; height > fromBlock - maxLookback && height >= 0; height -= 1) {
+      const raw = await this.#rpc(
+        "eth_getBlockByNumber",
+        [`0x${height.toString(16)}`, true],
+        { allowNullResult: true },
+      )
+      if (raw === null) continue
+      const transactions = (raw as { transactions?: unknown }).transactions
+      if (!Array.isArray(transactions) || transactions.length === 0) continue
+      const first = transactions[0] as { hash?: unknown }
+      if (typeof first?.hash === "string" && BLOCK_HASH_RE.test(first.hash)) {
+        return first.hash.toLowerCase()
+      }
+    }
+    fail(
+      `no confirmed transaction found within ${maxLookback} blocks of ${fromBlock} to trace-probe`,
+      "protocol",
+    )
+  }
+
   #blockTag(block: BlockRef): unknown {
     return this.#hashTagSupported
       ? { blockHash: block.hash, requireCanonical: true }
@@ -351,7 +379,7 @@ export class RehearsalRpcReader {
    */
   async qualifyProvider(
     expectedChainId: number,
-    options: { now?: () => Date } = {},
+    options: { now?: () => Date; probeTransactionHash?: string } = {},
   ): Promise<ProviderQualification> {
     const failures: string[] = []
 
@@ -376,24 +404,39 @@ export class RehearsalRpcReader {
       failures.push("endpoint does not support EIP-1898 block-hash tags")
     }
 
-    // A capability error means the method is absent. Any other error means the
-    // method exists and merely disliked our arguments, which is what we want.
+    // Trace a REAL confirmed transaction. Method recognition is not
+    // entitlement: providers return -32000 for "transaction not found", but
+    // also for "tracing disabled on your plan", "method restricted" and
+    // "backend tracing unavailable". Only a successful, non-null structured
+    // result proves tracing is actually usable.
     let supportsDebugTrace = true
+    let tracedTransactionHash: string | null = null
     try {
-      await this.#rpc("debug_traceTransaction", [`0x${"0".repeat(64)}`, {}], {
+      tracedTransactionHash = options.probeTransactionHash
+        ?? (await this.#findProbeTransaction(block.number))
+      const trace = await this.#rpc("debug_traceTransaction", [tracedTransactionHash, {}], {
         allowNullResult: true,
       })
-    } catch (error) {
-      if (isCapabilityFailure(error)) {
+      if (trace === null || typeof trace !== "object") {
         supportsDebugTrace = false
-        failures.push("endpoint does not expose debug_traceTransaction")
-      } else if (!(error instanceof RehearsalRpcError && error.kind === "rpc")) {
-        // Transport, HTTP, and protocol failures prove nothing about the
-        // method's existence and must not be read as support.
+        failures.push("debug_traceTransaction returned no structured trace for a confirmed tx")
+      }
+    } catch (error) {
+      if (
+        isCapabilityFailure(error)
+        || (error instanceof RehearsalRpcError && error.kind === "rpc")
+      ) {
+        // The server is telling us it will not or cannot trace: unusable.
+        supportsDebugTrace = false
+        failures.push(
+          "endpoint cannot trace a confirmed transaction"
+            + " (method absent, restricted, or tracing disabled)",
+        )
+      } else {
+        // Transport/HTTP/protocol failures are inconclusive infrastructure
+        // conditions, not evidence about entitlement.
         throw error
       }
-      // A non-capability JSON-RPC error means the method exists and merely
-      // rejected this transaction hash, which is the expected probe response.
     }
 
     // Retention at the REQUIRED depth. Re-reading the freshly confirmed block
@@ -423,6 +466,7 @@ export class RehearsalRpcReader {
       probedBlockHash: block.hash,
       supportsBlockHashTags,
       supportsDebugTrace,
+      tracedTransactionHash,
       historicalBlockReadable,
       requiredRetentionBlocks: REQUIRED_RETENTION_BLOCKS,
       testedHistoricalBlock,

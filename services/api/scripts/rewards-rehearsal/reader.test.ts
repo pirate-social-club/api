@@ -10,6 +10,7 @@ import {
 
 const URL_OK = "https://sepolia.base.org/v1?key=SUPERSECRETAPIKEY"
 const BLOCK_HASH = `0x${"ab".repeat(32)}`
+const PROBE_TX = `0x${"11".repeat(32)}`
 
 type Call = { body: Record<string, unknown>; init: RequestInit }
 
@@ -365,9 +366,13 @@ describe("provider qualification", () => {
       if (override) return override(body.id)
       const map: Record<string, unknown> = {
         eth_chainId: "0x14a34",
-        eth_getBlockByNumber: { number: "0x40000", hash: BLOCK_HASH },
+        eth_getBlockByNumber: {
+          number: "0x40000",
+          hash: BLOCK_HASH,
+          transactions: [{ hash: PROBE_TX }],
+        },
         eth_getCode: "0x6080",
-        debug_traceTransaction: { failed: false },
+        debug_traceTransaction: { failed: false, gas: 21000 },
       }
       return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
     }) as unknown as typeof fetch
@@ -390,16 +395,88 @@ describe("provider qualification", () => {
       make(qualifying({ debug_traceTransaction: (id) => errorFor(id, -32601) })).qualifyProvider(
         84532,
       ),
-    ).rejects.toThrow(/debug_traceTransaction/u)
+    ).rejects.toThrow(/cannot trace a confirmed transaction/u)
   })
 
-  it("treats a non-capability trace error as the method being present", async () => {
-    // "transaction not found" means the method exists and disliked our args.
-    const q = await make(
-      qualifying({ debug_traceTransaction: (id) => errorFor(id, -32000) }),
-    ).qualifyProvider(84532)
+  it("REFUSES a provider that recognizes the method but will not trace", async () => {
+    // -32000 also means "tracing disabled on your plan" or "method
+    // restricted". Method recognition is not entitlement.
+    await expect(
+      make(qualifying({ debug_traceTransaction: (id) => errorFor(id, -32000) })).qualifyProvider(
+        84532,
+      ),
+    ).rejects.toThrow(/cannot trace a confirmed transaction/u)
+  })
+
+  it("REFUSES a provider returning a null trace for a confirmed transaction", async () => {
+    await expect(
+      make(
+        qualifying({
+          debug_traceTransaction: (id) =>
+            new Response(JSON.stringify({ jsonrpc: "2.0", id, result: null }), { status: 200 }),
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/no structured trace/u)
+  })
+
+  it("traces a real confirmed transaction and records which one", async () => {
+    const q = await make(qualifying()).qualifyProvider(84532)
+    expect(q.tracedTransactionHash).toBe(PROBE_TX)
     expect(q.supportsDebugTrace).toBe(true)
-    expect(q.qualified).toBe(true)
+  })
+
+  it("accepts a reviewed probe transaction hash", async () => {
+    const reviewed = `0x${"22".repeat(32)}`
+    const seen: string[] = []
+    const q = await make(
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+        if (body.method === "debug_traceTransaction") seen.push(String(body.params[0]))
+        const map: Record<string, unknown> = {
+          eth_chainId: "0x14a34",
+          eth_getBlockByNumber: { number: "0x40000", hash: BLOCK_HASH, transactions: [{ hash: PROBE_TX }] },
+          eth_getCode: "0x6080",
+          debug_traceTransaction: { failed: false },
+        }
+        return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+      }) as unknown as typeof fetch,
+    ).qualifyProvider(84532, { probeTransactionHash: reviewed })
+    expect(seen).toEqual([reviewed])
+    expect(q.tracedTransactionHash).toBe(reviewed)
+  })
+
+  it("walks back past empty blocks to find a transaction to trace", async () => {
+    const heights: string[] = []
+    const q = await make(
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+        if (body.method === "eth_getBlockByNumber") {
+          const tag = String(body.params[0])
+          const full = body.params[1] === true
+          if (full) heights.push(tag)
+          // The confirmed block and the one below it are empty.
+          const empty = full && (tag === "0x40000" || tag === "0x3ffff")
+          return new Response(
+            JSON.stringify(
+              ok(body.id, {
+                number: "0x40000",
+                hash: BLOCK_HASH,
+                transactions: empty ? [] : [{ hash: PROBE_TX }],
+              }),
+            ),
+            { status: 200 },
+          )
+        }
+        const map: Record<string, unknown> = {
+          eth_chainId: "0x14a34",
+          eth_getCode: "0x6080",
+          debug_traceTransaction: { failed: false },
+        }
+        return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+      }) as unknown as typeof fetch,
+    ).qualifyProvider(84532)
+    expect(heights.slice(0, 3)).toEqual(["0x40000", "0x3ffff", "0x3fffe"])
+    expect(q.tracedTransactionHash).toBe(PROBE_TX)
   })
 
   it("refuses an endpoint without EIP-1898 block-hash tags", async () => {
@@ -486,10 +563,16 @@ describe("provider qualification", () => {
       const q = await make(
         (async (_u: string | URL | Request, init?: RequestInit) => {
           const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
-          if (body.method === "eth_getBlockByNumber") seen.push(String(body.params[0]))
+          if (body.method === "eth_getBlockByNumber" && body.params[1] === false) {
+            seen.push(String(body.params[0]))
+          }
           const map: Record<string, unknown> = {
             eth_chainId: "0x14a34",
-            eth_getBlockByNumber: { number: "0x40000", hash: BLOCK_HASH },
+            eth_getBlockByNumber: {
+              number: "0x40000",
+              hash: BLOCK_HASH,
+              transactions: [{ hash: PROBE_TX }],
+            },
             eth_getCode: "0x6080",
             debug_traceTransaction: { failed: false },
           }
@@ -504,23 +587,32 @@ describe("provider qualification", () => {
     })
 
     it("refuses a provider that prunes below the required depth", async () => {
-      let first = true
       await expect(
         make(
           (async (_u: string | URL | Request, init?: RequestInit) => {
-            const body = JSON.parse(String(init?.body)) as { method: string; id: number }
+            const body = JSON.parse(String(init?.body)) as {
+              method: string
+              id: number
+              params: unknown[]
+            }
             if (body.method === "eth_getBlockByNumber") {
-              if (first) {
-                first = false
-                return new Response(
-                  JSON.stringify(ok(body.id, { number: "0x40000", hash: BLOCK_HASH })),
-                  { status: 200 },
-                )
+              // The retention probe is the only full=false lookup at a height.
+              if (body.params[1] === false && body.params[0] !== "finalized") {
+                // Pruned: a valid null result.
+                return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }), {
+                  status: 200,
+                })
               }
-              // Pruned: a valid null result.
-              return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }), {
-                status: 200,
-              })
+              return new Response(
+                JSON.stringify(
+                  ok(body.id, {
+                    number: "0x40000",
+                    hash: BLOCK_HASH,
+                    transactions: [{ hash: PROBE_TX }],
+                  }),
+                ),
+                { status: 200 },
+              )
             }
             const map: Record<string, unknown> = {
               eth_chainId: "0x14a34",
@@ -534,20 +626,28 @@ describe("provider qualification", () => {
     })
 
     it("propagates a transport failure rather than calling it a retention failure", async () => {
-      let first = true
       await expect(
         make(
           (async (_u: string | URL | Request, init?: RequestInit) => {
-            const body = JSON.parse(String(init?.body)) as { method: string; id: number }
+            const body = JSON.parse(String(init?.body)) as {
+              method: string
+              id: number
+              params: unknown[]
+            }
             if (body.method === "eth_getBlockByNumber") {
-              if (first) {
-                first = false
-                return new Response(
-                  JSON.stringify(ok(body.id, { number: "0x40000", hash: BLOCK_HASH })),
-                  { status: 200 },
-                )
+              if (body.params[1] === false && body.params[0] !== "finalized") {
+                return new Response("boom", { status: 500 })
               }
-              return new Response("boom", { status: 500 })
+              return new Response(
+                JSON.stringify(
+                  ok(body.id, {
+                    number: "0x40000",
+                    hash: BLOCK_HASH,
+                    transactions: [{ hash: PROBE_TX }],
+                  }),
+                ),
+                { status: 200 },
+              )
             }
             const map: Record<string, unknown> = {
               eth_chainId: "0x14a34",
