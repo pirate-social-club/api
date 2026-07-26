@@ -108,6 +108,40 @@ export function encodeRewardVaultCalldata(request: RewardVaultActionRequest): st
   ])
 }
 
+export function rewardVaultInputFromSignedEffect(input: {
+  signedTx: string
+  effectKind: RewardVaultEffectKind
+  effectId: string
+  recipient: string
+  amount: bigint
+  vaultAddress: string
+  signerAddress: string
+  chainId: number
+}): RewardVaultTransactionInput {
+  const parsed = Transaction.from(input.signedTx)
+  const method = rewardVaultMethod(input.effectKind)
+  const decoded = VAULT.decodeFunctionData(method, parsed.data)
+  const reconstructed: RewardVaultTransactionInput = {
+    effectKind: input.effectKind,
+    effectId: input.effectId,
+    recipient: input.recipient,
+    amount: input.amount,
+    vaultAddress: input.vaultAddress,
+    signerAddress: input.signerAddress,
+    chainId: input.chainId,
+    deadline: BigInt(decoded[3]),
+    policyVersion: BigInt(decoded[4]),
+    nonce: parsed.nonce,
+    gas: {
+      maxFeePerGas: parsed.maxFeePerGas ?? 0n,
+      maxPriorityFeePerGas: parsed.maxPriorityFeePerGas ?? 0n,
+      gasLimit: parsed.gasLimit,
+    },
+  }
+  verifySignedRewardVaultTransaction(input.signedTx, reconstructed)
+  return reconstructed
+}
+
 export function verifySignedRewardVaultTransaction(
   signedTx: string,
   input: RewardVaultTransactionInput,
