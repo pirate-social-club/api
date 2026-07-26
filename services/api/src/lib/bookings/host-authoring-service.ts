@@ -81,14 +81,21 @@ function writeRepo(env: Env) {
 }
 
 async function refreshFeedDiscovery(env: Env, hostUserId: string): Promise<void> {
-  if (repositoriesForTests) {
-    await feedDiscoveryRefresherForTests?.(hostUserId)
-    return
+  try {
+    if (repositoriesForTests) {
+      await feedDiscoveryRefresherForTests?.(hostUserId)
+      return
+    }
+    await recomputeBookingFeedDiscoverySnapshotAfterWrite({
+      executor: getControlPlaneClient(env),
+      hostUserId,
+    })
+  } catch (error) {
+    // The authoring mutation and its trigger-owned invalidation have already committed.
+    // A cold feed miss will rebuild the absent snapshot; projection failure must not turn
+    // a successful host write into a client-visible error.
+    console.error("[bookings] feed discovery warm refresh failed", error)
   }
-  await recomputeBookingFeedDiscoverySnapshotAfterWrite({
-    executor: getControlPlaneClient(env),
-    hostUserId,
-  })
 }
 
 function validatePayoutWallet(input: BookingProfileInput & { payout_wallet_address?: string | null }): ServiceResult<string | null | undefined> {

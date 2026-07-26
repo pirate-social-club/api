@@ -15,6 +15,9 @@ function executorWithSnapshotCapture(captured: InStatement[]): Client {
   return {
     async execute(statement: InStatement | string): Promise<QueryResult> {
       const input = typeof statement === "string" ? { sql: statement, args: [] } : statement
+      if (input.sql.includes("SELECT feed_discovery_revision")) {
+        return { rows: [{ feed_discovery_revision: 7 }] }
+      }
       if (input.sql.includes("to_jsonb(p) AS profile")) {
         return {
           rows: [{
@@ -84,6 +87,7 @@ describe("booking feed discovery snapshots", () => {
       "2026-08-03T00:00:00.000Z",
       "2026-07-20T00:10:00.000Z",
       NOW,
+      7,
     ])
   })
 
@@ -177,6 +181,37 @@ describe("booking feed discovery snapshots", () => {
 
     expect(profileReads).toBe(2)
     expect(statements).toHaveLength(2)
-    expect(statements[1]?.args?.at(-1)).toBe("2026-07-20T00:00:01.000Z")
+    expect(statements[1]?.args?.at(-2)).toBe("2026-07-20T00:00:01.000Z")
+  })
+
+  test("a stale cross-isolate recompute cannot write after the host revision advances", async () => {
+    const statements: InStatement[] = []
+    const base = executorWithSnapshotCapture(statements)
+    let revision = 7
+    const executor = {
+      ...base,
+      async execute(statement: InStatement | string): Promise<QueryResult> {
+        const input = typeof statement === "string" ? { sql: statement, args: [] } : statement
+        if (input.sql.includes("SELECT feed_discovery_revision")) {
+          return { rows: [{ feed_discovery_revision: revision }] }
+        }
+        if (input.sql.includes("INSERT INTO bookings.feed_discovery_snapshots")) {
+          expect(input.sql).toContain("feed_discovery_revision = ?8")
+          expect(input.args?.at(-1)).toBe(7)
+          expect(revision).toBe(8)
+        }
+        return base.execute(statement)
+      },
+    } as Client
+    setGlobalBookingResolveSlotsForTests(() => {
+      revision = 8
+      return [{ startUtc: NOW, endUtc: "2026-07-20T00:30:00.000Z", priceCents: 5000, available: true }]
+    })
+
+    await recomputeBookingFeedDiscoverySnapshot({
+      executor,
+      hostUserId: "host_1",
+      nowUtc: NOW,
+    })
   })
 })
