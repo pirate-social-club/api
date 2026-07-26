@@ -23,8 +23,12 @@ import {
   rewardVaultSigningDeadline,
   type RewardsSettlementBackend,
 } from "../../rewards/reward-vault-lit-config"
-import { executeAndVerifyRewardVaultTransaction } from "../../rewards/reward-vault-transaction"
+import {
+  executeAndVerifyRewardVaultTransaction,
+  rewardVaultInputFromSignedEffect,
+} from "../../rewards/reward-vault-transaction"
 import { rewardOperationId } from "../../rewards/reward-operation-id"
+import { gatherRewardVaultRevertEvidence } from "../../rewards/reward-vault-revert-evidence"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
 // the DO module itself has no ethers import — the production worker entry registers this via
@@ -41,6 +45,9 @@ const REWARD_VAULT_EVENTS = new Interface([
   "event RewardPaid(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
   "event RewardRefunded(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
 ])
+const REWARD_VAULT_CAPACITY_ABI = [
+  "function epochDuration() view returns (uint64)",
+] as const
 
 export function matchRewardVaultEvent(input: {
   logs: readonly { address: string; topics: readonly string[]; data: string }[]
@@ -220,6 +227,102 @@ export const realChain: ChainPrimitives = {
     const receipt = await provider.getTransactionReceipt(txHash)
     if (receipt) return receipt.status === 1 ? "success" : "failed"
     return (await provider.getTransaction(txHash)) ? "pending" : "absent"
+  },
+  rewardVaultFailureEvidence: async (env, input) => {
+    const c = resolveConfig(env, "rewards")
+    if (c.backend !== "lit_vault") {
+      return {
+        disposition: "reconciliation_required" as const,
+        reason: "rewards backend is not lit_vault",
+        retryAfterMs: null,
+        compactEvidence: null,
+      }
+    }
+    const lit = resolveRewardVaultLitConfig(env)
+    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    try {
+      const receipt = await provider.getTransactionReceipt(input.txHash)
+      if (!receipt || receipt.status !== 0 || !receipt.blockHash) {
+        return {
+          disposition: "reconciliation_required" as const,
+          reason: "failed receipt with canonical block identity is unavailable",
+          retryAfterMs: null,
+          compactEvidence: null,
+        }
+      }
+      const transactionInput = rewardVaultInputFromSignedEffect({
+        signedTx: input.signedTx,
+        effectKind: input.effectKind,
+        effectId: input.effectId,
+        recipient: input.recipient,
+        amount: input.amountAtomic == null
+          ? BigInt(input.amountCents ?? 0) * 10_000n
+          : BigInt(input.amountAtomic),
+        vaultAddress: lit.vaultAddress,
+        signerAddress: resolveRewardsSettlementOperatorAddress(env),
+        chainId: c.chainId,
+      })
+      const evidence = await gatherRewardVaultRevertEvidence({
+        pinnedVaultAddress: lit.vaultAddress,
+        operatorKind: "rewards",
+        effectKind: input.effectKind,
+        signedTx: input.signedTx,
+        transactionInput,
+        receiptStatus: receipt.status,
+        receiptTransactionHash: receipt.hash,
+        receiptBlockHash: receipt.blockHash,
+        tracer: {
+          traceTransaction: async (txHash) => {
+            const trace = await provider.send("debug_traceTransaction", [
+              txHash,
+              { tracer: "callTracer", timeout: "10s" },
+            ]) as { to?: unknown; error?: unknown; output?: unknown }
+            return {
+              to: typeof trace.to === "string" ? trace.to : null,
+              reverted: typeof trace.error === "string" && trace.error.length > 0,
+              output: typeof trace.output === "string" ? trace.output : null,
+            }
+          },
+        },
+      })
+      if (evidence.disposition !== "capacity_deferred" || !evidence.evidence) {
+        return {
+          disposition: "reconciliation_required" as const,
+          reason: evidence.reason,
+          retryAfterMs: null,
+          compactEvidence: null,
+        }
+      }
+      const block = await provider.getBlock(receipt.blockHash)
+      if (!block) throw new Error("failed receipt block is unavailable")
+      const vault = new Contract(lit.vaultAddress, REWARD_VAULT_CAPACITY_ABI, provider)
+      const epochDuration = BigInt(await vault.epochDuration())
+      if (epochDuration <= 0n) throw new Error("vault epoch duration is invalid")
+      const nextEpochSeconds = ((BigInt(block.timestamp) / epochDuration) + 1n) * epochDuration
+      const retryAfterMs = Number(nextEpochSeconds * 1_000n + 1_000n)
+      if (!Number.isSafeInteger(retryAfterMs)) throw new Error("vault epoch retry time is invalid")
+      return {
+        disposition: "capacity_deferred" as const,
+        reason: evidence.reason,
+        retryAfterMs,
+        compactEvidence: {
+          method: evidence.evidence.method,
+          transaction_hash: evidence.evidence.transactionHash,
+          block_hash: evidence.evidence.blockHash,
+          selector: evidence.evidence.selector,
+          classified_at: evidence.evidence.classifiedAt,
+        },
+      }
+    } catch {
+      return {
+        disposition: "reconciliation_required" as const,
+        reason: "exact rewards vault failure trace was unavailable or invalid",
+        retryAfterMs: null,
+        compactEvidence: null,
+      }
+    } finally {
+      void provider.destroy()
+    }
   },
   rewardVaultEvent: async (env, input) => {
     const c = resolveConfig(env, "rewards")
