@@ -4,9 +4,12 @@ import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
   listHomeFeedCommunityViewCounts,
+  mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
+  resolveVideoFeedBestRankingMode,
+  selectBestVideoFeedProjectionPage,
   sortCommunitySummariesByViews,
   sortCommunitySummaries,
   sortHomeFeedProjectionRows,
@@ -40,6 +43,13 @@ describe("parseVideoFeedCursor", () => {
       rankedAt: 1753182999999,
     })
   })
+
+  test("accepts the scorer-backed v2 cursor", () => {
+    expect(parseVideoFeedCursor("v2:1753182000000:50", 1753182999999)).toEqual({
+      offset: 50,
+      rankedAt: 1753182000000,
+    })
+  })
 })
 
 describe("videoFeedOrderSql", () => {
@@ -51,10 +61,145 @@ describe("videoFeedOrderSql", () => {
     expect(orderBy).not.toContain("unixepoch(")
   })
 })
+
+describe("resolveVideoFeedBestRankingMode", () => {
+  test("defaults to the scorer and honors the emergency legacy fallback", () => {
+    expect(resolveVideoFeedBestRankingMode(undefined)).toBe("scorer")
+    expect(resolveVideoFeedBestRankingMode("scorer")).toBe("scorer")
+    expect(resolveVideoFeedBestRankingMode("legacy")).toBe("legacy")
+    expect(resolveVideoFeedBestRankingMode(" LEGACY ")).toBe("legacy")
+  })
+})
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
 let cleanup: (() => Promise<void>) | null = null
+
+function videoCandidateRow(input: {
+  postId: string
+  ageHours?: number
+  upvotes?: number
+  downvotes?: number
+  comments?: number
+  likes?: number
+  communityId?: string
+  authorUserId?: string | null
+  identityMode?: "anonymous" | "public"
+}): HomeFeedProjectionRow {
+  const rankedAt = Date.parse("2026-07-26T12:00:00.000Z")
+  return {
+    author_user_id: input.authorUserId === undefined ? `usr_${input.postId}` : input.authorUserId,
+    comment_count: input.comments ?? 0,
+    community_id: input.communityId ?? `cmt_${input.postId}`,
+    downvote_count: input.downvotes ?? 0,
+    identity_mode: input.identityMode ?? "public",
+    like_count: input.likes ?? 0,
+    post_type: "video",
+    source_created_at: new Date(rankedAt - (input.ageHours ?? 0) * 3_600_000).toISOString(),
+    source_post_id: input.postId,
+    upvote_count: input.upvotes ?? 0,
+    visibility: "public",
+  }
+}
+
+describe("best video candidate selection", () => {
+  const rankedAt = Date.parse("2026-07-26T12:00:00.000Z")
+
+  test("merges the engagement and recency legs without duplicate projections", () => {
+    const shared = videoCandidateRow({ postId: "pst_shared" })
+    const merged = mergeVideoFeedCandidateRows(
+      [shared, videoCandidateRow({ postId: "pst_engaged" })],
+      [shared, videoCandidateRow({ postId: "pst_recent" })],
+    )
+    expect(merged.map((row) => row.source_post_id)).toEqual([
+      "pst_shared",
+      "pst_engaged",
+      "pst_recent",
+    ])
+  })
+
+  test("can promote a cold-start post supplied only by the recency leg", () => {
+    const engagementLeg = Array.from({ length: 30 }, (_, index) => videoCandidateRow({
+      ageHours: 72 + index,
+      postId: `pst_engaged_${index}`,
+      upvotes: 1,
+    }))
+    const fresh = videoCandidateRow({ postId: "pst_fresh" })
+    const candidates = mergeVideoFeedCandidateRows(engagementLeg, [fresh])
+    const page = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: candidates,
+    })
+    expect(page.rows[0]?.source_post_id).toBe("pst_fresh")
+  })
+
+  test("carries projected likes into explicit engagement ranking", () => {
+    const liked = videoCandidateRow({ postId: "pst_liked", likes: 5 })
+    const neutral = videoCandidateRow({ postId: "pst_neutral" })
+    const page = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: [neutral, liked],
+    })
+    expect(page.rows[0]?.source_post_id).toBe("pst_liked")
+  })
+
+  test("uses one ranking clock and returns non-overlapping cursor pages", () => {
+    const candidates = Array.from({ length: 40 }, (_, index) => videoCandidateRow({
+      ageHours: index,
+      postId: `pst_${String(index).padStart(2, "0")}`,
+      upvotes: index % 4,
+    }))
+    const first = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: candidates,
+    })
+    const second = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 25, rankedAt },
+      rows: candidates,
+    })
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(first.rows).toHaveLength(25)
+    expect(second.rows.length).toBeGreaterThan(0)
+    expect(second.rows.every((row) => !firstIds.has(row.source_post_id))).toBe(true)
+    expect(first.hasMore).toBe(true)
+    expect(second.hasMore).toBe(false)
+  })
+
+  test("supports exact small batches for hydration backfill without repeating candidates", () => {
+    const candidates = Array.from({ length: 40 }, (_, index) => videoCandidateRow({
+      ageHours: index,
+      postId: `pst_backfill_${String(index).padStart(2, "0")}`,
+    }))
+    const first = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: candidates,
+    })
+    const backfill = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 25, rankedAt },
+      pageSize: 5,
+      rows: candidates,
+    })
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(backfill.rows).toHaveLength(5)
+    expect(backfill.rows.every((row) => !firstIds.has(row.source_post_id))).toBe(true)
+    expect(backfill.hasMore).toBe(true)
+  })
+
+  test("does not apply a shared internal author cap to anonymous projections", () => {
+    const candidates = Array.from({ length: 6 }, (_, index) => videoCandidateRow({
+      authorUserId: "usr_hidden_author",
+      communityId: `cmt_anon_${index}`,
+      identityMode: "anonymous",
+      postId: `pst_anon_${index}`,
+    }))
+    const page = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      pageSize: 6,
+      rows: candidates,
+    })
+    expect(page.rows).toHaveLength(6)
+  })
+})
 
 afterEach(async () => {
   if (cleanup) {

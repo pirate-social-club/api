@@ -29,6 +29,7 @@ function candidate(overrides: Partial<VideoCandidateInput> = {}): VideoCandidate
     upvotes: 0,
     downvotes: 0,
     comments: 0,
+    likes: 0,
     stats: null,
     ...overrides,
   }
@@ -80,27 +81,32 @@ describe("explicitEngagement", () => {
   test("stays inside [0,1) when engagement far outruns impressions", () => {
     // The defect this replaces: a posterior rate over an impression
     // denominator returned ~3 for this input and broke the feature contract.
-    const value = explicitEngagement({ upvotes: 30, comments: 0, validImpressions: 5 })
+    const value = explicitEngagement({ upvotes: 30, comments: 0, likes: 0, validImpressions: 5 })
     expect(value).toBeGreaterThan(0)
     expect(value).toBeLessThan(1)
   })
 
   test("is monotonic in engagement, so ordering survives saturation", () => {
-    const low = explicitEngagement({ upvotes: 5, comments: 0, validImpressions: 100 })
-    const mid = explicitEngagement({ upvotes: 50, comments: 0, validImpressions: 100 })
-    const high = explicitEngagement({ upvotes: 500, comments: 0, validImpressions: 100 })
+    const low = explicitEngagement({ upvotes: 5, comments: 0, likes: 0, validImpressions: 100 })
+    const mid = explicitEngagement({ upvotes: 50, comments: 0, likes: 0, validImpressions: 100 })
+    const high = explicitEngagement({ upvotes: 500, comments: 0, likes: 0, validImpressions: 100 })
     expect(low).toBeLessThan(mid)
     expect(mid).toBeLessThan(high)
     expect(high).toBeLessThan(1)
   })
 
   test("weights a comment twice a vote", () => {
-    expect(explicitEngagement({ upvotes: 2, comments: 0, validImpressions: 0 }))
-      .toBeCloseTo(explicitEngagement({ upvotes: 0, comments: 1, validImpressions: 0 }), 10)
+    expect(explicitEngagement({ upvotes: 2, comments: 0, likes: 0, validImpressions: 0 }))
+      .toBeCloseTo(explicitEngagement({ upvotes: 0, comments: 1, likes: 0, validImpressions: 0 }), 10)
+  })
+
+  test("keeps projected likes as an explicit positive signal", () => {
+    expect(explicitEngagement({ upvotes: 0, comments: 0, likes: 2, validImpressions: 0 }))
+      .toBeCloseTo(explicitEngagement({ upvotes: 2, comments: 0, likes: 0, validImpressions: 0 }), 10)
   })
 
   test("is zero with no engagement", () => {
-    expect(explicitEngagement({ upvotes: 0, comments: 0, validImpressions: 10 })).toBe(0)
+    expect(explicitEngagement({ upvotes: 0, comments: 0, likes: 0, validImpressions: 10 })).toBe(0)
   })
 })
 
@@ -367,7 +373,7 @@ describe("scoreVideoCandidate", () => {
   })
 
   test("exposes a stable version for telemetry", () => {
-    expect(VIDEO_SCORER_VERSION).toBe("v1")
+    expect(VIDEO_SCORER_VERSION).toBe("v2")
   })
 })
 

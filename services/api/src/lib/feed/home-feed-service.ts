@@ -34,6 +34,12 @@ import {
   compareProjectedVideoFeedRows,
   shouldShadowAuthenticatedVideoFeed,
 } from "./home-feed-control-plane-shadow"
+import { takeVideoFeedPage } from "./video-feed-selection"
+import {
+  scoreVideoCandidates,
+  type ScoredVideoCandidate,
+  type VideoCandidateInput,
+} from "./video-scorer"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -167,6 +173,14 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
 type VideoFeedCursor = { offset: number; rankedAt: number }
 const VIDEO_FEED_PAGE_SIZE = 25
 const VIDEO_FEED_MAX_CANDIDATES_SCANNED = 250
+const VIDEO_FEED_CANDIDATES_PER_LEG = 250
+
+type VideoFeedProjectionPage = {
+  allowHydrationBackfill: boolean
+  bestOrderedRows?: readonly HomeFeedProjectionRow[]
+  nextCursor: string | null
+  rows: HomeFeedProjectionRow[]
+}
 
 export function nextVideoFeedBackfillBatchSize(input: {
   candidatesScanned: number
@@ -178,7 +192,7 @@ export function nextVideoFeedBackfillBatchSize(input: {
 }
 
 export function parseVideoFeedCursor(cursor: string | null | undefined, now: number): VideoFeedCursor {
-  const match = /^v1:(\d+):(\d+)$/u.exec(cursor ?? "")
+  const match = /^v[12]:(\d+):(\d+)$/u.exec(cursor ?? "")
   if (!match) return { offset: 0, rankedAt: now }
   const rankedAt = Number(match[1])
   const offset = Number(match[2])
@@ -186,6 +200,87 @@ export function parseVideoFeedCursor(cursor: string | null | undefined, now: num
     return { offset: 0, rankedAt: now }
   }
   return { offset, rankedAt }
+}
+
+export function resolveVideoFeedBestRankingMode(
+  mode: string | null | undefined,
+): "legacy" | "scorer" {
+  return mode?.trim().toLowerCase() === "legacy" ? "legacy" : "scorer"
+}
+
+function videoFeedProjectionKey(row: HomeFeedProjectionRow): string {
+  return `${row.community_id}\u0000${row.source_post_id}`
+}
+
+export function mergeVideoFeedCandidateRows(
+  engagementRows: readonly HomeFeedProjectionRow[],
+  recentRows: readonly HomeFeedProjectionRow[],
+): HomeFeedProjectionRow[] {
+  const merged = new Map<string, HomeFeedProjectionRow>()
+  for (const row of [...engagementRows, ...recentRows]) {
+    const key = videoFeedProjectionKey(row)
+    if (!merged.has(key)) merged.set(key, row)
+  }
+  return [...merged.values()]
+}
+
+function toVideoCandidateInput(row: HomeFeedProjectionRow): VideoCandidateInput {
+  return {
+    authorUserId: row.identity_mode === "anonymous" ? null : row.author_user_id ?? null,
+    comments: row.comment_count,
+    communityId: row.community_id,
+    createdAtMs: getProjectionCreatedAtMs(row),
+    downvotes: row.downvote_count,
+    // Duration is not a first-class projection column. Phase 1 priors are
+    // intentionally identical across duration buckets, so absence is neutral.
+    durationSeconds: null,
+    likes: row.like_count,
+    postId: row.source_post_id,
+    stats: null,
+    upvotes: row.upvote_count,
+  }
+}
+
+export function selectBestVideoFeedProjectionPage(input: {
+  cursor: VideoFeedCursor
+  pageSize?: number
+  rows: readonly HomeFeedProjectionRow[]
+}): { hasMore: boolean; rows: HomeFeedProjectionRow[] } {
+  return sliceBestVideoFeedProjectionDeck({
+    cursor: input.cursor,
+    orderedRows: orderBestVideoFeedProjectionRows(input.rows, input.cursor.rankedAt),
+    pageSize: input.pageSize,
+  })
+}
+
+function orderBestVideoFeedProjectionRows(
+  rows: readonly HomeFeedProjectionRow[],
+  rankedAt: number,
+): HomeFeedProjectionRow[] {
+  const rowByKey = new Map(rows.map((row) => [videoFeedProjectionKey(row), row] as const))
+  const remaining = scoreVideoCandidates(rows.map(toVideoCandidateInput), rankedAt)
+  const ordered: ScoredVideoCandidate[] = []
+  while (remaining.length > 0) {
+    const policyPage = takeVideoFeedPage(remaining, VIDEO_FEED_PAGE_SIZE)
+    if (policyPage.length === 0) break
+    ordered.push(...policyPage)
+  }
+  return ordered
+    .map((item) => rowByKey.get(`${item.candidate.communityId}\u0000${item.candidate.postId}`))
+    .filter((row): row is HomeFeedProjectionRow => Boolean(row))
+}
+
+function sliceBestVideoFeedProjectionDeck(input: {
+  cursor: VideoFeedCursor
+  orderedRows: readonly HomeFeedProjectionRow[]
+  pageSize?: number
+}): { hasMore: boolean; rows: HomeFeedProjectionRow[] } {
+  const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
+  const selected = input.orderedRows.slice(input.cursor.offset, input.cursor.offset + pageSize)
+  return {
+    hasMore: input.cursor.offset + selected.length < input.orderedRows.length,
+    rows: selected,
+  }
 }
 
 export function videoFeedOrderSql(sort: HomeFeedSort): string {
@@ -210,7 +305,7 @@ async function listVideoHomeFeedProjectionRows(input: {
   pageSize?: number
   sort: HomeFeedSort
   timeRange: HomeFeedTimeRange
-}): Promise<{ nextCursor: string | null; rows: HomeFeedProjectionRow[] }> {
+}): Promise<VideoFeedProjectionPage> {
   const cursor = parseVideoFeedCursor(input.cursor, input.now)
   const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
   const args: Array<string | number> = [...input.communityIds]
@@ -246,8 +341,104 @@ async function listVideoHomeFeedProjectionRows(input: {
   const rows = result.rows.map((row) => toHomeFeedProjectionRow(row))
   const hasMore = rows.length > pageSize
   return {
+    allowHydrationBackfill: true,
     rows: rows.slice(0, pageSize),
     nextCursor: hasMore ? `v1:${cursor.rankedAt}:${cursor.offset + pageSize}` : null,
+  }
+}
+
+async function listBestVideoHomeFeedProjectionRows(input: {
+  communityIds: string[]
+  cursor?: string | null
+  env: Env
+  includeProjectedPayload?: boolean
+  memberCommunityIdSet: Set<string>
+  now: number
+  orderedRows?: readonly HomeFeedProjectionRow[]
+  pageSize?: number
+  timeRange: HomeFeedTimeRange
+}): Promise<VideoFeedProjectionPage> {
+  const cursor = parseVideoFeedCursor(input.cursor, input.now)
+  if (input.orderedRows) {
+    const selected = sliceBestVideoFeedProjectionDeck({
+      cursor,
+      orderedRows: input.orderedRows,
+      pageSize: input.pageSize,
+    })
+    return {
+      allowHydrationBackfill: true,
+      bestOrderedRows: input.orderedRows,
+      rows: selected.rows,
+      nextCursor: selected.hasMore
+        ? `v2:${cursor.rankedAt}:${cursor.offset + selected.rows.length}`
+        : null,
+    }
+  }
+  const args: Array<string | number> = [...input.communityIds]
+  const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const cutoffMs = getTimeRangeCutoffMs(input.timeRange, cursor.rankedAt)
+  const filters = [
+    "projection_version = 1",
+    "status = 'published'",
+    "post_type = 'video'",
+    `community_id IN (${communityPlaceholders})`,
+  ]
+  const memberCommunityIds = input.communityIds.filter((communityId) => input.memberCommunityIdSet.has(communityId))
+  if (memberCommunityIds.length === 0) {
+    filters.push("visibility = 'public'")
+  } else {
+    const memberPlaceholders: string[] = []
+    for (const communityId of memberCommunityIds) {
+      args.push(communityId)
+      memberPlaceholders.push(`?${args.length}`)
+    }
+    filters.push(`(visibility = 'public' OR community_id IN (${memberPlaceholders.join(", ")}))`)
+  }
+  if (cutoffMs != null) {
+    args.push(new Date(cutoffMs).toISOString())
+    filters.push(`source_created_at >= ?${args.length}`)
+  }
+  args.push(VIDEO_FEED_CANDIDATES_PER_LEG)
+  const limitPlaceholder = `?${args.length}`
+  const projectedPayloadColumn = input.includeProjectedPayload ? ", projected_payload_json" : ""
+  const columns = `community_id, source_post_id, author_user_id, identity_mode, source_created_at, visibility, post_type${projectedPayloadColumn},
+             upvote_count, downvote_count, comment_count, like_count`
+  const client = getControlPlaneClient(input.env)
+  const executeLeg = (orderBy: string) => client.execute({
+    sql: `
+      SELECT ${columns}
+      FROM community_post_projections
+      WHERE ${filters.join("\n        AND ")}
+      ORDER BY ${orderBy}
+      LIMIT ${limitPlaceholder}
+    `,
+    args,
+  })
+  // Keep the queries portable and independently indexable. A UNION would put
+  // this hot path back inside the Postgres/D1 dialect intersection that caused
+  // the old freshness expression to be removed.
+  const engagementResult = await executeLeg(videoFeedOrderSql("top"))
+  const recentResult = await executeLeg(videoFeedOrderSql("new"))
+  const candidates = filterVisibleHomeFeedProjections(
+    mergeVideoFeedCandidateRows(
+      engagementResult.rows.map(toHomeFeedProjectionRow),
+      recentResult.rows.map(toHomeFeedProjectionRow),
+    ),
+    input.memberCommunityIdSet,
+  )
+  const orderedRows = orderBestVideoFeedProjectionRows(candidates, cursor.rankedAt)
+  const selected = sliceBestVideoFeedProjectionDeck({
+    cursor,
+    orderedRows,
+    pageSize: input.pageSize,
+  })
+  return {
+    allowHydrationBackfill: true,
+    bestOrderedRows: orderedRows,
+    rows: selected.rows,
+    nextCursor: selected.hasMore
+      ? `v2:${cursor.rankedAt}:${cursor.offset + selected.rows.length}`
+      : null,
   }
 }
 
@@ -606,16 +797,28 @@ export async function listHomeFeed(input: {
     mode: input.env.AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE,
     userId: input.userId,
   })
+  const useBestVideoScorer = sort === "best"
+    && resolveVideoFeedBestRankingMode(input.env.VIDEO_FEED_BEST_RANKING_MODE) === "scorer"
   let videoPage = input.contentKind === "video"
-    ? await listVideoHomeFeedProjectionRows({
-        communityIds,
-        cursor: input.cursor,
-        env: input.env,
-        includeProjectedPayload: shadowControlPlane,
-        now,
-        sort,
-        timeRange,
-      })
+    ? useBestVideoScorer
+      ? await listBestVideoHomeFeedProjectionRows({
+          communityIds,
+          cursor: input.cursor,
+          env: input.env,
+          includeProjectedPayload: shadowControlPlane,
+          memberCommunityIdSet,
+          now,
+          timeRange,
+        })
+      : await listVideoHomeFeedProjectionRows({
+          communityIds,
+          cursor: input.cursor,
+          env: input.env,
+          includeProjectedPayload: shadowControlPlane,
+          now,
+          sort,
+          timeRange,
+        })
     : null
   let allRows = filterVisibleHomeFeedProjections(
     videoPage?.rows ?? await listHomeFeedProjectionRows({
@@ -705,7 +908,7 @@ export async function listHomeFeed(input: {
   }
   let orderedItems = await hydrateRows(pageRows)
 
-  if (videoPage) {
+  if (videoPage?.allowHydrationBackfill) {
     let candidatesScanned = videoPage.rows.length
     while (
       orderedItems.length < VIDEO_FEED_PAGE_SIZE
@@ -716,16 +919,28 @@ export async function listHomeFeed(input: {
         candidatesScanned,
         returnedItems: orderedItems.length,
       })
-      videoPage = await listVideoHomeFeedProjectionRows({
-        communityIds,
-        cursor: videoPage.nextCursor,
-        env: input.env,
-        includeProjectedPayload: shadowControlPlane,
-        now,
-        pageSize: nextPageSize,
-        sort,
-        timeRange,
-      })
+      videoPage = useBestVideoScorer
+        ? await listBestVideoHomeFeedProjectionRows({
+            communityIds,
+            cursor: videoPage.nextCursor,
+            env: input.env,
+            includeProjectedPayload: shadowControlPlane,
+            memberCommunityIdSet,
+            now,
+            orderedRows: videoPage.bestOrderedRows,
+            pageSize: nextPageSize,
+            timeRange,
+          })
+        : await listVideoHomeFeedProjectionRows({
+            communityIds,
+            cursor: videoPage.nextCursor,
+            env: input.env,
+            includeProjectedPayload: shadowControlPlane,
+            now,
+            pageSize: nextPageSize,
+            sort,
+            timeRange,
+          })
       const nextRows = filterVisibleHomeFeedProjections(videoPage.rows, memberCommunityIdSet)
       candidatesScanned += videoPage.rows.length
       allRows = [...allRows, ...nextRows]

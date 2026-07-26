@@ -28,6 +28,7 @@ function scored(input: {
       upvotes: 0,
       downvotes: 0,
       comments: 0,
+      likes: 0,
       stats: input.validImpressions === undefined ? null : {
         validImpressions: input.validImpressions,
         validPlays: input.validImpressions,
@@ -136,6 +137,16 @@ describe("takeVideoFeedPage", () => {
   test("never returns more than the page size", () => {
     const remaining = ladder(100)
     expect(takeVideoFeedPage(remaining, 25)).toHaveLength(25)
+  })
+
+  test("treats the same post id in different communities as distinct candidates", () => {
+    const remaining = [
+      scored({ postId: "pst_shared", communityId: "cmt_a", score: 1 }),
+      scored({ postId: "pst_shared", communityId: "cmt_b", score: 0.9 }),
+    ]
+    const page = takeVideoFeedPage(remaining, 2)
+    expect(page).toHaveLength(2)
+    expect(remaining).toHaveLength(0)
   })
 })
 

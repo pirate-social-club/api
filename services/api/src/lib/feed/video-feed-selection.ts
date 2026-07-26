@@ -30,6 +30,10 @@ type PageBuildState = {
   selectedIds: Set<string>
 }
 
+function candidateKey(candidate: ScoredVideoCandidate): string {
+  return `${candidate.candidate.communityId}\u0000${candidate.candidate.postId}`
+}
+
 function capsAllow(state: PageBuildState, candidate: ScoredVideoCandidate): boolean {
   const { authorUserId, communityId } = candidate.candidate
   if ((state.communityCounts.get(communityId) ?? 0) >= COMMUNITY_CAP_PER_PAGE) return false
@@ -43,9 +47,9 @@ function capsAllow(state: PageBuildState, candidate: ScoredVideoCandidate): bool
 }
 
 function admit(state: PageBuildState, candidate: ScoredVideoCandidate): void {
-  const { authorUserId, communityId, postId } = candidate.candidate
+  const { authorUserId, communityId } = candidate.candidate
   state.selected.push(candidate)
-  state.selectedIds.add(postId)
+  state.selectedIds.add(candidateKey(candidate))
   state.communityCounts.set(communityId, (state.communityCounts.get(communityId) ?? 0) + 1)
   if (authorUserId) {
     state.authorCounts.set(authorUserId, (state.authorCounts.get(authorUserId) ?? 0) + 1)
@@ -75,7 +79,7 @@ export function takeVideoFeedPage(
     let admitted = 0
     for (const candidate of remaining) {
       if (state.selected.length >= pageSize || admitted >= limit) return
-      if (state.selectedIds.has(candidate.candidate.postId)) continue
+      if (state.selectedIds.has(candidateKey(candidate))) continue
       if (!predicate(candidate)) continue
       if (!capsAllow(state, candidate)) continue
       admit(state, candidate)
@@ -92,7 +96,7 @@ export function takeVideoFeedPage(
   if (state.selectedIds.size > 0) {
     for (let index = remaining.length - 1; index >= 0; index -= 1) {
       const candidate = remaining[index]
-      if (candidate && state.selectedIds.has(candidate.candidate.postId)) {
+      if (candidate && state.selectedIds.has(candidateKey(candidate))) {
         remaining.splice(index, 1)
       }
     }

@@ -30,6 +30,12 @@ export type Env = {
    * are complete; it currently behaves as `off`.
    */
   AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE?: "off" | "shadow" | "serve"
+  /**
+   * Emergency rollback for the default best-video ranking path. Unset or
+   * `scorer` serves the versioned TypeScript scorer; `legacy` restores the
+   * portable SQL engagement ordering without affecting `new` or `top`.
+   */
+  VIDEO_FEED_BEST_RANKING_MODE?: "legacy" | "scorer"
   /** Sample percentage (0-100) for non-blocking owned-vs-hosted EFP read comparisons. */
   EFP_FOLLOW_SHADOW_SAMPLE_PERCENT?: string
   EFP_HOSTED_API_URL?: string
