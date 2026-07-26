@@ -166,14 +166,14 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         refunded_cents INTEGER NOT NULL,
         platform_fee_bps INTEGER NOT NULL DEFAULT 0,
         platform_fee_cents INTEGER NOT NULL DEFAULT 0,
-        starts_at TIMESTAMPTZ NOT NULL,
-        ends_at TIMESTAMPTZ NOT NULL,
+        starts_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
         ended_at TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
         CHECK (reserved_cents >= 0 AND credited_cents >= 0 AND paid_cents >= 0 AND refunded_cents >= 0),
@@ -272,10 +272,11 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       CREATE TABLE reward_campaign_funding_effects (
         reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
         tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
-        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TIMESTAMPTZ
+        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT
       );
     `)
-    await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
+    const concurrentPoolsMigration = await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8")
+    await db.unsafe(concurrentPoolsMigration.replaceAll("TIMESTAMPTZ", "TEXT"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
