@@ -166,8 +166,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         refunded_cents INTEGER NOT NULL,
         platform_fee_bps INTEGER NOT NULL DEFAULT 0,
         platform_fee_cents INTEGER NOT NULL DEFAULT 0,
-        starts_at TEXT NOT NULL,
-        ends_at TEXT NOT NULL,
+        starts_at TIMESTAMPTZ NOT NULL,
+        ends_at TIMESTAMPTZ NOT NULL,
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
@@ -442,6 +442,20 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         25, 25, 100, 0, 0, 0, 0, 0, 1, 'terms-invariants-pg',
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
+    `, [NOW])
+    await db.unsafe(`
+      INSERT INTO reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id, reward_campaign_id, status,
+        expected_amount_cents, confirmed_at
+      )
+      SELECT
+        'rcf_seed_' || reward_campaign_id,
+        reward_campaign_id,
+        'confirmed',
+        funded_cents,
+        $1
+      FROM reward_campaigns
+      WHERE funded_cents > 0
     `, [NOW])
     await db.end()
   })
