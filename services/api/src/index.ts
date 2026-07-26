@@ -40,7 +40,12 @@ import walletIdentities from "./routes/wallet-identities"
 import {
   isPublicReadCacheRequest,
 } from "./routes/cache-headers"
-import { flushAnalyticsOutbox, isAnalyticsEnabled, syncCommunityHealthCounts } from "./lib/analytics"
+import {
+  flushAnalyticsOutbox,
+  isAnalyticsEnabled,
+  pruneAnalyticsOutbox,
+  syncCommunityHealthCounts,
+} from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
 import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
@@ -574,6 +579,7 @@ async function flushScheduledAnalytics(env: Env): Promise<void> {
   const db = getControlPlaneClient(env)
   try {
     await flushAnalyticsOutbox(env, db)
+    await pruneAnalyticsOutbox(db)
   } catch (error) {
     console.error("[analytics] scheduled flush failed", error)
     await captureScheduledError(env, error, "analytics_flush")
