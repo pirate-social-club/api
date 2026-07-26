@@ -7,9 +7,8 @@ import {
   type Hex,
   type Log,
 } from "viem"
-import { base } from "viem/chains"
+import { base, mainnet, optimism, type Chain } from "viem/chains"
 
-import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import { decodeEfpListOp } from "./list-op"
 import {
@@ -25,6 +24,12 @@ export const EFP_BASE_LIST_RECORDS = "0x41aa48ef3c0446b46a5b1cc6337ff3d3716e2a33
 export const EFP_BASE_ACCOUNT_METADATA = "0x5289fe5dabc021d02fddf23d4a4df96f4e0f17ef" as Address
 export const EFP_BASE_LIST_REGISTRY = "0x0e688f5dca4a0a4729946acbc44c792341714e08" as Address
 export const EFP_BASE_START_BLOCK = 20_000_000n
+export const EFP_OPTIMISM_CHAIN_ID = 10
+export const EFP_OPTIMISM_LIST_RECORDS = "0x4ca00413d850dcfa3516e14d21dae2772f2acb85" as Address
+export const EFP_OPTIMISM_START_BLOCK = 125_792_000n
+export const EFP_ETHEREUM_CHAIN_ID = 1
+export const EFP_ETHEREUM_LIST_RECORDS = "0x5289fe5dabc021d02fddf23d4a4df96f4e0f17ef" as Address
+export const EFP_ETHEREUM_START_BLOCK = 20_820_000n
 export const EFP_CONFIRMATION_DEPTH = 64n
 export const EFP_REPLAY_BLOCKS = 128n
 export const EFP_SCAN_BLOCK_SPAN = 10_000n
@@ -37,14 +42,50 @@ const UPDATE_LIST_STORAGE_LOCATION_EVENT = parseAbiItem(
   "event UpdateListStorageLocation(uint256 indexed tokenId, bytes listStorageLocation)",
 )
 
-function buildEfpBaseReader(rpcUrl: string) {
+function buildEfpReader(rpcUrl: string, chain: Chain) {
   return createPublicClient({
-    chain: base,
+    chain,
     transport: http(rpcUrl, { timeout: 12_000 }),
   })
 }
 
-type EfpChainReader = ReturnType<typeof buildEfpBaseReader>
+type EfpChainReader = ReturnType<typeof buildEfpReader>
+
+export type EfpIndexerChainConfig = {
+  chainId: number
+  chain: Chain
+  name: "base" | "optimism" | "ethereum"
+  listRecordsAddress: Address
+  startBlock: bigint
+  accountMetadataAddress?: Address
+  listRegistryAddress?: Address
+}
+
+export const EFP_INDEXER_CHAINS: Record<EfpIndexerChainConfig["name"], EfpIndexerChainConfig> = {
+  base: {
+    chainId: EFP_BASE_CHAIN_ID,
+    chain: base,
+    name: "base",
+    listRecordsAddress: EFP_BASE_LIST_RECORDS,
+    startBlock: EFP_BASE_START_BLOCK,
+    accountMetadataAddress: EFP_BASE_ACCOUNT_METADATA,
+    listRegistryAddress: EFP_BASE_LIST_REGISTRY,
+  },
+  optimism: {
+    chainId: EFP_OPTIMISM_CHAIN_ID,
+    chain: optimism,
+    name: "optimism",
+    listRecordsAddress: EFP_OPTIMISM_LIST_RECORDS,
+    startBlock: EFP_OPTIMISM_START_BLOCK,
+  },
+  ethereum: {
+    chainId: EFP_ETHEREUM_CHAIN_ID,
+    chain: mainnet,
+    name: "ethereum",
+    listRecordsAddress: EFP_ETHEREUM_LIST_RECORDS,
+    startBlock: EFP_ETHEREUM_START_BLOCK,
+  },
+}
 
 function requiredIndex(log: Log, key: "transactionIndex" | "logIndex"): number {
   const value = log[key]
@@ -118,16 +159,14 @@ export function decodeStorageLocation(value: Hex): {
 }
 
 export function createEfpBaseReader(rpcUrl: string): EfpChainReader {
-  return buildEfpBaseReader(rpcUrl)
+  return buildEfpReader(rpcUrl, base)
 }
 
-export function isEfpIndexerEnabled(
-  env: Pick<Env, "BASE_MAINNET_RPC_URL" | "CONTROL_PLANE_DATABASE_URL">,
-): boolean {
-  return Boolean(
-    String(env.BASE_MAINNET_RPC_URL ?? "").trim()
-    && String(env.CONTROL_PLANE_DATABASE_URL ?? "").trim(),
-  )
+export function createEfpChainReader(
+  rpcUrl: string,
+  config: EfpIndexerChainConfig,
+): EfpChainReader {
+  return buildEfpReader(rpcUrl, config.chain)
 }
 
 export type EfpScanSummary = {
@@ -143,25 +182,27 @@ export type EfpScanSummary = {
   storageLocationEventCount: number
 }
 
-export async function scanEfpBaseOnce(input: {
+export async function scanEfpChainOnce(input: {
   client: Client
   rpcUrl: string
+  config: EfpIndexerChainConfig
   reader?: EfpChainReader
   now?: () => Date
   blockSpan?: bigint
 }): Promise<EfpScanSummary> {
-  const reader = input.reader ?? createEfpBaseReader(input.rpcUrl)
+  const { config } = input
+  const reader = input.reader ?? createEfpChainReader(input.rpcUrl, config)
   const now = input.now ?? (() => new Date())
   const scanStartedAt = now().toISOString()
   const head = await reader.getBlockNumber()
   const safeHead = head > EFP_CONFIRMATION_DEPTH ? head - EFP_CONFIRMATION_DEPTH : 0n
-  const cursor = await readEfpIndexerCursor(input.client, EFP_BASE_CHAIN_ID)
-  if (safeHead < EFP_BASE_START_BLOCK) {
+  const cursor = await readEfpIndexerCursor(input.client, config.chainId)
+  if (safeHead < config.startBlock) {
     return {
       status: "caught_up",
-      chainId: EFP_BASE_CHAIN_ID,
+      chainId: config.chainId,
       fromBlock: null,
-      throughBlock: cursor?.indexedThroughBlock.toString() ?? (EFP_BASE_START_BLOCK - 1n).toString(),
+      throughBlock: cursor?.indexedThroughBlock.toString() ?? (config.startBlock - 1n).toString(),
       safeHeadBlock: safeHead.toString(),
       listOpCount: 0,
       malformedListOpCount: 0,
@@ -171,11 +212,11 @@ export async function scanEfpBaseOnce(input: {
     }
   }
 
-  const indexedThrough = cursor?.indexedThroughBlock ?? (EFP_BASE_START_BLOCK - 1n)
+  const indexedThrough = cursor?.indexedThroughBlock ?? (config.startBlock - 1n)
   if (indexedThrough >= safeHead) {
     return {
       status: "caught_up",
-      chainId: EFP_BASE_CHAIN_ID,
+      chainId: config.chainId,
       fromBlock: null,
       throughBlock: indexedThrough.toString(),
       safeHeadBlock: safeHead.toString(),
@@ -187,10 +228,10 @@ export async function scanEfpBaseOnce(input: {
     }
   }
 
-  const replayFrom = indexedThrough >= EFP_BASE_START_BLOCK
+  const replayFrom = indexedThrough >= config.startBlock
     ? indexedThrough - EFP_REPLAY_BLOCKS + 1n
-    : EFP_BASE_START_BLOCK
-  const fromBlock = replayFrom < EFP_BASE_START_BLOCK ? EFP_BASE_START_BLOCK : replayFrom
+    : config.startBlock
+  const fromBlock = replayFrom < config.startBlock ? config.startBlock : replayFrom
   const blockSpan = input.blockSpan && input.blockSpan > 0n
     ? input.blockSpan
     : EFP_SCAN_BLOCK_SPAN
@@ -216,8 +257,8 @@ export async function scanEfpBaseOnce(input: {
   for (const range of ranges) {
     const [listLogs, metadataLogs, storageLogs] = await Promise.all([
       getLogsAdaptive(
-        (fromBlock, toBlock) => reader.getLogs({
-          address: EFP_BASE_LIST_RECORDS,
+          (fromBlock, toBlock) => reader.getLogs({
+          address: config.listRecordsAddress,
           event: LIST_OP_EVENT,
           fromBlock,
           toBlock,
@@ -226,9 +267,9 @@ export async function scanEfpBaseOnce(input: {
         range.fromBlock,
         range.toBlock,
       ),
-      getLogsAdaptive(
+      config.accountMetadataAddress ? getLogsAdaptive(
         (fromBlock, toBlock) => reader.getLogs({
-          address: EFP_BASE_ACCOUNT_METADATA,
+          address: config.accountMetadataAddress,
           event: UPDATE_ACCOUNT_METADATA_EVENT,
           fromBlock,
           toBlock,
@@ -236,10 +277,10 @@ export async function scanEfpBaseOnce(input: {
         }),
         range.fromBlock,
         range.toBlock,
-      ),
-      getLogsAdaptive(
+      ) : Promise.resolve([]),
+      config.listRegistryAddress ? getLogsAdaptive(
         (fromBlock, toBlock) => reader.getLogs({
-          address: EFP_BASE_LIST_REGISTRY,
+          address: config.listRegistryAddress,
           event: UPDATE_LIST_STORAGE_LOCATION_EVENT,
           fromBlock,
           toBlock,
@@ -247,7 +288,7 @@ export async function scanEfpBaseOnce(input: {
         }),
         range.fromBlock,
         range.toBlock,
-      ),
+      ) : Promise.resolve([]),
     ])
     rangeResults.push({ listLogs, metadataLogs, storageLogs })
   }
@@ -260,8 +301,8 @@ export async function scanEfpBaseOnce(input: {
     const rawOp = log.args.op
     if (typeof rawOp !== "string") throw new Error("EFP ListOp log is missing op bytes")
     return {
-      chainId: EFP_BASE_CHAIN_ID,
-      contractAddress: EFP_BASE_LIST_RECORDS,
+      chainId: config.chainId,
+      contractAddress: config.listRecordsAddress,
       slot: log.args.slot,
       blockNumber: log.blockNumber,
       blockHash: requiredHex(log.blockHash, "blockHash"),
@@ -275,8 +316,8 @@ export async function scanEfpBaseOnce(input: {
   const primaryListEvents: PersistedPrimaryListEvent[] = metadataLogs
     .filter((log) => log.args.key === "primary-list")
     .map((log) => ({
-      chainId: EFP_BASE_CHAIN_ID,
-      contractAddress: EFP_BASE_ACCOUNT_METADATA,
+      chainId: config.chainId,
+      contractAddress: config.accountMetadataAddress ?? EFP_BASE_ACCOUNT_METADATA,
       accountAddress: log.args.addr.toLowerCase() as Address,
       rawValue: log.args.value,
       listId: decodePrimaryListId(log.args.value),
@@ -289,8 +330,8 @@ export async function scanEfpBaseOnce(input: {
   const storageLocationEvents: PersistedListStorageLocationEvent[] = storageLogs.map((log) => {
     const decoded = decodeStorageLocation(log.args.listStorageLocation)
     return {
-      chainId: EFP_BASE_CHAIN_ID,
-      registryAddress: EFP_BASE_LIST_REGISTRY,
+      chainId: config.chainId,
+      registryAddress: config.listRegistryAddress ?? EFP_BASE_LIST_REGISTRY,
       listId: log.args.tokenId,
       rawStorageLocation: log.args.listStorageLocation,
       storageChainId: decoded?.chainId ?? null,
@@ -306,7 +347,7 @@ export async function scanEfpBaseOnce(input: {
   const scanCompletedAt = now().toISOString()
   await replaceEfpIndexerRange({
     client: input.client,
-    chainId: EFP_BASE_CHAIN_ID,
+    chainId: config.chainId,
     fromBlock,
     throughBlock,
     throughBlockHash: requiredHex(through.hash, "through block hash"),
@@ -320,7 +361,7 @@ export async function scanEfpBaseOnce(input: {
 
   return {
     status: "indexed",
-    chainId: EFP_BASE_CHAIN_ID,
+    chainId: config.chainId,
     fromBlock: fromBlock.toString(),
     throughBlock: throughBlock.toString(),
     safeHeadBlock: safeHead.toString(),
@@ -330,4 +371,10 @@ export async function scanEfpBaseOnce(input: {
     primaryListEventCount: primaryListEvents.length,
     storageLocationEventCount: storageLocationEvents.length,
   }
+}
+
+export async function scanEfpBaseOnce(
+  input: Omit<Parameters<typeof scanEfpChainOnce>[0], "config">,
+): Promise<EfpScanSummary> {
+  return await scanEfpChainOnce({ ...input, config: EFP_INDEXER_CHAINS.base })
 }
