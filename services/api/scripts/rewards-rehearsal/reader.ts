@@ -27,6 +27,20 @@ export const ALLOWED_RPC_HOSTS = ["sepolia.base.org"] as const
 export const CONFIRMATION_TAG = "finalized"
 export const CONFIRMATION_DEPTH_FALLBACK = 8
 
+/**
+ * Required historical retention, derived rather than guessed.
+ *
+ * The drill plus its evidence gathering and reconciliation cleanup must all be
+ * re-readable afterwards: a trace or block lookup that has been pruned cannot
+ * be re-verified by a reviewer. Base produces a block roughly every 2s.
+ */
+import { REWARD_VAULT_TRACE_OPTIONS } from "../../src/lib/rewards/reward-vault-revert-evidence"
+
+export const BASE_BLOCK_TIME_SECONDS = 2
+export const REHEARSAL_REQUIRED_RETENTION_HOURS = 72
+export const REHEARSAL_REQUIRED_RETENTION_BLOCKS =
+  (REHEARSAL_REQUIRED_RETENTION_HOURS * 3600) / BASE_BLOCK_TIME_SECONDS
+
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_RESPONSE_BYTES = 256 * 1024
 
@@ -66,6 +80,27 @@ const HEX_QUANTITY_RE = /^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/u
 const BLOCK_HASH_RE = /^0x[0-9a-fA-F]{64}$/u
 
 export type BlockRef = { number: number; hash: string }
+
+/** Archived selection-time evidence that an endpoint can support the drill. */
+export type ProviderQualification = {
+  host: string
+  chainId: number
+  confirmationPolicy: ConfirmationPolicy
+  probedBlockNumber: number
+  probedBlockHash: string
+  supportsBlockHashTags: boolean
+  supportsDebugTrace: boolean
+  /** The real confirmed transaction actually traced, proving usable entitlement. */
+  tracedTransactionHash: string | null
+  historicalBlockReadable: boolean
+  /** Source-controlled depth the endpoint had to satisfy. */
+  rehearsalRequiredRetentionBlocks: number
+  /** The actual historical height probed, not merely the confirmed head. */
+  testedHistoricalBlock: number
+  capturedAt: string
+  qualified: boolean
+  failures: string[]
+}
 
 export type ConfirmationPolicy = {
   kind: "finalized-tag" | "fixed-depth"
@@ -265,6 +300,32 @@ export class RehearsalRpcReader {
     return ref
   }
 
+  /**
+   * Finds a confirmed transaction to trace, walking back from the confirmed
+   * block until a non-empty one is found. Preferred over a hard-coded hash,
+   * which would fall outside the retention horizon and start failing.
+   */
+  async #findProbeTransaction(fromBlock: number, maxLookback = 25): Promise<string> {
+    for (let height = fromBlock; height > fromBlock - maxLookback && height >= 0; height -= 1) {
+      const raw = await this.#rpc(
+        "eth_getBlockByNumber",
+        [`0x${height.toString(16)}`, true],
+        { allowNullResult: true },
+      )
+      if (raw === null) continue
+      const transactions = (raw as { transactions?: unknown }).transactions
+      if (!Array.isArray(transactions) || transactions.length === 0) continue
+      const first = transactions[0] as { hash?: unknown }
+      if (typeof first?.hash === "string" && BLOCK_HASH_RE.test(first.hash)) {
+        return first.hash.toLowerCase()
+      }
+    }
+    fail(
+      `no confirmed transaction found within ${maxLookback} blocks of ${fromBlock} to trace-probe`,
+      "protocol",
+    )
+  }
+
   #blockTag(block: BlockRef): unknown {
     return this.#hashTagSupported
       ? { blockHash: block.hash, requireCanonical: true }
@@ -304,6 +365,139 @@ export class RehearsalRpcReader {
     return await this.#withBlockTag(block, async (tag) =>
       this.#hexQuantity(await this.#rpc("eth_getBalance", [address, tag]), "eth_getBalance"),
     )
+  }
+
+  /**
+   * Proves the endpoint can actually support the rehearsal, and refuses it
+   * otherwise.
+   *
+   * `debug_traceTransaction` is the one that fails QUIETLY if unchecked: the
+   * capacity-deferral classifier fails closed to `reconciliation_required`
+   * without it, so every capacity revert would land in reconciliation and the
+   * fairness measurement would silently measure nothing rather than erroring.
+   *
+   * Deliberately not part of {@link PreflightChainReader}: the preflight must
+   * never gain the ability to trace. This is a selection-time capability.
+   */
+  async qualifyProvider(
+    expectedChainId: number,
+    options: { now?: () => Date; probeTransactionHash?: string } = {},
+  ): Promise<ProviderQualification> {
+    const failures: string[] = []
+
+    const chainId = await this.chainId()
+    if (chainId !== expectedChainId) {
+      failures.push(`chain id is ${chainId}, expected ${expectedChainId}`)
+    }
+
+    const block = await this.latestConfirmedBlock()
+    const confirmationPolicy = this.confirmationPolicy
+
+    // EIP-1898 probed directly, not inferred from the downgrade flag.
+    let supportsBlockHashTags = true
+    try {
+      await this.#rpc("eth_getCode", [
+        "0x0000000000000000000000000000000000000001",
+        { blockHash: block.hash, requireCanonical: true },
+      ])
+    } catch (error) {
+      if (!isCapabilityFailure(error)) throw error
+      supportsBlockHashTags = false
+      failures.push("endpoint does not support EIP-1898 block-hash tags")
+    }
+
+    // Trace a REAL confirmed transaction. Method recognition is not
+    // entitlement: providers return -32000 for "transaction not found", but
+    // also for "tracing disabled on your plan", "method restricted" and
+    // "backend tracing unavailable". Only a successful, non-null structured
+    // result proves tracing is actually usable.
+    let supportsDebugTrace = true
+    let tracedTransactionHash: string | null = null
+    try {
+      tracedTransactionHash = options.probeTransactionHash
+        ?? (await this.#findProbeTransaction(block.number))
+      const trace = await this.#rpc(
+        "debug_traceTransaction",
+        [tracedTransactionHash, REWARD_VAULT_TRACE_OPTIONS],
+        { allowNullResult: true },
+      )
+      // A callTracer root carries `type` and `from`; the default opcode tracer
+      // returns structLogs/gas/failed instead. Requiring the call-trace shape
+      // proves the tracer production uses is the one that actually ran.
+      const root = trace as { type?: unknown; from?: unknown } | null
+      if (
+        root === null
+        || typeof root !== "object"
+        || Array.isArray(root)
+        || typeof root.type !== "string"
+        || typeof root.from !== "string"
+      ) {
+        supportsDebugTrace = false
+        failures.push(
+          "debug_traceTransaction did not return a callTracer result for a confirmed transaction",
+        )
+      }
+    } catch (error) {
+      if (
+        isCapabilityFailure(error)
+        || (error instanceof RehearsalRpcError && error.kind === "rpc")
+      ) {
+        // The server is telling us it will not or cannot trace: unusable.
+        supportsDebugTrace = false
+        failures.push(
+          "endpoint cannot trace a confirmed transaction"
+            + " (method absent, restricted, or tracing disabled)",
+        )
+      } else {
+        // Transport/HTTP/protocol failures are inconclusive infrastructure
+        // conditions, not evidence about entitlement.
+        throw error
+      }
+    }
+
+    // Retention at the REQUIRED depth. Re-reading the freshly confirmed block
+    // would only prove ordinary lookup: an endpoint keeping 128 blocks passes
+    // that and is still useless for re-verifying the drill afterwards.
+    const testedHistoricalBlock = Math.max(0, block.number - REHEARSAL_REQUIRED_RETENTION_BLOCKS)
+    const historical = await this.#rpc(
+      "eth_getBlockByNumber",
+      [`0x${testedHistoricalBlock.toString(16)}`, false],
+      { allowNullResult: true },
+    )
+    // Only a valid null/missing block means insufficient retention; every other
+    // failure propagates out of #rpc rather than being relabelled.
+    const historicalBlockReadable = historical !== null
+    if (!historicalBlockReadable) {
+      failures.push(
+        `endpoint does not retain block ${testedHistoricalBlock}`
+          + ` (${REHEARSAL_REQUIRED_RETENTION_BLOCKS} blocks / ~${REHEARSAL_REQUIRED_RETENTION_HOURS}h of history)`,
+      )
+    }
+
+    const qualification: ProviderQualification = {
+      host: this.host,
+      chainId,
+      confirmationPolicy,
+      probedBlockNumber: block.number,
+      probedBlockHash: block.hash,
+      supportsBlockHashTags,
+      supportsDebugTrace,
+      tracedTransactionHash,
+      historicalBlockReadable,
+      rehearsalRequiredRetentionBlocks: REHEARSAL_REQUIRED_RETENTION_BLOCKS,
+      testedHistoricalBlock,
+      capturedAt: (options.now ?? (() => new Date()))().toISOString(),
+      qualified: failures.length === 0,
+      failures,
+    }
+
+    if (!qualification.qualified) {
+      throw new RehearsalRpcError(
+        `rehearsal rpc: provider ${this.host} is not qualified: ${failures.join("; ")}`,
+        "protocol",
+      )
+    }
+    return qualification
   }
 
   /**

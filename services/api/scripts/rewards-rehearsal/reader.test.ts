@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test"
 
+import { REWARD_VAULT_TRACE_OPTIONS } from "../../src/lib/rewards/reward-vault-revert-evidence"
 import {
   ALLOWED_RPC_HOSTS,
+  REHEARSAL_REQUIRED_RETENTION_BLOCKS,
   RehearsalRpcReader,
   RehearsalRpcError,
   assertAllowedRpcUrl,
@@ -9,6 +11,8 @@ import {
 
 const URL_OK = "https://sepolia.base.org/v1?key=SUPERSECRETAPIKEY"
 const BLOCK_HASH = `0x${"ab".repeat(32)}`
+const PROBE_TX = `0x${"11".repeat(32)}`
+const VAULT_PROBE = "0x000000000000000000000000000000000000beef"
 
 type Call = { body: Record<string, unknown>; init: RequestInit }
 
@@ -348,5 +352,355 @@ describe("snapshot revalidation checks the captured block", () => {
     const block = await reader.latestConfirmedBlock()
     await reader.getCode(VAULT_ADDR, block)
     await expect(reader.assertSnapshotIntact()).rejects.toThrow(/reorganised/u)
+  })
+})
+
+describe("provider qualification", () => {
+  const errorFor = (id: number, code: number) =>
+    new Response(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message: "nope" } }), {
+      status: 200,
+    })
+
+  const qualifying = (overrides: Record<string, (id: number) => Response> = {}) =>
+    (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; id: number }
+      const override = overrides[body.method]
+      if (override) return override(body.id)
+      const map: Record<string, unknown> = {
+        eth_chainId: "0x14a34",
+        eth_getBlockByNumber: {
+          number: "0x40000",
+          hash: BLOCK_HASH,
+          transactions: [{ hash: PROBE_TX }],
+        },
+        eth_getCode: "0x6080",
+        debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+      }
+      return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+    }) as unknown as typeof fetch
+
+  it("qualifies an endpoint with every required capability", async () => {
+    const q = await make(qualifying()).qualifyProvider(84532)
+    expect(q.qualified).toBe(true)
+    expect(q.supportsBlockHashTags).toBe(true)
+    expect(q.supportsDebugTrace).toBe(true)
+    expect(q.historicalBlockReadable).toBe(true)
+    expect(q.host).toBe("sepolia.base.org")
+    expect(q.probedBlockHash).toBe(BLOCK_HASH)
+    expect(q.failures).toEqual([])
+  })
+
+  it("REFUSES an endpoint without debug_traceTransaction", async () => {
+    // The quiet failure: without this, capacity deferrals silently become
+    // reconciliation cases and the fairness measurement measures nothing.
+    await expect(
+      make(qualifying({ debug_traceTransaction: (id) => errorFor(id, -32601) })).qualifyProvider(
+        84532,
+      ),
+    ).rejects.toThrow(/cannot trace a confirmed transaction/u)
+  })
+
+  it("REFUSES a provider that recognizes the method but will not trace", async () => {
+    // -32000 also means "tracing disabled on your plan" or "method
+    // restricted". Method recognition is not entitlement.
+    await expect(
+      make(qualifying({ debug_traceTransaction: (id) => errorFor(id, -32000) })).qualifyProvider(
+        84532,
+      ),
+    ).rejects.toThrow(/cannot trace a confirmed transaction/u)
+  })
+
+  it("REFUSES a provider that answers with the default opcode tracer", async () => {
+    // structLogs/gas/failed is the opcode tracer. A provider can support it
+    // while rejecting callTracer, which is the mode production actually uses.
+    await expect(
+      make(
+        qualifying({
+          debug_traceTransaction: (id) =>
+            new Response(
+              JSON.stringify(ok(id, { gas: 21000, failed: false, structLogs: [] })),
+              { status: 200 },
+            ),
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/callTracer result/u)
+  })
+
+  it("sends the exact production trace options", async () => {
+    const sent: unknown[] = []
+    await make(
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+        if (body.method === "debug_traceTransaction") sent.push(body.params[1])
+        const map: Record<string, unknown> = {
+          eth_chainId: "0x14a34",
+          eth_getBlockByNumber: { number: "0x40000", hash: BLOCK_HASH, transactions: [{ hash: PROBE_TX }] },
+          eth_getCode: "0x6080",
+          debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab" },
+        }
+        return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+      }) as unknown as typeof fetch,
+    ).qualifyProvider(84532)
+    expect(sent).toEqual([REWARD_VAULT_TRACE_OPTIONS])
+  })
+
+  it("REFUSES a provider returning a null trace for a confirmed transaction", async () => {
+    await expect(
+      make(
+        qualifying({
+          debug_traceTransaction: (id) =>
+            new Response(JSON.stringify({ jsonrpc: "2.0", id, result: null }), { status: 200 }),
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/callTracer result/u)
+  })
+
+  it("traces a real confirmed transaction and records which one", async () => {
+    const q = await make(qualifying()).qualifyProvider(84532)
+    expect(q.tracedTransactionHash).toBe(PROBE_TX)
+    expect(q.supportsDebugTrace).toBe(true)
+  })
+
+  it("accepts a reviewed probe transaction hash", async () => {
+    const reviewed = `0x${"22".repeat(32)}`
+    const seen: string[] = []
+    const q = await make(
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+        if (body.method === "debug_traceTransaction") seen.push(String(body.params[0]))
+        const map: Record<string, unknown> = {
+          eth_chainId: "0x14a34",
+          eth_getBlockByNumber: { number: "0x40000", hash: BLOCK_HASH, transactions: [{ hash: PROBE_TX }] },
+          eth_getCode: "0x6080",
+          debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+        }
+        return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+      }) as unknown as typeof fetch,
+    ).qualifyProvider(84532, { probeTransactionHash: reviewed })
+    expect(seen).toEqual([reviewed])
+    expect(q.tracedTransactionHash).toBe(reviewed)
+  })
+
+  it("walks back past empty blocks to find a transaction to trace", async () => {
+    const heights: string[] = []
+    const q = await make(
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+        if (body.method === "eth_getBlockByNumber") {
+          const tag = String(body.params[0])
+          const full = body.params[1] === true
+          if (full) heights.push(tag)
+          // The confirmed block and the one below it are empty.
+          const empty = full && (tag === "0x40000" || tag === "0x3ffff")
+          return new Response(
+            JSON.stringify(
+              ok(body.id, {
+                number: "0x40000",
+                hash: BLOCK_HASH,
+                transactions: empty ? [] : [{ hash: PROBE_TX }],
+              }),
+            ),
+            { status: 200 },
+          )
+        }
+        const map: Record<string, unknown> = {
+          eth_chainId: "0x14a34",
+          eth_getCode: "0x6080",
+          debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+        }
+        return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+      }) as unknown as typeof fetch,
+    ).qualifyProvider(84532)
+    expect(heights.slice(0, 3)).toEqual(["0x40000", "0x3ffff", "0x3fffe"])
+    expect(q.tracedTransactionHash).toBe(PROBE_TX)
+  })
+
+  it("refuses an endpoint without EIP-1898 block-hash tags", async () => {
+    await expect(
+      make(qualifying({ eth_getCode: (id) => errorFor(id, -32602) })).qualifyProvider(84532),
+    ).rejects.toThrow(/EIP-1898/u)
+  })
+
+  it("refuses an endpoint on the wrong chain", async () => {
+    await expect(
+      make(
+        qualifying({
+          eth_chainId: (id) =>
+            new Response(JSON.stringify({ jsonrpc: "2.0", id, result: "0x2105" }), { status: 200 }),
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/chain id is 8453/u)
+  })
+
+  it("propagates a transport failure on the EIP-1898 probe", async () => {
+    await expect(
+      make(
+        qualifying({
+          eth_getCode: () => {
+            throw new Error("socket hang up")
+          },
+        }),
+      ).qualifyProvider(84532),
+    ).rejects.toThrow(/failed, timed out/u)
+  })
+
+  describe("the trace probe must not read failure as support", () => {
+    it("propagates a transport failure", async () => {
+      await expect(
+        make(
+          qualifying({
+            debug_traceTransaction: () => {
+              throw new Error("socket hang up")
+            },
+          }),
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/failed, timed out/u)
+    })
+
+    it("propagates an HTTP failure", async () => {
+      await expect(
+        make(
+          qualifying({ debug_traceTransaction: () => new Response("nope", { status: 502 }) }),
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/HTTP 502/u)
+    })
+
+    it("propagates a rate limit", async () => {
+      await expect(
+        make(
+          qualifying({ debug_traceTransaction: () => new Response("slow", { status: 429 }) }),
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/HTTP 429/u)
+    })
+
+    it("propagates malformed JSON", async () => {
+      await expect(
+        make(
+          qualifying({ debug_traceTransaction: () => new Response("{nope", { status: 200 }) }),
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/not valid JSON/u)
+    })
+
+    it("propagates a mismatched response id", async () => {
+      await expect(
+        make(
+          qualifying({
+            debug_traceTransaction: (id) =>
+              new Response(JSON.stringify(ok(id + 99, { failed: false })), { status: 200 }),
+          }),
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/response id did not match/u)
+    })
+  })
+
+  describe("retention is probed at the required depth", () => {
+    it("probes confirmedBlock - rehearsalRequiredRetentionBlocks, not the head", async () => {
+      const seen: string[] = []
+      const q = await make(
+        (async (_u: string | URL | Request, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { method: string; id: number; params: unknown[] }
+          if (body.method === "eth_getBlockByNumber" && body.params[1] === false) {
+            seen.push(String(body.params[0]))
+          }
+          const map: Record<string, unknown> = {
+            eth_chainId: "0x14a34",
+            eth_getBlockByNumber: {
+              number: "0x40000",
+              hash: BLOCK_HASH,
+              transactions: [{ hash: PROBE_TX }],
+            },
+            eth_getCode: "0x6080",
+            debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+          }
+          return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+        }) as unknown as typeof fetch,
+      ).qualifyProvider(84532)
+
+      const expectedDepth = 0x40000 - REHEARSAL_REQUIRED_RETENTION_BLOCKS
+      expect(q.testedHistoricalBlock).toBe(expectedDepth)
+      expect(q.rehearsalRequiredRetentionBlocks).toBe(REHEARSAL_REQUIRED_RETENTION_BLOCKS)
+      expect(seen).toContain(`0x${expectedDepth.toString(16)}`)
+    })
+
+    it("refuses a provider that prunes below the required depth", async () => {
+      await expect(
+        make(
+          (async (_u: string | URL | Request, init?: RequestInit) => {
+            const body = JSON.parse(String(init?.body)) as {
+              method: string
+              id: number
+              params: unknown[]
+            }
+            if (body.method === "eth_getBlockByNumber") {
+              // The retention probe is the only full=false lookup at a height.
+              if (body.params[1] === false && body.params[0] !== "finalized") {
+                // Pruned: a valid null result.
+                return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }), {
+                  status: 200,
+                })
+              }
+              return new Response(
+                JSON.stringify(
+                  ok(body.id, {
+                    number: "0x40000",
+                    hash: BLOCK_HASH,
+                    transactions: [{ hash: PROBE_TX }],
+                  }),
+                ),
+                { status: 200 },
+              )
+            }
+            const map: Record<string, unknown> = {
+              eth_chainId: "0x14a34",
+              eth_getCode: "0x6080",
+              debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+            }
+            return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+          }) as unknown as typeof fetch,
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/does not retain block/u)
+    })
+
+    it("propagates a transport failure rather than calling it a retention failure", async () => {
+      await expect(
+        make(
+          (async (_u: string | URL | Request, init?: RequestInit) => {
+            const body = JSON.parse(String(init?.body)) as {
+              method: string
+              id: number
+              params: unknown[]
+            }
+            if (body.method === "eth_getBlockByNumber") {
+              if (body.params[1] === false && body.params[0] !== "finalized") {
+                return new Response("boom", { status: 500 })
+              }
+              return new Response(
+                JSON.stringify(
+                  ok(body.id, {
+                    number: "0x40000",
+                    hash: BLOCK_HASH,
+                    transactions: [{ hash: PROBE_TX }],
+                  }),
+                ),
+                { status: 200 },
+              )
+            }
+            const map: Record<string, unknown> = {
+              eth_chainId: "0x14a34",
+              eth_getCode: "0x6080",
+              debug_traceTransaction: { type: "CALL", from: "0x00000000000000000000000000000000000000ab", to: VAULT_PROBE, output: "0x" },
+            }
+            return new Response(JSON.stringify(ok(body.id, map[body.method])), { status: 200 })
+          }) as unknown as typeof fetch,
+        ).qualifyProvider(84532),
+      ).rejects.toThrow(/HTTP 500/u)
+    })
+  })
+
+  it("records when the evidence was captured", async () => {
+    const q = await make(qualifying()).qualifyProvider(84532, {
+      now: () => new Date("2026-07-26T12:00:00.000Z"),
+    })
+    expect(q.capturedAt).toBe("2026-07-26T12:00:00.000Z")
   })
 })
