@@ -39,6 +39,24 @@ const upstreamSourceHydrationDependencies: UpstreamSourceHydrationDependencies =
   findStoryRegisteredAssetProjectionSources,
 }
 
+export type DerivativeSourceHydrationTiming = {
+  local_rows_ms: number
+  global_rows_ms: number
+  profiles_ms: number
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.round(performance.now() - startedAt)
+}
+
+function emptyDerivativeSourceHydrationTiming(): DerivativeSourceHydrationTiming {
+  return {
+    local_rows_ms: 0,
+    global_rows_ms: 0,
+    profiles_ms: 0,
+  }
+}
+
 function parseUpstreamRef(sourceRef: string): ParsedUpstreamRef {
   const normalized = sourceRef.trim()
   const storyIpMatch = STORY_IP_REF_PATTERN.exec(normalized)
@@ -183,24 +201,27 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   env?: Env | null
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
-}, dependencies: UpstreamSourceHydrationDependencies = upstreamSourceHydrationDependencies): Promise<void> {
+}, dependencies: UpstreamSourceHydrationDependencies = upstreamSourceHydrationDependencies): Promise<DerivativeSourceHydrationTiming> {
   const refs = Array.from(new Set(input.responses.flatMap((response) => response.post.upstream_asset_refs ?? [])))
     .map(parseUpstreamRef)
     .filter((ref) => ref.sourceRef.length > 0)
     .slice(0, 25)
 
   if (refs.length === 0) {
-    return
+    return emptyDerivativeSourceHydrationTiming()
   }
 
+  const localRowsStartedAt = performance.now()
   const localRows = await findUpstreamSourceRows({
     client: input.client,
     communityId: input.communityId,
     refs,
   })
+  const localRowsMs = elapsedMs(localRowsStartedAt)
   const unresolvedStoryRefs = refs.filter((ref): ref is Extract<ParsedUpstreamRef, { kind: "story_ip" }> =>
     ref.kind === "story_ip" && !findRowForRef(ref, localRows)
   )
+  const globalRowsStartedAt = performance.now()
   const globalRows = unresolvedStoryRefs.length > 0 && input.env
     ? await dependencies.findStoryRegisteredAssetProjectionSources({
         env: input.env,
@@ -210,18 +231,21 @@ export async function hydrateDerivativeSourcesForResponses(input: {
         })),
       })
     : []
+  const globalRowsMs = elapsedMs(globalRowsStartedAt)
   const localAssetKeys = new Set(localRows.map((row) => `${row.community_id}:${row.asset_id}`))
   const rows: UpstreamSourceRow[] = [
     ...localRows,
     ...globalRows.filter((row) => !localAssetKeys.has(`${row.community_id}:${row.asset_id}`)),
   ]
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
+  const profilesStartedAt = performance.now()
   const profilesByUserId = input.profileRepository
     ? new Map(await Promise.all(creatorUserIds.map(async (userId) => [
         userId,
         await input.profileRepository!.getProfileByUserId(userId).catch(() => null),
       ] as const)))
     : new Map()
+  const profilesMs = elapsedMs(profilesStartedAt)
 
   for (const response of input.responses) {
     const postRefs = (response.post.upstream_asset_refs ?? [])
@@ -257,5 +281,11 @@ export async function hydrateDerivativeSourcesForResponses(input: {
         creator_display_name: profile?.display_name ?? null,
       }
     }).filter((source): source is PostDerivativeSource => source != null)
+  }
+
+  return {
+    local_rows_ms: localRowsMs,
+    global_rows_ms: globalRowsMs,
+    profiles_ms: profilesMs,
   }
 }

@@ -13,7 +13,10 @@ import {
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
-import { hydrateDerivativeSourcesForResponses } from "../posts/upstream-source-hydration"
+import {
+  hydrateDerivativeSourcesForResponses,
+  type DerivativeSourceHydrationTiming,
+} from "../posts/upstream-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
 import { getControlPlaneClient, withBackgroundControlPlaneClients } from "../runtime-deps"
@@ -71,12 +74,21 @@ export type HomeFeedCommunityTiming = {
   total_ms: number
   open_ms: number
   identity_ms: number
+  viewer_gate_ms: number
   posts_ms: number
   snapshots_ms: number
   votes_ms: number
   localize_ms: number
+  crosspost_ms: number
+  author_handles_ms: number
+  streaks_ms: number
   derivatives_ms: number
+  derivative_local_rows_ms: number
+  derivative_global_rows_ms: number
+  derivative_profiles_ms: number
+  serialize_ms: number
   enqueue_ms: number
+  unaccounted_ms: number
 }
 
 export type HomeFeedCommunityReadResult = {
@@ -385,12 +397,21 @@ export async function readHomeFeedCommunityItems(input: {
         total_ms: elapsedMs(communityStartedAt),
         open_ms: openMs,
         identity_ms: 0,
+        viewer_gate_ms: 0,
         posts_ms: 0,
         snapshots_ms: 0,
         votes_ms: 0,
         localize_ms: 0,
+        crosspost_ms: 0,
+        author_handles_ms: 0,
+        streaks_ms: 0,
         derivatives_ms: 0,
+        derivative_local_rows_ms: 0,
+        derivative_global_rows_ms: 0,
+        derivative_profiles_ms: 0,
+        serialize_ms: 0,
         enqueue_ms: 0,
+        unaccounted_ms: 0,
       },
     }
   }
@@ -401,12 +422,14 @@ export async function readHomeFeedCommunityItems(input: {
     const communitySummary = input.baseCommunity
       ? withHomeFeedCommunityIdentity(input.baseCommunity, identity)
       : null
+    const viewerGateStartedAt = performance.now()
     const viewerGateState = await getHomeFeedViewerGateState({
       client: db.client,
       communityId: input.communityId,
       displayName: communitySummary?.display_name ?? identity?.displayName ?? input.communityId,
       userId: input.userId,
     })
+    const viewerGateMs = elapsedMs(viewerGateStartedAt)
     const communityItems: HomeFeedItem[] = []
     const postsStartedAt = performance.now()
     const postsById = await listPostsById(db.client, input.rows.map((row) => row.source_post_id))
@@ -465,11 +488,13 @@ export async function readHomeFeedCommunityItems(input: {
       localizeMs += elapsedMs(localizeStartedAt)
       postReadJobs.push({ post, response })
     }
+    const crosspostStartedAt = performance.now()
     await hydrateCrosspostSourcesForResponses({
       responses: postReadJobs.map((job) => job.response),
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
     })
+    const crosspostMs = elapsedMs(crosspostStartedAt)
     // Stamp public-identity author handles onto the post payload so home-feed
     // cards render the byline on first paint instead of falling back to a
     // per-author profile fetch (the truncated-id -> handle flicker). One batched
@@ -477,10 +502,13 @@ export async function readHomeFeedCommunityItems(input: {
     // The live feed hits this directly; the cached materialized public feed
     // reuses it via listHomeFeed -> readHomeFeedCommunityItems before it stores
     // the serialized payload, so both paths get the handle.
+    const authorHandlesStartedAt = performance.now()
     await hydrateAuthorPublicHandlesForResponses({
       responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
     })
+    const authorHandlesMs = elapsedMs(authorHandlesStartedAt)
+    const streaksStartedAt = performance.now()
     await hydrateSongStreakSummariesForResponses({
       client: db.client,
       responses: postReadJobs.map((job) => job.response),
@@ -488,10 +516,16 @@ export async function readHomeFeedCommunityItems(input: {
       studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
+    const streaksMs = elapsedMs(streaksStartedAt)
     const derivativeResponses = homeFeedVideoDerivativeResponses(postReadJobs.map((job) => job.response))
     const derivativesStartedAt = performance.now()
+    let derivativeTiming: DerivativeSourceHydrationTiming = {
+      local_rows_ms: 0,
+      global_rows_ms: 0,
+      profiles_ms: 0,
+    }
     if (derivativeResponses.length > 0) {
-      await hydrateDerivativeSourcesForResponses({
+      derivativeTiming = await hydrateDerivativeSourcesForResponses({
         client: db.client,
         communityId: input.communityId,
         env: input.env,
@@ -500,6 +534,7 @@ export async function readHomeFeedCommunityItems(input: {
       })
     }
     const derivativesMs = elapsedMs(derivativesStartedAt)
+    const serializeStartedAt = performance.now()
     if (communitySummary) {
       const serializedCommunitySummary = serializeHomeFeedCommunitySummary(communitySummary)
       for (const job of postReadJobs) {
@@ -512,6 +547,7 @@ export async function readHomeFeedCommunityItems(input: {
         })
       }
     }
+    const serializeMs = elapsedMs(serializeStartedAt)
     const enqueueStartedAt = performance.now()
     await enqueuePostReadJobs({
       env: input.env,
@@ -522,6 +558,20 @@ export async function readHomeFeedCommunityItems(input: {
       fallbackClient: db.client,
     })
     const enqueueMs = elapsedMs(enqueueStartedAt)
+    const totalMs = elapsedMs(communityStartedAt)
+    const accountedMs = openMs
+      + identityMs
+      + viewerGateMs
+      + postsMs
+      + snapshotsMs
+      + votesMs
+      + localizeMs
+      + crosspostMs
+      + authorHandlesMs
+      + streaksMs
+      + derivativesMs
+      + serializeMs
+      + enqueueMs
     return {
       items: communityItems,
       identity,
@@ -529,15 +579,24 @@ export async function readHomeFeedCommunityItems(input: {
         community_id: input.communityId,
         rows: input.rows.length,
         returned_items: communityItems.length,
-        total_ms: elapsedMs(communityStartedAt),
+        total_ms: totalMs,
         open_ms: openMs,
         identity_ms: identityMs,
+        viewer_gate_ms: viewerGateMs,
         posts_ms: postsMs,
         snapshots_ms: snapshotsMs,
         votes_ms: votesMs,
         localize_ms: localizeMs,
+        crosspost_ms: crosspostMs,
+        author_handles_ms: authorHandlesMs,
+        streaks_ms: streaksMs,
         derivatives_ms: derivativesMs,
+        derivative_local_rows_ms: derivativeTiming.local_rows_ms,
+        derivative_global_rows_ms: derivativeTiming.global_rows_ms,
+        derivative_profiles_ms: derivativeTiming.profiles_ms,
+        serialize_ms: serializeMs,
         enqueue_ms: enqueueMs,
+        unaccounted_ms: Math.max(0, totalMs - accountedMs),
       },
     }
   } finally {
