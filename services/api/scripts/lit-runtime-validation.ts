@@ -23,6 +23,7 @@
 
 import { buildRewardVaultLitAction } from "../src/lib/rewards/reward-vault-lit-action"
 import {
+  rewardVaultActionRequest,
   verifySignedRewardVaultTransaction,
   type RewardVaultTransactionInput,
 } from "../src/lib/rewards/reward-vault-transaction"
@@ -175,8 +176,11 @@ async function probeGetPrivateKeyIdentifier(pkpAddress: string): Promise<ProbeRe
     stringZero: "0",
     derivationPath: "m/44'/60'/0'/0/0",
   }
+  // Inlined rather than passed via js_params: this probe must not depend on the
+  // parameter-passing convention it is running alongside.
   const code = `
-    async function main() {
+    const candidates = ${JSON.stringify(candidates)};
+    async function main(input) {
       const out = {}
       for (const [label, candidate] of Object.entries(candidates)) {
         try {
@@ -196,7 +200,7 @@ async function probeGetPrivateKeyIdentifier(pkpAddress: string): Promise<ProbeRe
       return out
     }
   `
-  const { response, hasError, logs } = await executeAction(code, { candidates, expected: pkpAddress })
+  const { response, hasError, logs } = await executeAction(code, { expected: pkpAddress })
   const detail = (response ?? {}) as Record<string, { accepted?: boolean; derivedAddress?: string }>
   const accepted = Object.entries(detail)
     .filter(([, value]) => value?.accepted === true)
@@ -252,20 +256,12 @@ async function probeSignedTransactionRoundTrip(pkpAddress: string): Promise<Prob
     maxGasLimit: input.gas.gasLimit,
   })
 
-  const { response, hasError, logs } = await executeAction(code, {
-    method: "pay",
-    effectId: input.effectId,
-    recipient: input.recipient,
-    amount: input.amount.toString(),
-    deadline: input.deadline.toString(),
-    policyVersion: input.policyVersion.toString(),
-    nonce: input.nonce,
-    gas: {
-      maxFeePerGas: input.gas.maxFeePerGas.toString(),
-      maxPriorityFeePerGas: input.gas.maxPriorityFeePerGas.toString(),
-      gasLimit: input.gas.gasLimit.toString(),
-    },
-  })
+  // Send exactly what the production executor sends — the canonical request,
+  // including the derived operationId and the pinned cross-check fields.
+  const { response, hasError, logs } = await executeAction(
+    code,
+    rewardVaultActionRequest(input) as unknown as Record<string, unknown>,
+  )
 
   if (hasError) {
     return {
@@ -326,9 +322,35 @@ async function main(): Promise<void> {
     )
   }
 
+  // A probe that throws must be recorded as a failure, never abort the run —
+  // otherwise one broken probe hides every result after it.
+  const runProbe = async (
+    probe: string,
+    question: string,
+    run: () => Promise<ProbeResult>,
+  ): Promise<ProbeResult> => {
+    try {
+      return await run()
+    } catch (error) {
+      return { probe, question, passed: false, finding: `probe threw: ${scrub(error)}` }
+    }
+  }
+
   const results: ProbeResult[] = []
-  results.push(await probeEthersSurface())
-  results.push(await probeTeeClock())
+  results.push(
+    await runProbe(
+      "ethers-surface",
+      "Does the action runtime expose the ethers v5 API the action assumes?",
+      probeEthersSurface,
+    ),
+  )
+  results.push(
+    await runProbe(
+      "tee-clock",
+      "Is TEE clock skew small enough for the action's deadline window?",
+      probeTeeClock,
+    ),
+  )
 
   // Prefer a PKP minted out-of-band by the account owner, so the usage key
   // running these probes never needs `can_create_pkps`.
@@ -337,8 +359,20 @@ async function main(): Promise<void> {
   console.log(
     `PKP wallet for this run: ${pkpAddress}${provided ? " (provided)" : " (created by this run)"}`,
   )
-  results.push(await probeGetPrivateKeyIdentifier(pkpAddress))
-  results.push(await probeSignedTransactionRoundTrip(pkpAddress))
+  results.push(
+    await runProbe(
+      "getPrivateKey-identifier",
+      "Does getPrivateKey({ pkpId }) accept the PKP address, as the action assumes?",
+      () => probeGetPrivateKeyIdentifier(pkpAddress),
+    ),
+  )
+  results.push(
+    await runProbe(
+      "signed-tx-round-trip",
+      "Does the real action's signed transaction pass the byte-exact verifier?",
+      () => probeSignedTransactionRoundTrip(pkpAddress),
+    ),
+  )
 
   console.log("\n=== Lit runtime validation ===")
   for (const result of results) {
