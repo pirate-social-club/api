@@ -165,6 +165,33 @@ describe("best video candidate selection", () => {
     expect(second.hasMore).toBe(false)
   })
 
+  test("does not discard candidates deferred into a later diversity-policy page", () => {
+    const candidates = [
+      ...Array.from({ length: 6 }, (_, index) => videoCandidateRow({
+        authorUserId: `usr_loud_${index}`,
+        communityId: "cmt_loud",
+        postId: `pst_loud_${index}`,
+        upvotes: 100 - index,
+      })),
+      ...Array.from({ length: 4 }, (_, index) => videoCandidateRow({
+        authorUserId: `usr_singleton_${index}`,
+        communityId: `cmt_singleton_${index}`,
+        postId: `pst_singleton_${index}`,
+        upvotes: 50 - index,
+      })),
+    ]
+    const page = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: candidates,
+    })
+    expect(page.rows).toHaveLength(candidates.length)
+    expect(new Set(page.rows.map((row) => row.source_post_id))).toEqual(
+      new Set(candidates.map((row) => row.source_post_id)),
+    )
+    expect(page.nextOffset).toBe(candidates.length)
+    expect(page.hasMore).toBe(false)
+  })
+
   test("supports exact small batches for hydration backfill without repeating candidates", () => {
     const candidates = Array.from({ length: 40 }, (_, index) => videoCandidateRow({
       ageHours: index,

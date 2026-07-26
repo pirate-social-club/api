@@ -283,6 +283,20 @@ function sliceBestVideoFeedProjectionDeck(input: {
   pageSize?: number
 }): { hasMore: boolean; nextOffset: number; rows: HomeFeedProjectionRow[] } {
   const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
+  // The deck is already partitioned by takeVideoFeedPage, which defers
+  // cap-rejected candidates into later policy pages. Reapplying caps during
+  // ordinary cursor pagination would advance past those deferred rows and make
+  // them permanently unreachable. A second cap pass is needed only when
+  // hydration backfill crosses a policy-page seam inside one delivered page.
+  if (!input.priorRows?.length) {
+    const rows = input.orderedRows.slice(input.cursor.offset, input.cursor.offset + pageSize)
+    const nextOffset = input.cursor.offset + rows.length
+    return {
+      hasMore: nextOffset < input.orderedRows.length,
+      nextOffset,
+      rows,
+    }
+  }
   const authorCounts = new Map<string, number>()
   const communityCounts = new Map<string, number>()
   const countRow = (row: HomeFeedProjectionRow): void => {
