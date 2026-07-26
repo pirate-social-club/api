@@ -282,6 +282,70 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
     expect(String(heartbeats[0].seen_at)).toBe("2026-07-01 10:00:20+00");
   });
 
+  test("rejects attendance writes outside the session window before minting credentials", async () => {
+    await seedBooking({ bookingId: "bkg_lifecycle_service_attach_early", status: "confirmed" });
+    await seedBooking({ bookingId: "bkg_lifecycle_service_attach_late", status: "live" });
+    let credentialBuilds = 0;
+    setGlobalBookingAgoraBuilderForTests(({ channel, uid }) => {
+      credentialBuilds += 1;
+      return {
+        app_id: "app_test",
+        channel,
+        uid,
+        token: "must-not-be-minted",
+        token_expires_at: 1_783_000_000,
+        configured: true,
+      };
+    });
+
+    expect(await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_early",
+      actorUserId: "booker_bkg_lifecycle_service_attach_early",
+      nowUtc: "2026-07-01T09:54:59Z",
+    })).toEqual({ ok: false, reason: "not_attachable" });
+    expect(await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      nowUtc: "2026-07-01T11:00:00Z",
+    })).toEqual({ ok: false, reason: "not_attachable" });
+    expect(credentialBuilds).toBe(0);
+
+    const attendance = await repoDb.unsafe(
+      `SELECT count(*)::int AS count
+         FROM bookings.attendance_sessions
+        WHERE booking_id IN ($1, $2)`,
+      ["bkg_lifecycle_service_attach_early", "bkg_lifecycle_service_attach_late"],
+    ) as Record<string, unknown>[];
+    expect(attendance[0]?.count).toBe(0);
+
+    const attached = await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      nowUtc: "2026-07-01T10:00:00Z",
+    });
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) throw new Error("expected in-window attach");
+    expect(await heartbeatGlobalBookingSession({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      sessionId: attached.sessionId,
+      nowUtc: "2026-07-01T11:00:00Z",
+    })).toEqual({ ok: false, reason: "not_found" });
+
+    const heartbeats = await repoDb.unsafe(
+      "SELECT count(*)::int AS count FROM bookings.attendance_heartbeats WHERE session_id = $1",
+      [attached.sessionId],
+    ) as Record<string, unknown>[];
+    expect(heartbeats[0]?.count).toBe(0);
+  });
+
   test("settles global complete, cancel, and no-show with effects and lock release", async () => {
     installSettlementFakes();
     await seedBooking({ bookingId: "bkg_lifecycle_service_complete", status: "live", lock: true });

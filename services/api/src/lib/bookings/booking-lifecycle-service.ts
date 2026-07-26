@@ -16,6 +16,12 @@ const UNFINISHED_INTENT_STATES = new Set<string>([
   "cancelled_by_booker",
 ]);
 
+function isWithinAttendanceWindow(booking: Booking, nowUtc: string): boolean {
+  const now = epochMs(nowUtc);
+  return now >= epochMs(booking.slotStartUtc) - SESSION_START_LEAD_MS
+    && now < epochMs(booking.slotEndUtc);
+}
+
 interface BookingLifecycleSnapshot {
   booking_id: string;
   status: string;
@@ -669,6 +675,7 @@ export async function attachGlobalBookingSession(input: {
   const party = booking ? actorParty(booking, input.actorUserId) : null;
   if (!booking || !party) return { ok: false, reason: "not_found" };
   if (!ATTACHABLE_STATES.has(booking.status)) return { ok: false, reason: "not_attachable" };
+  if (!isWithinAttendanceWindow(booking, input.nowUtc)) return { ok: false, reason: "not_attachable" };
 
   const channel = deriveBookingChannel(input.bookingId);
   const uid = randomAgoraUid();
@@ -696,7 +703,17 @@ export async function heartbeatGlobalBookingSession(input: {
   sessionId: string;
   nowUtc: string;
 }): Promise<GlobalHeartbeatResult> {
-  const result = await createBookingLifecycleWriteRepository(input.executor).heartbeatAttendanceSession({
+  const repo = createBookingLifecycleWriteRepository(input.executor);
+  const booking = await repo.getBooking(input.bookingId);
+  if (
+    !booking
+    || !actorParty(booking, input.actorUserId)
+    || !ATTACHABLE_STATES.has(booking.status)
+    || !isWithinAttendanceWindow(booking, input.nowUtc)
+  ) {
+    return { ok: false, reason: "not_found" };
+  }
+  const result = await repo.heartbeatAttendanceSession({
     heartbeatId: `bah_${crypto.randomUUID()}`,
     sessionId: input.sessionId,
     bookingId: input.bookingId,
