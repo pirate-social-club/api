@@ -6,46 +6,75 @@
  * believe it is, so this module refuses to produce a manifest unless every
  * value is supplied explicitly and passes every check.
  *
- * There are no defaults and no optional fields on purpose. A missing value is
- * an error, never an assumption — an omitted `executeInGroups` must not be
- * read as "probably fine".
+ * Two structural rules make this a safety gate rather than a consistency check:
  *
- * Nothing here executes anything. Parsing a manifest is necessary but not
- * sufficient to run the drill; see `preflight.ts`, which additionally proves
- * the live chain matches what was captured here.
+ *   1. The limits a manifest is judged against live HERE, in source, not in the
+ *      manifest. A capture cannot declare its own ceiling and pass.
+ *   2. The expected staging identities are pinned HERE too. The manifest proves
+ *      it matches the pin; it does not get to define the pin.
+ *
+ * There are no defaults and no optional fields on purpose. A missing value is
+ * an error, never an assumption.
+ *
+ * Nothing here executes anything. A parsed manifest is necessary but not
+ * sufficient to run the drill; the on-chain preflight must additionally prove
+ * the live chain matches what was captured.
  */
 
 /** Base Sepolia. The rehearsal action must target this chain and no other. */
 export const REHEARSAL_CHAIN_ID = 84532
 
 /**
- * The Lit wildcard group. A usage key scoped to `[0]` can execute in every
- * group, which would let attacker-style code reach identities outside staging.
- * Its presence is disqualifying regardless of what else is in the list.
+ * Source-controlled ceilings. Deliberately NOT manifest-supplied: a capture
+ * that could declare its own ceiling would always pass.
+ *
+ * USDC is 6-decimal, so 5_000_000n is $5.
  */
-const WILDCARD_GROUP_IDS = new Set(["0", "*", ""])
+export const REHEARSAL_LIMITS = {
+  maxVaultUsdcAtomic: 5_000_000n,
+  maxSignerEthWei: 5_000_000_000_000_000n,
+  maxEpochCapAtomic: 2_000_000n,
+} as const
+
+/**
+ * Reviewed pins for the staging topology.
+ *
+ * `groupId` is intentionally null: it is still PENDING CAPTURE in the
+ * credential ledger, and until a reviewed value is committed here the drill
+ * cannot run. That is the intended blocker, expressed in code rather than
+ * relying on someone remembering.
+ */
+export const PINNED_STAGING_GROUP_ID: string | null = null
+export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
+
+/** A capture older than this is refused; topology drifts. */
+export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
+
+/**
+ * The Lit wildcard group. A usage key scoped to `[0]` can execute in every
+ * group. Its presence is disqualifying regardless of what else is listed.
+ */
+const WILDCARD_GROUP_IDS = new Set(["0", "*"])
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 export type RehearsalManifest = {
-  capturedAt: string
-  capturedBy: string
+  attestation: {
+    capturedAt: string
+    capturedBy: string
+    approvedBy: string
+    evidenceReference: string
+    evidenceSha256: string
+  }
   lit: {
-    /** Exact `execute_in_groups` value read back from the usage key. */
     usageKeyExecuteInGroups: string[]
     stagingGroupId: string
-    /** Every PKP in the staging group. */
     stagingGroupPkpAddresses: string[]
-    /** Every action CID registered to the staging group. */
     stagingGroupActionCids: string[]
-    /**
-     * Known production-capable PKPs. The staging group must be disjoint from
-     * these. Supplying an empty list is rejected: "we checked and there are
-     * none" and "we did not check" must not look identical.
-     */
     knownProductionPkpAddresses: string[]
   }
   vault: {
     address: string
-    /** keccak256 of the deployed runtime bytecode. */
     bytecodeHash: string
     chainId: number
     policyVersion: bigint
@@ -60,17 +89,13 @@ export type RehearsalManifest = {
     vaultUsdcAtomic: bigint
     signerEthWei: bigint
   }
-  /** Ceilings proving the rehearsal is deliberately tiny. */
-  rehearsalCeilings: {
-    maxVaultUsdcAtomic: bigint
-    maxSignerEthWei: bigint
-    maxEpochCapAtomic: bigint
-  }
   killSwitches: {
     reserveRefillDisableProcedure: string
     fundingQuoteDisableProcedure: string
     vaultPauseProcedure: string
     operatorRotationProcedure: string
+    /** Proof the two off-chain switches actually change live behavior. */
+    offChainKillSwitchDryRunEvidence: string
   }
 }
 
@@ -78,6 +103,9 @@ export class RehearsalManifestError extends Error {}
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/u
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/u
+const SHA256_RE = /^[0-9a-f]{64}$/u
+/** Canonical UTC only. `Date.parse` accepts far too much to be a gate. */
+const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 
 function fail(message: string): never {
   throw new RehearsalManifestError(`rehearsal manifest rejected: ${message}`)
@@ -93,7 +121,9 @@ function requireNonEmptyString(value: unknown, field: string): string {
 function requireAddress(value: unknown, field: string): string {
   const raw = requireNonEmptyString(value, field)
   if (!ADDRESS_RE.test(raw)) fail(`${field} is not a 20-byte address`)
-  return raw.toLowerCase()
+  const normalized = raw.toLowerCase()
+  if (normalized === ZERO_ADDRESS) fail(`${field} must not be the zero address`)
+  return normalized
 }
 
 function requirePositiveBigInt(value: unknown, field: string): bigint {
@@ -109,44 +139,96 @@ function requireStringArray(value: unknown, field: string): string[] {
   return value.map((entry, index) => requireNonEmptyString(entry, `${field}[${index}]`))
 }
 
+function requireUtcTimestamp(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field)
+  if (!UTC_RE.test(raw) || Number.isNaN(Date.parse(raw))) {
+    fail(`${field} must be a canonical UTC timestamp (YYYY-MM-DDTHH:MM:SS[.mmm]Z)`)
+  }
+  return raw
+}
+
 /**
- * Validates a captured staging manifest. Throws on the first violation rather
- * than accumulating, so a partially-captured manifest can never be acted on.
+ * Reviewed staging pins the manifest is judged against.
+ *
+ * Passed in rather than read from module scope so the parser stays pure and
+ * testable. The ONLY production source is {@link PINNED_STAGING_GROUP_ID} and
+ * {@link PINNED_STAGING_PKP_ADDRESS}; the executable entrypoint must pass those
+ * and nothing else. A manifest can never supply its own pins.
  */
-export function parseRehearsalManifest(raw: unknown): RehearsalManifest {
+export type ReviewedStagingPins = {
+  groupId: string | null
+  pkpAddress: string
+}
+
+export function parseRehearsalManifest(
+  raw: unknown,
+  options: { now: Date; pins: ReviewedStagingPins },
+): RehearsalManifest {
   if (typeof raw !== "object" || raw === null) fail("manifest must be an object")
-  const input = raw as Record<string, Record<string, unknown> | unknown>
+  const input = raw as Record<string, unknown>
 
-  const capturedAt = requireNonEmptyString((input as { capturedAt?: unknown }).capturedAt, "capturedAt")
-  if (Number.isNaN(Date.parse(capturedAt))) fail("capturedAt must be an ISO-8601 timestamp")
-  const capturedBy = requireNonEmptyString((input as { capturedBy?: unknown }).capturedBy, "capturedBy")
-
+  const attestation = (input.attestation ?? fail("attestation section is missing")) as Record<string, unknown>
   const lit = (input.lit ?? fail("lit section is missing")) as Record<string, unknown>
   const vault = (input.vault ?? fail("vault section is missing")) as Record<string, unknown>
   const balances = (input.balances ?? fail("balances section is missing")) as Record<string, unknown>
-  const ceilings = (input.rehearsalCeilings
-    ?? fail("rehearsalCeilings section is missing")) as Record<string, unknown>
-  const killSwitches = (input.killSwitches
-    ?? fail("killSwitches section is missing")) as Record<string, unknown>
+  const killSwitches = (input.killSwitches ?? fail("killSwitches section is missing")) as Record<string, unknown>
 
-  // --- Gate 1: usage-key scope proves no wildcard and nothing beyond staging.
+  if ("rehearsalCeilings" in input) {
+    fail("rehearsalCeilings must not be manifest-supplied; limits are source-controlled")
+  }
+
+  // --- Gate 0: independently attested, fresh capture.
+  const capturedAt = requireUtcTimestamp(attestation.capturedAt, "attestation.capturedAt")
+  const ageSeconds = (options.now.getTime() - Date.parse(capturedAt)) / 1000
+  if (ageSeconds < 0) fail("attestation.capturedAt is in the future")
+  if (ageSeconds > MAX_CAPTURE_AGE_SECONDS) {
+    fail(`attestation.capturedAt is ${Math.floor(ageSeconds)}s old; topology capture must be fresh`)
+  }
+  const capturedBy = requireNonEmptyString(attestation.capturedBy, "attestation.capturedBy")
+  const approvedBy = requireNonEmptyString(attestation.approvedBy, "attestation.approvedBy")
+  if (capturedBy.trim() === approvedBy.trim()) {
+    fail("attestation.approvedBy must be an independent party, not attestation.capturedBy")
+  }
+  const evidenceReference = requireNonEmptyString(
+    attestation.evidenceReference,
+    "attestation.evidenceReference",
+  )
+  const evidenceSha256 = requireNonEmptyString(attestation.evidenceSha256, "attestation.evidenceSha256")
+  if (!SHA256_RE.test(evidenceSha256)) {
+    fail("attestation.evidenceSha256 must be 64 lowercase hex characters")
+  }
+
+  // --- Gate 1: usage-key scope matches the reviewed pin, with no wildcard.
+  if (options.pins.groupId === null) {
+    fail(
+      "the reviewed staging group ID is not pinned; commit it before any attacker-style execution",
+    )
+  }
+  const pinnedGroupId = options.pins.groupId
+  const pinnedPkpAddress = requireAddress(options.pins.pkpAddress, "pins.pkpAddress")
   const executeInGroups = requireStringArray(lit.usageKeyExecuteInGroups, "lit.usageKeyExecuteInGroups")
   const stagingGroupId = requireNonEmptyString(lit.stagingGroupId, "lit.stagingGroupId")
+  if (stagingGroupId !== pinnedGroupId) {
+    fail("lit.stagingGroupId does not match the reviewed pin")
+  }
   for (const group of executeInGroups) {
     if (WILDCARD_GROUP_IDS.has(group.trim())) {
       fail(`lit.usageKeyExecuteInGroups contains the wildcard "${group}"; the key can reach every group`)
     }
   }
-  if (executeInGroups.length !== 1 || executeInGroups[0] !== stagingGroupId) {
+  if (executeInGroups.length !== 1 || executeInGroups[0] !== pinnedGroupId) {
     fail(
-      "lit.usageKeyExecuteInGroups must be exactly [stagingGroupId];"
+      "lit.usageKeyExecuteInGroups must be exactly the pinned staging group;"
         + ` captured ${JSON.stringify(executeInGroups)}`,
     )
   }
 
-  // --- Gate 2: staging group holds no production-capable identity.
+  // --- Gate 2: group membership matches the pin and holds no production identity.
   const groupPkps = requireStringArray(lit.stagingGroupPkpAddresses, "lit.stagingGroupPkpAddresses")
     .map((entry, index) => requireAddress(entry, `lit.stagingGroupPkpAddresses[${index}]`))
+  if (groupPkps.length !== 1 || groupPkps[0] !== pinnedPkpAddress) {
+    fail("lit.stagingGroupPkpAddresses must be exactly the pinned staging PKP")
+  }
   const productionPkps = requireStringArray(
     lit.knownProductionPkpAddresses,
     "lit.knownProductionPkpAddresses",
@@ -157,18 +239,13 @@ export function parseRehearsalManifest(raw: unknown): RehearsalManifest {
   }
   const actionCids = requireStringArray(lit.stagingGroupActionCids, "lit.stagingGroupActionCids")
 
-  // --- Gate 3: vault identity, chain, and deliberately tiny policy.
-  const chainId = vault.chainId
-  if (chainId !== REHEARSAL_CHAIN_ID) {
-    fail(`vault.chainId must be Base Sepolia ${REHEARSAL_CHAIN_ID}; captured ${String(chainId)}`)
+  // --- Gate 3: vault identity, chain, and source-controlled tiny policy.
+  if (vault.chainId !== REHEARSAL_CHAIN_ID) {
+    fail(`vault.chainId must be Base Sepolia ${REHEARSAL_CHAIN_ID}; captured ${String(vault.chainId)}`)
   }
   const vaultAddress = requireAddress(vault.address, "vault.address")
   const bytecodeHash = requireNonEmptyString(vault.bytecodeHash, "vault.bytecodeHash")
   if (!HASH_RE.test(bytecodeHash)) fail("vault.bytecodeHash is not a 32-byte hash")
-
-  const maxEpochCap = requirePositiveBigInt(ceilings.maxEpochCapAtomic, "rehearsalCeilings.maxEpochCapAtomic")
-  const maxVaultUsdc = requirePositiveBigInt(ceilings.maxVaultUsdcAtomic, "rehearsalCeilings.maxVaultUsdcAtomic")
-  const maxSignerEth = requirePositiveBigInt(ceilings.maxSignerEthWei, "rehearsalCeilings.maxSignerEthWei")
 
   const payoutEpochCap = requirePositiveBigInt(vault.payoutEpochCapAtomic, "vault.payoutEpochCapAtomic")
   const refundEpochCap = requirePositiveBigInt(vault.refundEpochCapAtomic, "vault.refundEpochCapAtomic")
@@ -178,24 +255,27 @@ export function parseRehearsalManifest(raw: unknown): RehearsalManifest {
     ["vault.payoutEpochCapAtomic", payoutEpochCap],
     ["vault.refundEpochCapAtomic", refundEpochCap],
   ] as const) {
-    if (value > maxEpochCap) {
-      fail(`${label} (${value}) exceeds the rehearsal ceiling (${maxEpochCap}); caps must be tiny`)
+    if (value > REHEARSAL_LIMITS.maxEpochCapAtomic) {
+      fail(
+        `${label} (${value}) exceeds the source-controlled rehearsal ceiling`
+          + ` (${REHEARSAL_LIMITS.maxEpochCapAtomic}); caps must be tiny`,
+      )
     }
   }
   if (maxPayout > payoutEpochCap) fail("vault.maxPayoutAtomic exceeds vault.payoutEpochCapAtomic")
   if (maxRefund > refundEpochCap) fail("vault.maxRefundAtomic exceeds vault.refundEpochCapAtomic")
 
-  // --- Gate 4: balances are minimal.
+  // --- Gate 4: balances are minimal, against source-controlled ceilings.
   const vaultUsdc = requirePositiveBigInt(balances.vaultUsdcAtomic, "balances.vaultUsdcAtomic")
   const signerEth = requirePositiveBigInt(balances.signerEthWei, "balances.signerEthWei")
-  if (vaultUsdc > maxVaultUsdc) {
-    fail(`balances.vaultUsdcAtomic (${vaultUsdc}) exceeds the rehearsal ceiling (${maxVaultUsdc})`)
+  if (vaultUsdc > REHEARSAL_LIMITS.maxVaultUsdcAtomic) {
+    fail(`balances.vaultUsdcAtomic (${vaultUsdc}) exceeds the source-controlled rehearsal ceiling`)
   }
-  if (signerEth > maxSignerEth) {
-    fail(`balances.signerEthWei (${signerEth}) exceeds the rehearsal ceiling (${maxSignerEth})`)
+  if (signerEth > REHEARSAL_LIMITS.maxSignerEthWei) {
+    fail(`balances.signerEthWei (${signerEth}) exceeds the source-controlled rehearsal ceiling`)
   }
 
-  // --- Gate 5: every containment lever has a written procedure before we attack.
+  // --- Gate 5: containment levers documented AND proven to work.
   const containment = {
     reserveRefillDisableProcedure: requireNonEmptyString(
       killSwitches.reserveRefillDisableProcedure,
@@ -213,11 +293,14 @@ export function parseRehearsalManifest(raw: unknown): RehearsalManifest {
       killSwitches.operatorRotationProcedure,
       "killSwitches.operatorRotationProcedure",
     ),
+    offChainKillSwitchDryRunEvidence: requireNonEmptyString(
+      killSwitches.offChainKillSwitchDryRunEvidence,
+      "killSwitches.offChainKillSwitchDryRunEvidence",
+    ),
   }
 
   return {
-    capturedAt,
-    capturedBy,
+    attestation: { capturedAt, capturedBy, approvedBy, evidenceReference, evidenceSha256 },
     lit: {
       usageKeyExecuteInGroups: executeInGroups,
       stagingGroupId,
@@ -247,48 +330,72 @@ export function parseRehearsalManifest(raw: unknown): RehearsalManifest {
       vaultUsdcAtomic: vaultUsdc,
       signerEthWei: signerEth,
     },
-    rehearsalCeilings: {
-      maxVaultUsdcAtomic: maxVaultUsdc,
-      maxSignerEthWei: maxSignerEth,
-      maxEpochCapAtomic: maxEpochCap,
-    },
     killSwitches: containment,
   }
 }
 
 /**
+ * Containment window, expressed either as measured on-chain fact or as the
+ * conservative bound. There is no way to assert a smaller bucket count without
+ * supplying the timestamps that prove it.
+ */
+export type ContainmentWindow =
+  | { kind: "measured"; attackStartedAtSeconds: bigint; pauseConfirmedAtSeconds: bigint }
+  | { kind: "conservative"; containmentWindowSeconds: bigint }
+
+function requireNonNegative(value: bigint, field: string): bigint {
+  if (typeof value !== "bigint") fail(`${field} must be supplied as a bigint`)
+  if (value < 0n) fail(`${field} must not be negative`)
+  return value
+}
+
+/**
  * Worst-case victim loss for a containment window.
  *
- * Gross movement is not the same as victim loss: an attacker topping up the
- * vault inflates the former but not the latter, so only inflows that were not
- * attacker-funded count. Containment can also straddle an epoch rollover, so
- * the number of capacity buckets is `ceil(W / D) + 1` unless exact vault
- * timing proves fewer.
+ * Gross movement is not victim loss: an attacker topping up the vault inflates
+ * the former but not the latter, so only non-attacker inflows count.
+ *
+ * Epoch buckets are derived, never asserted. A measured window uses the exact
+ * epoch indices the vault itself would compute; anything else falls back to
+ * `ceil(W / D) + 1`, because a sub-epoch incident straddling a rollover still
+ * touches two buckets.
  */
 export function worstCaseVictimLossAtomic(input: {
   vaultBalanceAtAttackStartAtomic: bigint
-  /** Reserve refills plus new legitimate funding received before pause. */
   victimFundInflowsBeforePauseAtomic: bigint
   payoutEpochCapAtomic: bigint
   refundEpochCapAtomic: bigint
-  containmentWindowSeconds: bigint
   epochDurationSeconds: bigint
-  /** Supply only when exact vault timing proves a smaller number. */
-  provenEpochsTouched?: bigint
+  window: ContainmentWindow
 }): { lossAtomic: bigint; epochsTouched: bigint } {
-  if (input.epochDurationSeconds <= 0n) {
-    throw new RehearsalManifestError("epochDurationSeconds must be positive")
-  }
-  if (input.containmentWindowSeconds < 0n) {
-    throw new RehearsalManifestError("containmentWindowSeconds must not be negative")
-  }
-  const ceilWindows =
-    (input.containmentWindowSeconds + input.epochDurationSeconds - 1n) / input.epochDurationSeconds
-  const epochsTouched = input.provenEpochsTouched ?? ceilWindows + 1n
-  if (epochsTouched <= 0n) throw new RehearsalManifestError("epochsTouched must be positive")
+  const epochDuration = requirePositiveBigInt(input.epochDurationSeconds, "epochDurationSeconds")
+  const balance = requireNonNegative(
+    input.vaultBalanceAtAttackStartAtomic,
+    "vaultBalanceAtAttackStartAtomic",
+  )
+  const inflows = requireNonNegative(
+    input.victimFundInflowsBeforePauseAtomic,
+    "victimFundInflowsBeforePauseAtomic",
+  )
+  const payoutCap = requirePositiveBigInt(input.payoutEpochCapAtomic, "payoutEpochCapAtomic")
+  const refundCap = requirePositiveBigInt(input.refundEpochCapAtomic, "refundEpochCapAtomic")
 
-  const reachable =
-    input.vaultBalanceAtAttackStartAtomic + input.victimFundInflowsBeforePauseAtomic
-  const capacity = epochsTouched * (input.payoutEpochCapAtomic + input.refundEpochCapAtomic)
+  let epochsTouched: bigint
+  if (input.window.kind === "measured") {
+    const started = requireNonNegative(input.window.attackStartedAtSeconds, "attackStartedAtSeconds")
+    const paused = requireNonNegative(input.window.pauseConfirmedAtSeconds, "pauseConfirmedAtSeconds")
+    if (paused < started) fail("pauseConfirmedAtSeconds precedes attackStartedAtSeconds")
+    // Exactly how the vault indexes epochs: block.timestamp / epochDuration.
+    epochsTouched = paused / epochDuration - started / epochDuration + 1n
+  } else {
+    const windowSeconds = requireNonNegative(
+      input.window.containmentWindowSeconds,
+      "containmentWindowSeconds",
+    )
+    epochsTouched = (windowSeconds + epochDuration - 1n) / epochDuration + 1n
+  }
+
+  const reachable = balance + inflows
+  const capacity = epochsTouched * (payoutCap + refundCap)
   return { lossAtomic: reachable < capacity ? reachable : capacity, epochsTouched }
 }

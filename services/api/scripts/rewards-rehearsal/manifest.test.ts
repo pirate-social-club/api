@@ -1,20 +1,32 @@
 import { describe, expect, it } from "bun:test"
 
 import {
+  PINNED_STAGING_GROUP_ID,
+  PINNED_STAGING_PKP_ADDRESS,
   parseRehearsalManifest,
   worstCaseVictimLossAtomic,
   RehearsalManifestError,
+  type ReviewedStagingPins,
 } from "./manifest"
 
-const STAGING_PKP = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
+const STAGING_PKP = PINNED_STAGING_PKP_ADDRESS
 const PROD_PKP = "0x00000000000000000000000000000000000000aa"
+const GROUP = "grp_rewards_staging"
+
+const NOW = new Date("2026-07-26T12:00:00.000Z")
+const PINS: ReviewedStagingPins = { groupId: GROUP, pkpAddress: STAGING_PKP }
 
 const valid = () => ({
-  capturedAt: "2026-07-26T12:00:00.000Z",
-  capturedBy: "rewards-rehearsal-operator",
+  attestation: {
+    capturedAt: "2026-07-26T11:30:00.000Z",
+    capturedBy: "rehearsal-operator",
+    approvedBy: "independent-approver",
+    evidenceReference: "https://dashboard.chipotle.litprotocol.com/ capture 2026-07-26",
+    evidenceSha256: "a".repeat(64),
+  },
   lit: {
-    usageKeyExecuteInGroups: ["grp_rewards_staging"],
-    stagingGroupId: "grp_rewards_staging",
+    usageKeyExecuteInGroups: [GROUP],
+    stagingGroupId: GROUP,
     stagingGroupPkpAddresses: [STAGING_PKP],
     stagingGroupActionCids: ["QmStagingRehearsalActionCid"],
     knownProductionPkpAddresses: [PROD_PKP],
@@ -35,145 +47,191 @@ const valid = () => ({
     vaultUsdcAtomic: 100_000n,
     signerEthWei: 1_000_000_000_000_000n,
   },
-  rehearsalCeilings: {
-    maxVaultUsdcAtomic: 1_000_000n,
-    maxSignerEthWei: 5_000_000_000_000_000n,
-    maxEpochCapAtomic: 100_000n,
-  },
   killSwitches: {
     reserveRefillDisableProcedure: "flip PIRATE_REWARDS_RESERVE_REFILL_ENABLED=0",
     fundingQuoteDisableProcedure: "flip PIRATE_REWARDS_FUNDING_ADMISSION=0",
-    vaultPauseProcedure: "Safe tx: setPauseState(true,true)",
-    operatorRotationProcedure: "Safe tx: setSettlementOperator(<fresh>)",
+    vaultPauseProcedure: "Safe tx nonce n: setPauseState(true,true)",
+    operatorRotationProcedure: "Safe tx nonce n+1: setSettlementOperator(<fresh>)",
+    offChainKillSwitchDryRunEvidence: "dry-run 2026-07-26: both flags observed to reject live traffic",
   },
 })
 
-const withLit = (patch: Record<string, unknown>) => ({
-  ...valid(),
-  lit: { ...valid().lit, ...patch },
-})
+const parse = (raw: unknown, pins: ReviewedStagingPins = PINS) =>
+  parseRehearsalManifest(raw, { now: NOW, pins })
+
+const withSection = (section: string, patch: Record<string, unknown>) => {
+  const base = valid() as Record<string, Record<string, unknown>>
+  return { ...base, [section]: { ...base[section], ...patch } }
+}
 
 describe("parseRehearsalManifest", () => {
-  it("accepts a fully captured staging manifest", () => {
-    const manifest = parseRehearsalManifest(valid())
+  it("accepts a fully captured, independently attested manifest", () => {
+    const manifest = parse(valid())
     expect(manifest.vault.chainId).toBe(84532)
-    expect(manifest.lit.usageKeyExecuteInGroups).toEqual(["grp_rewards_staging"])
+    expect(manifest.lit.usageKeyExecuteInGroups).toEqual([GROUP])
   })
 
-  it.each(["0", "*"])("rejects the wildcard group %p", (wildcard) => {
-    expect(() =>
-      parseRehearsalManifest(withLit({ usageKeyExecuteInGroups: [wildcard] })),
-    ).toThrow(/wildcard/u)
+  describe("pins are source-controlled, never manifest-supplied", () => {
+    it("refuses while the staging group ID is unpinned", () => {
+      expect(() => parse(valid(), { groupId: null, pkpAddress: STAGING_PKP })).toThrow(
+        /not pinned/u,
+      )
+    })
+
+    it("ships unpinned, so the drill cannot run until a reviewed value lands", () => {
+      expect(PINNED_STAGING_GROUP_ID).toBeNull()
+    })
+
+    it("refuses a captured group that disagrees with the pin", () => {
+      expect(() => parse(withSection("lit", { stagingGroupId: "grp_other", usageKeyExecuteInGroups: ["grp_other"] })))
+        .toThrow(/does not match the reviewed pin/u)
+    })
+
+    it("refuses a group PKP set that disagrees with the pin", () => {
+      expect(() => parse(withSection("lit", { stagingGroupPkpAddresses: [PROD_PKP] }))).toThrow(
+        /exactly the pinned staging PKP/u,
+      )
+    })
+
+    it("refuses a manifest that tries to supply its own ceilings", () => {
+      expect(() => parse({ ...valid(), rehearsalCeilings: { maxVaultUsdcAtomic: 1n } })).toThrow(
+        /must not be manifest-supplied/u,
+      )
+    })
   })
 
-  it("rejects an empty group entry before it can be read as a wildcard", () => {
-    // Caught as a malformed entry rather than as a wildcard. Either way it must
-    // never parse; this pins that the blank case is rejected, not the message.
-    expect(() => parseRehearsalManifest(withLit({ usageKeyExecuteInGroups: [""] }))).toThrow(
-      RehearsalManifestError,
+  describe("attestation", () => {
+    it("refuses a stale capture", () => {
+      expect(() => parse(withSection("attestation", { capturedAt: "2026-07-24T11:30:00.000Z" })))
+        .toThrow(/must be fresh/u)
+    })
+
+    it("refuses a capture timestamped in the future", () => {
+      expect(() => parse(withSection("attestation", { capturedAt: "2026-07-27T00:00:00.000Z" })))
+        .toThrow(/in the future/u)
+    })
+
+    it("refuses self-approval", () => {
+      expect(() => parse(withSection("attestation", { approvedBy: "rehearsal-operator" }))).toThrow(
+        /independent party/u,
+      )
+    })
+
+    it.each(["2026-07-26 11:30:00", "26 July 2026", "2026-07-26T11:30:00+02:00"])(
+      "refuses non-canonical timestamp %p",
+      (capturedAt) => {
+        expect(() => parse(withSection("attestation", { capturedAt }))).toThrow(/canonical UTC/u)
+      },
     )
+
+    it.each(["", "not-a-hash", "A".repeat(64)])("refuses evidence hash %p", (evidenceSha256) => {
+      expect(() => parse(withSection("attestation", { evidenceSha256 }))).toThrow(
+        RehearsalManifestError,
+      )
+    })
   })
 
-  it("rejects a wildcard even when the staging group is also present", () => {
-    expect(() =>
-      parseRehearsalManifest(
-        withLit({ usageKeyExecuteInGroups: ["grp_rewards_staging", "0"] }),
-      ),
-    ).toThrow(/wildcard/u)
+  describe("usage-key scope", () => {
+    it.each(["0", "*"])("rejects the wildcard group %p", (wildcard) => {
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [wildcard] }))).toThrow(
+        /wildcard/u,
+      )
+    })
+
+    it("rejects a wildcard even when the pinned group is also present", () => {
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "0"] }))).toThrow(
+        /wildcard/u,
+      )
+    })
+
+    it("rejects any group beyond the pinned one", () => {
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "grp_other"] })))
+        .toThrow(/must be exactly the pinned staging group/u)
+    })
+
+    it("rejects an empty group entry", () => {
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [""] }))).toThrow(
+        RehearsalManifestError,
+      )
+    })
   })
 
-  it("rejects a key scoped to any group beyond staging", () => {
-    expect(() =>
-      parseRehearsalManifest(
-        withLit({ usageKeyExecuteInGroups: ["grp_rewards_staging", "grp_other"] }),
-      ),
-    ).toThrow(/must be exactly/u)
+  describe("group membership", () => {
+    it("rejects an empty production list, since it cannot prove a check happened", () => {
+      expect(() => parse(withSection("lit", { knownProductionPkpAddresses: [] }))).toThrow(
+        /cannot prove a check was performed/u,
+      )
+    })
   })
 
-  it("rejects a staging group containing a production PKP", () => {
-    expect(() =>
-      parseRehearsalManifest(
-        withLit({ stagingGroupPkpAddresses: [STAGING_PKP, PROD_PKP] }),
-      ),
-    ).toThrow(/production-capable PKPs/u)
+  describe("chain, policy and balances", () => {
+    it("rejects any chain other than Base Sepolia", () => {
+      expect(() => parse(withSection("vault", { chainId: 8453 }))).toThrow(/Base Sepolia/u)
+    })
+
+    it("rejects caps above the source-controlled ceiling", () => {
+      expect(() => parse(withSection("vault", { payoutEpochCapAtomic: 9_000_000n }))).toThrow(
+        /source-controlled rehearsal ceiling/u,
+      )
+    })
+
+    it("rejects balances above the source-controlled ceiling", () => {
+      expect(() => parse(withSection("balances", { vaultUsdcAtomic: 9_000_000n }))).toThrow(
+        /source-controlled rehearsal ceiling/u,
+      )
+    })
+
+    it("rejects a per-transfer limit above its own epoch cap", () => {
+      expect(() => parse(withSection("vault", { maxRefundAtomic: 60_000n }))).toThrow(
+        /exceeds vault.refundEpochCapAtomic/u,
+      )
+    })
+
+    it.each(["address"])("rejects the zero vault %s", (field) => {
+      expect(() =>
+        parse(withSection("vault", { [field]: "0x0000000000000000000000000000000000000000" })),
+      ).toThrow(/must not be the zero address/u)
+    })
+
+    it("rejects a zero settlement operator", () => {
+      expect(() =>
+        parse(
+          withSection("balances", {
+            settlementOperatorAddress: "0x0000000000000000000000000000000000000000",
+          }),
+        ),
+      ).toThrow(/must not be the zero address/u)
+    })
+
+    it("refuses a numeric value supplied as a number rather than a bigint", () => {
+      expect(() => parse(withSection("vault", { policyVersion: 1 as unknown as bigint }))).toThrow(
+        /must be supplied as a bigint/u,
+      )
+    })
   })
 
-  it("rejects an empty production list, since it cannot prove a check happened", () => {
-    expect(() => parseRehearsalManifest(withLit({ knownProductionPkpAddresses: [] }))).toThrow(
-      /cannot prove a check was performed/u,
-    )
+  describe("containment levers", () => {
+    it.each([
+      "reserveRefillDisableProcedure",
+      "fundingQuoteDisableProcedure",
+      "vaultPauseProcedure",
+      "operatorRotationProcedure",
+      "offChainKillSwitchDryRunEvidence",
+    ])("requires %s before the drill", (field) => {
+      expect(() => parse(withSection("killSwitches", { [field]: "" }))).toThrow(
+        new RegExp(field, "u"),
+      )
+    })
   })
 
-  it("rejects any chain other than Base Sepolia", () => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({ ...manifest, vault: { ...manifest.vault, chainId: 8453 } }),
-    ).toThrow(/Base Sepolia/u)
-  })
-
-  it("rejects caps above the rehearsal ceiling", () => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({
-        ...manifest,
-        vault: { ...manifest.vault, payoutEpochCapAtomic: 200_000n },
-      }),
-    ).toThrow(/caps must be tiny/u)
-  })
-
-  it("rejects balances above the rehearsal ceiling", () => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({
-        ...manifest,
-        balances: { ...manifest.balances, vaultUsdcAtomic: 9_000_000n },
-      }),
-    ).toThrow(/exceeds the rehearsal ceiling/u)
-  })
-
-  it("rejects a per-transfer limit above its own epoch cap", () => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({
-        ...manifest,
-        vault: { ...manifest.vault, maxRefundAtomic: 60_000n },
-      }),
-    ).toThrow(/exceeds vault.refundEpochCapAtomic/u)
-  })
-
-  it.each([
-    "reserveRefillDisableProcedure",
-    "fundingQuoteDisableProcedure",
-    "vaultPauseProcedure",
-    "operatorRotationProcedure",
-  ])("requires a written %s before the drill", (field) => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({
-        ...manifest,
-        killSwitches: { ...manifest.killSwitches, [field]: "" },
-      }),
-    ).toThrow(new RegExp(field, "u"))
-  })
-
-  it.each(["lit", "vault", "balances", "rehearsalCeilings", "killSwitches"])(
+  it.each(["attestation", "lit", "vault", "balances", "killSwitches"])(
     "refuses when the %s section is missing entirely",
     (section) => {
       const manifest = valid() as Record<string, unknown>
       delete manifest[section]
-      expect(() => parseRehearsalManifest(manifest)).toThrow(RehearsalManifestError)
+      expect(() => parse(manifest)).toThrow(RehearsalManifestError)
     },
   )
-
-  it("refuses a numeric value supplied as a number rather than a bigint", () => {
-    const manifest = valid()
-    expect(() =>
-      parseRehearsalManifest({
-        ...manifest,
-        vault: { ...manifest.vault, policyVersion: 1 as unknown as bigint },
-      }),
-    ).toThrow(/must be supplied as a bigint/u)
-  })
 })
 
 describe("worstCaseVictimLossAtomic", () => {
@@ -184,26 +242,68 @@ describe("worstCaseVictimLossAtomic", () => {
     refundEpochCapAtomic: 50_000n,
     epochDurationSeconds: 86_400n,
   }
+  const conservative = (containmentWindowSeconds: bigint) =>
+    ({ kind: "conservative", containmentWindowSeconds }) as const
 
   it("counts a sub-epoch window as two buckets, since it can straddle a rollover", () => {
-    const result = worstCaseVictimLossAtomic({ ...base, containmentWindowSeconds: 600n })
+    const result = worstCaseVictimLossAtomic({ ...base, window: conservative(600n) })
     expect(result.epochsTouched).toBe(2n)
     expect(result.lossAtomic).toBe(200_000n)
   })
 
   it("adds a bucket for each further epoch the window spans", () => {
-    // 1.5 days -> ceil(1.5) + 1 = 3
-    const result = worstCaseVictimLossAtomic({ ...base, containmentWindowSeconds: 129_600n })
+    const result = worstCaseVictimLossAtomic({ ...base, window: conservative(129_600n) })
     expect(result.epochsTouched).toBe(3n)
   })
 
-  it("counts refund capacity as attacker budget alongside payout capacity", () => {
-    const withoutRefund = worstCaseVictimLossAtomic({
-      ...base,
-      refundEpochCapAtomic: 0n,
-      containmentWindowSeconds: 600n,
+  describe("measured windows are derived, never asserted", () => {
+    it("uses the vault's own epoch indexing when it does not cross a boundary", () => {
+      // Both inside epoch 1: 86_400 <= t < 172_800
+      const result = worstCaseVictimLossAtomic({
+        ...base,
+        window: {
+          kind: "measured",
+          attackStartedAtSeconds: 90_000n,
+          pauseConfirmedAtSeconds: 90_600n,
+        },
+      })
+      expect(result.epochsTouched).toBe(1n)
+      expect(result.lossAtomic).toBe(100_000n)
     })
-    expect(withoutRefund.lossAtomic).toBe(100_000n)
+
+    it("counts two buckets for a short window that straddles a rollover", () => {
+      const result = worstCaseVictimLossAtomic({
+        ...base,
+        window: {
+          kind: "measured",
+          attackStartedAtSeconds: 172_500n,
+          pauseConfirmedAtSeconds: 172_900n,
+        },
+      })
+      expect(result.epochsTouched).toBe(2n)
+    })
+
+    it("rejects a pause that precedes the attack", () => {
+      expect(() =>
+        worstCaseVictimLossAtomic({
+          ...base,
+          window: {
+            kind: "measured",
+            attackStartedAtSeconds: 200n,
+            pauseConfirmedAtSeconds: 100n,
+          },
+        }),
+      ).toThrow(RehearsalManifestError)
+    })
+  })
+
+  it("counts refund capacity as attacker budget alongside payout capacity", () => {
+    const result = worstCaseVictimLossAtomic({
+      ...base,
+      refundEpochCapAtomic: 10_000n,
+      window: conservative(600n),
+    })
+    expect(result.lossAtomic).toBe(120_000n)
   })
 
   it("includes victim inflows received before pause", () => {
@@ -211,34 +311,29 @@ describe("worstCaseVictimLossAtomic", () => {
       ...base,
       vaultBalanceAtAttackStartAtomic: 120_000n,
       victimFundInflowsBeforePauseAtomic: 60_000n,
-      containmentWindowSeconds: 600n,
+      window: conservative(600n),
     })
-    // reachable 180_000 < capacity 200_000
     expect(result.lossAtomic).toBe(180_000n)
   })
 
-  it("is bounded by reachable funds, not by capacity alone", () => {
+  it("is bounded by reachable funds, not capacity alone", () => {
     const result = worstCaseVictimLossAtomic({
       ...base,
       vaultBalanceAtAttackStartAtomic: 5_000n,
-      containmentWindowSeconds: 600n,
+      window: conservative(600n),
     })
     expect(result.lossAtomic).toBe(5_000n)
   })
 
-  it("accepts a proven smaller bucket count when vault timing establishes one", () => {
-    const result = worstCaseVictimLossAtomic({
-      ...base,
-      containmentWindowSeconds: 600n,
-      provenEpochsTouched: 1n,
-    })
-    expect(result.epochsTouched).toBe(1n)
-    expect(result.lossAtomic).toBe(100_000n)
-  })
-
-  it("rejects a non-positive epoch duration", () => {
+  it.each([
+    ["epochDurationSeconds", { epochDurationSeconds: 0n }],
+    ["payoutEpochCapAtomic", { payoutEpochCapAtomic: 0n }],
+    ["refundEpochCapAtomic", { refundEpochCapAtomic: 0n }],
+    ["vaultBalanceAtAttackStartAtomic", { vaultBalanceAtAttackStartAtomic: -1n }],
+    ["victimFundInflowsBeforePauseAtomic", { victimFundInflowsBeforePauseAtomic: -1n }],
+  ])("rejects invalid %s", (_field, patch) => {
     expect(() =>
-      worstCaseVictimLossAtomic({ ...base, epochDurationSeconds: 0n, containmentWindowSeconds: 1n }),
+      worstCaseVictimLossAtomic({ ...base, ...patch, window: conservative(600n) }),
     ).toThrow(RehearsalManifestError)
   })
 })
