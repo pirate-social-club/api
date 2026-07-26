@@ -29,15 +29,15 @@ SELECT
     ranked.updated_at
 FROM (
     SELECT
-        community_id,
-        post_id,
-        reward_campaign_id,
-        created_at,
-        updated_at,
+        campaign.community_id,
+        campaign.post_id,
+        campaign.reward_campaign_id,
+        campaign.created_at,
+        campaign.updated_at,
         ROW_NUMBER() OVER (
-            PARTITION BY community_id, post_id
+            PARTITION BY campaign.community_id, campaign.post_id
             ORDER BY
-                CASE status
+                CASE campaign.status
                     WHEN 'active' THEN 0
                     WHEN 'operational_hold' THEN 1
                     WHEN 'paused' THEN 2
@@ -48,11 +48,11 @@ FROM (
                     WHEN 'draft' THEN 7
                     ELSE 8
                 END,
-                updated_at DESC,
-                reward_campaign_id ASC
+                campaign.updated_at DESC,
+                campaign.reward_campaign_id ASC
         ) AS pool_rank
-    FROM reward_campaigns
-    WHERE status NOT IN ('ended', 'canceled')
+    FROM reward_campaigns AS campaign
+    WHERE campaign.status NOT IN ('ended', 'canceled')
 ) ranked
 WHERE pool_rank = 1;
 
