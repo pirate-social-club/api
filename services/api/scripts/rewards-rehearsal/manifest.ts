@@ -214,9 +214,17 @@ function requireUtcTimestamp(value: unknown, field: string): string {
  * Reviewed staging pins the manifest is judged against.
  *
  * Passed in rather than read from module scope so the parser stays pure and
- * testable. The ONLY production source is {@link PINNED_STAGING_GROUP_ID} and
- * {@link PINNED_STAGING_PKP_ADDRESS}; the executable entrypoint must pass those
- * and nothing else. A manifest can never supply its own pins.
+ * testable. The ONLY production sources are the four source-controlled pins —
+ * {@link PINNED_STAGING_GROUP_ID}, {@link PINNED_STAGING_PKP_ADDRESS},
+ * {@link PINNED_STAGING_ACTION_CID_HASH} and
+ * {@link PINNED_STAGING_ACTION_SOURCE_CID}. The executable entrypoint
+ * ({@link loadReviewedRehearsalManifest}) must pass those and nothing else.
+ *
+ * Every one of them is part of the trust boundary: the group and PKP bound
+ * WHERE the key may execute and WITH WHICH signing identity, and the two action
+ * pins bound WHAT may execute and prove the executor's raw CID and the group's
+ * permitted hash describe one reviewed action. A manifest can never supply its
+ * own pins.
  */
 export type ReviewedStagingPins = {
   groupId: string | null
