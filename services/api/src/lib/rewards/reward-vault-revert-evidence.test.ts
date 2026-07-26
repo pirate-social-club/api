@@ -3,7 +3,7 @@ import { Transaction, Wallet, id } from "ethers"
 
 import {
   gatherRewardVaultRevertEvidence,
-  type RewardVaultRevertReplayer,
+  type RewardVaultTransactionTracer,
 } from "./reward-vault-revert-evidence"
 import {
   encodeRewardVaultCalldata,
@@ -14,6 +14,7 @@ import {
 const SIGNER = new Wallet("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d")
 const VAULT = "0x000000000000000000000000000000000000beef"
 const EPOCH_LIMIT_EXCEEDED = id("EpochLimitExceeded()").slice(0, 10)
+const BLOCK_HASH = `0x${"ab".repeat(32)}`
 
 const baseInput: RewardVaultTransactionInput = {
   effectKind: "reward_cashout",
@@ -45,70 +46,72 @@ async function signFor(input: RewardVaultTransactionInput): Promise<string> {
   return await SIGNER.signTransaction(tx)
 }
 
-const replayerReturning = (data: string | null): RewardVaultRevertReplayer => ({
-  callAtBlock: async () => ({ reverted: true, data }),
+const tracerReturning = (output: string | null): RewardVaultTransactionTracer => ({
+  traceTransaction: async () => ({ to: VAULT, reverted: true, output }),
 })
 
-const args = async (overrides: Partial<Parameters<typeof gatherRewardVaultRevertEvidence>[0]> = {}) => ({
-  pinnedVaultAddress: VAULT,
-  operatorKind: "rewards",
-  effectKind: "reward_cashout",
-  signedTx: await signFor(baseInput),
-  transactionInput: baseInput,
-  receiptStatus: 0,
-  receiptBlockNumber: 1_234_567,
-  replayer: replayerReturning(EPOCH_LIMIT_EXCEEDED),
-  ...overrides,
-})
+const args = async (overrides: Partial<Parameters<typeof gatherRewardVaultRevertEvidence>[0]> = {}) => {
+  const signedTx = await signFor(baseInput)
+  return {
+    pinnedVaultAddress: VAULT,
+    operatorKind: "rewards",
+    effectKind: "reward_cashout",
+    signedTx,
+    transactionInput: baseInput,
+    receiptStatus: 0,
+    receiptTransactionHash: Transaction.from(signedTx).hash!,
+    receiptBlockHash: BLOCK_HASH,
+    tracer: tracerReturning(EPOCH_LIMIT_EXCEEDED),
+    now: () => new Date("2026-07-26T12:00:00.000Z"),
+    ...overrides,
+  }
+}
 
 describe("gatherRewardVaultRevertEvidence", () => {
   it("defers when every gate passes", async () => {
     const result = await gatherRewardVaultRevertEvidence(await args())
     expect(result.disposition).toBe("capacity_deferred")
     expect(result.errorName).toBe("EpochLimitExceeded")
-    expect(result.replayedAtBlock).toBe(1_234_567)
+    expect(result.evidence).toEqual({
+      method: "debug_traceTransaction",
+      transactionHash: result.evidence?.transactionHash,
+      blockHash: BLOCK_HASH,
+      selector: EPOCH_LIMIT_EXCEEDED,
+      classifiedAt: "2026-07-26T12:00:00.000Z",
+    })
   })
 
-  it("replays against the receipt block, never latest", async () => {
-    const seen: number[] = []
+  it("traces the exact receipt transaction hash", async () => {
+    const seen: string[] = []
+    const input = await args()
     await gatherRewardVaultRevertEvidence(
-      await args({
-        replayer: {
-          callAtBlock: async (_call, blockNumber) => {
-            seen.push(blockNumber)
-            return { reverted: true, data: EPOCH_LIMIT_EXCEEDED }
+      {
+        ...input,
+        tracer: {
+          traceTransaction: async (txHash) => {
+            seen.push(txHash)
+            return { to: VAULT, reverted: true, output: EPOCH_LIMIT_EXCEEDED }
           },
         },
-      }),
+      },
     )
-    expect(seen).toEqual([1_234_567])
+    expect(seen).toEqual([input.receiptTransactionHash])
   })
 
-  it("replays the exact mined call: pinned vault, signer, calldata, zero value", async () => {
-    let captured: { to: string; from: string; data: string; value: bigint } | null = null
-    await gatherRewardVaultRevertEvidence(
-      await args({
-        replayer: {
-          callAtBlock: async (call) => {
-            captured = call
-            return { reverted: true, data: EPOCH_LIMIT_EXCEEDED }
-          },
-        },
-      }),
+  it("rejects a receipt hash that does not match the verified signed transaction", async () => {
+    const result = await gatherRewardVaultRevertEvidence(
+      await args({ receiptTransactionHash: `0x${"cd".repeat(32)}` }),
     )
-    const request = rewardVaultActionRequest(baseInput)
-    expect(captured!.to.toLowerCase()).toBe(request.vaultAddress.toLowerCase())
-    expect(captured!.from.toLowerCase()).toBe(SIGNER.address.toLowerCase())
-    expect(captured!.data).toBe(encodeRewardVaultCalldata(request))
-    expect(captured!.value).toBe(0n)
+    expect(result.disposition).toBe("reconciliation_required")
+    expect(result.reason).toContain("does not match")
   })
 
-  it("fails closed when the archive cannot execute at that block", async () => {
+  it("fails closed when exact tracing is unsupported or unavailable", async () => {
     const result = await gatherRewardVaultRevertEvidence(
       await args({
-        replayer: {
-          callAtBlock: async () => {
-            throw new Error("missing trie node / block not available")
+        tracer: {
+          traceTransaction: async () => {
+            throw new Error("method not supported")
           },
         },
       }),
@@ -117,12 +120,28 @@ describe("gatherRewardVaultRevertEvidence", () => {
     expect(result.reason).toContain("failing closed")
   })
 
-  it("fails closed when the replay does not revert at all", async () => {
+  it("fails closed when the trace does not report a root revert", async () => {
     const result = await gatherRewardVaultRevertEvidence(
-      await args({ replayer: { callAtBlock: async () => ({ reverted: false }) } }),
+      await args({ tracer: { traceTransaction: async () => ({ to: VAULT, reverted: false, output: null }) } }),
     )
     expect(result.disposition).toBe("reconciliation_required")
-    expect(result.reason).toContain("inconsistent")
+    expect(result.reason).toContain("root revert")
+  })
+
+  it("fails closed when only a nested call targets the vault", async () => {
+    const result = await gatherRewardVaultRevertEvidence(
+      await args({
+        tracer: {
+          traceTransaction: async () => ({
+            to: "0x000000000000000000000000000000000000cafe",
+            reverted: true,
+            output: EPOCH_LIMIT_EXCEEDED,
+          }),
+        },
+      }),
+    )
+    expect(result.disposition).toBe("reconciliation_required")
+    expect(result.reason).toContain("trace root target")
   })
 
   it.each([
@@ -131,8 +150,8 @@ describe("gatherRewardVaultRevertEvidence", () => {
     ["StalePolicy()", "StalePolicy"],
     ["OperationAlreadyUsed()", "OperationAlreadyUsed"],
   ])("does not defer when the replay reverts with %s", async (signature, name) => {
-    const result = await gatherRewardVaultRevertEvidence(
-      await args({ replayer: replayerReturning(id(signature).slice(0, 10)) }),
+      const result = await gatherRewardVaultRevertEvidence(
+      await args({ tracer: tracerReturning(id(signature).slice(0, 10)) }),
     )
     expect(result.disposition).toBe("reconciliation_required")
     expect(result.errorName).toBe(name)
@@ -142,7 +161,7 @@ describe("gatherRewardVaultRevertEvidence", () => {
     "does not defer on absent/unknown revert data (%p)",
     async (data) => {
       const result = await gatherRewardVaultRevertEvidence(
-        await args({ replayer: replayerReturning(data) }),
+        await args({ tracer: tracerReturning(data) }),
       )
       expect(result.disposition).toBe("reconciliation_required")
     },
@@ -186,10 +205,10 @@ describe("gatherRewardVaultRevertEvidence", () => {
     expect(result.reason).toContain("not a reverted transaction")
   })
 
-  it("refuses when the receipt carries no block number to pin to", async () => {
-    const result = await gatherRewardVaultRevertEvidence(await args({ receiptBlockNumber: null }))
+  it("refuses non-canonical receipt block identity", async () => {
+    const result = await gatherRewardVaultRevertEvidence(await args({ receiptBlockHash: "latest" }))
     expect(result.disposition).toBe("reconciliation_required")
-    expect(result.reason).toContain("cannot pin replay")
+    expect(result.reason).toContain("canonical transaction/block identity")
   })
 
   it("defers refunds too, not just payouts", async () => {
@@ -198,11 +217,13 @@ describe("gatherRewardVaultRevertEvidence", () => {
       effectKind: "reward_funding_refund",
       effectId: "rcf_capacity_deferral_fixture",
     }
+    const signedTx = await signFor(refundInput)
     const result = await gatherRewardVaultRevertEvidence(
       await args({
         effectKind: "reward_funding_refund",
         transactionInput: refundInput,
-        signedTx: await signFor(refundInput),
+        signedTx,
+        receiptTransactionHash: Transaction.from(signedTx).hash!,
       }),
     )
     expect(result.disposition).toBe("capacity_deferred")
