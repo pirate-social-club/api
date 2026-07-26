@@ -597,6 +597,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         recipientAddress: row.recipient_address,
       }
     }
+    if (row.effect_kind === "booking_refund" && row.amount_atomic != null) {
+      return {
+        operatorKind: "booking",
+        communityId: row.community_id,
+        bookingId: row.booking_id,
+        effectKind: "booking_refund",
+        amountAtomic: row.amount_atomic,
+        recipientAddress: row.recipient_address,
+      }
+    }
     return {
       operatorKind: "booking",
       communityId: row.community_id,
