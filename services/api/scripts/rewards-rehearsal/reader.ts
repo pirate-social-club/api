@@ -27,6 +27,18 @@ export const ALLOWED_RPC_HOSTS = ["sepolia.base.org"] as const
 export const CONFIRMATION_TAG = "finalized"
 export const CONFIRMATION_DEPTH_FALLBACK = 8
 
+/**
+ * Required historical retention, derived rather than guessed.
+ *
+ * The drill plus its evidence gathering and reconciliation cleanup must all be
+ * re-readable afterwards: a trace or block lookup that has been pruned cannot
+ * be re-verified by a reviewer. Base produces a block roughly every 2s.
+ */
+export const BASE_BLOCK_TIME_SECONDS = 2
+export const REQUIRED_RETENTION_HOURS = 72
+export const REQUIRED_RETENTION_BLOCKS =
+  (REQUIRED_RETENTION_HOURS * 3600) / BASE_BLOCK_TIME_SECONDS
+
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_RESPONSE_BYTES = 256 * 1024
 
@@ -77,6 +89,11 @@ export type ProviderQualification = {
   supportsBlockHashTags: boolean
   supportsDebugTrace: boolean
   historicalBlockReadable: boolean
+  /** Source-controlled depth the endpoint had to satisfy. */
+  requiredRetentionBlocks: number
+  /** The actual historical height probed, not merely the confirmed head. */
+  testedHistoricalBlock: number
+  capturedAt: string
   qualified: boolean
   failures: string[]
 }
@@ -332,7 +349,10 @@ export class RehearsalRpcReader {
    * Deliberately not part of {@link PreflightChainReader}: the preflight must
    * never gain the ability to trace. This is a selection-time capability.
    */
-  async qualifyProvider(expectedChainId: number): Promise<ProviderQualification> {
+  async qualifyProvider(
+    expectedChainId: number,
+    options: { now?: () => Date } = {},
+  ): Promise<ProviderQualification> {
     const failures: string[] = []
 
     const chainId = await this.chainId()
@@ -367,17 +387,32 @@ export class RehearsalRpcReader {
       if (isCapabilityFailure(error)) {
         supportsDebugTrace = false
         failures.push("endpoint does not expose debug_traceTransaction")
+      } else if (!(error instanceof RehearsalRpcError && error.kind === "rpc")) {
+        // Transport, HTTP, and protocol failures prove nothing about the
+        // method's existence and must not be read as support.
+        throw error
       }
-      // Any other failure: the method exists. Not a qualification failure.
+      // A non-capability JSON-RPC error means the method exists and merely
+      // rejected this transaction hash, which is the expected probe response.
     }
 
-    // Retention: the confirmed block must still be readable by height.
-    let historicalBlockReadable = true
-    try {
-      await this.#rpc("eth_getBlockByNumber", [`0x${block.number.toString(16)}`, false])
-    } catch {
-      historicalBlockReadable = false
-      failures.push(`endpoint could not re-read confirmed block ${block.number}`)
+    // Retention at the REQUIRED depth. Re-reading the freshly confirmed block
+    // would only prove ordinary lookup: an endpoint keeping 128 blocks passes
+    // that and is still useless for re-verifying the drill afterwards.
+    const testedHistoricalBlock = Math.max(0, block.number - REQUIRED_RETENTION_BLOCKS)
+    const historical = await this.#rpc(
+      "eth_getBlockByNumber",
+      [`0x${testedHistoricalBlock.toString(16)}`, false],
+      { allowNullResult: true },
+    )
+    // Only a valid null/missing block means insufficient retention; every other
+    // failure propagates out of #rpc rather than being relabelled.
+    const historicalBlockReadable = historical !== null
+    if (!historicalBlockReadable) {
+      failures.push(
+        `endpoint does not retain block ${testedHistoricalBlock}`
+          + ` (${REQUIRED_RETENTION_BLOCKS} blocks / ~${REQUIRED_RETENTION_HOURS}h of history)`,
+      )
     }
 
     const qualification: ProviderQualification = {
@@ -389,6 +424,9 @@ export class RehearsalRpcReader {
       supportsBlockHashTags,
       supportsDebugTrace,
       historicalBlockReadable,
+      requiredRetentionBlocks: REQUIRED_RETENTION_BLOCKS,
+      testedHistoricalBlock,
+      capturedAt: (options.now ?? (() => new Date()))().toISOString(),
       qualified: failures.length === 0,
       failures,
     }
