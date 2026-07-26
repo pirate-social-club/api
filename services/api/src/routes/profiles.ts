@@ -5,6 +5,7 @@ import { getProfileRepository, getUserRepository } from "../lib/auth/repositorie
 import {
   authenticateAdminUserOrAgentDelegated,
   authenticateAdminOrUser,
+  authenticateUserToken,
   type ActorContext,
   type AdminActorContext,
   type AuthenticatedEnv,
@@ -27,6 +28,11 @@ import {
   serializeProfile,
 } from "../serializers/profile"
 import { serializeProfileActivityResponse } from "../serializers/profile-activity"
+import {
+  canonicalFollowWallet,
+  readProfileFollowState,
+  shadowCompareProfileFollowState,
+} from "../lib/efp-indexer/profile-follow-read-service"
 
 const profiles = new Hono<AuthenticatedEnv>()
 const COURTYARD_INVENTORY_RATE_LIMIT_WINDOW_MS = 60_000
@@ -475,6 +481,46 @@ profiles.post("/me/set-primary-public-handle", async (c) => {
     throw authError("Authentication failed")
   }
   return c.json(serializeProfile(profile), 200)
+})
+
+function shouldShadowFollowRead(value: string | undefined): boolean {
+  const percent = Number(value)
+  return Number.isFinite(percent) && percent > 0 && Math.random() * 100 < Math.min(percent, 100)
+}
+
+profiles.get("/:userId/follow-state", async (c) => {
+  const targetPublicUserId = c.req.param("userId").trim()
+  const targetUserId = decodePublicUserId(targetPublicUserId)
+  const profileRepository = getProfileRepository(c.env)
+  if (!await profileRepository.getProfileByUserId(targetUserId)) {
+    throw notFoundError("Profile not found")
+  }
+
+  const authorization = c.req.header("authorization")
+  const actor = authorization?.startsWith("Bearer ")
+    ? await authenticateUserToken({
+        env: c.env,
+        token: authorization.slice("Bearer ".length),
+      })
+    : null
+  const users = getUserRepository(c.env)
+  const owned = await readProfileFollowState({
+    client: getControlPlaneClient(c.env),
+    users,
+    targetUserId,
+    targetPublicUserId,
+    viewerUserId: actor?.userId ?? null,
+  })
+
+  if (shouldShadowFollowRead(c.env.EFP_FOLLOW_SHADOW_SAMPLE_PERCENT)) {
+    const viewerWallet = actor ? await canonicalFollowWallet(users, actor.userId) : null
+    c.executionCtx.waitUntil(shadowCompareProfileFollowState({
+      owned,
+      viewerWallet,
+      apiUrl: c.env.EFP_HOSTED_API_URL,
+    }))
+  }
+  return c.json(owned, 200)
 })
 
 profiles.get("/:userId", async (c) => {
