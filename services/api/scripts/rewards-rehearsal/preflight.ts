@@ -17,11 +17,33 @@
 import { keccak256 } from "ethers"
 
 import type { ExecutableRehearsalManifest } from "./manifest"
+import type { BlockRef, ConfirmationPolicy } from "./reader"
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-/** Vault view selectors, derived from the contract's public state variables. */
-const SELECTORS = {
+/**
+ * Vault view selectors, derived from the contract's public state variables.
+ * Exported so a test can re-derive each from its Solidity signature; a
+ * hand-typed entry must not be able to drift from the contract silently.
+ */
+export const VAULT_VIEW_SIGNATURES = {
+  owner: "owner()",
+  pendingOwner: "pendingOwner()",
+  settlementOperator: "settlementOperator()",
+  payoutsPaused: "payoutsPaused()",
+  refundsPaused: "refundsPaused()",
+  policyVersion: "policyVersion()",
+  epochDuration: "epochDuration()",
+  maxPayout: "maxPayout()",
+  payoutEpochCap: "payoutEpochCap()",
+  maxRefund: "maxRefund()",
+  refundEpochCap: "refundEpochCap()",
+  usdc: "usdc()",
+} as const
+
+export const BALANCE_OF_SIGNATURE = "balanceOf(address)"
+
+export const SELECTORS = {
   owner: "0x8da5cb5b",
   pendingOwner: "0xe30c3978",
   settlementOperator: "0x1b6984e8",
@@ -36,8 +58,7 @@ const SELECTORS = {
   usdc: "0x3e413bee",
 } as const
 
-/** `balanceOf(address)` */
-const BALANCE_OF_SELECTOR = "0x70a08231"
+export const BALANCE_OF_SELECTOR = "0x70a08231"
 
 export class RehearsalPreflightError extends Error {}
 
@@ -46,15 +67,20 @@ function fail(message: string): never {
 }
 
 /**
- * Narrow chain surface. Every method takes an explicit block number so no
- * implementation can silently read `latest` for one field.
+ * Narrow chain surface. Every read takes an explicit {@link BlockRef} so no
+ * implementation can silently read `latest` for one field, and the reader owns
+ * its own endpoint so a caller cannot validate one URL and connect elsewhere.
  */
 export type PreflightChainReader = {
+  readonly host: string
+  readonly confirmationPolicy: ConfirmationPolicy
+  readonly readsWereHashPinned: boolean
   chainId(): Promise<number>
-  latestConfirmedBlock(): Promise<{ number: number; hash: string }>
-  getCode(address: string, blockNumber: number): Promise<string>
-  call(to: string, data: string, blockNumber: number): Promise<string>
-  getBalance(address: string, blockNumber: number): Promise<bigint>
+  latestConfirmedBlock(): Promise<BlockRef>
+  getCode(address: string, block: BlockRef): Promise<string>
+  call(to: string, data: string, block: BlockRef): Promise<string>
+  getBalance(address: string, block: BlockRef): Promise<bigint>
+  assertSnapshotIntact(): Promise<void>
 }
 
 export type PreflightCheck = {
@@ -68,34 +94,16 @@ export type PreflightEvidence = {
   blockNumber: number
   blockHash: string
   rpcHost: string
+  confirmationPolicy: ConfirmationPolicy
+  readsWereHashPinned: boolean
   checks: PreflightCheck[]
   passed: boolean
+  failureSummary: string | null
 }
 
 export type ExpectedPauseState = {
   payoutsPaused: boolean
   refundsPaused: boolean
-}
-
-/**
- * Validates the RPC endpoint before it is used.
- *
- * HTTPS only, host must be on the allow-list, and no redirects may be followed
- * — a redirected RPC is an unpinned RPC, and every guarantee here rests on
- * reading the chain we think we are reading.
- */
-export function assertPinnedRpcUrl(rpcUrl: string, allowedHosts: readonly string[]): string {
-  let parsed: URL
-  try {
-    parsed = new URL(rpcUrl)
-  } catch {
-    fail("RPC URL is not a valid URL")
-  }
-  if (parsed.protocol !== "https:") fail(`RPC URL must be HTTPS; got ${parsed.protocol}`)
-  if (!allowedHosts.includes(parsed.host)) {
-    fail(`RPC host ${parsed.host} is not on the pinned allow-list`)
-  }
-  return parsed.host
 }
 
 function decodeAddress(word: string, field: string): string {
@@ -125,11 +133,15 @@ function decodeBool(word: string, field: string): boolean {
 export async function runRehearsalPreflight(input: {
   manifest: ExecutableRehearsalManifest
   reader: PreflightChainReader
-  rpcUrl: string
-  allowedRpcHosts: readonly string[]
   expectedPauseState: ExpectedPauseState
+  /**
+   * Receives evidence on BOTH success and failure. Failure evidence must be
+   * emitted here rather than relying on an exception `cause` surviving
+   * serialization into a log or an evidence file.
+   */
+  emitEvidence?: (evidence: PreflightEvidence) => void
 }): Promise<PreflightEvidence> {
-  const rpcHost = assertPinnedRpcUrl(input.rpcUrl, input.allowedRpcHosts)
+  const rpcHost = input.reader.host
   const { manifest } = input
 
   const observedChainId = await input.reader.chainId()
@@ -144,12 +156,12 @@ export async function runRehearsalPreflight(input: {
   // describes.
   const block = await input.reader.latestConfirmedBlock()
 
-  const code = await input.reader.getCode(manifest.vault.address, block.number)
+  const code = await input.reader.getCode(manifest.vault.address, block)
   if (!code || code === "0x") fail("vault address has no deployed bytecode at the pinned block")
   record("vault.bytecodeHash", manifest.vault.bytecodeHash, keccak256(code).toLowerCase())
 
   const readWord = (selector: string, field: string) =>
-    input.reader.call(manifest.vault.address, selector, block.number).then((word) => ({ word, field }))
+    input.reader.call(manifest.vault.address, selector, block).then((word) => ({ word, field }))
 
   const [
     owner,
@@ -232,8 +244,8 @@ export async function runRehearsalPreflight(input: {
   // Balances at the same block as everything else.
   const balanceCall = `${BALANCE_OF_SELECTOR}${manifest.vault.address.slice(2).padStart(64, "0")}`
   const [vaultUsdcWord, signerEth] = await Promise.all([
-    input.reader.call(manifest.vault.usdcAddress, balanceCall, block.number),
-    input.reader.getBalance(manifest.balances.settlementOperatorAddress, block.number),
+    input.reader.call(manifest.vault.usdcAddress, balanceCall, block),
+    input.reader.getBalance(manifest.balances.settlementOperatorAddress, block),
   ])
   record(
     "balances.vaultUsdcAtomic",
@@ -242,18 +254,27 @@ export async function runRehearsalPreflight(input: {
   )
   record("balances.signerEthWei", manifest.balances.signerEthWei.toString(), signerEth.toString())
 
+  // Height-pinned reads can straddle a reorg; prove the snapshot still holds.
+  await input.reader.assertSnapshotIntact()
+
   const mismatches = checks.filter((check) => !check.matched)
+  const summary = mismatches.length === 0
+    ? null
+    : mismatches
+        .map((check) => `${check.field}: expected ${check.expected}, observed ${check.observed}`)
+        .join("; ")
   const evidence: PreflightEvidence = {
     blockNumber: block.number,
     blockHash: block.hash,
     rpcHost,
+    confirmationPolicy: input.reader.confirmationPolicy,
+    readsWereHashPinned: input.reader.readsWereHashPinned,
     checks,
     passed: mismatches.length === 0,
+    failureSummary: summary,
   }
+  input.emitEvidence?.(evidence)
   if (!evidence.passed) {
-    const summary = mismatches
-      .map((check) => `${check.field}: expected ${check.expected}, observed ${check.observed}`)
-      .join("; ")
     throw new RehearsalPreflightError(
       `rehearsal preflight failed at block ${block.number} (${block.hash}): ${summary}`,
       { cause: evidence },

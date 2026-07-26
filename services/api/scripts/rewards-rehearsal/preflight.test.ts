@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test"
-import { keccak256 } from "ethers"
+import { id, keccak256 } from "ethers"
 
 import {
-  assertPinnedRpcUrl,
   runRehearsalPreflight,
+  SELECTORS,
+  BALANCE_OF_SELECTOR,
+  VAULT_VIEW_SIGNATURES,
+  BALANCE_OF_SIGNATURE,
   RehearsalPreflightError,
   type PreflightChainReader,
 } from "./preflight"
@@ -15,8 +18,6 @@ const OPERATOR = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
 const USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 const CODE = "0x60806040523480156100"
 const BLOCK = { number: 1_234_567, hash: `0x${"ab".repeat(32)}` }
-const ALLOWED = ["sepolia.base.org"] as const
-const RPC = "https://sepolia.base.org/v1"
 
 const word = (hex: string) => `0x${hex.padStart(64, "0")}`
 const addressWord = (address: string) => word(address.slice(2))
@@ -60,22 +61,26 @@ const RESPONSES: Record<string, string> = {
 const reader = (overrides: Partial<PreflightChainReader> = {}, patch: Record<string, string> = {}) => {
   const seenBlocks: number[] = []
   const base: PreflightChainReader = {
+    host: "sepolia.base.org",
+    confirmationPolicy: { kind: "finalized-tag", depth: null },
+    readsWereHashPinned: true,
+    assertSnapshotIntact: async () => {},
     chainId: async () => 84532,
     latestConfirmedBlock: async () => BLOCK,
-    getCode: async (_a, blockNumber) => {
-      seenBlocks.push(blockNumber)
+    getCode: async (_a, block) => {
+      seenBlocks.push(block.number)
       return CODE
     },
-    call: async (to, data, blockNumber) => {
-      seenBlocks.push(blockNumber)
+    call: async (to, data, block) => {
+      seenBlocks.push(block.number)
       if (to === USDC) return word("186a0") // 100_000
       const selector = data.slice(0, 10)
       const value = { ...RESPONSES, ...patch }[selector]
       if (value === undefined) throw new Error(`unexpected selector ${selector}`)
       return value
     },
-    getBalance: async (_a, blockNumber) => {
-      seenBlocks.push(blockNumber)
+    getBalance: async (_a, block) => {
+      seenBlocks.push(block.number)
       return 1_000_000_000_000_000n
     },
     ...overrides,
@@ -87,7 +92,7 @@ const run = (options: {
   overrides?: Partial<PreflightChainReader>
   patch?: Record<string, string>
   expectedPauseState?: { payoutsPaused: boolean; refundsPaused: boolean }
-  rpcUrl?: string
+  emitEvidence?: (e: unknown) => void
 } = {}) => {
   const { reader: chainReader, seenBlocks } = reader(options.overrides, options.patch)
   return {
@@ -95,27 +100,11 @@ const run = (options: {
     promise: runRehearsalPreflight({
       manifest,
       reader: chainReader,
-      rpcUrl: options.rpcUrl ?? RPC,
-      allowedRpcHosts: ALLOWED,
       expectedPauseState: options.expectedPauseState ?? { payoutsPaused: false, refundsPaused: false },
+      emitEvidence: options.emitEvidence as never,
     }),
   }
 }
-
-describe("assertPinnedRpcUrl", () => {
-  it("accepts a pinned HTTPS host", () => {
-    expect(assertPinnedRpcUrl(RPC, ALLOWED)).toBe("sepolia.base.org")
-  })
-
-  it.each([
-    "http://sepolia.base.org/v1",
-    "ws://sepolia.base.org",
-    "https://evil.example.com/v1",
-    "not a url",
-  ])("rejects %p", (url) => {
-    expect(() => assertPinnedRpcUrl(url, ALLOWED)).toThrow(RehearsalPreflightError)
-  })
-})
 
 describe("runRehearsalPreflight", () => {
   it("passes and records evidence when the chain matches the manifest", async () => {
@@ -209,19 +198,63 @@ describe("runRehearsalPreflight", () => {
     ).rejects.toThrow(/signerEthWei/u)
   })
 
-  it("refuses an unpinned RPC before touching the chain", async () => {
-    let touched = false
+})
+
+describe("selectors are derived, never transcribed", () => {
+  it.each(Object.entries(VAULT_VIEW_SIGNATURES))(
+    "%s matches keccak of its Solidity signature",
+    (name, signature) => {
+      expect(SELECTORS[name as keyof typeof SELECTORS]).toBe(id(signature).slice(0, 10))
+    },
+  )
+
+  it("derives the ERC-20 balanceOf selector", () => {
+    expect(BALANCE_OF_SELECTOR).toBe(id(BALANCE_OF_SIGNATURE).slice(0, 10))
+  })
+})
+
+describe("evidence is emitted on failure, not only on success", () => {
+  it("emits sanitized failure evidence before throwing", async () => {
+    const emitted: unknown[] = []
     await expect(
       run({
-        rpcUrl: "https://evil.example.com",
+        patch: { "0x58355ead": word("2") },
+        emitEvidence: (evidence) => emitted.push(evidence),
+      }).promise,
+    ).rejects.toThrow(RehearsalPreflightError)
+
+    expect(emitted).toHaveLength(1)
+    const evidence = emitted[0] as {
+      passed: boolean
+      failureSummary: string | null
+      checks: { field: string }[]
+      blockHash: string
+    }
+    expect(evidence.passed).toBe(false)
+    expect(evidence.failureSummary).toContain("vault.policyVersion")
+    expect(evidence.blockHash).toBe(BLOCK.hash)
+    // Full check list survives, not just the mismatch.
+    expect(evidence.checks.length).toBeGreaterThan(10)
+  })
+
+  it("records the confirmation policy and whether reads were hash-pinned", async () => {
+    const evidence = await run().promise
+    expect(evidence.confirmationPolicy).toEqual({ kind: "finalized-tag", depth: null })
+    expect(evidence.readsWereHashPinned).toBe(true)
+  })
+})
+
+describe("snapshot integrity", () => {
+  it("fails when the snapshot was reorganised during the reads", async () => {
+    await expect(
+      run({
         overrides: {
-          chainId: async () => {
-            touched = true
-            return 84532
+          readsWereHashPinned: false,
+          assertSnapshotIntact: async () => {
+            throw new RehearsalPreflightError("snapshot was reorganised during the preflight")
           },
         },
       }).promise,
-    ).rejects.toThrow(RehearsalPreflightError)
-    expect(touched).toBe(false)
+    ).rejects.toThrow(/reorganised/u)
   })
 })
