@@ -84,4 +84,13 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     expect(updatedInput?.platformFeeBps).toBeUndefined()
     expect(refreshedHosts).toEqual(["host_1"])
   })
+
+  test("a failed warm projection does not fail the committed profile write", async () => {
+    setBookingFeedDiscoveryRefresherForTests(async () => {
+      throw new Error("projection unavailable")
+    })
+    const res = await upsertBookingProfile({} as never, "host_1", validProfile)
+    expect(res.ok).toBe(true)
+    expect(createdInput?.hostUserId).toBe("host_1")
+  })
 })

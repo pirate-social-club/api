@@ -27,21 +27,21 @@ function uniqueHostUserIds(hostUserIds: string[]): string[] {
   return [...new Set(hostUserIds.filter((hostUserId) => hostUserId.trim().length > 0))]
 }
 
-export async function invalidateBookingFeedDiscoverySnapshot(
-  executor: Client,
-  hostUserId: string,
-): Promise<void> {
-  await executor.execute({
-    sql: "DELETE FROM bookings.feed_discovery_snapshots WHERE host_user_id = ?1",
-    args: [hostUserId],
-  })
-}
-
 export async function recomputeBookingFeedDiscoverySnapshot(input: {
   executor: Client
   hostUserId: string
   nowUtc?: string
 }): Promise<BookingFeedDiscoverySnapshot | null> {
+  const revisionResult = await input.executor.execute({
+    sql: "SELECT feed_discovery_revision FROM bookings.profiles WHERE host_user_id = ?1",
+    args: [input.hostUserId],
+  })
+  const sourceRevisionValue = revisionResult.rows[0]?.feed_discovery_revision
+  if (sourceRevisionValue === undefined || sourceRevisionValue === null) return null
+  const sourceRevision = Number(sourceRevisionValue)
+  if (!Number.isSafeInteger(sourceRevision) || sourceRevision < 0) {
+    throw new TypeError(`Invalid feed discovery revision for ${input.hostUserId}`)
+  }
   const computedAt = input.nowUtc ?? new Date().toISOString()
   const windowStartUtc = computedAt
   const windowEndUtc = addMilliseconds(
@@ -58,7 +58,15 @@ export async function recomputeBookingFeedDiscoverySnapshot(input: {
     nowUtc: computedAt,
   })
   if (!availability.bookable) {
-    await invalidateBookingFeedDiscoverySnapshot(input.executor, input.hostUserId)
+    await input.executor.execute({
+      sql: `DELETE FROM bookings.feed_discovery_snapshots AS snapshot
+            USING bookings.profiles AS profile
+            WHERE snapshot.host_user_id = ?1
+              AND profile.host_user_id = snapshot.host_user_id
+              AND profile.feed_discovery_revision = ?2
+              AND snapshot.source_revision <= ?2`,
+      args: [input.hostUserId, sourceRevision],
+    })
     return null
   }
 
@@ -80,15 +88,20 @@ export async function recomputeBookingFeedDiscoverySnapshot(input: {
     sql: `
       INSERT INTO bookings.feed_discovery_snapshots (
         host_user_id, has_available_slot, starting_price_cents,
-        window_start_utc, window_end_utc, valid_until, computed_at
-      ) VALUES (?1, ?2, ?3, ?4::timestamptz, ?5::timestamptz, ?6::timestamptz, ?7::timestamptz)
+        window_start_utc, window_end_utc, valid_until, computed_at, source_revision
+      )
+      SELECT ?1, ?2, ?3, ?4::timestamptz, ?5::timestamptz, ?6::timestamptz, ?7::timestamptz, ?8
+      FROM bookings.profiles
+      WHERE host_user_id = ?1 AND feed_discovery_revision = ?8
       ON CONFLICT (host_user_id) DO UPDATE SET
         has_available_slot = EXCLUDED.has_available_slot,
         starting_price_cents = EXCLUDED.starting_price_cents,
         window_start_utc = EXCLUDED.window_start_utc,
         window_end_utc = EXCLUDED.window_end_utc,
         valid_until = EXCLUDED.valid_until,
-        computed_at = EXCLUDED.computed_at
+        computed_at = EXCLUDED.computed_at,
+        source_revision = EXCLUDED.source_revision
+      WHERE feed_discovery_snapshots.source_revision <= EXCLUDED.source_revision
     `,
     args: [
       snapshot.hostUserId,
@@ -98,6 +111,7 @@ export async function recomputeBookingFeedDiscoverySnapshot(input: {
       snapshot.windowEndUtc,
       snapshot.validUntil,
       snapshot.computedAt,
+      sourceRevision,
     ],
   })
   return snapshot
