@@ -67,6 +67,7 @@ describe("resolveVideoFeedBestRankingMode", () => {
     expect(resolveVideoFeedBestRankingMode(undefined)).toBe("scorer")
     expect(resolveVideoFeedBestRankingMode("scorer")).toBe("scorer")
     expect(resolveVideoFeedBestRankingMode("legacy")).toBe("legacy")
+    expect(resolveVideoFeedBestRankingMode(" LEGACY ")).toBe("legacy")
   })
 })
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"

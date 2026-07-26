@@ -203,9 +203,9 @@ export function parseVideoFeedCursor(cursor: string | null | undefined, now: num
 }
 
 export function resolveVideoFeedBestRankingMode(
-  mode: Env["VIDEO_FEED_BEST_RANKING_MODE"],
+  mode: string | null | undefined,
 ): "legacy" | "scorer" {
-  return mode === "legacy" ? "legacy" : "scorer"
+  return mode?.trim().toLowerCase() === "legacy" ? "legacy" : "scorer"
 }
 
 function videoFeedProjectionKey(row: HomeFeedProjectionRow): string {
