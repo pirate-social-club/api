@@ -1279,13 +1279,14 @@ export type UnresolvedBookingPaymentIntent = {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending";
+  intent_status: "verifying" | "verified" | "verification_failed" | "custody_refund_pending" | "custody_operator_incident";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
   updated_at: string;
   unresolved_age_seconds: number;
   custody_refund?: BookingCustodyRefund | null;
+  custody_incident?: BookingCustodyIncident | null;
 };
 
 export type BookingCancellationPreview = {
@@ -2972,7 +2973,7 @@ export type RewardCampaignCreateRequest = {
   idempotency_key: string;
 };
 
-export type RewardCampaignFundingStatus = "quoted" | "confirming" | "confirmed" | "failed" | "refund_pending" | "refunded";
+export type RewardCampaignFundingStatus = "quoted" | "confirming" | "confirmed" | "failed" | "refund_pending" | "operator_incident" | "refunded";
 
 export type RewardCampaignFundingQuote = {
   id: string;
@@ -3105,10 +3106,22 @@ type BookingCounterparty = {
   avatar_ref: string | null;
 };
 
+type BookingCustodyIncident = {
+  reason: "multiple_senders";
+  transfers: Array<BookingCustodyIncidentTransfer>;
+  detected_at: string;
+};
+
+type BookingCustodyIncidentTransfer = {
+  sender_address: string;
+  observed_amount_atomic: string;
+  transfer_count: number;
+};
+
 type BookingCustodyRefund = {
   observed_amount_atomic: string;
   sender_address: string;
-  reason: "wrong_transfer_amount";
+  reason: "wrong_transfer_amount" | "unexpected_sender";
   detected_at: string;
   refund_tx_ref: string | null;
   refunded_at: string | null;

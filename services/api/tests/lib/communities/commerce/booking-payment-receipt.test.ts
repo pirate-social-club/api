@@ -62,8 +62,16 @@ describe("evaluateBookingPaymentReceipt — exact-amount matching", () => {
   test("wrong recipient → rejected", () => {
     expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { to: getAddress("0x2222222222222222222222222222222222222222") }), EXPECTED, "0xtx").kind).toBe("rejected")
   })
-  test("wrong sender → rejected", () => {
-    expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { from: getAddress("0x3333333333333333333333333333333333333333") }), EXPECTED, "0xtx").kind).toBe("rejected")
+  test("wrong sender into operator custody → refundable custody mismatch", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(50_000_000n, { from: getAddress("0x3333333333333333333333333333333333333333") }),
+      EXPECTED,
+      "0xtx",
+    )).toMatchObject({
+      kind: "custody_mismatch",
+      reason: "unexpected_sender",
+      observedAmountAtomic: "50000000",
+    })
   })
   test("wrong token → rejected", () => {
     expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { token: getAddress("0x4444444444444444444444444444444444444444") }), EXPECTED, "0xtx").kind).toBe("rejected")

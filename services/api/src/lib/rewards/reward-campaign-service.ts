@@ -37,6 +37,7 @@ import {
   type RewardVaultRefundPolicyObserver,
 } from "./reward-vault-refund-policy"
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
+import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -780,6 +781,69 @@ async function markFundingRefundPending(input: {
   return refundPending
 }
 
+async function markFundingCustodyOperatorIncident(input: {
+  env: Env
+  tx: Transaction
+  campaignId: string
+  fundingId: string
+  txHash: string
+  transfers: Array<{
+    senderAddress: string
+    observedAmountAtomic: string
+    transferCount: number
+  }>
+  now: string
+}): Promise<FundingRow> {
+  const evidence = {
+    transfers: input.transfers.map((transfer) => ({
+      sender_address: transfer.senderAddress,
+      observed_amount_atomic: transfer.observedAmountAtomic,
+      transfer_count: transfer.transferCount,
+    })),
+  }
+  // Custody evidence must remain durable even when alert delivery is misconfigured.
+  // The incident reader can still surface this sentinel ownership for operator repair.
+  const ownership = rewardCampaignAlertOwnership(input.env) ?? {
+    owner: "reward-operator",
+    destination: "configuration-required",
+  }
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaign_funding_effects
+      SET status = 'operator_incident',
+          custody_evidence_json = ?2::text::jsonb,
+          failure_reason = 'multiple_senders',
+          confirmed_at = ?3,
+          updated_at = ?3
+      WHERE reward_campaign_funding_effect_id = ?1
+    `,
+    args: [input.fundingId, JSON.stringify(evidence), input.now],
+  })
+  await input.tx.execute({
+    sql: `
+      INSERT INTO reward_campaign_incidents (
+        reward_campaign_incident_id, reward_campaign_id, incident_kind, reason,
+        details_json, opened_at, last_seen_at, alert_owner, alert_destination
+      ) VALUES (?1, ?2, 'funding_custody_ambiguous', 'multiple_senders', ?3::text::jsonb, ?4, ?4, ?5, ?6)
+      ON CONFLICT (reward_campaign_id, incident_kind) WHERE resolved_at IS NULL
+      DO UPDATE SET
+        last_seen_at = GREATEST(reward_campaign_incidents.last_seen_at, excluded.last_seen_at),
+        details_json = excluded.details_json
+    `,
+    args: [
+      makeId("rci"),
+      input.campaignId,
+      JSON.stringify({ funding_id: input.fundingId, tx_hash: input.txHash, ...evidence }),
+      input.now,
+      ownership.owner,
+      ownership.destination,
+    ],
+  })
+  const incident = await selectFunding(input.tx, input.fundingId)
+  if (!incident) throw new Error("operator-incident reward funding effect disappeared")
+  return incident
+}
+
 export async function confirmRewardCampaignFunding(input: {
   env: Env
   client: Client
@@ -889,7 +953,7 @@ export async function confirmRewardCampaignFunding(input: {
     })
     return (await selectFunding(tx, input.fundingId)) ?? effect
   })
-  if (["confirmed", "failed", "refund_pending"].includes(requiredString(claimed, "status"))) {
+  if (["confirmed", "failed", "refund_pending", "operator_incident"].includes(requiredString(claimed, "status"))) {
     return fundingResource(claimed)
   }
 
@@ -953,6 +1017,17 @@ export async function confirmRewardCampaignFunding(input: {
         blockNumber: verification.blockNumber,
         blockHash: verification.blockHash,
         reason: verification.reason,
+        now,
+      }))
+    }
+    if (verification.kind === "custody_incident") {
+      return fundingResource(await markFundingCustodyOperatorIncident({
+        env: input.env,
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        txHash,
+        transfers: verification.transfers,
         now,
       }))
     }

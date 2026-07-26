@@ -200,6 +200,7 @@ export type PaymentIntentStatus =
   | "verification_failed"
   | "verification_rejected"
   | "custody_refund_pending"
+  | "custody_operator_incident"
   | "consumed"
   | "expired"
   | "refunded"
@@ -232,7 +233,14 @@ export interface PaymentIntent {
   consumedAt: string | null;
   custodyObservedAmountAtomic: string | null;
   custodySenderAddress: string | null;
-  custodyReason: "wrong_transfer_amount" | null;
+  custodyReason: "wrong_transfer_amount" | "unexpected_sender" | "multiple_senders" | null;
+  custodyEvidence?: {
+    transfers: Array<{
+      senderAddress: string;
+      observedAmountAtomic: string;
+      transferCount: number;
+    }>;
+  } | null;
   custodyDetectedAt: string | null;
   refundTxRef: string | null;
   refundAttemptCount: number;

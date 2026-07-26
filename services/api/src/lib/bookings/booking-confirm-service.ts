@@ -121,10 +121,20 @@ type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
   | {
     kind: "custody_mismatch";
-    reason: "wrong_transfer_amount";
+    reason: "wrong_transfer_amount" | "unexpected_sender";
     senderAddress: string;
     txRef: string;
     observedAmountAtomic: string;
+  }
+  | {
+    kind: "custody_incident";
+    reason: "multiple_senders";
+    txRef: string;
+    transfers: Array<{
+      senderAddress: string;
+      observedAmountAtomic: string;
+      transferCount: number;
+    }>;
   }
   | { kind: "pending" }
   | { kind: "rejected"; reason: string };
@@ -278,6 +288,7 @@ export type ConfirmGlobalBookingResult =
       | "payment_pending"
       | "payment_rejected"
       | "payment_refund_pending"
+      | "payment_review_required"
       | "transaction_already_used"
       | "verification_in_progress"
       | "replay_mismatch"
@@ -348,6 +359,7 @@ export async function confirmGlobalBookingHold(input: {
   if (intent.status === "verified") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
   if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
   if (intent.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
+  if (intent.status === "custody_operator_incident") return { ok: false, reason: "payment_review_required" };
   if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
   // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
   // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
@@ -368,6 +380,7 @@ export async function confirmGlobalBookingHold(input: {
     }
     if (current?.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
     if (current?.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
+    if (current?.status === "custody_operator_incident") return { ok: false, reason: "payment_review_required" };
     return { ok: false, reason: "verification_in_progress" };
   }
 
@@ -413,6 +426,24 @@ export async function confirmGlobalBookingHold(input: {
       && current.custodyReason === outcome.reason
     ) {
       return { ok: false, reason: "payment_refund_pending" };
+    }
+    return { ok: false, reason: "verification_in_progress" };
+  }
+  if (outcome.kind === "custody_incident") {
+    const transitioned = await intentRepo.markPaymentIntentCustodyOperatorIncident({
+      paymentIntentId: intentId,
+      claimToken,
+      transfers: outcome.transfers,
+      nowUtc: input.nowUtc,
+    });
+    if (transitioned) return { ok: false, reason: "payment_review_required" };
+    const current = await intentRepo.getPaymentIntent(intentId);
+    if (
+      current?.status === "custody_operator_incident"
+      && current.claimedTxRef === normalizedTxRef
+      && JSON.stringify(current.custodyEvidence?.transfers) === JSON.stringify(outcome.transfers)
+    ) {
+      return { ok: false, reason: "payment_review_required" };
     }
     return { ok: false, reason: "verification_in_progress" };
   }

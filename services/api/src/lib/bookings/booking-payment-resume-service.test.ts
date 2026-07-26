@@ -122,10 +122,41 @@ test("operator unresolved view exposes durable claim identity and age without pa
     updated_at: "2026-07-24T11:55:00.000Z",
     unresolved_age_seconds: 1800,
     custody_refund: null,
+    custody_incident: null,
   });
   expect(view).not.toHaveProperty("wallet_attachment_id");
   expect(view).not.toHaveProperty("recipient_address");
   expect(view).not.toHaveProperty("amount_atomic");
+});
+
+test("operator unresolved view exposes multi-sender custody evidence without assigning a money executor", () => {
+  const pending = record("custody_operator_incident");
+  pending.intent.claimedTxRef = "0xtx";
+  pending.intent.consumedWalletAttachmentId = "wallet_1";
+  pending.intent.custodyReason = "multiple_senders";
+  pending.intent.custodyDetectedAt = NOW;
+  pending.intent.custodyEvidence = {
+    transfers: [
+      { senderAddress: "0x1111111111111111111111111111111111111111", observedAmountAtomic: "5000000", transferCount: 1 },
+      { senderAddress: "0x2222222222222222222222222222222222222222", observedAmountAtomic: "1", transferCount: 1 },
+    ],
+  };
+  const view = unresolvedBookingPaymentIntentView({
+    intent: pending.intent,
+    hostUserId: pending.hostUserId,
+    bookerUserId: pending.bookerUserId,
+    holdStatus: "expired",
+  }, NOW);
+  expect(view.intent_status).toBe("custody_operator_incident");
+  expect(view.custody_refund).toBeNull();
+  expect(view.custody_incident).toEqual({
+    reason: "multiple_senders",
+    detected_at: NOW,
+    transfers: [
+      { sender_address: "0x1111111111111111111111111111111111111111", observed_amount_atomic: "5000000", transfer_count: 1 },
+      { sender_address: "0x2222222222222222222222222222222222222222", observed_amount_atomic: "1", transfer_count: 1 },
+    ],
+  });
 });
 
 test("operator unresolved view preserves each recoverable intent status", () => {

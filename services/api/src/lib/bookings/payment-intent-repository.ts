@@ -55,7 +55,15 @@ interface VerifyPaymentIntentInput extends ClaimPaymentIntentInput {
 export interface MarkCustodyRefundPendingInput extends ClaimPaymentIntentInput {
   observedAmountAtomic: string;
   senderAddress: string;
-  reason: "wrong_transfer_amount";
+  reason: "wrong_transfer_amount" | "unexpected_sender";
+}
+
+export interface MarkCustodyOperatorIncidentInput extends ClaimPaymentIntentInput {
+  transfers: Array<{
+    senderAddress: string;
+    observedAmountAtomic: string;
+    transferCount: number;
+  }>;
 }
 
 type CreateOrGetPaymentIntentResult =
@@ -130,6 +138,7 @@ function decodeStatus(value: unknown): PaymentIntentStatus {
     status !== "verification_failed" &&
     status !== "verification_rejected" &&
     status !== "custody_refund_pending" &&
+    status !== "custody_operator_incident" &&
     status !== "consumed" &&
     status !== "expired" &&
     status !== "refunded" &&
@@ -170,10 +179,40 @@ function decodePaymentIntent(row: QueryResultRow): PaymentIntent {
     custodySenderAddress: textFromRowNullable(row.custody_sender_address),
     custodyReason: (() => {
       const reason = textFromRowNullable(row.custody_reason);
-      if (reason !== null && reason !== "wrong_transfer_amount") {
+      if (
+        reason !== null
+        && reason !== "wrong_transfer_amount"
+        && reason !== "unexpected_sender"
+        && reason !== "multiple_senders"
+      ) {
         throw new TypeError(`decodePaymentIntent: bad custody reason ${reason}`);
       }
       return reason;
+    })(),
+    custodyEvidence: (() => {
+      const value = row.custody_evidence_json;
+      if (value == null) return null;
+      const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
+      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { transfers?: unknown }).transfers)) {
+        throw new TypeError("decodePaymentIntent: bad custody evidence");
+      }
+      const transfers = (parsed as { transfers: unknown[] }).transfers.map((entry) => {
+        if (!entry || typeof entry !== "object") throw new TypeError("decodePaymentIntent: bad custody transfer");
+        const transfer = entry as Record<string, unknown>;
+        if (
+          typeof transfer.sender_address !== "string"
+          || typeof transfer.observed_amount_atomic !== "string"
+          || !Number.isSafeInteger(transfer.transfer_count)
+        ) {
+          throw new TypeError("decodePaymentIntent: bad custody transfer");
+        }
+        return {
+          senderAddress: transfer.sender_address,
+          observedAmountAtomic: transfer.observed_amount_atomic,
+          transferCount: transfer.transfer_count as number,
+        };
+      });
+      return { transfers };
     })(),
     custodyDetectedAt: isoUtcFromRowNullable(row.custody_detected_at),
     refundTxRef: textFromRowNullable(row.refund_tx_ref),
@@ -192,7 +231,7 @@ const COLUMNS =
   "platform_fee_bps, platform_fee_cents, host_payout_cents, status, verification_claim_token, " +
   "verification_claim_expires_at, claimed_tx_ref, verified_sender_address, verified_at, " +
   "consumed_wallet_attachment_id, consumed_at, custody_observed_amount_atomic, custody_sender_address, " +
-  "custody_reason, custody_detected_at, refund_tx_ref, refund_attempt_count, " +
+  "custody_reason, custody_evidence_json, custody_detected_at, refund_tx_ref, refund_attempt_count, " +
   "refund_last_attempt_at, refund_last_error_code, refunded_at, created_at, updated_at";
 
 function matchesReplay(input: Required<CreatePaymentIntentInput>, row: PaymentIntent): boolean {
@@ -353,7 +392,7 @@ async function listOperatorUnresolvedPaymentIntents(
           JOIN bookings.holds h ON h.hold_id = pi.hold_id
           WHERE (${reclaimable}
                  OR (pi.status = 'verified' AND pi.consumed_at IS NULL)
-                 OR pi.status = 'custody_refund_pending')
+                 OR pi.status IN ('custody_refund_pending', 'custody_operator_incident'))
             AND pi.claimed_tx_ref IS NOT NULL
             AND pi.consumed_wallet_attachment_id IS NOT NULL
           ORDER BY pi.updated_at ASC, pi.payment_intent_id ASC
@@ -642,6 +681,54 @@ async function markPaymentIntentCustodyRefundPending(
   return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
 }
 
+async function markPaymentIntentCustodyOperatorIncident(
+  exec: PaymentIntentSqlExecutor,
+  input: MarkCustodyOperatorIncidentInput,
+): Promise<PaymentIntent | null> {
+  const evidence = {
+    transfers: input.transfers.map((transfer) => ({
+      sender_address: transfer.senderAddress,
+      observed_amount_atomic: transfer.observedAmountAtomic,
+      transfer_count: transfer.transferCount,
+    })),
+  };
+  const res = await exec.execute({
+    sql: `WITH transitioned AS (
+            UPDATE bookings.payment_intents
+            SET status = 'custody_operator_incident',
+                custody_reason = 'multiple_senders',
+                custody_evidence_json = ?3::text::jsonb,
+                custody_detected_at = ?4::timestamptz,
+                verification_claim_token = NULL,
+                verification_claim_expires_at = NULL,
+                version = version + 1,
+                updated_at = ?4::timestamptz
+            WHERE payment_intent_id = ?1
+              AND status = 'verifying'
+              AND verification_claim_token = ?2
+            RETURNING *
+          ), expired_hold AS (
+            UPDATE bookings.holds
+            SET status = 'expired', updated_at = ?4::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          ), released_lock AS (
+            UPDATE bookings.host_slot_locks
+            SET status = 'released', updated_at = ?4::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          )
+          SELECT ${COLUMNS} FROM transitioned`,
+    args: [
+      textToArg("paymentIntentId", input.paymentIntentId),
+      textToArg("claimToken", input.claimToken),
+      JSON.stringify(evidence),
+      isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
 async function markPaymentIntentRejected(
   exec: PaymentIntentSqlExecutor,
   input: ClaimPaymentIntentInput,
@@ -724,6 +811,7 @@ export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
   markPaymentIntentVerified(input: VerifyPaymentIntentInput): Promise<PaymentIntent | null>;
   markPaymentIntentVerificationFailed(input: ClaimPaymentIntentInput): Promise<PaymentIntent | null>;
   markPaymentIntentCustodyRefundPending(input: MarkCustodyRefundPendingInput): Promise<PaymentIntent | null>;
+  markPaymentIntentCustodyOperatorIncident(input: MarkCustodyOperatorIncidentInput): Promise<PaymentIntent | null>;
   markPaymentIntentRejected(input: ClaimPaymentIntentInput): Promise<PaymentIntent | null>;
   expirePaymentIntentIfDue(paymentIntentId: string, nowUtc: string): Promise<PaymentIntent | null>;
   consumePaymentIntent(paymentIntentId: string, holdId: string, nowUtc: string): Promise<PaymentIntent | null>;
@@ -756,6 +844,7 @@ function buildWriteRepository(executor: PaymentIntentSqlExecutor): PaymentIntent
     markPaymentIntentVerified: (input) => markPaymentIntentVerified(executor, input),
     markPaymentIntentVerificationFailed: (input) => markPaymentIntentVerificationFailed(executor, input),
     markPaymentIntentCustodyRefundPending: (input) => markPaymentIntentCustodyRefundPending(executor, input),
+    markPaymentIntentCustodyOperatorIncident: (input) => markPaymentIntentCustodyOperatorIncident(executor, input),
     markPaymentIntentRejected: (input) => markPaymentIntentRejected(executor, input),
     expirePaymentIntentIfDue: (paymentIntentId, nowUtc) => expirePaymentIntentIfDue(executor, paymentIntentId, nowUtc),
     consumePaymentIntent: (paymentIntentId, holdId, nowUtc) => consumePaymentIntent(executor, paymentIntentId, holdId, nowUtc),
