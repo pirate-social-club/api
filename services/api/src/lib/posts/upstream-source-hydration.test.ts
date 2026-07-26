@@ -57,7 +57,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
       }),
     } as Pick<Client, "execute"> as Client
 
-    await hydrateDerivativeSourcesForResponses({
+    const timing = await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_songs",
       env: {} as never,
@@ -83,6 +83,11 @@ describe("hydrateDerivativeSourcesForResponses", () => {
         creator_display_name: null,
       },
     ])
+    expect(timing).toEqual({
+      local_rows_ms: expect.any(Number),
+      global_rows_ms: expect.any(Number),
+      profiles_ms: expect.any(Number),
+    })
   })
 
   test("hydrates a cross-community Story song and creator from the global projection", async () => {
@@ -91,7 +96,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
     response.post.post_type = "video"
     const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
 
-    await hydrateDerivativeSourcesForResponses({
+    const timing = await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_videos",
       env: {} as never,
@@ -125,6 +130,11 @@ describe("hydrateDerivativeSourcesForResponses", () => {
       source_post: "post_pst_original",
       creator_handle: "artist.pirate",
       creator_display_name: "Artist",
+    })
+    expect(timing).toEqual({
+      local_rows_ms: expect.any(Number),
+      global_rows_ms: expect.any(Number),
+      profiles_ms: expect.any(Number),
     })
   })
 })
