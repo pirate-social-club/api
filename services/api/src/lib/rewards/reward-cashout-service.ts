@@ -26,6 +26,15 @@ import {
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
 import type { RewardCashoutResponse, RewardPayoutStatus, UpstreamIdentity } from "../../types"
+import { captureScheduledWarning } from "../ops-alerts/scheduled"
+import {
+  fitsPayoutCapacity,
+  listFairPayoutCandidates,
+  markSongSelected,
+  payoutMaxWaitSeconds,
+  payoutWaitSeconds,
+  readFreshPayoutCapacity,
+} from "./reward-payout-fairness"
 
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000]
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
@@ -88,6 +97,9 @@ export interface RewardPayoutReconciliationSummary {
   failed: number
   pending: number
   errors: number
+  capacityDeferred: number
+  capacityObservationStale: boolean
+  overdueSongs: number
 }
 
 function normalizeIdempotencyKey(raw: unknown): string {
@@ -115,6 +127,22 @@ function parseConfiguredCents(raw: string | undefined, fallback: number): number
 
 function rewardPayoutsEnabled(env: Pick<Env, "REWARDS_PAYOUTS_ENABLED">): boolean {
   return String(env.REWARDS_PAYOUTS_ENABLED ?? "").trim().toLowerCase() === "true"
+}
+
+async function warnPayoutScheduler(
+  env: Env,
+  message: string,
+  task: string,
+  extra: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await captureScheduledWarning(env, message, task, extra, { urgency: "high" })
+  } catch (error) {
+    console.error("[rewards] payout scheduler alert delivery failed", {
+      task,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 function normalizeRecipientAddress(raw: string): string {
@@ -816,34 +844,114 @@ export async function reconcileSubmittedRewardPayouts(input: {
     failed: 0,
     pending: 0,
     errors: 0,
+    capacityDeferred: 0,
+    capacityObservationStale: false,
+    overdueSongs: 0,
   }
   if (!summary.enabled) return summary
 
   const client = input.client ?? getControlPlaneClient(input.env)
   const nowUtc = input.nowUtc ?? new Date().toISOString()
   const limit = Math.max(1, Math.min(250, Math.trunc(input.limit ?? DEFAULT_PAYOUT_RECONCILE_LIMIT)))
-  const rows = await client.execute({
+  const inFlight = await client.execute({
     sql: `
       SELECT ${PAYOUT_COLUMNS}
       FROM reward_payout_effects
-      WHERE status = 'submitted'
+      WHERE status = 'submitted' AND settlement_ref IS NOT NULL
       ORDER BY updated_at ASC, reward_payout_effect_id ASC
       LIMIT ?1
     `,
     args: [limit],
   })
-
-  for (const row of rows.rows) {
-    summary.scanned += 1
-    const effect = decodePayoutEffect(row)
+  const effects: RewardPayoutEffect[] = inFlight.rows.map(decodePayoutEffect)
+  const selectedCandidates = new Map<string, Awaited<ReturnType<typeof listFairPayoutCandidates>>[number]>()
+  const remainingSlots = Math.max(0, limit - effects.length)
+  const nowMs = Date.parse(nowUtc)
+  if (remainingSlots > 0) {
+    let capacityRemaining: bigint | null = null
+    let capacityAvailable = true
     try {
-      const advanced = await advanceSubmittedPayout({
-        env: input.env,
-        client,
-        effect,
-        nowUtc,
-        confirmPollMs: input.confirmPollMs ?? [],
+      capacityRemaining = (await readFreshPayoutCapacity({ env: input.env, client, nowMs }))?.remainingAtomic ?? null
+    } catch (error) {
+      capacityAvailable = false
+      summary.capacityObservationStale = true
+      console.warn("[rewards] payout admission paused by missing or stale vault capacity", {
+        error: error instanceof Error ? error.message : String(error),
       })
+      await warnPayoutScheduler(
+        input.env,
+        "Reward payout admission is paused by missing or stale vault capacity",
+        "reward_payout_capacity_stale",
+        { capacity_observation_stale: true },
+      )
+    }
+    const candidates = await listFairPayoutCandidates({ client, scanLimit: Math.max(remainingSlots * 20, 250) })
+    const maxWaitSeconds = payoutMaxWaitSeconds(input.env)
+    const overdue = candidates
+      .map((candidate) => ({ candidate, waitSeconds: payoutWaitSeconds(candidate, nowMs) }))
+      .filter(({ waitSeconds }) => waitSeconds > maxWaitSeconds)
+      .sort((left, right) => right.waitSeconds - left.waitSeconds)
+    summary.overdueSongs = overdue.length
+    for (const { candidate, waitSeconds } of overdue.slice(0, 10)) {
+      await warnPayoutScheduler(
+        input.env,
+        "Reward payout song exceeded the fairness wait SLO",
+        `reward_payout_fairness:${candidate.communityId ?? "legacy"}:${candidate.postId ?? candidate.effectId}`,
+        {
+          community_id: candidate.communityId,
+          post_id: candidate.postId,
+          reward_payout_effect_id: candidate.effectId,
+          wait_seconds: waitSeconds,
+          max_wait_seconds: maxWaitSeconds,
+        },
+      )
+    }
+    if (capacityAvailable) {
+      for (const candidate of candidates) {
+        if (effects.length >= limit) break
+        if (capacityRemaining !== null && !fitsPayoutCapacity(candidate, capacityRemaining)) {
+          summary.capacityDeferred += 1
+          continue
+        }
+        const selected = await client.execute({
+          sql: `
+            SELECT ${PAYOUT_COLUMNS}
+            FROM reward_payout_effects
+            WHERE reward_payout_effect_id = ?1
+              AND status = 'submitted'
+              AND settlement_ref IS NULL
+            LIMIT 1
+          `,
+          args: [candidate.effectId],
+        })
+        if (!selected.rows[0]) continue
+        effects.push(decodePayoutEffect(selected.rows[0]))
+        selectedCandidates.set(candidate.effectId, candidate)
+        if (capacityRemaining !== null) {
+          capacityRemaining -= BigInt(candidate.amountCents) * 10_000n
+        }
+      }
+    }
+  }
+
+  for (const effect of effects) {
+    summary.scanned += 1
+    try {
+      const selectedCandidate = selectedCandidates.get(effect.rewardPayoutEffectId)
+      let advanced: RewardPayoutEffect
+      try {
+        advanced = await advanceSubmittedPayout({
+          env: input.env,
+          client,
+          effect,
+          nowUtc,
+          confirmPollMs: input.confirmPollMs ?? [],
+        })
+      } finally {
+        if (selectedCandidate) {
+          await markSongSelected({ client, candidate: selectedCandidate, selectedAt: nowUtc })
+        }
+      }
       if (advanced.status === "confirmed") {
         summary.confirmed += 1
       } else if (advanced.status === "failed") {

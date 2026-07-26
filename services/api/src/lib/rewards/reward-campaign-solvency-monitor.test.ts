@@ -13,6 +13,7 @@ function clientWithRow(row: Record<string, unknown>): Client {
     execute: async (statement: string | { sql: string }) => {
       const sql = typeof statement === "string" ? statement : statement.sql
       return sql.includes("INSERT INTO reward_solvency_observations")
+        || sql.includes("INSERT INTO reward_vault_capacity_observations")
         ? { rows: [], columns: [] }
         : { rows: [row], columns: [] }
     },
@@ -114,10 +115,28 @@ describe("reward campaign treasury solvency monitor", () => {
       client,
       readBalance: async () => 2_000_000n,
       readSignerBalance: async () => 50n,
+      readCapacity: async () => ({
+        policyVersion: 3n,
+        epochDurationSeconds: 86_400n,
+        currentEpoch: 20_000n,
+        payoutEpochCapAtomic: 10_000_000n,
+        payoutSpentAtomic: 2_000_000n,
+        refundEpochCapAtomic: 5_000_000n,
+        refundSpentAtomic: 1_000_000n,
+        observedBlockNumber: 12_345,
+        observedBlockHash: `0x${"ab".repeat(32)}`,
+      }),
       warn,
     })
 
-    expect(summary).toMatchObject({ signerBalanceWei: 50n, nonceAnomalies: 2 })
+    expect(summary).toMatchObject({
+      signerBalanceWei: 50n,
+      nonceAnomalies: 2,
+      vaultCapacity: {
+        currentEpoch: 20_000n,
+        payoutSpentAtomic: 2_000_000n,
+      },
+    })
     expect(warn).toHaveBeenCalledTimes(2)
     expect(warn.mock.calls.map((call) => call[2])).toEqual([
       "reward_campaign_treasury_solvency:signer_eth",

@@ -1883,6 +1883,9 @@ describe("rewards routes", () => {
       failed: 0,
       pending: 0,
       errors: 0,
+      capacityDeferred: 0,
+      capacityObservationStale: false,
+      overdueSongs: 0,
     })
     expect(settleCount).toBe(1)
     expect(confirmCount).toBe(1)
