@@ -36,6 +36,7 @@ import {
   observeRewardVaultRefundPolicy,
   type RewardVaultRefundPolicyObserver,
 } from "./reward-vault-refund-policy"
+import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -624,6 +625,7 @@ export async function createRewardCampaignFundingQuote(input: {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
   assertRewardCampaignSettlementReadiness(input.env)
+  await assertRewardSolvencyAdmission({ env: input.env, client: input.client, now: new Date(input.now ?? Date.now()) })
   const amountCents = cents(input.amountCents, "amount_cents", false)
   const idempotencyKey = nonEmpty(input.idempotencyKey, "idempotency_key")
   const now = input.now ?? nowIso()

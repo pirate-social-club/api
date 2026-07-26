@@ -720,7 +720,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await removeCampaignTestPost("pst_cross_race_pg")
   })
 
-  test("different identities racing for the final budget admit one full credit", async () => {
+  test("different identities racing for the final funding leave the loser retryable", async () => {
     const results = await withProductionPostgresClient(async (client) => Promise.all(
       (["a", "b"] as const).map((suffix) => creditRewardCampaignQualification({
         env: PG_ENV,
@@ -739,7 +739,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         now: NOW,
       })),
     ))
-    expect(results.map((result) => result.result).sort()).toEqual(["budget", "credited"])
+    expect(results.map((result) => result.result).sort()).toEqual(["credited", "funding_deferred"])
 
     const verify = connect(TEST_DB, 1)
     const reservations = await verify.unsafe(
@@ -753,7 +753,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     expect(campaigns).toEqual([{ status: "exhausted", funded_cents: 40, reserved_cents: 0, credited_cents: 40 }])
   })
 
-  test("pre-end qualifications remain claimable during grace and exhaustion rejects the next identity", async () => {
+  test("pre-end qualifications remain claimable and exhaustion defers the next identity", async () => {
     const candidate = {
       communityId: "cmt_reward_pg",
       postId: "pst_ended_grace_pg",
@@ -778,7 +778,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })
       return [credited.result, exhausted.result]
     })
-    expect(results).toEqual(["credited", "budget"])
+    expect(results).toEqual(["credited", "funding_deferred"])
 
     const verify = connect(TEST_DB, 1)
     const campaigns = await verify.unsafe(`

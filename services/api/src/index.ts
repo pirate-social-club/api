@@ -1109,6 +1109,7 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
       || summary.pending_verification > 0
       || summary.expired_pending > 0
       || summary.skipped_budget > 0
+      || summary.deferred_funding > 0
       || summary.skipped_expired > 0
       || summary.skipped_owner_blocked > 0
       || summary.skipped_no_campaign > 0

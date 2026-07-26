@@ -4,6 +4,7 @@ import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import { rowValue } from "../sql-row"
 import { captureScheduledWarning } from "../ops-alerts/scheduled"
+import { resolveRewardsSettlementBackend } from "./reward-vault-lit-config"
 
 const TASK = "reward_campaign_treasury_solvency"
 const CENTS_TO_USDC_ATOMIC = 10_000n
@@ -12,23 +13,24 @@ const ERC20_BALANCE_ABI = ["function balanceOf(address account) view returns (ui
 export const REWARD_CAMPAIGN_LIABILITY_SQL = `
   SELECT
     COALESCE((
-      SELECT SUM(
-        CASE WHEN status IN ('funding_quoted', 'funding_confirming', 'scheduled', 'active', 'paused', 'operational_hold')
-          THEN funded_cents - reserved_cents - credited_cents - refunded_cents
-          ELSE 0
-        END + reserved_cents
-      )
-      FROM reward_campaigns
-    ), 0) AS campaign_future_cents,
+      SELECT SUM(f.expected_amount_cents - COALESCE(a.allocated_cents, 0))
+      FROM reward_campaign_funding_effects f
+      LEFT JOIN (
+        SELECT reward_campaign_funding_effect_id, SUM(amount_cents) AS allocated_cents
+        FROM reward_campaign_reservation_funding_allocations
+        GROUP BY reward_campaign_funding_effect_id
+      ) a ON a.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+      WHERE f.status = 'confirmed'
+    ), 0) AS contribution_liability_cents,
     GREATEST(
       COALESCE((SELECT SUM(amount_cents) FROM reward_events), 0)
         - COALESCE((
           SELECT SUM(amount_cents)
-          FROM reward_payout_effects
-          WHERE status IN ('submitted', 'confirmed')
+          FROM reward_payout_allocations
+          WHERE status = 'confirmed'
         ), 0),
       0
-    ) AS learner_balance_cents,
+    ) AS credited_unpaid_liability_cents,
     COALESCE((
       SELECT SUM(CAST(received_amount_atomic AS NUMERIC))
       FROM reward_campaign_funding_effects
@@ -37,8 +39,8 @@ export const REWARD_CAMPAIGN_LIABILITY_SQL = `
 `
 
 export type RewardCampaignLiability = {
-  campaignFutureCents: bigint
-  learnerBalanceCents: bigint
+  contributionLiabilityCents: bigint
+  creditedUnpaidLiabilityCents: bigint
   pendingRefundAtomic: bigint
   totalAtomic: bigint
 }
@@ -50,6 +52,9 @@ export type RewardCampaignSolvencySummary = {
   balanceAtomic?: bigint
   liability?: RewardCampaignLiability
   solvent?: boolean
+  observedAt?: string
+  signerBalanceWei?: bigint
+  nonceAnomalies?: number
 }
 
 type SolvencyConfig = {
@@ -84,14 +89,15 @@ function bigintValue(value: unknown): bigint {
 export async function readRewardCampaignLiability(client: Client): Promise<RewardCampaignLiability> {
   const result = await client.execute(REWARD_CAMPAIGN_LIABILITY_SQL)
   const row = result.rows[0]
-  const campaignFutureCents = bigintValue(rowValue(row, "campaign_future_cents"))
-  const learnerBalanceCents = bigintValue(rowValue(row, "learner_balance_cents"))
+  const contributionLiabilityCents = bigintValue(rowValue(row, "contribution_liability_cents"))
+  const creditedUnpaidLiabilityCents = bigintValue(rowValue(row, "credited_unpaid_liability_cents"))
   const pendingRefundAtomic = bigintValue(rowValue(row, "pending_refund_atomic"))
   return {
-    campaignFutureCents,
-    learnerBalanceCents,
+    contributionLiabilityCents,
+    creditedUnpaidLiabilityCents,
     pendingRefundAtomic,
-    totalAtomic: (campaignFutureCents + learnerBalanceCents) * CENTS_TO_USDC_ATOMIC + pendingRefundAtomic,
+    totalAtomic: (contributionLiabilityCents + creditedUnpaidLiabilityCents) * CENTS_TO_USDC_ATOMIC
+      + pendingRefundAtomic,
   }
 }
 
@@ -105,10 +111,51 @@ async function readTreasuryBalance(config: SolvencyConfig): Promise<bigint> {
   }
 }
 
+async function readNativeBalance(config: SolvencyConfig, address: string): Promise<bigint> {
+  const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
+  try {
+    return await provider.getBalance(address)
+  } finally {
+    void provider.destroy()
+  }
+}
+
+function signerGasFloor(env: Env): bigint {
+  const raw = String(env.REWARDS_LIT_SIGNER_MIN_ETH_WEI ?? "0").trim()
+  if (!/^(0|[1-9][0-9]*)$/u.test(raw)) {
+    throw new Error("REWARDS_LIT_SIGNER_MIN_ETH_WEI is invalid")
+  }
+  return BigInt(raw)
+}
+
+async function readNonceAnomalies(client: Client): Promise<number> {
+  const result = await client.execute(`
+    SELECT (
+      (SELECT COUNT(*) FROM reward_payout_effects
+        WHERE updated_at >= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+          AND (
+            coordinator_state = 'replaced'
+            OR LOWER(COALESCE(failure_reason, '')) LIKE '%nonce%'
+          ))
+      +
+      (SELECT COUNT(*) FROM reward_campaign_funding_effects
+        WHERE updated_at >= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+          AND (
+            refund_coordinator_state = 'replaced'
+            OR LOWER(COALESCE(refund_last_error, '')) LIKE '%nonce%'
+          ))
+    ) AS nonce_anomalies
+  `)
+  const value = Number(rowValue(result.rows[0], "nonce_anomalies") ?? 0)
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("Rewards nonce anomaly count is invalid")
+  return value
+}
+
 export async function monitorRewardCampaignTreasurySolvency(input: {
   env: Env
   client: Client
   readBalance?: (config: SolvencyConfig) => Promise<bigint>
+  readSignerBalance?: (config: SolvencyConfig, address: string) => Promise<bigint>
   warn?: typeof captureScheduledWarning
 }): Promise<RewardCampaignSolvencySummary> {
   const config = resolveConfig(input.env)
@@ -116,6 +163,43 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
   const liability = await readRewardCampaignLiability(input.client)
   const balanceAtomic = await (input.readBalance ?? readTreasuryBalance)(config)
   const solvent = balanceAtomic >= liability.totalAtomic
+  const observedAt = new Date().toISOString()
+  await input.client.execute({
+    sql: `
+      INSERT INTO reward_solvency_observations (
+        observation_key, chain_id, treasury_address, token_address,
+        balance_atomic, contribution_liability_cents,
+        credited_unpaid_liability_cents, pending_refund_atomic,
+        total_liability_atomic, solvent, observed_at, updated_at
+      ) VALUES (
+        'rewards_treasury', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10
+      )
+      ON CONFLICT (observation_key) DO UPDATE SET
+        chain_id = excluded.chain_id,
+        treasury_address = excluded.treasury_address,
+        token_address = excluded.token_address,
+        balance_atomic = excluded.balance_atomic,
+        contribution_liability_cents = excluded.contribution_liability_cents,
+        credited_unpaid_liability_cents = excluded.credited_unpaid_liability_cents,
+        pending_refund_atomic = excluded.pending_refund_atomic,
+        total_liability_atomic = excluded.total_liability_atomic,
+        solvent = excluded.solvent,
+        observed_at = excluded.observed_at,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      config.chainId,
+      config.treasuryAddress,
+      config.tokenAddress,
+      balanceAtomic.toString(),
+      liability.contributionLiabilityCents.toString(),
+      liability.creditedUnpaidLiabilityCents.toString(),
+      liability.pendingRefundAtomic.toString(),
+      liability.totalAtomic.toString(),
+      solvent,
+      observedAt,
+    ],
+  })
   if (!solvent) {
     await (input.warn ?? captureScheduledWarning)(
       input.env,
@@ -128,12 +212,42 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
         balance_usdc: formatUnits(balanceAtomic, 6),
         liability_usdc: formatUnits(liability.totalAtomic, 6),
         shortfall_usdc: formatUnits(liability.totalAtomic - balanceAtomic, 6),
-        campaign_future_cents: liability.campaignFutureCents.toString(),
-        learner_balance_cents: liability.learnerBalanceCents.toString(),
+        contribution_liability_cents: liability.contributionLiabilityCents.toString(),
+        credited_unpaid_liability_cents: liability.creditedUnpaidLiabilityCents.toString(),
         pending_refund_atomic: liability.pendingRefundAtomic.toString(),
       },
       { urgency: "high" },
     )
+  }
+  let signerBalanceWei: bigint | undefined
+  let nonceAnomalies: number | undefined
+  if (resolveRewardsSettlementBackend(input.env) === "lit_vault") {
+    const signerAddress = getAddress(String(input.env.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS ?? ""))
+    signerBalanceWei = await (input.readSignerBalance ?? readNativeBalance)(config, signerAddress)
+    nonceAnomalies = await readNonceAnomalies(input.client)
+    const floor = signerGasFloor(input.env)
+    if (signerBalanceWei <= floor) {
+      await (input.warn ?? captureScheduledWarning)(
+        input.env,
+        "Lit rewards signer ETH is at or below its operational floor",
+        `${TASK}:signer_eth`,
+        {
+          signer_address: signerAddress,
+          signer_balance_wei: signerBalanceWei.toString(),
+          configured_floor_wei: floor.toString(),
+        },
+        { urgency: "high" },
+      )
+    }
+    if (nonceAnomalies > 0) {
+      await (input.warn ?? captureScheduledWarning)(
+        input.env,
+        "Lit rewards signer nonce contention detected",
+        `${TASK}:nonce_contention`,
+        { signer_address: signerAddress, anomaly_count_15m: nonceAnomalies },
+        { urgency: "high" },
+      )
+    }
   }
   return {
     configured: true,
@@ -142,5 +256,8 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
     balanceAtomic,
     liability,
     solvent,
+    observedAt,
+    signerBalanceWei,
+    nonceAnomalies,
   }
 }

@@ -10,7 +10,12 @@ import {
 
 function clientWithRow(row: Record<string, unknown>): Client {
   return {
-    execute: async () => ({ rows: [row], columns: [] }),
+    execute: async (statement: string | { sql: string }) => {
+      const sql = typeof statement === "string" ? statement : statement.sql
+      return sql.includes("INSERT INTO reward_solvency_observations")
+        ? { rows: [], columns: [] }
+        : { rows: [row], columns: [] }
+    },
   } as unknown as Client
 }
 
@@ -22,16 +27,16 @@ const env = {
 } as Env
 
 describe("reward campaign treasury solvency monitor", () => {
-  test("combines future campaign inventory, learner balances, and exact pending refunds", async () => {
+  test("combines unconsumed contribution lots, credited-unpaid balances, and exact pending refunds", async () => {
     const liability = await readRewardCampaignLiability(clientWithRow({
-      campaign_future_cents: "100",
-      learner_balance_cents: "25",
+      contribution_liability_cents: "100",
+      credited_unpaid_liability_cents: "25",
       pending_refund_atomic: "12345",
     }))
 
     expect(liability).toEqual({
-      campaignFutureCents: 100n,
-      learnerBalanceCents: 25n,
+      contributionLiabilityCents: 100n,
+      creditedUnpaidLiabilityCents: 25n,
       pendingRefundAtomic: 12_345n,
       totalAtomic: 1_262_345n,
     })
@@ -47,8 +52,8 @@ describe("reward campaign treasury solvency monitor", () => {
         REWARDS_PAYOUTS_ENABLED: "false",
       } as Env,
       client: clientWithRow({
-        campaign_future_cents: "100",
-        learner_balance_cents: "0",
+        contribution_liability_cents: "100",
+        credited_unpaid_liability_cents: "0",
         pending_refund_atomic: "0",
       }),
       readBalance: async () => 700_000n,
@@ -62,7 +67,7 @@ describe("reward campaign treasury solvency monitor", () => {
       balance_usdc: "0.7",
       liability_usdc: "1.0",
       shortfall_usdc: "0.3",
-      campaign_future_cents: "100",
+      contribution_liability_cents: "100",
     })
   })
 
@@ -71,8 +76,8 @@ describe("reward campaign treasury solvency monitor", () => {
     const summary = await monitorRewardCampaignTreasurySolvency({
       env,
       client: clientWithRow({
-        campaign_future_cents: "100",
-        learner_balance_cents: "25",
+        contribution_liability_cents: "100",
+        credited_unpaid_liability_cents: "25",
         pending_refund_atomic: "0",
       }),
       readBalance: async () => 2_000_000n,
@@ -81,5 +86,42 @@ describe("reward campaign treasury solvency monitor", () => {
 
     expect(summary.solvent).toBe(true)
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  test("alerts on a depleted Lit signer and recent nonce contention", async () => {
+    const warn = mock(async (..._args: Parameters<typeof captureScheduledWarning>) => true)
+    const client = {
+      execute: async (statement: string | { sql: string }) => {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("nonce_anomalies")) return { rows: [{ nonce_anomalies: "2" }] }
+        if (sql.includes("INSERT INTO reward_solvency_observations")) return { rows: [] }
+        return {
+          rows: [{
+            contribution_liability_cents: "100",
+            credited_unpaid_liability_cents: "0",
+            pending_refund_atomic: "0",
+          }],
+        }
+      },
+    } as unknown as Client
+    const summary = await monitorRewardCampaignTreasurySolvency({
+      env: {
+        ...env,
+        PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",
+        PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x3000000000000000000000000000000000000003",
+        REWARDS_LIT_SIGNER_MIN_ETH_WEI: "100",
+      } as Env,
+      client,
+      readBalance: async () => 2_000_000n,
+      readSignerBalance: async () => 50n,
+      warn,
+    })
+
+    expect(summary).toMatchObject({ signerBalanceWei: 50n, nonceAnomalies: 2 })
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn.mock.calls.map((call) => call[2])).toEqual([
+      "reward_campaign_treasury_solvency:signer_eth",
+      "reward_campaign_treasury_solvency:nonce_contention",
+    ])
   })
 })

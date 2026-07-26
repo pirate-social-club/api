@@ -33,6 +33,8 @@ import type { RewardCashoutRequest } from "../types"
 import { inspectKaraokeRewardEligibility } from "../lib/posts/post-karaoke-service"
 import { resolveRewardSettlementManually } from "../lib/rewards/reward-settlement-manual-resolution"
 import { getRewardPoolRefundPolicyReadiness } from "../lib/rewards/reward-pool-refund-readiness"
+import { getRewardBackendFlipReadiness } from "../lib/rewards/reward-backend-flip-readiness"
+import { getRewardSolvencyGateStatus } from "../lib/rewards/reward-solvency-gate"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -379,6 +381,25 @@ rewards.get("/operator/reward_pools/refund_policy_readiness", async (c) => {
     proposedMaxRefundAtomic: rawProposed === undefined ? undefined : BigInt(rawProposed),
   })
   return c.json(readiness, 200)
+})
+rewards.get("/operator/reward_settlements/backend_flip_readiness", async (c) => {
+  const operator = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
+  return c.json(await getRewardBackendFlipReadiness(getControlPlaneClient(c.env)), 200)
+})
+rewards.get("/operator/reward_settlements/solvency_readiness", async (c) => {
+  const operator = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
+  return c.json(await getRewardSolvencyGateStatus({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+  }), 200)
 })
 
 export default rewards
