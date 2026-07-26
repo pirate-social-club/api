@@ -4,6 +4,7 @@ import {
   authenticateOperatorCredential,
   requireOperatorScope,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
 } from "../lib/operator-credential-auth"
 import { getRewardCampaignCapabilities } from "../lib/rewards/reward-campaign-capabilities"
@@ -42,6 +43,9 @@ const operatorRouteDefaults = {
   authenticate: authenticateOperatorCredential,
   recover: recoverRewardCampaignIncident,
   getClient: getControlPlaneClient,
+  getBackendFlipReadiness: getRewardBackendFlipReadiness,
+  getRefundPolicyReadiness: getRewardPoolRefundPolicyReadiness,
+  getSolvencyReadiness: getRewardSolvencyGateStatus,
   resolveSettlement: resolveRewardSettlementManually,
   alertRecovery: async (env: Env, campaignId: string, incidentId: string) => captureScheduledWarning(
     env,
@@ -59,6 +63,10 @@ type RewardRecoveryRouteServices = Pick<
 type RewardSettlementResolutionRouteServices = Pick<
   RewardOperatorRouteServices,
   "authenticate" | "resolveSettlement" | "getClient"
+>
+type RewardReadinessRouteServices = Pick<
+  RewardOperatorRouteServices,
+  "authenticate" | "getBackendFlipReadiness" | "getClient" | "getRefundPolicyReadiness" | "getSolvencyReadiness"
 >
 
 rewards.use("/me/rewards", authenticate)
@@ -358,6 +366,56 @@ export function createRewardSettlementResolutionHandler(
   }
 }
 
+export function createRewardRefundPolicyReadinessHandler(
+  services: RewardReadinessRouteServices = operatorRouteDefaults,
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_SETTLEMENT_READ_SCOPE)
+    const rawProposed = c.req.query("proposed_max_refund_atomic")
+    if (rawProposed !== undefined && !/^(0|[1-9][0-9]*)$/u.test(rawProposed)) {
+      throw badRequestError("Invalid proposed max refund")
+    }
+    const readiness = await services.getRefundPolicyReadiness({
+      client: services.getClient(c.env),
+      proposedMaxRefundAtomic: rawProposed === undefined ? undefined : BigInt(rawProposed),
+    })
+    return c.json(readiness, 200)
+  }
+}
+
+export function createRewardBackendFlipReadinessHandler(
+  services: RewardReadinessRouteServices = operatorRouteDefaults,
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_SETTLEMENT_READ_SCOPE)
+    return c.json(await services.getBackendFlipReadiness(services.getClient(c.env)), 200)
+  }
+}
+
+export function createRewardSolvencyReadinessHandler(
+  services: RewardReadinessRouteServices = operatorRouteDefaults,
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_SETTLEMENT_READ_SCOPE)
+    return c.json(await services.getSolvencyReadiness({
+      env: c.env,
+      client: services.getClient(c.env),
+    }), 200)
+  }
+}
+
 rewards.post(
   "/operator/reward_campaigns/:campaignId/incidents/:incidentId/recover",
   createRewardCampaignRecoveryHandler(),
@@ -366,40 +424,8 @@ rewards.post(
   "/operator/reward_settlements/:effectId/resolve",
   createRewardSettlementResolutionHandler(),
 )
-rewards.get("/operator/reward_pools/refund_policy_readiness", async (c) => {
-  const operator = await authenticateOperatorCredential({
-    env: c.env,
-    authorization: c.req.header("authorization"),
-  })
-  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
-  const rawProposed = c.req.query("proposed_max_refund_atomic")
-  if (rawProposed !== undefined && !/^(0|[1-9][0-9]*)$/u.test(rawProposed)) {
-    throw badRequestError("Invalid proposed max refund")
-  }
-  const readiness = await getRewardPoolRefundPolicyReadiness({
-    client: getControlPlaneClient(c.env),
-    proposedMaxRefundAtomic: rawProposed === undefined ? undefined : BigInt(rawProposed),
-  })
-  return c.json(readiness, 200)
-})
-rewards.get("/operator/reward_settlements/backend_flip_readiness", async (c) => {
-  const operator = await authenticateOperatorCredential({
-    env: c.env,
-    authorization: c.req.header("authorization"),
-  })
-  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
-  return c.json(await getRewardBackendFlipReadiness(getControlPlaneClient(c.env)), 200)
-})
-rewards.get("/operator/reward_settlements/solvency_readiness", async (c) => {
-  const operator = await authenticateOperatorCredential({
-    env: c.env,
-    authorization: c.req.header("authorization"),
-  })
-  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
-  return c.json(await getRewardSolvencyGateStatus({
-    env: c.env,
-    client: getControlPlaneClient(c.env),
-  }), 200)
-})
+rewards.get("/operator/reward_pools/refund_policy_readiness", createRewardRefundPolicyReadinessHandler())
+rewards.get("/operator/reward_settlements/backend_flip_readiness", createRewardBackendFlipReadinessHandler())
+rewards.get("/operator/reward_settlements/solvency_readiness", createRewardSolvencyReadinessHandler())
 
 export default rewards

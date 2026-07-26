@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import { Hono } from "hono"
 import rewards, {
+  createRewardBackendFlipReadinessHandler,
   createRewardCampaignRecoveryHandler,
+  createRewardRefundPolicyReadinessHandler,
   createRewardSettlementResolutionHandler,
+  createRewardSolvencyReadinessHandler,
 } from "./rewards"
 import type { Env } from "../env"
 import type { Client } from "../lib/sql-client"
 import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
 } from "../lib/operator-credential-auth"
 
@@ -134,4 +138,78 @@ describe("reward settlement manual resolution route", () => {
       operatorActorId: "reward-operator",
     })
   })
+})
+
+type RewardReadinessPath =
+  | "/operator/reward_pools/refund_policy_readiness"
+  | "/operator/reward_settlements/backend_flip_readiness"
+  | "/operator/reward_settlements/solvency_readiness"
+
+function readinessApp(
+  scope: typeof REWARD_SETTLEMENT_READ_SCOPE | typeof REWARD_SETTLEMENT_RESOLVE_SCOPE,
+  called: () => void,
+) {
+  const app = withErrors(new Hono<{ Bindings: Env }>())
+  const services = {
+    authenticate: async () => ({
+      authType: "operator_credential" as const,
+      operatorCredentialId: "opc_test",
+      operatorActorId: "reward-observer",
+      scopes: [scope],
+    }),
+    getClient: (() => ({} as Client)) as typeof import("../lib/runtime-deps").getControlPlaneClient,
+    getRefundPolicyReadiness: async () => {
+      called()
+      return { ready: true } as never
+    },
+    getBackendFlipReadiness: async () => {
+      called()
+      return { ready: true } as never
+    },
+    getSolvencyReadiness: async () => {
+      called()
+      return { ready: true } as never
+    },
+  }
+  app.get(
+    "/operator/reward_pools/refund_policy_readiness",
+    createRewardRefundPolicyReadinessHandler(services),
+  )
+  app.get(
+    "/operator/reward_settlements/backend_flip_readiness",
+    createRewardBackendFlipReadinessHandler(services),
+  )
+  app.get(
+    "/operator/reward_settlements/solvency_readiness",
+    createRewardSolvencyReadinessHandler(services),
+  )
+  return app
+}
+
+describe("reward settlement readiness routes", () => {
+  const paths: RewardReadinessPath[] = [
+    "/operator/reward_pools/refund_policy_readiness",
+    "/operator/reward_settlements/backend_flip_readiness",
+    "/operator/reward_settlements/solvency_readiness",
+  ]
+
+  for (const path of paths) {
+    test(`${path} rejects the manual-resolution scope`, async () => {
+      let calls = 0
+      const response = await readinessApp(REWARD_SETTLEMENT_RESOLVE_SCOPE, () => {
+        calls += 1
+      }).request(path, { headers: { authorization: "Operator test.secret" } }, {} as Env)
+      expect(response.status).toBe(403)
+      expect(calls).toBe(0)
+    })
+
+    test(`${path} accepts only the read scope`, async () => {
+      let calls = 0
+      const response = await readinessApp(REWARD_SETTLEMENT_READ_SCOPE, () => {
+        calls += 1
+      }).request(path, { headers: { authorization: "Operator test.secret" } }, {} as Env)
+      expect(response.status).toBe(200)
+      expect(calls).toBe(1)
+    })
+  }
 })

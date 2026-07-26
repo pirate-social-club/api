@@ -5,6 +5,8 @@ import {
   hashOperatorCredentialSecret,
   requireOperatorScope,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_READ_SCOPE,
+  REWARD_SETTLEMENT_RESOLVE_SCOPE,
   type OperatorActorContext,
 } from "./operator-credential-auth"
 import { authenticateAdminToken } from "./auth-middleware"
@@ -333,6 +335,25 @@ describe("requireOperatorScope", () => {
     }
     expect(() => requireOperatorScope(bookingOnly, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE)).toThrow("scope")
     expect(() => requireOperatorScope(rewardOperator, REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE)).not.toThrow()
+  })
+
+  test("keeps reward settlement reads distinct from manual resolution", () => {
+    const reader: OperatorActorContext = {
+      authType: "operator_credential",
+      operatorCredentialId: "opc_rewards_reader",
+      operatorActorId: "svc_reward_observer",
+      scopes: [REWARD_SETTLEMENT_READ_SCOPE],
+    }
+    const resolver: OperatorActorContext = {
+      ...reader,
+      operatorCredentialId: "opc_rewards_resolver",
+      operatorActorId: "svc_reward_operator",
+      scopes: [REWARD_SETTLEMENT_RESOLVE_SCOPE],
+    }
+    expect(() => requireOperatorScope(reader, REWARD_SETTLEMENT_READ_SCOPE)).not.toThrow()
+    expect(() => requireOperatorScope(reader, REWARD_SETTLEMENT_RESOLVE_SCOPE)).toThrow("scope")
+    expect(() => requireOperatorScope(resolver, REWARD_SETTLEMENT_READ_SCOPE)).toThrow("scope")
+    expect(() => requireOperatorScope(resolver, REWARD_SETTLEMENT_RESOLVE_SCOPE)).not.toThrow()
   })
 
   test("a generic admin token cannot satisfy money-resolution scope", () => {
