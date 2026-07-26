@@ -18,7 +18,7 @@ import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./rew
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
-import { REWARD_SONG_SLOT_ACQUIRE_SQL } from "./reward-campaign-service"
+import { REWARD_SONG_POOL_REGISTER_SQL } from "./reward-campaign-service"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -44,6 +44,10 @@ const PAYOUT_EFFECTS_MIGRATION_URL = new URL(
 )
 const SONG_SLOTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0147_control_plane_reward_song_slots.sql",
+  import.meta.url,
+)
+const CONCURRENT_POOLS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0159_control_plane_reward_concurrent_pools.sql",
   import.meta.url,
 )
 const NOW = "2026-07-10T12:00:00.000Z"
@@ -168,6 +172,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
         ended_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
@@ -264,6 +269,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SONG_SLOTS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
+      CREATE TABLE reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
+        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
+        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT
+      );
+    `)
+    const concurrentPoolsMigration = await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8")
+    await db.unsafe(concurrentPoolsMigration.replaceAll("TIMESTAMPTZ", "TEXT"))
+    await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
         ADD COLUMN operational_hold_reason TEXT,
@@ -271,11 +285,6 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         ADD COLUMN operational_held_by TEXT,
         ADD COLUMN operational_recovered_at TIMESTAMPTZ,
         ADD COLUMN operational_recovered_by TEXT;
-      CREATE TABLE reward_campaign_funding_effects (
-        reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
-        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
-        confirmed_block_number BIGINT, confirmed_block_hash TEXT
-      );
       CREATE TABLE reward_campaign_incidents (
         reward_campaign_incident_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
         incident_kind TEXT NOT NULL, reason TEXT NOT NULL, details_json JSONB NOT NULL,
@@ -435,6 +444,20 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
     `, [NOW])
+    await db.unsafe(`
+      INSERT INTO reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id, reward_campaign_id, status,
+        expected_amount_cents, confirmed_at
+      )
+      SELECT
+        'rcf_seed_' || reward_campaign_id,
+        reward_campaign_id,
+        'confirmed',
+        funded_cents,
+        $1
+      FROM reward_campaigns
+      WHERE funded_cents > 0
+    `, [NOW])
     await db.end()
   })
 
@@ -479,6 +502,14 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     const db = connect(TEST_DB, 1)
     await db.unsafe("DELETE FROM reward_song_period_claims WHERE post_id = $1", [postId])
     await db.unsafe("DELETE FROM reward_events WHERE post_id = $1", [postId])
+    await db.unsafe("DELETE FROM reward_song_pools WHERE post_id = $1", [postId])
+    await db.unsafe(`
+      DELETE FROM reward_campaign_reservation_funding_allocations a
+      USING reward_campaign_reservations r, reward_campaigns c
+      WHERE a.reward_campaign_reservation_id = r.reward_campaign_reservation_id
+        AND c.reward_campaign_id = r.reward_campaign_id
+        AND c.post_id = $1
+    `, [postId])
     await db.unsafe(`
       DELETE FROM reward_campaign_reservations r
       USING reward_campaigns c
@@ -488,10 +519,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.end()
   }
 
-  test("concurrent funding-slot acquisition admits one holder and self-releases by time", async () => {
-    // Seed on a dedicated connection and keep it alive through the pooled race.
-    // Bun 1.2 can close this connection before the committed rows are visible to
-    // newly opened pool connections, which intermittently trips the slot FK.
+  test("concurrent song-pool registration admits one stable pool identity", async () => {
     const seed = connect(TEST_DB, 1)
     await seed.unsafe(`
       INSERT INTO reward_campaigns (
@@ -511,24 +539,23 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `, [NOW, "2026-07-11T12:00:00.000Z"])
     try {
       await withProductionPostgresClient(async (client) => {
-        const expiresAt = "2026-07-10T12:15:00.000Z"
-        const acquire = (campaignId: string, now = NOW) => client.execute({
-          sql: REWARD_SONG_SLOT_ACQUIRE_SQL,
-          args: ["cmt_reward_pg", "pst_slot_pg", campaignId, expiresAt, now],
+        const register = (campaignId: string) => client.execute({
+          sql: REWARD_SONG_POOL_REGISTER_SQL,
+          args: ["cmt_reward_pg", "pst_slot_pg", campaignId, NOW],
         })
-        const attempts = await Promise.all([acquire("rcp_slot_a_pg"), acquire("rcp_slot_b_pg")])
+        const attempts = await Promise.all([
+          register("rcp_slot_a_pg"),
+          register("rcp_slot_b_pg"),
+        ])
         expect(attempts.reduce((count, result) => count + result.rows.length, 0)).toBe(1)
-        const held = await client.execute("SELECT holder_campaign_id FROM reward_song_slots WHERE post_id = 'pst_slot_pg'")
-        const holder = String(held.rows[0]?.holder_campaign_id)
+        const held = await client.execute("SELECT reward_campaign_id FROM reward_song_pools WHERE post_id = 'pst_slot_pg'")
+        const holder = String(held.rows[0]?.reward_campaign_id)
         const other = holder === "rcp_slot_a_pg" ? "rcp_slot_b_pg" : "rcp_slot_a_pg"
 
-        await client.execute({ sql: "UPDATE reward_campaigns SET status = 'active' WHERE reward_campaign_id = ?1", args: [holder] })
-        const blockedByLive = await acquire(other, "2026-07-10T12:16:00.000Z")
-        expect(blockedByLive.rows).toHaveLength(0)
-
         await client.execute({ sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1", args: [holder] })
-        const takeover = await acquire(other, "2026-07-10T12:16:00.000Z")
-        expect(takeover.rows).toEqual([{ holder_campaign_id: other }])
+        await client.execute({ sql: "DELETE FROM reward_song_pools WHERE reward_campaign_id = ?1", args: [holder] })
+        const replacement = await register(other)
+        expect(replacement.rows).toEqual([{ reward_campaign_id: other }])
       })
     } finally {
       await seed.end()
@@ -563,10 +590,20 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     const campaigns = await verify.unsafe(
       `SELECT funded_cents, reserved_cents, credited_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_reward_pg'`,
     ) as Array<{ funded_cents: number; reserved_cents: number; credited_cents: number }>
+    const allocations = await verify.unsafe(`
+      SELECT a.amount_cents, f.reward_campaign_funding_effect_id
+      FROM reward_campaign_reservation_funding_allocations a
+      JOIN reward_campaign_funding_effects f
+        ON f.reward_campaign_funding_effect_id = a.reward_campaign_funding_effect_id
+    `) as Array<{ amount_cents: number; reward_campaign_funding_effect_id: string }>
     await verify.end()
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(events).toEqual([{ amount_cents: 40 }])
     expect(campaigns).toEqual([{ funded_cents: 100, reserved_cents: 0, credited_cents: 40 }])
+    expect(allocations).toEqual([{
+      amount_cents: 40,
+      reward_campaign_funding_effect_id: "rcf_seed_rcp_reward_pg",
+    }])
   })
 
   test("a later campaign cannot pay the other activity for the same human, song, and UTC day", async () => {

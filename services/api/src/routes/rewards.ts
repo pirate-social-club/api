@@ -32,6 +32,7 @@ import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
 import type { RewardCashoutRequest } from "../types"
 import { inspectKaraokeRewardEligibility } from "../lib/posts/post-karaoke-service"
 import { resolveRewardSettlementManually } from "../lib/rewards/reward-settlement-manual-resolution"
+import { getRewardPoolRefundPolicyReadiness } from "../lib/rewards/reward-pool-refund-readiness"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -363,5 +364,21 @@ rewards.post(
   "/operator/reward_settlements/:effectId/resolve",
   createRewardSettlementResolutionHandler(),
 )
+rewards.get("/operator/reward_pools/refund_policy_readiness", async (c) => {
+  const operator = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operator, REWARD_SETTLEMENT_RESOLVE_SCOPE)
+  const rawProposed = c.req.query("proposed_max_refund_atomic")
+  if (rawProposed !== undefined && !/^(0|[1-9][0-9]*)$/u.test(rawProposed)) {
+    throw badRequestError("Invalid proposed max refund")
+  }
+  const readiness = await getRewardPoolRefundPolicyReadiness({
+    client: getControlPlaneClient(c.env),
+    proposedMaxRefundAtomic: rawProposed === undefined ? undefined : BigInt(rawProposed),
+  })
+  return c.json(readiness, 200)
+})
 
 export default rewards

@@ -153,6 +153,27 @@ describe("reward campaign reconciler", () => {
     })
     await ctx.client.execute({
       sql: `
+        INSERT INTO reward_campaign_funding_effects (
+          reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+          idempotency_key, chain_id, token_address, expected_amount_cents,
+          expected_amount_atomic, received_amount_atomic, sender_address,
+          treasury_address, tx_hash, status, expires_at, confirmed_at,
+          created_at, updated_at
+        ) VALUES (
+          'rcf_pending_verification', 'rcp_pending_verification', ?1,
+          'pending-verification-funding', 84532,
+          '0x1000000000000000000000000000000000000001',
+          1000, '10000000', '10000000',
+          '0x3000000000000000000000000000000000000003',
+          '0x2000000000000000000000000000000000000002',
+          '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'confirmed', '2026-07-10T13:00:00.000Z', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })
+    await ctx.client.execute({
+      sql: `
         INSERT INTO reward_qualification_events (
           reward_qualification_event_id, community_id, shard_sequence, user_id,
           post_id, song_artifact_bundle_id, activity, qualified_at,

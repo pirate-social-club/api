@@ -16,6 +16,66 @@ import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
 
+async function allocateReservationAcrossContributionLots(input: {
+  client: Pick<Client, "execute">
+  campaignId: string
+  reservationId: string
+  amountCents: number
+  allocatedAt: string
+}): Promise<void> {
+  const lots = await input.client.execute({
+    sql: `
+      SELECT
+        f.reward_campaign_funding_effect_id,
+        f.expected_amount_cents
+          - COALESCE(SUM(a.amount_cents), 0) AS remaining_cents
+      FROM reward_campaign_funding_effects f
+      LEFT JOIN reward_campaign_reservation_funding_allocations a
+        ON a.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+      WHERE f.reward_campaign_id = ?1
+        AND f.status = 'confirmed'
+      GROUP BY
+        f.reward_campaign_funding_effect_id,
+        f.expected_amount_cents,
+        f.confirmed_at
+      HAVING f.expected_amount_cents - COALESCE(SUM(a.amount_cents), 0) > 0
+      ORDER BY f.confirmed_at ASC, f.reward_campaign_funding_effect_id ASC
+    `,
+    args: [input.campaignId],
+  })
+
+  let remaining = input.amountCents
+  for (const lot of lots.rows) {
+    if (remaining === 0) break
+    const available = Number(rowValue(lot, "remaining_cents"))
+    if (!Number.isSafeInteger(available) || available <= 0) {
+      throw new Error("reward contribution lot remainder is invalid")
+    }
+    const allocated = Math.min(remaining, available)
+    await input.client.execute({
+      sql: `
+        INSERT INTO reward_campaign_reservation_funding_allocations (
+          reward_campaign_reservation_id,
+          reward_campaign_funding_effect_id,
+          amount_cents,
+          allocated_at
+        ) VALUES (?1, ?2, ?3, ?4)
+      `,
+      args: [
+        input.reservationId,
+        String(rowValue(lot, "reward_campaign_funding_effect_id")),
+        allocated,
+        input.allocatedAt,
+      ],
+    })
+    remaining -= allocated
+  }
+
+  if (remaining !== 0) {
+    throw new Error("reward contribution lots do not cover reservation")
+  }
+}
+
 export type RewardQualificationCandidate = {
   eventId: string
   userId: string
@@ -515,6 +575,13 @@ export async function creditRewardCampaignQualification(input: {
         reservationId, campaignId, identity.id, input.candidate.userId,
         input.candidate.periodKey, input.candidate.activity, amount, creditNow,
       ],
+    })
+    await allocateReservationAcrossContributionLots({
+      client: tx,
+      campaignId,
+      reservationId,
+      amountCents: amount,
+      allocatedAt: creditNow,
     })
     await tx.execute({
       sql: "UPDATE reward_campaigns SET reserved_cents = reserved_cents + ?2, updated_at = ?3 WHERE reward_campaign_id = ?1",
