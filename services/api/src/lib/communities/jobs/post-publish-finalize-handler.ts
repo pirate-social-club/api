@@ -264,6 +264,23 @@ async function convergePublishedPostProjection(input: {
     })
   }
 
+  try {
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.post.community_id,
+      jobType: "telegram_post_publish",
+      subjectType: "post",
+      subjectId: input.post.post_id,
+      createdAt: input.now,
+    })
+  } catch (error) {
+    logPipelineError("[community-job] Telegram publication enqueue failed", {
+      community_id: input.post.community_id,
+      post_id: input.post.post_id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
   await updateStoryRegisteredAssetPostStatus({
     env: input.env,
     communityId: input.post.community_id,

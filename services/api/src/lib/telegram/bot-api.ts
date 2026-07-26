@@ -31,6 +31,7 @@ export type TelegramBotProfile = {
 export type TelegramChatMember = {
   status: string
   can_invite_users?: boolean
+  can_post_messages?: boolean
 }
 
 export type TelegramFile = {
@@ -151,6 +152,58 @@ export function sendTelegramMessage(
   },
 ): Promise<{ message_id: number }> {
   return callTelegramBotApi(bot, "sendMessage", body)
+}
+
+type TelegramInlineReplyMarkup = {
+  inline_keyboard: Array<Array<Record<string, unknown>>>
+}
+
+export function sendTelegramPhoto(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    photo: string
+    caption?: string
+    reply_markup?: TelegramInlineReplyMarkup
+  },
+): Promise<{ message_id: number }> {
+  return callTelegramBotApi(bot, "sendPhoto", body)
+}
+
+export function sendTelegramVideo(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    video: string
+    caption?: string
+    reply_markup?: TelegramInlineReplyMarkup
+  },
+): Promise<{ message_id: number }> {
+  return callTelegramBotApi(bot, "sendVideo", body)
+}
+
+export function editTelegramMessageText(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    message_id: number
+    text: string
+    reply_markup?: TelegramInlineReplyMarkup
+  },
+): Promise<{ message_id: number } | true> {
+  return callTelegramBotApi(bot, "editMessageText", body)
+}
+
+export function editTelegramMessageCaption(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    message_id: number
+    caption: string
+    reply_markup?: TelegramInlineReplyMarkup
+  },
+): Promise<{ message_id: number } | true> {
+  return callTelegramBotApi(bot, "editMessageCaption", body)
 }
 
 export function setTelegramChatMenuButton(

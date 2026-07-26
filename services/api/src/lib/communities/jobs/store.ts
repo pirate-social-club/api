@@ -26,6 +26,7 @@ export type CommunityJobType =
   | "live_room_viewer_sessions_prune"
   | "video_media_analysis"
   | "video_audio_catalog_unenroll"
+  | "telegram_post_publish"
 type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 export type CommunityJobCheckpoint =
   | "attempt_started"
