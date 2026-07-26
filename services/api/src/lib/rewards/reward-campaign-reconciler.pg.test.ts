@@ -748,9 +748,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     const campaigns = await verify.unsafe(
       `SELECT status, funded_cents, reserved_cents, credited_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_budget_pg'`,
     ) as Array<{ status: string; funded_cents: number; reserved_cents: number; credited_cents: number }>
+    const pending = await verify.unsafe(
+      `SELECT status FROM reward_pending_qualifications
+       WHERE reward_campaign_id = 'rcp_budget_pg'
+       ORDER BY status`,
+    ) as Array<{ status: string }>
     await verify.end()
     expect(reservations).toEqual([{ status: "credited", amount_cents: 40 }])
     expect(campaigns).toEqual([{ status: "exhausted", funded_cents: 40, reserved_cents: 0, credited_cents: 40 }])
+    expect(pending).toEqual([{ status: "credited" }, { status: "reconciling" }])
   })
 
   test("pre-end qualifications remain claimable and exhaustion defers the next identity", async () => {
