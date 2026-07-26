@@ -12,6 +12,7 @@ import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../v
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
+import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 
 const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
@@ -106,6 +107,7 @@ export type RewardCampaignReconciliationSummary = {
   skipped_owner_blocked: number
   skipped_no_campaign: number
   skipped_budget: number
+  deferred_funding: number
   skipped_cap: number
   skipped_score: number
   failed_communities: number
@@ -130,6 +132,7 @@ function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
     skipped_owner_blocked: 0,
     skipped_no_campaign: 0,
     skipped_budget: 0,
+    deferred_funding: 0,
     skipped_cap: 0,
     skipped_score: 0,
     failed_communities: 0,
@@ -286,7 +289,7 @@ async function ingestCommunity(input: {
   })
 }
 
-type CreditResult = "credited" | "duplicate" | "identity" | "expired" | "owner_blocked" | "no_campaign" | "budget" | "cap" | "score"
+type CreditResult = "credited" | "duplicate" | "identity" | "expired" | "owner_blocked" | "no_campaign" | "budget" | "funding_deferred" | "cap" | "score"
 type PendingTerminalReason =
   | "campaign_ended"
   | "budget_unavailable"
@@ -389,6 +392,7 @@ export async function creditRewardCampaignQualification(input: {
   now: string
   currentTime?: () => string
 }): Promise<{ result: CreditResult; amountCents: number }> {
+  await assertRewardSolvencyAdmission({ env: input.env, client: input.client, now: new Date(input.now) })
   if (isRewardQualificationExpired(input.candidate.qualifiedAt, input.now)) {
     await markPendingQualificationTerminal({
       client: input.client,
@@ -483,11 +487,9 @@ export async function creditRewardCampaignQualification(input: {
     const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
     const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
     if (funded - reserved - credited - refunded < amount) {
-      await markPendingQualificationTerminal({
-        client: tx, eventId: input.candidate.eventId, status: "ineligible",
-        reason: "budget_unavailable", now: creditNow,
-      })
-      return { result: "budget", amountCents: 0 }
+      // Exhaustion is a pool state, not a terminal qualification outcome.
+      // Leave the projection reconciling so a later contribution can fund it.
+      return { result: "funding_deferred", amountCents: 0 }
     }
     if (!identity) {
       await markQualificationPendingVerification({
@@ -785,6 +787,7 @@ export async function reconcileRewardCampaigns(input: {
         else if (result.result === "owner_blocked") summary.skipped_owner_blocked += 1
         else if (result.result === "no_campaign") summary.skipped_no_campaign += 1
         else if (result.result === "budget") summary.skipped_budget += 1
+        else if (result.result === "funding_deferred") summary.deferred_funding += 1
         else if (result.result === "cap") summary.skipped_cap += 1
         else if (result.result === "score") summary.skipped_score += 1
       } catch (error) {

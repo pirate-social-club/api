@@ -363,6 +363,12 @@ export type Env = {
   REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS?: string
   REWARDS_CAMPAIGN_TREASURY_ADDRESS?: string
   REWARDS_CAMPAIGN_RPC_URL?: string
+  /** Dark rollout gate. When true, stale/unknown/insolvent observations stop new funding and credits. */
+  REWARDS_SOLVENCY_FREEZE_ENABLED?: string
+  /** Maximum age of the last successful treasury observation. Defaults to 15 minutes. */
+  REWARDS_SOLVENCY_MAX_OBSERVATION_AGE_SECONDS?: string
+  /** Alert-only signer gas floor; this is operational friction, never a security cap. */
+  REWARDS_LIT_SIGNER_MIN_ETH_WEI?: string
   // Optional comma-separated public post IDs. When set, self-serve campaign
   // creation fails closed for every other post.
   REWARDS_CAMPAIGN_POST_ALLOWLIST?: string
