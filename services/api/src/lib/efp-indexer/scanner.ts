@@ -116,10 +116,17 @@ async function getLogsAdaptive<T>(
   try {
     return [...await fetchRange(fromBlock, toBlock)]
   } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+    const rpcData = error && typeof error === "object" && "data" in error
+      ? String(error.data)
+      : ""
+    const message = `${
+      error instanceof Error ? error.message : String(error)
+    } ${rpcData}`.toLowerCase()
     const canSplit = message.includes("response too large")
       || message.includes("block range")
       || message.includes("limited to")
+      || /more than \d+ results/u.test(message)
+      || message.includes("try with this block range")
     if (message.includes("rate limit") && rateLimitAttempt < 6) {
       const retryAfterMs = Math.min(5_000, 250 * (2 ** rateLimitAttempt))
       await new Promise((resolve) => setTimeout(resolve, retryAfterMs))
