@@ -76,6 +76,10 @@ export type RehearsalManifest = {
   vault: {
     address: string
     bytecodeHash: string
+    /** The staging administration Safe expected to own the vault. */
+    ownerSafeAddress: string
+    /** The USDC token the vault is immutably bound to. */
+    usdcAddress: string
     chainId: number
     policyVersion: bigint
     epochDurationSeconds: bigint
@@ -160,10 +164,17 @@ export type ReviewedStagingPins = {
   pkpAddress: string
 }
 
+/**
+ * The parser's result. UNTRUSTED: it was validated against whatever pins and
+ * clock the caller supplied, which is right for tests and wrong for execution.
+ * Nothing that touches the chain or Lit may accept this type.
+ */
+export type ParsedRehearsalManifest = RehearsalManifest
+
 export function parseRehearsalManifest(
   raw: unknown,
   options: { now: Date; pins: ReviewedStagingPins },
-): RehearsalManifest {
+): ParsedRehearsalManifest {
   if (typeof raw !== "object" || raw === null) fail("manifest must be an object")
   const input = raw as Record<string, unknown>
 
@@ -244,6 +255,8 @@ export function parseRehearsalManifest(
     fail(`vault.chainId must be Base Sepolia ${REHEARSAL_CHAIN_ID}; captured ${String(vault.chainId)}`)
   }
   const vaultAddress = requireAddress(vault.address, "vault.address")
+  const ownerSafeAddress = requireAddress(vault.ownerSafeAddress, "vault.ownerSafeAddress")
+  const usdcAddress = requireAddress(vault.usdcAddress, "vault.usdcAddress")
   const bytecodeHash = requireNonEmptyString(vault.bytecodeHash, "vault.bytecodeHash")
   if (!HASH_RE.test(bytecodeHash)) fail("vault.bytecodeHash is not a 32-byte hash")
 
@@ -311,6 +324,8 @@ export function parseRehearsalManifest(
     vault: {
       address: vaultAddress,
       bytecodeHash: bytecodeHash.toLowerCase(),
+      ownerSafeAddress,
+      usdcAddress,
       chainId: REHEARSAL_CHAIN_ID,
       policyVersion: requirePositiveBigInt(vault.policyVersion, "vault.policyVersion"),
       epochDurationSeconds: requirePositiveBigInt(
@@ -398,4 +413,33 @@ export function worstCaseVictimLossAtomic(input: {
   const reachable = balance + inflows
   const capacity = epochsTouched * (payoutCap + refundCap)
   return { lossAtomic: reachable < capacity ? reachable : capacity, epochsTouched }
+}
+
+/**
+ * Brand owned by this module and deliberately not exported. Without it, an
+ * `ExecutableRehearsalManifest` cannot be constructed outside this file except
+ * by an explicit unsafe cast, which is greppable and reviewable.
+ */
+declare const REVIEWED_BRAND: unique symbol
+
+/**
+ * A manifest validated against the SOURCE-CONTROLLED pins and limits and the
+ * real clock. The on-chain preflight and the drill executor accept only this
+ * type, so caller-supplied pins can exercise parsing in tests but cannot reach
+ * an executable path.
+ */
+export type ExecutableRehearsalManifest = RehearsalManifest & {
+  readonly [REVIEWED_BRAND]: true
+}
+
+/**
+ * The only supported way to obtain an executable manifest. Uses the reviewed
+ * pins and the current clock; neither is caller-supplied.
+ */
+export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsalManifest {
+  const parsed = parseRehearsalManifest(raw, {
+    now: new Date(),
+    pins: { groupId: PINNED_STAGING_GROUP_ID, pkpAddress: PINNED_STAGING_PKP_ADDRESS },
+  })
+  return parsed as ExecutableRehearsalManifest
 }

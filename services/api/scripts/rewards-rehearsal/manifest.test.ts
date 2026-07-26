@@ -34,6 +34,8 @@ const valid = () => ({
   vault: {
     address: "0x000000000000000000000000000000000000beef",
     bytecodeHash: `0x${"ab".repeat(32)}`,
+    ownerSafeAddress: "0x1cd289b6b232e1378d606ba550019e553685ad4c",
+    usdcAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
     chainId: 84532,
     policyVersion: 1n,
     epochDurationSeconds: 86_400n,
