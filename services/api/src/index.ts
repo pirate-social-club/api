@@ -984,6 +984,9 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
         || summary.failed > 0
         || summary.pending > 0
         || summary.errors > 0
+        || summary.capacityDeferred > 0
+        || summary.capacityObservationStale
+        || summary.overdueSongs > 0
       )
     ) {
       console.info("[rewards] reconciled submitted reward payouts", JSON.stringify(summary))
@@ -1005,6 +1008,20 @@ async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise
         balance_atomic: solvency.balanceAtomic?.toString(),
         liability_atomic: solvency.liability?.totalAtomic.toString(),
         solvent: solvency.solvent,
+        vault_capacity: solvency.vaultCapacity
+          ? {
+            policy_version: solvency.vaultCapacity.policyVersion.toString(),
+            current_epoch: solvency.vaultCapacity.currentEpoch.toString(),
+            payout_remaining_atomic: (
+              solvency.vaultCapacity.payoutEpochCapAtomic - solvency.vaultCapacity.payoutSpentAtomic
+            ).toString(),
+            refund_remaining_atomic: (
+              solvency.vaultCapacity.refundEpochCapAtomic - solvency.vaultCapacity.refundSpentAtomic
+            ).toString(),
+            observed_block_number: solvency.vaultCapacity.observedBlockNumber,
+            observed_block_hash: solvency.vaultCapacity.observedBlockHash,
+          }
+          : undefined,
       }))
     }
   } catch (error) {

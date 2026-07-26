@@ -370,6 +370,10 @@ export type Env = {
   REWARDS_SOLVENCY_FREEZE_ENABLED?: string
   /** Maximum age of the last successful treasury observation. Defaults to 15 minutes. */
   REWARDS_SOLVENCY_MAX_OBSERVATION_AGE_SECONDS?: string
+  /** Maximum age of the last block-pinned vault capacity observation. */
+  REWARDS_CAPACITY_MAX_OBSERVATION_AGE_SECONDS?: string
+  /** Maximum age of a song's oldest submitted payout before a high-urgency alert. */
+  REWARDS_PAYOUT_MAX_WAIT_SECONDS?: string
   /** Alert-only signer gas floor; this is operational friction, never a security cap. */
   REWARDS_LIT_SIGNER_MIN_ETH_WEI?: string
   // Optional comma-separated public post IDs. When set, self-serve campaign
