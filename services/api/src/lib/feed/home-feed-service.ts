@@ -35,7 +35,11 @@ import {
   shouldShadowAuthenticatedVideoFeed,
 } from "./home-feed-control-plane-shadow"
 import { takeVideoFeedPage } from "./video-feed-selection"
-import { scoreVideoCandidates, type VideoCandidateInput } from "./video-scorer"
+import {
+  scoreVideoCandidates,
+  type ScoredVideoCandidate,
+  type VideoCandidateInput,
+} from "./video-scorer"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -173,6 +177,7 @@ const VIDEO_FEED_CANDIDATES_PER_LEG = 250
 
 type VideoFeedProjectionPage = {
   allowHydrationBackfill: boolean
+  bestOrderedRows?: readonly HomeFeedProjectionRow[]
   nextCursor: string | null
   rows: HomeFeedProjectionRow[]
 }
@@ -223,6 +228,7 @@ function toVideoCandidateInput(row: HomeFeedProjectionRow): VideoCandidateInput 
     // Duration is not a first-class projection column. Phase 1 priors are
     // intentionally identical across duration buckets, so absence is neutral.
     durationSeconds: null,
+    likes: row.like_count,
     postId: row.source_post_id,
     stats: null,
     upvotes: row.upvote_count,
@@ -234,21 +240,40 @@ export function selectBestVideoFeedProjectionPage(input: {
   pageSize?: number
   rows: readonly HomeFeedProjectionRow[]
 }): { hasMore: boolean; rows: HomeFeedProjectionRow[] } {
-  const rowByKey = new Map(input.rows.map((row) => [videoFeedProjectionKey(row), row] as const))
-  const remaining = scoreVideoCandidates(input.rows.map(toVideoCandidateInput), input.cursor.rankedAt)
-  const ordered: ReturnType<typeof scoreVideoCandidates> = []
+  return sliceBestVideoFeedProjectionDeck({
+    cursor: input.cursor,
+    orderedRows: orderBestVideoFeedProjectionRows(input.rows, input.cursor.rankedAt),
+    pageSize: input.pageSize,
+  })
+}
+
+function orderBestVideoFeedProjectionRows(
+  rows: readonly HomeFeedProjectionRow[],
+  rankedAt: number,
+): HomeFeedProjectionRow[] {
+  const rowByKey = new Map(rows.map((row) => [videoFeedProjectionKey(row), row] as const))
+  const remaining = scoreVideoCandidates(rows.map(toVideoCandidateInput), rankedAt)
+  const ordered: ScoredVideoCandidate[] = []
   while (remaining.length > 0) {
     const policyPage = takeVideoFeedPage(remaining, VIDEO_FEED_PAGE_SIZE)
     if (policyPage.length === 0) break
     ordered.push(...policyPage)
   }
+  return ordered
+    .map((item) => rowByKey.get(`${item.candidate.communityId}\u0000${item.candidate.postId}`))
+    .filter((row): row is HomeFeedProjectionRow => Boolean(row))
+}
+
+function sliceBestVideoFeedProjectionDeck(input: {
+  cursor: VideoFeedCursor
+  orderedRows: readonly HomeFeedProjectionRow[]
+  pageSize?: number
+}): { hasMore: boolean; rows: HomeFeedProjectionRow[] } {
   const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
-  const selected = ordered.slice(input.cursor.offset, input.cursor.offset + pageSize)
+  const selected = input.orderedRows.slice(input.cursor.offset, input.cursor.offset + pageSize)
   return {
-    hasMore: input.cursor.offset + selected.length < ordered.length,
-    rows: selected
-      .map((item) => rowByKey.get(`${item.candidate.communityId}\u0000${item.candidate.postId}`))
-      .filter((row): row is HomeFeedProjectionRow => Boolean(row)),
+    hasMore: input.cursor.offset + selected.length < input.orderedRows.length,
+    rows: selected,
   }
 }
 
@@ -323,10 +348,26 @@ async function listBestVideoHomeFeedProjectionRows(input: {
   includeProjectedPayload?: boolean
   memberCommunityIdSet: Set<string>
   now: number
+  orderedRows?: readonly HomeFeedProjectionRow[]
   pageSize?: number
   timeRange: HomeFeedTimeRange
 }): Promise<VideoFeedProjectionPage> {
   const cursor = parseVideoFeedCursor(input.cursor, input.now)
+  if (input.orderedRows) {
+    const selected = sliceBestVideoFeedProjectionDeck({
+      cursor,
+      orderedRows: input.orderedRows,
+      pageSize: input.pageSize,
+    })
+    return {
+      allowHydrationBackfill: true,
+      bestOrderedRows: input.orderedRows,
+      rows: selected.rows,
+      nextCursor: selected.hasMore
+        ? `v2:${cursor.rankedAt}:${cursor.offset + selected.rows.length}`
+        : null,
+    }
+  }
   const args: Array<string | number> = [...input.communityIds]
   const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
   const cutoffMs = getTimeRangeCutoffMs(input.timeRange, cursor.rankedAt)
@@ -379,13 +420,15 @@ async function listBestVideoHomeFeedProjectionRows(input: {
     ),
     input.memberCommunityIdSet,
   )
-  const selected = selectBestVideoFeedProjectionPage({
+  const orderedRows = orderBestVideoFeedProjectionRows(candidates, cursor.rankedAt)
+  const selected = sliceBestVideoFeedProjectionDeck({
     cursor,
+    orderedRows,
     pageSize: input.pageSize,
-    rows: candidates,
   })
   return {
     allowHydrationBackfill: true,
+    bestOrderedRows: orderedRows,
     rows: selected.rows,
     nextCursor: selected.hasMore
       ? `v2:${cursor.rankedAt}:${cursor.offset + selected.rows.length}`
@@ -876,6 +919,7 @@ export async function listHomeFeed(input: {
             includeProjectedPayload: shadowControlPlane,
             memberCommunityIdSet,
             now,
+            orderedRows: videoPage.bestOrderedRows,
             pageSize: nextPageSize,
             timeRange,
           })

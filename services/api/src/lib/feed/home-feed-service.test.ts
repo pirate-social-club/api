@@ -71,6 +71,7 @@ function videoCandidateRow(input: {
   upvotes?: number
   downvotes?: number
   comments?: number
+  likes?: number
   communityId?: string
   authorUserId?: string | null
   identityMode?: "anonymous" | "public"
@@ -82,7 +83,7 @@ function videoCandidateRow(input: {
     community_id: input.communityId ?? `cmt_${input.postId}`,
     downvote_count: input.downvotes ?? 0,
     identity_mode: input.identityMode ?? "public",
-    like_count: 0,
+    like_count: input.likes ?? 0,
     post_type: "video",
     source_created_at: new Date(rankedAt - (input.ageHours ?? 0) * 3_600_000).toISOString(),
     source_post_id: input.postId,
@@ -120,6 +121,16 @@ describe("best video candidate selection", () => {
       rows: candidates,
     })
     expect(page.rows[0]?.source_post_id).toBe("pst_fresh")
+  })
+
+  test("carries projected likes into explicit engagement ranking", () => {
+    const liked = videoCandidateRow({ postId: "pst_liked", likes: 5 })
+    const neutral = videoCandidateRow({ postId: "pst_neutral" })
+    const page = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      rows: [neutral, liked],
+    })
+    expect(page.rows[0]?.source_post_id).toBe("pst_liked")
   })
 
   test("uses one ranking clock and returns non-overlapping cursor pages", () => {

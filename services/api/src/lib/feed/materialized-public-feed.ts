@@ -5,6 +5,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
 import { HOME_FEED_SERVER_TIMING, listHomeFeed, type HomeFeedResponseWithTiming } from "./home-feed-service"
 import type { Env, HomeFeedResponse } from "../../types"
+import { VIDEO_SCORER_VERSION } from "./video-scorer"
 
 const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v1"
 const MATERIALIZED_PUBLIC_HOME_FEED_FRESH_MS = 5 * 60 * 1000
@@ -87,10 +88,12 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
   const localeKey = locale ?? "default"
   const contentKind = input.contentKind ?? null
   const contentKindCacheKey = contentKind ? [`content_kind=${contentKind}`] : []
+  const scorerCacheKey = contentKind === "video" ? [`scorer=${VIDEO_SCORER_VERSION}`] : []
   return {
     cacheKey: [
       MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION,
       ...contentKindCacheKey,
+      ...scorerCacheKey,
       "sort=best",
       `locale=${localeKey}`,
       "time_range=all",

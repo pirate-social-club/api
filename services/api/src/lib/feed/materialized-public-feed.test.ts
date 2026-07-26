@@ -5,6 +5,7 @@ import {
   buildMaterializedPublicHomeFeedTarget,
   readMaterializedPublicHomeFeed,
 } from "./materialized-public-feed"
+import { VIDEO_SCORER_VERSION } from "./video-scorer"
 
 function clientWithRow(row: Record<string, unknown>): Client {
   return {
@@ -31,6 +32,17 @@ function cachedRow(staleAt: string): Record<string, unknown> {
 }
 
 describe("readMaterializedPublicHomeFeed", () => {
+  test("versions video snapshots with the scorer while leaving mixed-feed keys stable", () => {
+    const videoTarget = buildMaterializedPublicHomeFeedTarget({
+      contentKind: "video",
+      locale: "en",
+      sort: "best",
+      timeRange: "all",
+    })
+    expect(videoTarget?.cacheKey).toContain(`scorer=${VIDEO_SCORER_VERSION}`)
+    expect(target?.cacheKey).not.toContain("scorer=")
+  })
+
   test("serves an expired snapshot during the bounded outage grace", async () => {
     const result = await readMaterializedPublicHomeFeed({
       client: clientWithRow(cachedRow("2026-07-20T07:30:00.000Z")),

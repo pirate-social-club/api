@@ -10,7 +10,7 @@
 //
 // Nothing here may import from the serving path; the dependency points one way.
 
-export const VIDEO_SCORER_VERSION = "v1"
+export const VIDEO_SCORER_VERSION = "v2"
 
 export type VideoDurationBucket = "lt_10s" | "10_30s" | "30_60s" | "gt_60s"
 
@@ -48,6 +48,7 @@ export type VideoCandidateInput = {
   upvotes: number
   downvotes: number
   comments: number
+  likes: number
   stats: VideoCandidateStats | null
 }
 
@@ -200,7 +201,7 @@ export function disapprovalRate(input: { upvotes: number; downvotes: number }): 
 }
 
 /**
- * Votes and comments are read from the projection counters and are not
+ * Votes, comments, and likes are read from the projection counters and are not
  * impression-attributed, so no denominator bounds them: a posterior rate here
  * can exceed 1 whenever engagement outruns impressions. Saturating the raw
  * ratio maps [0, inf) to [0, 1) monotonically instead.
@@ -211,9 +212,12 @@ export function disapprovalRate(input: { upvotes: number; downvotes: number }): 
 export function explicitEngagement(input: {
   upvotes: number
   comments: number
+  likes: number
   validImpressions: number
 }): number {
-  const points = finiteCount(input.upvotes) + 2 * finiteCount(input.comments)
+  const points = finiteCount(input.upvotes)
+    + 2 * finiteCount(input.comments)
+    + finiteCount(input.likes)
   const ratio = points / (finiteCount(input.validImpressions) + PRIOR_WEIGHT)
   return ratio / (ratio + EXPLICIT_SATURATION_K)
 }
@@ -248,6 +252,7 @@ export function videoScorerFeatures(
     negative: posteriorRate(stats?.fastSkips ?? 0, validImpressions, NEGATIVE_PRIOR),
     explicit: explicitEngagement({
       comments: candidate.comments,
+      likes: candidate.likes,
       upvotes: candidate.upvotes,
       validImpressions,
     }),
