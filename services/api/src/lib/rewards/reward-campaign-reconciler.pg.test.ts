@@ -172,6 +172,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         terms_hash TEXT NOT NULL,
         exhausted_at TEXT,
         ended_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
