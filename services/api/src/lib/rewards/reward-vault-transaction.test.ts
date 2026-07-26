@@ -6,6 +6,7 @@ import {
   executeAndVerifyRewardVaultTransaction,
   rewardVaultActionRequest,
   verifySignedRewardVaultTransaction,
+  rewardVaultInputFromSignedEffect,
   type RewardVaultTransactionInput,
 } from "./reward-vault-transaction"
 
@@ -123,5 +124,33 @@ describe("verifySignedRewardVaultTransaction", () => {
     const expected = input(overrides)
     const signedTx = await sign(signedFor)
     expect(() => verifySignedRewardVaultTransaction(signedTx, expected)).toThrow("calldata mismatch")
+  })
+})
+
+describe("rewardVaultInputFromSignedEffect", () => {
+  test("reconstructs only signed policy fields and re-verifies immutable effect fields", async () => {
+    const expected = input()
+    const signedTx = await sign(expected)
+    expect(rewardVaultInputFromSignedEffect({
+      signedTx,
+      effectKind: "reward_cashout",
+      effectId: expected.effectId,
+      recipient: expected.recipient,
+      amount: expected.amount,
+      vaultAddress: expected.vaultAddress,
+      signerAddress: expected.signerAddress,
+      chainId: expected.chainId,
+    })).toEqual(expected)
+
+    expect(() => rewardVaultInputFromSignedEffect({
+      signedTx,
+      effectKind: "reward_cashout",
+      effectId: "rpe_wrong",
+      recipient: expected.recipient,
+      amount: expected.amount,
+      vaultAddress: expected.vaultAddress,
+      signerAddress: expected.signerAddress,
+      chainId: expected.chainId,
+    })).toThrow("calldata mismatch")
   })
 })
