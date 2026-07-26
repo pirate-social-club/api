@@ -701,10 +701,19 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   // PostgreSQL trigger functions and EXECUTE FUNCTION triggers have no SQLite
   // equivalent. Local mirrors exercise application behavior; the real-PostgreSQL
   // reward suite applies the canonical migration and verifies these guards.
-  if (normalized.startsWith("CREATE FUNCTION ")) {
+  if (
+    normalized.startsWith("CREATE FUNCTION ")
+    || normalized.startsWith("CREATE OR REPLACE FUNCTION ")
+  ) {
     return []
   }
-  if (normalized.startsWith("CREATE TRIGGER ") && normalized.includes(" EXECUTE FUNCTION ")) {
+  if (
+    (
+      normalized.startsWith("CREATE TRIGGER ")
+      || normalized.startsWith("CREATE CONSTRAINT TRIGGER ")
+    )
+    && normalized.includes(" EXECUTE FUNCTION ")
+  ) {
     return []
   }
 
@@ -771,6 +780,17 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       return SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD
     }
     return []
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE EFP_FOLLOW_PROJECTION_STATE ")
+    && normalized.includes("ADD COLUMN LAST_RECONCILED_AT ")
+    && normalized.includes("ADD COLUMN LAST_RECONCILIATION_ERROR ")
+  ) {
+    return [
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciled_at TEXT;",
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciliation_error TEXT;",
+    ]
   }
 
   let sqliteCompat = statement

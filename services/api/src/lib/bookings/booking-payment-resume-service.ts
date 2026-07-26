@@ -54,7 +54,7 @@ export interface UnresolvedBookingPaymentIntentView {
   hold_id: string;
   host_user_id: string;
   booker_user_id: string;
-  intent_status: "verification_failed";
+  intent_status: "verifying" | "verified" | "verification_failed";
   hold_status: "active" | "consumed" | "expired";
   claimed_tx_ref: string;
   hold_expires_at: string;
@@ -236,7 +236,7 @@ export async function listUnresolvedBookingPaymentIntentsForOperator(input: {
 }): Promise<{ data: UnresolvedBookingPaymentIntentView[]; hasMore: boolean }> {
   const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 50)));
   const records = await createPaymentIntentWriteRepository(input.executor)
-    .listClaimedUnresolvedPaymentIntents(limit + 1);
+    .listClaimedUnresolvedPaymentIntents(input.nowUtc, limit + 1);
   return {
     data: records.slice(0, limit).map((record) =>
       unresolvedBookingPaymentIntentView(record, input.nowUtc)),
@@ -248,12 +248,19 @@ export function unresolvedBookingPaymentIntentView(
   { intent, hostUserId, bookerUserId, holdStatus }: ClaimedUnresolvedPaymentIntentRecord,
   nowUtc: string,
 ): UnresolvedBookingPaymentIntentView {
+  if (
+    intent.status !== "verifying"
+    && intent.status !== "verified"
+    && intent.status !== "verification_failed"
+  ) {
+    throw new TypeError(`unresolvedBookingPaymentIntentView: bad intent status ${intent.status}`);
+  }
   return {
     payment_intent_id: intent.paymentIntentId,
     hold_id: intent.holdId,
     host_user_id: hostUserId,
     booker_user_id: bookerUserId,
-    intent_status: "verification_failed",
+    intent_status: intent.status,
     hold_status: holdStatus,
     claimed_tx_ref: intent.claimedTxRef as string,
     hold_expires_at: intent.holdExpiresAt,
