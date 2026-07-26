@@ -159,6 +159,7 @@ feed.get("/home/videos/public", async (c) => {
     searchParams: url.searchParams,
     sort: c.req.query("sort") ?? null,
     timeRange: c.req.query("time_range") ?? null,
+    videoRankingMode: c.env.VIDEO_FEED_BEST_RANKING_MODE,
   })
   const materialized = await readMaterializedPublicHomeFeed({
     client: getControlPlaneClient(c.env),

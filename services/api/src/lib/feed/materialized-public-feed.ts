@@ -3,7 +3,12 @@ import { getProfileRepository } from "../auth/repositories"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
-import { HOME_FEED_SERVER_TIMING, listHomeFeed, type HomeFeedResponseWithTiming } from "./home-feed-service"
+import {
+  HOME_FEED_SERVER_TIMING,
+  listHomeFeed,
+  resolveVideoFeedBestRankingMode,
+  type HomeFeedResponseWithTiming,
+} from "./home-feed-service"
 import type { Env, HomeFeedResponse } from "../../types"
 import { VIDEO_SCORER_VERSION } from "./video-scorer"
 
@@ -65,6 +70,7 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
   searchParams?: URLSearchParams
   sort?: string | null
   timeRange?: string | null
+  videoRankingMode?: Env["VIDEO_FEED_BEST_RANKING_MODE"]
 }): MaterializedPublicHomeFeedTarget | null {
   if (input.searchParams) {
     for (const key of input.searchParams.keys()) {
@@ -88,7 +94,13 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
   const localeKey = locale ?? "default"
   const contentKind = input.contentKind ?? null
   const contentKindCacheKey = contentKind ? [`content_kind=${contentKind}`] : []
-  const scorerCacheKey = contentKind === "video" ? [`scorer=${VIDEO_SCORER_VERSION}`] : []
+  const videoRankingMode = resolveVideoFeedBestRankingMode(input.videoRankingMode)
+  const scorerCacheKey = contentKind === "video"
+    ? [
+        `ranking=${videoRankingMode}`,
+        ...(videoRankingMode === "scorer" ? [`scorer=${VIDEO_SCORER_VERSION}`] : []),
+      ]
+    : []
   return {
     cacheKey: [
       MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION,

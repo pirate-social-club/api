@@ -8,6 +8,7 @@ import {
   nextVideoFeedBackfillBatchSize,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
+  resolveVideoFeedBestRankingMode,
   selectBestVideoFeedProjectionPage,
   sortCommunitySummariesByViews,
   sortCommunitySummaries,
@@ -58,6 +59,14 @@ describe("videoFeedOrderSql", () => {
     expect(orderBy).toContain("CASE WHEN")
     expect(orderBy).not.toMatch(/\bpow(?:er)?\s*\(/iu)
     expect(orderBy).not.toContain("unixepoch(")
+  })
+})
+
+describe("resolveVideoFeedBestRankingMode", () => {
+  test("defaults to the scorer and honors the emergency legacy fallback", () => {
+    expect(resolveVideoFeedBestRankingMode(undefined)).toBe("scorer")
+    expect(resolveVideoFeedBestRankingMode("scorer")).toBe("scorer")
+    expect(resolveVideoFeedBestRankingMode("legacy")).toBe("legacy")
   })
 })
 import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"

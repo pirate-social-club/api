@@ -202,6 +202,12 @@ export function parseVideoFeedCursor(cursor: string | null | undefined, now: num
   return { offset, rankedAt }
 }
 
+export function resolveVideoFeedBestRankingMode(
+  mode: Env["VIDEO_FEED_BEST_RANKING_MODE"],
+): "legacy" | "scorer" {
+  return mode === "legacy" ? "legacy" : "scorer"
+}
+
 function videoFeedProjectionKey(row: HomeFeedProjectionRow): string {
   return `${row.community_id}\u0000${row.source_post_id}`
 }
@@ -791,8 +797,10 @@ export async function listHomeFeed(input: {
     mode: input.env.AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE,
     userId: input.userId,
   })
+  const useBestVideoScorer = sort === "best"
+    && resolveVideoFeedBestRankingMode(input.env.VIDEO_FEED_BEST_RANKING_MODE) === "scorer"
   let videoPage = input.contentKind === "video"
-    ? sort === "best"
+    ? useBestVideoScorer
       ? await listBestVideoHomeFeedProjectionRows({
           communityIds,
           cursor: input.cursor,
@@ -911,7 +919,7 @@ export async function listHomeFeed(input: {
         candidatesScanned,
         returnedItems: orderedItems.length,
       })
-      videoPage = sort === "best"
+      videoPage = useBestVideoScorer
         ? await listBestVideoHomeFeedProjectionRows({
             communityIds,
             cursor: videoPage.nextCursor,
