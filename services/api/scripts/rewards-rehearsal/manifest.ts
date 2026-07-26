@@ -48,14 +48,19 @@ export const PINNED_STAGING_GROUP_ID: string | null = "1"
 export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
 
 /**
- * The reviewed action CID the staging group must permit — and permit ALONE.
+ * The HASH of the reviewed action CID the staging group must permit — and
+ * permit ALONE.
+ *
+ * The group stores `cidHashesPermitted` (bytes32), not raw IPFS CIDs. The raw
+ * CID is pinned separately in the production executor configuration; the
+ * manifest records both so their relationship is auditable.
  *
  * Ships null: the group is currently configured with the `[0]` CID wildcard,
  * which permits every action and is the leading explanation for arbitrary code
  * having executed during the runtime probes. Until a reviewed CID is registered
  * and the wildcard replaced, no executable manifest can be produced.
  */
-export const PINNED_STAGING_ACTION_CID: string | null = null
+export const PINNED_STAGING_ACTION_CID_HASH: string | null = null
 
 /** A capture older than this is refused; topology drifts. */
 export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
@@ -80,7 +85,10 @@ export type RehearsalManifest = {
     usageKeyExecuteInGroups: string[]
     stagingGroupId: string
     stagingGroupPkpAddresses: string[]
-    stagingGroupActionCids: string[]
+    /** bytes32 hashes as stored by the group. */
+    stagingGroupActionCidHashes: string[]
+    /** The raw IPFS CID those hashes correspond to, recorded for traceability. */
+    stagingActionSourceCid: string
     knownProductionPkpAddresses: string[]
   }
   vault: {
@@ -176,6 +184,13 @@ function requireStringArray(value: unknown, field: string): string[] {
   return value.map((entry, index) => requireNonEmptyString(entry, `${field}[${index}]`))
 }
 
+/** Canonical lowercase bytes32, as the group stores CID hashes. */
+function requireBytes32(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field)
+  if (!HASH_RE.test(raw)) fail(`${field} must be a 32-byte hash (0x + 64 hex)`)
+  return raw.toLowerCase()
+}
+
 function requireUtcTimestamp(value: unknown, field: string): string {
   const raw = requireNonEmptyString(value, field)
   if (!UTC_RE.test(raw) || Number.isNaN(Date.parse(raw))) {
@@ -195,7 +210,7 @@ function requireUtcTimestamp(value: unknown, field: string): string {
 export type ReviewedStagingPins = {
   groupId: string | null
   pkpAddress: string
-  actionCid: string | null
+  actionCidHash: string | null
 }
 
 /**
@@ -287,27 +302,38 @@ export function parseRehearsalManifest(
   }
   // A non-empty list is NOT sufficient: the captured wildcard ["0"] is
   // non-empty and permits every action.
-  if (options.pins.actionCid === null) {
+  if (options.pins.actionCidHash === null) {
     fail(
-      "the reviewed staging action CID is not pinned; register it and replace the group's"
-        + " [0] CID wildcard before any executable manifest is produced",
+      "the reviewed staging action CID hash is not pinned; the action cannot exist until the"
+        + " staging vault is deployed, since its address is baked into the action source",
     )
   }
-  const pinnedActionCid = requireNonEmptyString(options.pins.actionCid, "pins.actionCid")
-  const actionCids = requireStringArray(lit.stagingGroupActionCids, "lit.stagingGroupActionCids")
-  for (const cid of actionCids) {
-    if (WILDCARD_SENTINELS.has(cid.trim())) {
+  const pinnedActionCidHash = requireBytes32(options.pins.actionCidHash, "pins.actionCidHash")
+  const actionCidHashes = requireStringArray(
+    lit.stagingGroupActionCidHashes,
+    "lit.stagingGroupActionCidHashes",
+  )
+  for (const hash of actionCidHashes) {
+    if (WILDCARD_SENTINELS.has(hash.trim())) {
       fail(
-        `lit.stagingGroupActionCids contains the wildcard "${cid}"; the group permits every action`,
+        `lit.stagingGroupActionCidHashes contains the wildcard "${hash}";`
+          + " the group permits every action",
       )
     }
   }
-  if (actionCids.length !== 1 || actionCids[0] !== pinnedActionCid) {
+  const normalizedHashes = actionCidHashes.map((hash, index) =>
+    requireBytes32(hash, `lit.stagingGroupActionCidHashes[${index}]`),
+  )
+  if (normalizedHashes.length !== 1 || normalizedHashes[0] !== pinnedActionCidHash) {
     fail(
-      "lit.stagingGroupActionCids must be exactly the reviewed action CID;"
-        + ` captured ${JSON.stringify(actionCids)}`,
+      "lit.stagingGroupActionCidHashes must be exactly the reviewed action CID hash;"
+        + ` captured ${JSON.stringify(normalizedHashes)}`,
     )
   }
+  const stagingActionSourceCid = requireNonEmptyString(
+    lit.stagingActionSourceCid,
+    "lit.stagingActionSourceCid",
+  )
 
   // --- Gate 3: vault identity, chain, and source-controlled tiny policy.
   if (vault.chainId !== REHEARSAL_CHAIN_ID) {
@@ -377,7 +403,8 @@ export function parseRehearsalManifest(
       usageKeyExecuteInGroups: executeInGroups,
       stagingGroupId,
       stagingGroupPkpAddresses: groupPkps,
-      stagingGroupActionCids: actionCids,
+      stagingGroupActionCidHashes: normalizedHashes,
+      stagingActionSourceCid,
       knownProductionPkpAddresses: productionPkps,
     },
     vault: {
@@ -501,7 +528,7 @@ export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsal
     pins: {
       groupId: PINNED_STAGING_GROUP_ID,
       pkpAddress: PINNED_STAGING_PKP_ADDRESS,
-      actionCid: PINNED_STAGING_ACTION_CID,
+      actionCidHash: PINNED_STAGING_ACTION_CID_HASH,
     },
   })
   return parsed as ExecutableRehearsalManifest
