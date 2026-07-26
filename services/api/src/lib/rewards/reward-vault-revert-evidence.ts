@@ -16,6 +16,15 @@ import {
   type RewardVaultTransactionInput,
 } from "./reward-vault-transaction"
 
+/**
+ * The EXACT trace options production uses. Shared with rehearsal provider
+ * qualification so the capability proven at selection time is the capability
+ * actually exercised: a provider can support the default opcode tracer while
+ * rejecting callTracer, and would otherwise qualify while capacity
+ * classification still failed.
+ */
+export const REWARD_VAULT_TRACE_OPTIONS = { tracer: "callTracer", timeout: "10s" } as const
+
 export type RewardVaultTransactionTrace = {
   /** Root call target from the trace, never a nested-call target. */
   to: string | null

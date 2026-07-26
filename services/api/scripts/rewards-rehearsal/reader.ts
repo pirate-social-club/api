@@ -34,10 +34,12 @@ export const CONFIRMATION_DEPTH_FALLBACK = 8
  * re-readable afterwards: a trace or block lookup that has been pruned cannot
  * be re-verified by a reviewer. Base produces a block roughly every 2s.
  */
+import { REWARD_VAULT_TRACE_OPTIONS } from "../../src/lib/rewards/reward-vault-revert-evidence"
+
 export const BASE_BLOCK_TIME_SECONDS = 2
-export const REQUIRED_RETENTION_HOURS = 72
-export const REQUIRED_RETENTION_BLOCKS =
-  (REQUIRED_RETENTION_HOURS * 3600) / BASE_BLOCK_TIME_SECONDS
+export const REHEARSAL_REQUIRED_RETENTION_HOURS = 72
+export const REHEARSAL_REQUIRED_RETENTION_BLOCKS =
+  (REHEARSAL_REQUIRED_RETENTION_HOURS * 3600) / BASE_BLOCK_TIME_SECONDS
 
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_RESPONSE_BYTES = 256 * 1024
@@ -92,7 +94,7 @@ export type ProviderQualification = {
   tracedTransactionHash: string | null
   historicalBlockReadable: boolean
   /** Source-controlled depth the endpoint had to satisfy. */
-  requiredRetentionBlocks: number
+  rehearsalRequiredRetentionBlocks: number
   /** The actual historical height probed, not merely the confirmed head. */
   testedHistoricalBlock: number
   capturedAt: string
@@ -414,12 +416,26 @@ export class RehearsalRpcReader {
     try {
       tracedTransactionHash = options.probeTransactionHash
         ?? (await this.#findProbeTransaction(block.number))
-      const trace = await this.#rpc("debug_traceTransaction", [tracedTransactionHash, {}], {
-        allowNullResult: true,
-      })
-      if (trace === null || typeof trace !== "object") {
+      const trace = await this.#rpc(
+        "debug_traceTransaction",
+        [tracedTransactionHash, REWARD_VAULT_TRACE_OPTIONS],
+        { allowNullResult: true },
+      )
+      // A callTracer root carries `type` and `from`; the default opcode tracer
+      // returns structLogs/gas/failed instead. Requiring the call-trace shape
+      // proves the tracer production uses is the one that actually ran.
+      const root = trace as { type?: unknown; from?: unknown } | null
+      if (
+        root === null
+        || typeof root !== "object"
+        || Array.isArray(root)
+        || typeof root.type !== "string"
+        || typeof root.from !== "string"
+      ) {
         supportsDebugTrace = false
-        failures.push("debug_traceTransaction returned no structured trace for a confirmed tx")
+        failures.push(
+          "debug_traceTransaction did not return a callTracer result for a confirmed transaction",
+        )
       }
     } catch (error) {
       if (
@@ -442,7 +458,7 @@ export class RehearsalRpcReader {
     // Retention at the REQUIRED depth. Re-reading the freshly confirmed block
     // would only prove ordinary lookup: an endpoint keeping 128 blocks passes
     // that and is still useless for re-verifying the drill afterwards.
-    const testedHistoricalBlock = Math.max(0, block.number - REQUIRED_RETENTION_BLOCKS)
+    const testedHistoricalBlock = Math.max(0, block.number - REHEARSAL_REQUIRED_RETENTION_BLOCKS)
     const historical = await this.#rpc(
       "eth_getBlockByNumber",
       [`0x${testedHistoricalBlock.toString(16)}`, false],
@@ -454,7 +470,7 @@ export class RehearsalRpcReader {
     if (!historicalBlockReadable) {
       failures.push(
         `endpoint does not retain block ${testedHistoricalBlock}`
-          + ` (${REQUIRED_RETENTION_BLOCKS} blocks / ~${REQUIRED_RETENTION_HOURS}h of history)`,
+          + ` (${REHEARSAL_REQUIRED_RETENTION_BLOCKS} blocks / ~${REHEARSAL_REQUIRED_RETENTION_HOURS}h of history)`,
       )
     }
 
@@ -468,7 +484,7 @@ export class RehearsalRpcReader {
       supportsDebugTrace,
       tracedTransactionHash,
       historicalBlockReadable,
-      requiredRetentionBlocks: REQUIRED_RETENTION_BLOCKS,
+      rehearsalRequiredRetentionBlocks: REHEARSAL_REQUIRED_RETENTION_BLOCKS,
       testedHistoricalBlock,
       capturedAt: (options.now ?? (() => new Date()))().toISOString(),
       qualified: failures.length === 0,

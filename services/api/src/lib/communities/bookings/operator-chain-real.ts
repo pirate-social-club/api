@@ -28,7 +28,10 @@ import {
   rewardVaultInputFromSignedEffect,
 } from "../../rewards/reward-vault-transaction"
 import { rewardOperationId } from "../../rewards/reward-operation-id"
-import { gatherRewardVaultRevertEvidence } from "../../rewards/reward-vault-revert-evidence"
+import {
+  gatherRewardVaultRevertEvidence,
+  REWARD_VAULT_TRACE_OPTIONS,
+} from "../../rewards/reward-vault-revert-evidence"
 
 // Real ethers-backed implementation of the coordinator's chain seam. Kept in a SEPARATE module so
 // the DO module itself has no ethers import — the production worker entry registers this via
@@ -275,7 +278,7 @@ export const realChain: ChainPrimitives = {
           traceTransaction: async (txHash) => {
             const trace = await provider.send("debug_traceTransaction", [
               txHash,
-              { tracer: "callTracer", timeout: "10s" },
+              REWARD_VAULT_TRACE_OPTIONS,
             ]) as { to?: unknown; error?: unknown; output?: unknown }
             return {
               to: typeof trace.to === "string" ? trace.to : null,
