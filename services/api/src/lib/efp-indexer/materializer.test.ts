@@ -5,12 +5,14 @@ import { createControlPlaneTestClient } from "../../../tests/helpers"
 import { decodeEfpListOp } from "./list-op"
 import {
   deriveAuthoritativeFollowerEdges,
+  findEfpFollowersAffectedByChain,
   rebuildEfpProjectionAfterRangeReplacement,
   reconcileEfpFollowCounts,
   refreshEfpProjectionAvailability,
   replaceFollowerEffectiveEdges,
 } from "./materializer"
 import { replaceEfpIndexerRange } from "./repository"
+import { withTransaction } from "../transactions"
 
 const FOLLOWER = "0x1111111111111111111111111111111111111111" as Address
 const OLD_TARGET = "0x2222222222222222222222222222222222222222" as Address
@@ -88,6 +90,40 @@ function edge(target: Address, slot: bigint) {
 }
 
 describe("EFP follow materializer", () => {
+  test("finds projected and authoritative followers for a storage chain in one set", async () => {
+    const client = await setup()
+    await client.batch([
+      {
+        sql: `INSERT INTO efp_effective_follows VALUES (
+          ?1, ?2, 10, ?3, '77', 100, ?4, 0, 0, ?5
+        )`,
+        args: [FOLLOWER, OLD_TARGET, CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_primary_list_events (
+          chain_id, contract_address, account_address, metadata_key, raw_value,
+          list_id, block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?2, ?1, 'primary-list', '0x09', '9', 100, ?3, ?3, 0, 0, ?4)`,
+        args: [NEW_TARGET, CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_storage_location_events (
+          chain_id, registry_address, list_id, raw_storage_location,
+          storage_chain_id, storage_contract_address, storage_slot,
+          block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?1, '9', '0x', 10, ?1, '88', 100, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, NOW],
+      },
+    ], "write")
+
+    const followers = await withTransaction(client, "read", (tx) =>
+      findEfpFollowersAffectedByChain({ tx, chainId: 10 }))
+
+    expect(followers).toEqual([FOLLOWER, NEW_TARGET])
+  })
+
   test("new pointer replays a slot whose complete history predates the watermark", async () => {
     const client = await setup()
     const rawAdd = `0x01010101${OLD_TARGET.slice(2)}`.toLowerCase()
