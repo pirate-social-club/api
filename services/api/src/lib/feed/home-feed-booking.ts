@@ -1,4 +1,5 @@
 import type { HomeFeedItem } from "../../types"
+import { decodePublicUserId } from "../public-ids"
 import { boolOrNull, numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
 import type { InStatement, QueryResult } from "../sql-client"
 
@@ -79,7 +80,8 @@ export async function listFeedBookingsByHostUserIds(
 function discoverableAuthorUserId(item: HomeFeedItem): string | null {
   const post = item.post.post
   if (post.identity_mode !== "public" || post.authorship_mode !== "human_direct") return null
-  return post.author_user?.trim() || null
+  const publicUserId = post.author_user?.trim()
+  return publicUserId ? decodePublicUserId(publicUserId) : null
 }
 
 /**

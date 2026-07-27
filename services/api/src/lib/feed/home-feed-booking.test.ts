@@ -49,6 +49,21 @@ describe("home feed booking discovery", () => {
     expect(result[0]?.booking).toEqual(booking)
   })
 
+  test("decodes a serialized public user id before booking lookup", async () => {
+    const item = feedItem({ authorUser: "usr_usr_host" })
+    const lookups: string[][] = []
+    const result = await decorateHomeFeedItemsWithBookings({
+      items: [item],
+      lookup: async (hostUserIds) => {
+        lookups.push(hostUserIds)
+        return new Map([["usr_host", booking]])
+      },
+    })
+
+    expect(lookups).toEqual([["usr_host"]])
+    expect(result[0]?.booking).toEqual(booking)
+  })
+
   test("omits booking when no published booking profile is returned", async () => {
     const item = feedItem()
     const result = await decorateHomeFeedItemsWithBookings({
