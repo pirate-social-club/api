@@ -378,11 +378,29 @@ describe("resolveHomeFeedCommunityIds", () => {
   test("uses the explicit operator scope without leaking duplicate community reads", () => {
     expect(resolveHomeFeedCandidateCommunityIds({
       activeCommunities: [],
+      allowOverride: true,
       followRows: [],
       membershipRows: [],
       userId: "benchmark-user",
       override: ["community-a", "community-b", "community-a"],
     })).toEqual(["community-a", "community-b"])
+  })
+
+  test("ignores an explicit operator scope when the environment disallows overrides", () => {
+    const activeCommunities = [
+      createCommunityRow({
+        communityId: "community-production",
+        creatorUserId: "production-owner",
+      }),
+    ]
+    expect(resolveHomeFeedCandidateCommunityIds({
+      activeCommunities,
+      allowOverride: false,
+      followRows: [],
+      membershipRows: [],
+      userId: "benchmark-user",
+      override: ["community-override"],
+    })).toEqual(["community-production"])
   })
 
   test("returns all active communities for a signed-in user", () => {

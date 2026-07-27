@@ -584,12 +584,13 @@ export function resolveHomeFeedCommunityIds(input: {
 
 export function resolveHomeFeedCandidateCommunityIds(input: {
   activeCommunities: CommunityRow[]
+  allowOverride?: boolean
   followRows: CommunityFollowProjectionRow[]
   membershipRows: CommunityMembershipProjectionRow[]
   userId: string | null
   override?: readonly string[]
 }): string[] {
-  return input.override
+  return input.allowOverride && input.override
     ? [...new Set(input.override)]
     : resolveHomeFeedCommunityIds(input)
 }
@@ -876,6 +877,7 @@ export async function listHomeFeed(input: {
   }))
   const communityIds = resolveHomeFeedCandidateCommunityIds({
     activeCommunities,
+    allowOverride: input.env.ENVIRONMENT === "staging",
     followRows,
     membershipRows,
     userId: input.userId,

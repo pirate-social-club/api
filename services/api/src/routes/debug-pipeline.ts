@@ -59,9 +59,12 @@ function isRecognizedStagingSmoke(row: { display_name?: unknown; description?: u
 }
 
 debugPipeline.post("/home-feed-benchmark", async (c) => {
-  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
 
+  // This operator-only staging route deliberately impersonates `user_id` so
+  // benchmarks exercise the authenticated viewer path over a fixed candidate
+  // scope. It must never be mounted as a public or production capability.
   const body = await c.req.json().catch(() => null) as {
     community_ids?: unknown
     cursor?: unknown

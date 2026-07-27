@@ -33,8 +33,7 @@ describe("home-feed benchmark route guards", () => {
   test("is absent outside staging", async () => {
     const response = await debugPipeline.request("/home-feed-benchmark", {
       method: "POST",
-      headers: { "x-admin-token": "secret" },
-    }, { ENVIRONMENT: "production", PIRATE_ADMIN_TOKEN: "secret" } as Env)
+    }, { ENVIRONMENT: "production" } as Env)
     expect(response.status).toBe(404)
   })
 
