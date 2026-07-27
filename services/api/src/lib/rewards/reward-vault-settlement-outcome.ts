@@ -47,9 +47,9 @@ export type RewardVaultSettlementKind = "payout" | "refund"
 export type RewardVaultReceiptLog = {
   address: string
   topics: readonly string[]
-  /** Present for completeness; no recognized outcome depends on it. */
   data?: string
-  transactionHash?: string
+  /** Required. A log that cannot be tied to this transaction is not evidence. */
+  transactionHash: string
 }
 
 export type RewardVaultSettlementOutcome =
@@ -57,7 +57,14 @@ export type RewardVaultSettlementOutcome =
   | { disposition: "capacity_deferred"; reason: string; deferredEpoch: bigint }
   | { disposition: "reconciliation_required"; reason: string }
 
-const HASH_RE = /^0x[0-9a-fA-F]{64}$/u
+/** A canonical 32-byte word, as Ethereum indexed topics always are. */
+const TOPIC_RE = /^0x[0-9a-fA-F]{64}$/u
+/** The persisted representation of an operation id. */
+const CANONICAL_OPERATION_ID_RE = /^0x[0-9a-f]{64}$/u
+
+/** Indexed-parameter counts, so a malformed event never becomes evidence. */
+const DEFERRAL_TOPIC_COUNT = 4
+const SETTLEMENT_TOPIC_COUNT = 4
 
 function reconcile(reason: string): RewardVaultSettlementOutcome {
   return { disposition: "reconciliation_required", reason }
@@ -72,7 +79,17 @@ function sameAddress(left: string, right: string): boolean {
 }
 
 function sameHash(left: string | undefined, right: string): boolean {
-  return typeof left === "string" && HASH_RE.test(left) && left.toLowerCase() === right.toLowerCase()
+  return typeof left === "string" && TOPIC_RE.test(left) && left.toLowerCase() === right.toLowerCase()
+}
+
+function isCanonicalTopic(value: string | undefined): value is string {
+  return typeof value === "string" && TOPIC_RE.test(value)
+}
+
+/** Every indexed topic must be a canonical word before anything is decoded. */
+function topicsAreCanonical(log: RewardVaultReceiptLog, expectedCount: number): boolean {
+  if (log.topics.length !== expectedCount) return false
+  return log.topics.every((topic) => isCanonicalTopic(topic))
 }
 
 /**
@@ -95,14 +112,14 @@ export function classifyRewardVaultSettlement(input: {
   if (input.receiptStatus !== 1) {
     return reconcile("receipt did not succeed; a reverted transaction is never classified here")
   }
-  if (!HASH_RE.test(input.operationId)) {
-    return reconcile("operation id is not canonical bytes32")
+  if (!CANONICAL_OPERATION_ID_RE.test(input.operationId)) {
+    return reconcile("operation id is not canonical lowercase bytes32")
   }
-  if (!HASH_RE.test(input.receiptTransactionHash)) {
+  if (!TOPIC_RE.test(input.receiptTransactionHash)) {
     return reconcile("receipt transaction hash is not canonical")
   }
 
-  const operationId = input.operationId.toLowerCase()
+  const operationId = input.operationId
   const expectedSettlementTopic =
     input.expectedKind === "payout"
       ? VAULT_EVENT_TOPICS.rewardPaid
@@ -122,11 +139,9 @@ export function classifyRewardVaultSettlement(input: {
     // Only logs from the pinned vault can mean anything. Another contract may
     // legitimately emit in the same transaction; it is not evidence about ours.
     if (!sameAddress(log.address, input.pinnedVaultAddress)) continue
-    // A log from an unrelated transaction in the same block proves nothing.
-    if (log.transactionHash !== undefined
-      && !sameHash(log.transactionHash, input.receiptTransactionHash)) {
-      continue
-    }
+    // A log from an unrelated transaction in the same block proves nothing, and
+    // a log that cannot be tied to a transaction at all proves less.
+    if (!sameHash(log.transactionHash, input.receiptTransactionHash)) continue
 
     const topic0 = log.topics[0]
     if (typeof topic0 !== "string") continue
@@ -139,6 +154,10 @@ export function classifyRewardVaultSettlement(input: {
 
     if (topic === expectedSettlementTopic) {
       if (!sameHash(log.topics[1], operationId)) continue
+      if (!topicsAreCanonical(log, SETTLEMENT_TOPIC_COUNT)) {
+        contradiction = "settlement event has a malformed topic structure"
+        continue
+      }
       if (settlement !== null) contradiction = "receipt carries duplicate settlement events"
       settlement = log
       continue
@@ -146,6 +165,15 @@ export function classifyRewardVaultSettlement(input: {
 
     if (topic === VAULT_EVENT_TOPICS.operationCapacityDeferred) {
       if (!sameHash(log.topics[1], operationId)) continue
+      if (!topicsAreCanonical(log, DEFERRAL_TOPIC_COUNT)) {
+        contradiction = "deferral event has a malformed topic structure"
+        continue
+      }
+      // All three parameters are indexed, so the event carries no data.
+      if (log.data !== undefined && log.data !== "0x") {
+        contradiction = "deferral event carried unexpected data"
+        continue
+      }
       if (deferral !== null) contradiction = "receipt carries duplicate deferral events"
       deferral = log
     }
@@ -164,18 +192,11 @@ export function classifyRewardVaultSettlement(input: {
   }
 
   if (deferral !== null) {
-    const kindTopic = deferral.topics[2]
-    const epochTopic = deferral.topics[3]
-    if (typeof kindTopic !== "string" || typeof epochTopic !== "string") {
-      return reconcile("deferral event is missing its kind or epoch topic")
-    }
-    let kind: bigint
-    let epoch: bigint
-    try {
-      kind = BigInt(kindTopic)
-      epoch = BigInt(epochTopic)
-    } catch {
-      return reconcile("deferral event carries malformed kind or epoch topics")
+    // Topic canonicality was proven above, so decoding is safe here.
+    const kind = BigInt(deferral.topics[2] as string)
+    const epoch = BigInt(deferral.topics[3] as string)
+    if (kind !== VAULT_OPERATION_KIND.payout && kind !== VAULT_OPERATION_KIND.refund) {
+      return reconcile(`deferral event carries an unknown operation kind ${kind}`)
     }
     if (kind !== expectedDeferralKind) {
       return reconcile(
@@ -219,6 +240,14 @@ export function nextEpochRetryAtSeconds(input: {
   if (input.deferredEpoch < 0n) throw new Error("deferredEpoch must not be negative")
   if (input.confirmationAllowanceSeconds < 0n || input.jitterSeconds < 0n) {
     throw new Error("confirmation allowance and jitter must not be negative")
+  }
+  // Offsets must land inside the IMMEDIATELY following epoch. A larger total
+  // would silently skip epochs and strand the effect.
+  if (input.confirmationAllowanceSeconds + input.jitterSeconds >= input.epochDurationSeconds) {
+    throw new Error(
+      "confirmation allowance plus jitter must be shorter than one epoch,"
+        + " or the retry lands beyond the next epoch",
+    )
   }
   const nextEpochStart = (input.deferredEpoch + 1n) * input.epochDurationSeconds
   return nextEpochStart + input.confirmationAllowanceSeconds + input.jitterSeconds
