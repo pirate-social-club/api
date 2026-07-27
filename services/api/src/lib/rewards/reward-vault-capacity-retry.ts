@@ -117,6 +117,12 @@ export function crossCheckDeferredEpoch(input: {
   if (input.receiptBlockTimestampSeconds < 0n) {
     return { ok: false, reason: "receipt block timestamp must not be negative", receiptEpoch: null }
   }
+  // The classifier can only produce an unsigned epoch, but this is a pure
+  // boundary: reject an impossible input rather than let two negative values
+  // compare equal under some future reuse.
+  if (input.deferredEpoch < 0n) {
+    return { ok: false, reason: "deferred epoch must not be negative", receiptEpoch: null }
+  }
   const receiptEpoch = input.receiptBlockTimestampSeconds / input.epochDurationSeconds
   if (receiptEpoch !== input.deferredEpoch) {
     return {

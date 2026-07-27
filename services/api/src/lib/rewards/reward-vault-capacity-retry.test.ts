@@ -161,9 +161,22 @@ describe("crossCheckDeferredEpoch", () => {
     expect(result.receiptEpoch).toBe(10n)
   })
 
+  it("rejects a negative deferred epoch rather than comparing it", () => {
+    // Two negative values could otherwise compare equal under future reuse.
+    const result = crossCheckDeferredEpoch({
+      deferredEpoch: -1n,
+      receiptBlockTimestampSeconds: HOUR,
+      epochDurationSeconds: HOUR,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.reason).toContain("must not be negative")
+    expect(result.receiptEpoch).toBeNull()
+  })
+
   it.each([
     ["zero epoch duration", { epochDurationSeconds: 0n }],
     ["negative timestamp", { receiptBlockTimestampSeconds: -1n }],
+    ["negative deferred epoch", { deferredEpoch: -1n }],
   ])("rejects %s without asserting an epoch", (_label, patch) => {
     const result = crossCheckDeferredEpoch({
       deferredEpoch: 1n,
