@@ -523,7 +523,7 @@ export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: str
   },
   {
     "name": "1060_community_gate_policies.sql",
-    "checksum": "8bb9d45175bc3a3deb398776dd67d8f1b287a1843af9cb869ea9a7360bf7a548"
+    "checksum": "50b40ee28ad443c6ed4cc9bbfc0ffcd2cb2fe2a9cba443b5944952ec1b6ed5c6"
   },
   {
     "name": "1061_reference_links_resource_shape.sql",
@@ -635,7 +635,7 @@ export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: str
   },
   {
     "name": "1088_community_assistant_elevenlabs_voice_backfill.sql",
-    "checksum": "01f22966d812643e78408d1c0b4835568a6dd928569f33c00dac5d791ff1150d"
+    "checksum": "e5e341d1e39fc18c3b794cce4ad3579afc9caf6f2b5cc2cf9ff5b14a2bbb71b8"
   },
   {
     "name": "1089_community_assistant_text_and_voice_mode.sql",
@@ -643,7 +643,7 @@ export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: str
   },
   {
     "name": "1089_post_events.sql",
-    "checksum": "fd09e1c0502f498bc7ca2ba7f847fe1d31ed5b3f237e9c34f9019adb2a1404f6"
+    "checksum": "782bcec7005c69cefd501b9512066c450b481cc39c3c062a71a9e580f99ff2c0"
   },
   {
     "name": "1090_community_assistant_telegram_private_policy.sql",
