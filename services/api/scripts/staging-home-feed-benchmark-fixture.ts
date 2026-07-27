@@ -26,7 +26,7 @@ type FixturePost = {
   author_user_id: string
   community_id: string
   post_id: string
-  upload_id: string
+  upload_id?: string
 }
 
 type FixtureState = {
@@ -34,9 +34,10 @@ type FixtureState = {
   author_user_ids: string[]
   community_ids: string[]
   created_at: string
+  orphaned_upload_count?: number
   posts: FixturePost[]
   schema_version: 1
-  video_file: string
+  video_file?: string
   viewer_user_id: string
 }
 
@@ -70,6 +71,10 @@ function publicId(value: string, prefix: string): string {
 
 function internalId(value: string, prefix: string): string {
   return value.replace(new RegExp(`^${prefix}_`, "u"), "")
+}
+
+function internalUserId(value: string): string {
+  return value.startsWith("usr_usr_") ? value.slice("usr_".length) : value
 }
 
 async function requestJson<T>(input: {
@@ -334,7 +339,7 @@ async function verifyFixture(input: {
   const response = await requestJson<{
     items: Array<{
       community: { community_id?: string; id?: string }
-      post: { post: { author_user?: { id?: string; user_id?: string } } }
+      post: { post: { author_user?: string } }
     }>
   }>({
     apiBase: state.api_base,
@@ -348,9 +353,9 @@ async function verifyFixture(input: {
     },
   })
   const communityIds = new Set(response.items.map((item) => item.community.community_id ?? item.community.id))
-  const authorIds = new Set(response.items.map((item) => (
-    item.post.post.author_user?.user_id ?? item.post.post.author_user?.id
-  )).filter(Boolean))
+  const authorIds = new Set(response.items
+    .map((item) => item.post.post.author_user)
+    .filter((authorUser): authorUser is string => Boolean(authorUser)))
   const report = {
     authors: authorIds.size,
     communities: communityIds.size,
@@ -360,6 +365,175 @@ async function verifyFixture(input: {
   if (report.items !== 25 || report.communities < 9 || report.authors < 13) {
     throw new Error(`fixture page shape is not benchmark-ready: ${JSON.stringify(report)}`)
   }
+}
+
+async function recoverFixture(input: {
+  adminToken: string
+  apiBase: string
+  communityIds: string[]
+  statePath: string
+  viewerUserId: string
+}): Promise<void> {
+  if (input.communityIds.length !== REQUIRED_COMMUNITIES) {
+    throw new Error(`recover requires exactly ${REQUIRED_COMMUNITIES} distinct --community values`)
+  }
+  await readFile(input.statePath, "utf8")
+    .then(() => {
+      throw new Error(`state file already exists: ${input.statePath}`)
+    })
+    .catch((error: unknown) => {
+      if ((error as { code?: string }).code !== "ENOENT") throw error
+    })
+
+  type RecoveryItem = {
+    community: { community_id?: string; id?: string }
+    post: {
+      post: {
+        author_user?: string
+        id?: string
+        post_id?: string
+        title?: string
+      }
+    }
+  }
+  const recoveredPosts: FixturePost[] = []
+  const seenPostIds = new Set<string>()
+  let cursor: string | null = null
+  do {
+    const response: {
+      items: RecoveryItem[]
+      next_cursor?: string | null
+    } = await requestJson({
+      apiBase: input.apiBase,
+      method: "POST",
+      path: "/admin/debug/home-feed-benchmark",
+      headers: { "x-admin-token": input.adminToken },
+      body: {
+        community_ids: input.communityIds.map((id) => publicId(id, "com")),
+        cursor,
+        sort: "best",
+        user_id: publicId(input.viewerUserId, "usr"),
+      },
+    })
+    for (const item of response.items) {
+      const post = item.post.post
+      if (!post.title?.startsWith("Home feed benchmark ")) continue
+      const publicPostId = post.id ?? post.post_id
+      const publicCommunityId = item.community.id ?? item.community.community_id
+      const publicAuthorUserId = post.author_user
+      if (!publicPostId || !publicCommunityId || !publicAuthorUserId) {
+        throw new Error("benchmark item omitted post, community, or author identity")
+      }
+      const postId = internalId(publicPostId, "post")
+      if (seenPostIds.has(postId)) continue
+      seenPostIds.add(postId)
+      recoveredPosts.push({
+        author_user_id: internalUserId(publicAuthorUserId),
+        community_id: internalId(publicCommunityId, "com"),
+        post_id: postId,
+      })
+    }
+    cursor = response.next_cursor ?? null
+  } while (cursor)
+
+  const authorUserIds = [...new Set(recoveredPosts.map((post) => post.author_user_id))]
+  const recoveredCommunityIds = [...new Set(recoveredPosts.map((post) => post.community_id))]
+  if (
+    recoveredPosts.length !== REQUIRED_COMMUNITIES * POSTS_PER_COMMUNITY
+    || recoveredCommunityIds.length !== REQUIRED_COMMUNITIES
+    || authorUserIds.length !== AUTHOR_COUNT
+  ) {
+    throw new Error(`recovered fixture shape is unsafe: ${JSON.stringify({
+      authors: authorUserIds.length,
+      communities: recoveredCommunityIds.length,
+      posts: recoveredPosts.length,
+    })}`)
+  }
+  const state: FixtureState = {
+    api_base: input.apiBase,
+    author_user_ids: authorUserIds,
+    community_ids: recoveredCommunityIds,
+    created_at: new Date().toISOString(),
+    orphaned_upload_count: recoveredPosts.length,
+    posts: recoveredPosts,
+    schema_version: 1,
+    viewer_user_id: input.viewerUserId,
+  }
+  await writeState(input.statePath, state)
+  console.log(JSON.stringify({
+    authors: authorUserIds.length,
+    communities: recoveredCommunityIds.length,
+    posts: recoveredPosts.length,
+    recovered: true,
+    state_path: input.statePath,
+  }, null, 2))
+}
+
+async function benchmarkFixture(input: {
+  adminToken: string
+  iterations: number
+  statePath: string
+}): Promise<void> {
+  const state = await readState(input.statePath)
+  const samples: Array<{
+    authors: number
+    communities: number
+    items: number
+    server_timing: string | null
+    wall_ms: number
+  }> = []
+  for (let iteration = 0; iteration < input.iterations; iteration += 1) {
+    const startedAt = performance.now()
+    const response = await fetch(new URL("/admin/debug/home-feed-benchmark", state.api_base), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-token": input.adminToken,
+      },
+      body: JSON.stringify({
+        community_ids: state.community_ids.map((id) => publicId(id, "com")),
+        sort: "best",
+        user_id: publicId(state.viewer_user_id, "usr"),
+      }),
+    })
+    const body = await response.json() as {
+      items?: Array<{
+        community: { community_id?: string; id?: string }
+        post: { post: { author_user?: string } }
+      }>
+    }
+    const wallMs = Math.round((performance.now() - startedAt) * 100) / 100
+    if (!response.ok || !body.items) {
+      throw new Error(`benchmark request ${iteration + 1} failed with ${response.status}`)
+    }
+    const communities = new Set(body.items.map((item) => item.community.id ?? item.community.community_id))
+    const authors = new Set(body.items
+      .map((item) => item.post.post.author_user)
+      .filter((authorUser): authorUser is string => Boolean(authorUser)))
+    const sample = {
+      authors: authors.size,
+      communities: communities.size,
+      items: body.items.length,
+      server_timing: response.headers.get("server-timing"),
+      wall_ms: wallMs,
+    }
+    if (sample.items !== 25 || sample.communities < 9 || sample.authors < 13) {
+      throw new Error(`benchmark request ${iteration + 1} returned an invalid shape: ${JSON.stringify(sample)}`)
+    }
+    samples.push(sample)
+  }
+  const sortedWallMs = samples.map((sample) => sample.wall_ms).sort((left, right) => left - right)
+  const percentile = (value: number) => sortedWallMs[Math.ceil((value / 100) * sortedWallMs.length) - 1]!
+  console.log(JSON.stringify({
+    iterations: input.iterations,
+    samples,
+    summary: {
+      max_wall_ms: sortedWallMs.at(-1),
+      min_wall_ms: sortedWallMs[0],
+      p50_wall_ms: percentile(50),
+      p95_wall_ms: percentile(95),
+    },
+  }, null, 2))
 }
 
 async function cleanupFixture(input: {
@@ -377,6 +551,7 @@ async function cleanupFixture(input: {
     return
   }
   const orphanedUploadIds = state.posts.map((post) => post.upload_id).filter(Boolean)
+  const orphanedUploadCount = Math.max(state.orphaned_upload_count ?? 0, orphanedUploadIds.length)
   while (state.posts.length > 0) {
     const post = state.posts[state.posts.length - 1]!
     await requestJson<unknown>({
@@ -394,26 +569,37 @@ async function cleanupFixture(input: {
   await unlink(input.statePath)
   console.log(JSON.stringify({
     cleaned: true,
+    orphaned_upload_count: orphanedUploadCount,
     orphaned_upload_ids: orphanedUploadIds,
     state_path: input.statePath,
   }, null, 2))
 }
 
 const command = process.argv[2]
-if (!["create", "verify", "cleanup"].includes(command ?? "")) {
-  throw new Error("usage: staging-home-feed-benchmark-fixture.ts <create|verify|cleanup> [options]")
+if (!["benchmark", "create", "recover", "verify", "cleanup"].includes(command ?? "")) {
+  throw new Error("usage: staging-home-feed-benchmark-fixture.ts <benchmark|create|recover|verify|cleanup> [options]")
 }
 const apiBase = (arg("api-base") ?? "https://api-staging.pirate.sc").replace(/\/$/u, "")
 if (new URL(apiBase).hostname !== "api-staging.pirate.sc") {
   throw new Error("fixture is restricted to https://api-staging.pirate.sc")
 }
 const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? "").trim()
-if ((command === "verify" || flag("apply")) && !adminToken) {
+if ((command === "benchmark" || command === "recover" || command === "verify" || flag("apply")) && !adminToken) {
   throw new Error("PIRATE_ADMIN_TOKEN is required for verification or mutation")
 }
 const statePath = resolve(arg("state") ?? DEFAULT_STATE_PATH)
 
-if (command === "create") {
+if (command === "benchmark") {
+  const parsedIterations = Number.parseInt(arg("iterations") ?? "5", 10)
+  if (!Number.isInteger(parsedIterations) || parsedIterations < 1 || parsedIterations > 20) {
+    throw new Error("benchmark --iterations must be an integer from 1 to 20")
+  }
+  await benchmarkFixture({
+    adminToken,
+    iterations: parsedIterations,
+    statePath,
+  })
+} else if (command === "create") {
   const communityIds = [...new Set(args("community").map((id) => internalId(id, "com")))]
   const videoFile = arg("video-file")?.trim()
   if (!videoFile) throw new Error("create requires --video-file")
@@ -424,6 +610,17 @@ if (command === "create") {
     communityIds,
     statePath,
     videoFile: resolve(videoFile),
+  })
+} else if (command === "recover") {
+  const communityIds = [...new Set(args("community").map((id) => internalId(id, "com")))]
+  const viewerUserId = arg("viewer-user")?.trim()
+  if (!viewerUserId) throw new Error("recover requires --viewer-user")
+  await recoverFixture({
+    adminToken,
+    apiBase,
+    communityIds,
+    statePath,
+    viewerUserId: internalUserId(viewerUserId),
   })
 } else if (command === "verify") {
   await verifyFixture({ adminToken, statePath })

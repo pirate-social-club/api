@@ -77,18 +77,20 @@ anything:
 
 ## Current holds
 
-- **2026-07-27 18:19Z–20:00Z — Codex `/root`, feed fanout benchmark.**
-  Deploy candidate `b2cc97ff` (benchmark fixture upload compatibility and
-  public-to-internal `com_cmt_*` scope decoding), verify the existing 27-post removable fixture, measure
-  the staging-only fanout/page-shape route, then delete every recorded post.
-  Rollback is Worker version `2d874c90-ceca-469d-8fe4-db3810256563` (v1797,
-  API `def69dad`). The fixture leaves 27 recorded ~2 KB upload artifacts because
-  the upload API has no public deletion route.
+_None._
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-07-27** — Feed fanout benchmark completed on API `5d9f4f67` (Worker
+  `b606e79f`). Five valid 25-item samples spanning nine communities and 15
+  authors measured wall-time p50 16.626s and p95/max 21.043s. Server timing
+  attributed 13.123–17.595s to `community-fanout`, ~1.9s to viewer resolution,
+  and 426–474ms to projection/ranking. All 27 recorded posts were deleted and
+  a scoped rescan found zero benchmark-titled posts. Twenty-seven ~2 KB upload
+  artifacts remain because the upload API has no deletion route. Staging was
+  left on `5d9f4f67`.
 - **2026-07-24** — API #760 + #768 scheduler soak passed on isolated candidate
   `2cc78ef5`. Two acquiring batches completed `process_community_jobs` in
   93.234s/91.036s against its 90s start-work budget, with only in-flight scan
