@@ -43,6 +43,12 @@ export type DerivativeSourceHydrationTiming = {
   local_rows_ms: number
   global_rows_ms: number
   profiles_ms: number
+  /**
+   * Creator profile batch failed and enrichment was dropped for this slice.
+   * Without this, a failed batch reports a near-zero profiles_ms and is
+   * indistinguishable from a genuine speedup in before/after timing reports.
+   */
+  profiles_degraded: boolean
 }
 
 function elapsedMs(startedAt: number): number {
@@ -54,6 +60,7 @@ function emptyDerivativeSourceHydrationTiming(): DerivativeSourceHydrationTiming
     local_rows_ms: 0,
     global_rows_ms: 0,
     profiles_ms: 0,
+    profiles_degraded: false,
   }
 }
 
@@ -195,6 +202,51 @@ function fallbackSource(parsed: ParsedUpstreamRef): PostDerivativeSource | null 
   }
 }
 
+/**
+ * Creator profiles are read once per hydration slice instead of once per creator.
+ * The per-creator path issued one round trip each, and the feed's critical path is
+ * bounded by its slowest community slice, so collapsing those round trips is what
+ * moves the bound.
+ *
+ * A failed batch degrades enrichment for the whole slice rather than falling back to
+ * individual lookups: during a profile-store outage, per-creator retries would restore
+ * exactly the fan-out this batch removes, converting a degraded response into a slow one.
+ * Callers already treat a missing profile as "no handle/display name".
+ */
+type CreatorProfile = Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>
+
+async function loadCreatorProfiles(
+  profileRepository: ProfileRepository | null | undefined,
+  creatorUserIds: string[],
+): Promise<{ degraded: boolean; profilesByUserId: Map<string, CreatorProfile> }> {
+  if (!profileRepository || creatorUserIds.length === 0) {
+    return { degraded: false, profilesByUserId: new Map() }
+  }
+
+  if (profileRepository.listProfilesByUserIds) {
+    const batched = await profileRepository.listProfilesByUserIds(creatorUserIds).catch(
+      (error: unknown) => {
+        console.warn("[derivative-hydration] creator profile batch failed", error)
+        return null
+      },
+    )
+    return {
+      degraded: batched === null,
+      profilesByUserId: new Map(
+        creatorUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const),
+      ),
+    }
+  }
+
+  return {
+    degraded: false,
+    profilesByUserId: new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+      userId,
+      await profileRepository.getProfileByUserId(userId).catch(() => null),
+    ] as const))),
+  }
+}
+
 export async function hydrateDerivativeSourcesForResponses(input: {
   client: Client
   communityId: string
@@ -239,12 +291,10 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   ]
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
   const profilesStartedAt = performance.now()
-  const profilesByUserId = input.profileRepository
-    ? new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-        userId,
-        await input.profileRepository!.getProfileByUserId(userId).catch(() => null),
-      ] as const)))
-    : new Map()
+  const { degraded: profilesDegraded, profilesByUserId } = await loadCreatorProfiles(
+    input.profileRepository,
+    creatorUserIds,
+  )
   const profilesMs = elapsedMs(profilesStartedAt)
 
   for (const response of input.responses) {
@@ -287,5 +337,6 @@ export async function hydrateDerivativeSourcesForResponses(input: {
     local_rows_ms: localRowsMs,
     global_rows_ms: globalRowsMs,
     profiles_ms: profilesMs,
+    profiles_degraded: profilesDegraded,
   }
 }

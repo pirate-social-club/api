@@ -86,6 +86,7 @@ export type HomeFeedCommunityTiming = {
   derivative_local_rows_ms: number
   derivative_global_rows_ms: number
   derivative_profiles_ms: number
+  derivative_profiles_degraded: boolean
   serialize_ms: number
   enqueue_ms: number
   unaccounted_ms: number
@@ -409,6 +410,7 @@ export async function readHomeFeedCommunityItems(input: {
         derivative_local_rows_ms: 0,
         derivative_global_rows_ms: 0,
         derivative_profiles_ms: 0,
+        derivative_profiles_degraded: false,
         serialize_ms: 0,
         enqueue_ms: 0,
         unaccounted_ms: 0,
@@ -523,6 +525,7 @@ export async function readHomeFeedCommunityItems(input: {
       local_rows_ms: 0,
       global_rows_ms: 0,
       profiles_ms: 0,
+      profiles_degraded: false,
     }
     if (derivativeResponses.length > 0) {
       derivativeTiming = await hydrateDerivativeSourcesForResponses({
@@ -594,6 +597,7 @@ export async function readHomeFeedCommunityItems(input: {
         derivative_local_rows_ms: derivativeTiming.local_rows_ms,
         derivative_global_rows_ms: derivativeTiming.global_rows_ms,
         derivative_profiles_ms: derivativeTiming.profiles_ms,
+        derivative_profiles_degraded: derivativeTiming.profiles_degraded,
         serialize_ms: serializeMs,
         enqueue_ms: enqueueMs,
         unaccounted_ms: Math.max(0, totalMs - accountedMs),
