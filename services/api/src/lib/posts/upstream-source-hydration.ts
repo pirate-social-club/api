@@ -43,6 +43,12 @@ export type DerivativeSourceHydrationTiming = {
   local_rows_ms: number
   global_rows_ms: number
   profiles_ms: number
+  /**
+   * Creator profile batch failed and enrichment was dropped for this slice.
+   * Without this, a failed batch reports a near-zero profiles_ms and is
+   * indistinguishable from a genuine speedup in before/after timing reports.
+   */
+  profiles_degraded: boolean
 }
 
 function elapsedMs(startedAt: number): number {
@@ -54,6 +60,7 @@ function emptyDerivativeSourceHydrationTiming(): DerivativeSourceHydrationTiming
     local_rows_ms: 0,
     global_rows_ms: 0,
     profiles_ms: 0,
+    profiles_degraded: false,
   }
 }
 
@@ -211,20 +218,33 @@ type CreatorProfile = Awaited<ReturnType<ProfileRepository["getProfileByUserId"]
 async function loadCreatorProfiles(
   profileRepository: ProfileRepository | null | undefined,
   creatorUserIds: string[],
-): Promise<Map<string, CreatorProfile>> {
+): Promise<{ degraded: boolean; profilesByUserId: Map<string, CreatorProfile> }> {
   if (!profileRepository || creatorUserIds.length === 0) {
-    return new Map()
+    return { degraded: false, profilesByUserId: new Map() }
   }
 
   if (profileRepository.listProfilesByUserIds) {
-    const batched = await profileRepository.listProfilesByUserIds(creatorUserIds).catch(() => null)
-    return new Map(creatorUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const))
+    const batched = await profileRepository.listProfilesByUserIds(creatorUserIds).catch(
+      (error: unknown) => {
+        console.warn("[derivative-hydration] creator profile batch failed", error)
+        return null
+      },
+    )
+    return {
+      degraded: batched === null,
+      profilesByUserId: new Map(
+        creatorUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const),
+      ),
+    }
   }
 
-  return new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-    userId,
-    await profileRepository.getProfileByUserId(userId).catch(() => null),
-  ] as const)))
+  return {
+    degraded: false,
+    profilesByUserId: new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+      userId,
+      await profileRepository.getProfileByUserId(userId).catch(() => null),
+    ] as const))),
+  }
 }
 
 export async function hydrateDerivativeSourcesForResponses(input: {
@@ -271,7 +291,10 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   ]
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
   const profilesStartedAt = performance.now()
-  const profilesByUserId = await loadCreatorProfiles(input.profileRepository, creatorUserIds)
+  const { degraded: profilesDegraded, profilesByUserId } = await loadCreatorProfiles(
+    input.profileRepository,
+    creatorUserIds,
+  )
   const profilesMs = elapsedMs(profilesStartedAt)
 
   for (const response of input.responses) {
@@ -314,5 +337,6 @@ export async function hydrateDerivativeSourcesForResponses(input: {
     local_rows_ms: localRowsMs,
     global_rows_ms: globalRowsMs,
     profiles_ms: profilesMs,
+    profiles_degraded: profilesDegraded,
   }
 }

@@ -102,6 +102,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
       local_rows_ms: expect.any(Number),
       global_rows_ms: expect.any(Number),
       profiles_ms: expect.any(Number),
+      profiles_degraded: false,
     })
   })
 
@@ -150,6 +151,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
       local_rows_ms: expect.any(Number),
       global_rows_ms: expect.any(Number),
       profiles_ms: expect.any(Number),
+      profiles_degraded: false,
     })
   })
 
@@ -159,7 +161,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
     const batchedCalls: string[][] = []
     let perCreatorCalls = 0
 
-    await hydrateDerivativeSourcesForResponses({
+    const timing = await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_videos",
       env: {} as never,
@@ -184,6 +186,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
 
     expect(batchedCalls).toEqual([["usr_artist"]])
     expect(perCreatorCalls).toBe(0)
+    expect(timing.profiles_degraded).toBe(false)
     expect(response.derivative_sources?.[0]).toMatchObject({
       creator_handle: "artist.pirate",
       creator_display_name: "Artist",
@@ -195,7 +198,7 @@ describe("hydrateDerivativeSourcesForResponses", () => {
     const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
     let perCreatorCalls = 0
 
-    await hydrateDerivativeSourcesForResponses({
+    const timing = await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_videos",
       env: {} as never,
@@ -215,7 +218,9 @@ describe("hydrateDerivativeSourcesForResponses", () => {
 
     // The derivative itself still resolves; only the creator naming degrades. Falling back
     // to per-creator reads here would restore the fan-out this batch exists to remove.
+    // The flag keeps a failed batch from reading as a profiles_ms speedup in timing reports.
     expect(perCreatorCalls).toBe(0)
+    expect(timing.profiles_degraded).toBe(true)
     expect(response.derivative_sources?.[0]).toMatchObject({
       title: "Travel Guide",
       creator_user: "usr_usr_artist",
