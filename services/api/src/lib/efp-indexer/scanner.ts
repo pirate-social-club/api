@@ -107,6 +107,22 @@ function requiredHex(value: Hex | null | undefined, label: string): Hex {
   return value.toLowerCase() as Hex
 }
 
+function rpcErrorText(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error).toLowerCase()
+  const parts: string[] = []
+  const seen = new Set<object>()
+  let current: object | null = error
+  for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
+    seen.add(current)
+    const record = current as Record<string, unknown>
+    for (const key of ["message", "data", "details", "shortMessage"]) {
+      if (typeof record[key] === "string") parts.push(record[key])
+    }
+    current = record.cause && typeof record.cause === "object" ? record.cause : null
+  }
+  return parts.join(" ").toLowerCase()
+}
+
 async function getLogsAdaptive<T>(
   fetchRange: (fromBlock: bigint, toBlock: bigint) => Promise<readonly T[]>,
   fromBlock: bigint,
@@ -116,12 +132,7 @@ async function getLogsAdaptive<T>(
   try {
     return [...await fetchRange(fromBlock, toBlock)]
   } catch (error) {
-    const rpcData = error && typeof error === "object" && "data" in error
-      ? String(error.data)
-      : ""
-    const message = `${
-      error instanceof Error ? error.message : String(error)
-    } ${rpcData}`.toLowerCase()
+    const message = rpcErrorText(error)
     const canSplit = message.includes("response too large")
       || message.includes("block range")
       || message.includes("limited to")

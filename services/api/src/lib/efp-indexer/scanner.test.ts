@@ -192,11 +192,10 @@ describe("scanEfpBaseOnce", () => {
         expect(address).toBe(EFP_OPTIMISM_LIST_RECORDS)
         getLogRanges.push([fromBlock, toBlock])
         if (toBlock - fromBlock + 1n === 100_000n) {
-          const error = new Error("Invalid parameters")
-          Object.assign(error, {
+          const rpcError = Object.assign(new Error("RPC Request failed"), {
             data: "Query returned more than 50000 results. Try with this block range.",
           })
-          throw error
+          throw Object.assign(new Error("Invalid parameters"), { cause: rpcError })
         }
         if (fromBlock !== EFP_OPTIMISM_START_BLOCK) return []
         return Array.from({ length: 101 }, (_, index) => ({
