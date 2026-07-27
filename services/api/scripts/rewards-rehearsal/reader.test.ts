@@ -48,6 +48,9 @@ const make = (fetchImpl: typeof fetch) =>
 describe("assertAllowedRpcUrl", () => {
   it("accepts a source-controlled host", () => {
     expect(assertAllowedRpcUrl(URL_OK).host).toBe("sepolia.base.org")
+    expect(
+      assertAllowedRpcUrl("https://base-sepolia.g.alchemy.com/v2/secret").host,
+    ).toBe("base-sepolia.g.alchemy.com")
   })
 
   it.each([
@@ -73,6 +76,7 @@ describe("assertAllowedRpcUrl", () => {
 
   it("pins hosts in source, not from a caller", () => {
     expect(ALLOWED_RPC_HOSTS).toContain("sepolia.base.org")
+    expect(ALLOWED_RPC_HOSTS).toContain("base-sepolia.g.alchemy.com")
   })
 })
 

@@ -22,7 +22,10 @@
  */
 
 /** Source-controlled. Not caller-supplied, by design. */
-export const ALLOWED_RPC_HOSTS = ["sepolia.base.org"] as const
+export const ALLOWED_RPC_HOSTS = [
+  "sepolia.base.org",
+  "base-sepolia.g.alchemy.com",
+] as const
 
 export const CONFIRMATION_TAG = "finalized"
 export const CONFIRMATION_DEPTH_FALLBACK = 8
