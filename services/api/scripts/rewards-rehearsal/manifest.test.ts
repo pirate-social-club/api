@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test"
 
 import {
+  PINNED_STAGING_ACTION_CID_HASH,
+  PINNED_STAGING_ACTION_SOURCE_CID,
   PINNED_STAGING_GROUP_ID,
   PINNED_STAGING_PKP_ADDRESS,
   parseRehearsalManifest,
@@ -11,10 +13,17 @@ import {
 
 const STAGING_PKP = PINNED_STAGING_PKP_ADDRESS
 const PROD_PKP = "0x00000000000000000000000000000000000000aa"
-const GROUP = "grp_rewards_staging"
+const GROUP = "1"
+const ACTION_CID_HASH = `0x${"7c".repeat(32)}`
+const ACTION_SOURCE_CID = "QmReviewedStagingRewardVaultAction"
 
 const NOW = new Date("2026-07-26T12:00:00.000Z")
-const PINS: ReviewedStagingPins = { groupId: GROUP, pkpAddress: STAGING_PKP }
+const PINS: ReviewedStagingPins = {
+  groupId: GROUP,
+  pkpAddress: STAGING_PKP,
+  actionCidHash: ACTION_CID_HASH,
+  actionSourceCid: ACTION_SOURCE_CID,
+}
 
 const valid = () => ({
   attestation: {
@@ -28,7 +37,8 @@ const valid = () => ({
     usageKeyExecuteInGroups: [GROUP],
     stagingGroupId: GROUP,
     stagingGroupPkpAddresses: [STAGING_PKP],
-    stagingGroupActionCids: ["QmStagingRehearsalActionCid"],
+    stagingGroupActionCidHashes: [ACTION_CID_HASH],
+    stagingActionSourceCid: ACTION_SOURCE_CID,
     knownProductionPkpAddresses: [PROD_PKP],
   },
   vault: {
@@ -75,17 +85,46 @@ describe("parseRehearsalManifest", () => {
 
   describe("pins are source-controlled, never manifest-supplied", () => {
     it("refuses while the staging group ID is unpinned", () => {
-      expect(() => parse(valid(), { groupId: null, pkpAddress: STAGING_PKP })).toThrow(
-        /not pinned/u,
+      expect(() => parse(valid(), { ...PINS, groupId: null })).toThrow(/not pinned/u)
+    })
+
+    it("pins the captured staging group", () => {
+      expect(PINNED_STAGING_GROUP_ID).toBe("1")
+    })
+
+    it("ships with NO action CID hash pinned, so the drill cannot yet run", () => {
+      // The action's source pins the vault address, so its CID cannot exist
+      // until the staging vault is deployed. The group also still permits the
+      // [0] wildcard.
+      expect(PINNED_STAGING_ACTION_CID_HASH).toBeNull()
+    })
+
+    it("ships with NO raw source CID pinned either", () => {
+      expect(PINNED_STAGING_ACTION_SOURCE_CID).toBeNull()
+    })
+
+    it("refuses while the raw source CID is unpinned", () => {
+      expect(() => parse(valid(), { ...PINS, actionSourceCid: null })).toThrow(
+        /action source CID is not pinned/u,
       )
     })
 
-    it("ships unpinned, so the drill cannot run until a reviewed value lands", () => {
-      expect(PINNED_STAGING_GROUP_ID).toBeNull()
+    it("refuses a source CID that disagrees with its pin", () => {
+      // The correct hash with an unrelated source CID is misleading evidence
+      // and could diverge from the executor's configuration.
+      expect(() => parse(withSection("lit", { stagingActionSourceCid: "QmSomethingElse" }))).toThrow(
+        /does not match the reviewed source-CID pin/u,
+      )
+    })
+
+    it("refuses while the action CID hash is unpinned", () => {
+      expect(() => parse(valid(), { ...PINS, actionCidHash: null })).toThrow(
+        /action CID hash is not pinned/u,
+      )
     })
 
     it("refuses a captured group that disagrees with the pin", () => {
-      expect(() => parse(withSection("lit", { stagingGroupId: "grp_other", usageKeyExecuteInGroups: ["grp_other"] })))
+      expect(() => parse(withSection("lit", { stagingGroupId: "7", usageKeyExecuteInGroups: ["7"] })))
         .toThrow(/does not match the reviewed pin/u)
     })
 
@@ -147,14 +186,76 @@ describe("parseRehearsalManifest", () => {
     })
 
     it("rejects any group beyond the pinned one", () => {
-      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "grp_other"] })))
+      expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [GROUP, "7"] })))
         .toThrow(/must be exactly the pinned staging group/u)
     })
+
+    it("normalizes the API's numeric group id to the pinned string", () => {
+      // The Lit API returns can_execute_in_groups: [1]; the pin is "1".
+      const manifest = parse(
+        withSection("lit", { usageKeyExecuteInGroups: [1], stagingGroupId: 1 }),
+      )
+      expect(manifest.lit.usageKeyExecuteInGroups).toEqual(["1"])
+    })
+
+    it.each([1.5, -1, Number.MAX_SAFE_INTEGER + 2])(
+      "rejects the unsafe numeric group id %p rather than coercing it",
+      (groupId) => {
+        expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [groupId] }))).toThrow(
+          /safe non-negative integer group id/u,
+        )
+      },
+    )
 
     it("rejects an empty group entry", () => {
       expect(() => parse(withSection("lit", { usageKeyExecuteInGroups: [""] }))).toThrow(
         RehearsalManifestError,
       )
+    })
+  })
+
+  describe("action CID-hash scoping", () => {
+    it.each(["0", "*"])("rejects the CID wildcard %p", (wildcard) => {
+      expect(() => parse(withSection("lit", { stagingGroupActionCidHashes: [wildcard] }))).toThrow(
+        /permits every action/u,
+      )
+    })
+
+    it("rejects a wildcard alongside the reviewed hash", () => {
+      expect(() =>
+        parse(withSection("lit", { stagingGroupActionCidHashes: [ACTION_CID_HASH, "0"] })),
+      ).toThrow(/permits every action/u)
+    })
+
+    it("rejects any hash beyond the reviewed one", () => {
+      expect(() =>
+        parse(
+          withSection("lit", {
+            stagingGroupActionCidHashes: [ACTION_CID_HASH, `0x${"ab".repeat(32)}`],
+          }),
+        ),
+      ).toThrow(/exactly the reviewed action CID hash/u)
+    })
+
+    it("rejects a raw IPFS CID where a bytes32 hash is required", () => {
+      // The group stores cidHashesPermitted, not raw CIDs; conflating them
+      // would silently compare two different identifier spaces.
+      expect(() =>
+        parse(withSection("lit", { stagingGroupActionCidHashes: [ACTION_SOURCE_CID] })),
+      ).toThrow(/must be a 32-byte hash/u)
+    })
+
+    it("normalizes hash case before comparing", () => {
+      const manifest = parse(
+        withSection("lit", { stagingGroupActionCidHashes: [ACTION_CID_HASH.toUpperCase().replace("0X", "0x")] }),
+      )
+      expect(manifest.lit.stagingGroupActionCidHashes).toEqual([ACTION_CID_HASH])
+    })
+
+    it("records the raw source CID alongside its hash for traceability", () => {
+      const manifest = parse(valid())
+      expect(manifest.lit.stagingActionSourceCid).toBe(ACTION_SOURCE_CID)
+      expect(manifest.lit.stagingGroupActionCidHashes).toEqual([ACTION_CID_HASH])
     })
   })
 
