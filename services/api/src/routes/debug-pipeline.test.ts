@@ -51,4 +51,11 @@ describe("home-feed benchmark route guards", () => {
     }, { ENVIRONMENT: "staging", PIRATE_ADMIN_TOKEN: "secret" } as Env)
     expect(response.status).toBe(400)
   })
+
+  test("accepts real community IDs whose raw segment embeds a legacy prefix", () => {
+    expect(parseHomeFeedBenchmarkCommunityIds([
+      "com_cmt_b3ede813fccf489982e93739ef1bf6b0",
+    ])).toEqual(["com_cmt_b3ede813fccf489982e93739ef1bf6b0"])
+    expect(parseHomeFeedBenchmarkCommunityIds(["com_cmt_b3ede813!"])).toBeNull()
+  })
 })

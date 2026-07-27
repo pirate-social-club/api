@@ -5,6 +5,13 @@
  * explicitly supplied existing staging communities, records every created post
  * before continuing, and cleanup deletes only those recorded IDs.
  *
+ * Video post creation validates that the referenced storage_ref is a
+ * primary_video artifact uploaded by the posting author in that community, so
+ * each synthetic author joins the community and uploads the benchmark video
+ * (direct multipart is mandatory for primary_video) before posting. Upload
+ * artifacts have no public delete route; cleanup removes every recorded post
+ * and reports the orphaned upload IDs it leaves behind (~2 KB each).
+ *
  * Dry-run is the default. Mutations require --apply.
  */
 import { readFile, unlink, writeFile } from "node:fs/promises"
@@ -19,6 +26,7 @@ type FixturePost = {
   author_user_id: string
   community_id: string
   post_id: string
+  upload_id: string
 }
 
 type FixtureState = {
@@ -28,7 +36,7 @@ type FixtureState = {
   created_at: string
   posts: FixturePost[]
   schema_version: 1
-  storage_ref: string
+  video_file: string
   viewer_user_id: string
 }
 
@@ -109,6 +117,93 @@ async function resolveSyntheticUser(apiBase: string, subject: string, secret: st
   return internalId(userId, "usr")
 }
 
+function adminHeaders(adminToken: string, authorUserId: string): Record<string, string> {
+  return {
+    "x-admin-as-user-id": authorUserId,
+    "x-admin-operation-class": "home_feed_benchmark_fixture",
+    "x-admin-token": adminToken,
+  }
+}
+
+async function joinCommunity(input: {
+  adminToken: string
+  apiBase: string
+  authorUserId: string
+  communityId: string
+}): Promise<void> {
+  await requestJson<{ status?: string }>({
+    apiBase: input.apiBase,
+    method: "POST",
+    path: `/communities/${encodeURIComponent(publicId(input.communityId, "com"))}/join`,
+    headers: adminHeaders(input.adminToken, input.authorUserId),
+    body: {},
+  })
+}
+
+/**
+ * primary_video artifacts only accept direct multipart: intent → signed part
+ * PUT (content-type must match the intent, ETag passed back verbatim) →
+ * complete. Returns the storage_ref the post's media_refs must reference.
+ */
+async function uploadVideoArtifact(input: {
+  adminToken: string
+  apiBase: string
+  authorUserId: string
+  communityId: string
+  videoBytes: Uint8Array<ArrayBuffer>
+}): Promise<{ storageRef: string; uploadId: string }> {
+  const headers = adminHeaders(input.adminToken, input.authorUserId)
+  const communityPath = encodeURIComponent(publicId(input.communityId, "com"))
+  const hashHex = Buffer.from(await crypto.subtle.digest("SHA-256", input.videoBytes)).toString("hex")
+  const intent = await requestJson<{
+    id: string
+    storage_ref: string
+    upload_session?: { id: string; total_parts: number; upload_id: string }
+  }>({
+    apiBase: input.apiBase,
+    method: "POST",
+    path: `/communities/${communityPath}/song-artifact-uploads`,
+    headers,
+    body: {
+      artifact_kind: "primary_video",
+      content_hash: `0x${hashHex}`,
+      mime_type: "video/mp4",
+      size_bytes: input.videoBytes.byteLength,
+      upload_mode: "direct_multipart",
+    },
+  })
+  const session = intent.upload_session
+  if (!session) throw new Error(`upload intent ${intent.id} returned no multipart session`)
+  if (session.total_parts !== 1) {
+    throw new Error(`benchmark video must fit in one multipart part, got ${session.total_parts}`)
+  }
+  const uploadPath = `/communities/${communityPath}/song-artifact-uploads/${encodeURIComponent(intent.id)}`
+  const signed = await fetch(new URL(`${uploadPath}/sessions/${encodeURIComponent(session.id)}/parts/1/signed-url`, input.apiBase), { headers })
+  if (!signed.ok) throw new Error(`part signed-url failed with ${signed.status}`)
+  const signedUrl = (await signed.json() as { url: string }).url
+  const putResponse = await fetch(signedUrl, {
+    method: "PUT",
+    headers: { "content-type": "video/mp4" },
+    body: new Blob([input.videoBytes], { type: "video/mp4" }),
+  })
+  const etag = putResponse.headers.get("etag")?.trim()
+  if (!putResponse.ok || !etag) {
+    throw new Error(`part upload failed with ${putResponse.status}${etag ? "" : " (missing ETag)"}`)
+  }
+  await requestJson<unknown>({
+    apiBase: input.apiBase,
+    method: "POST",
+    path: `${uploadPath}/sessions/${encodeURIComponent(session.id)}/complete`,
+    headers,
+    body: {
+      content_hash: `0x${hashHex}`,
+      parts: [{ etag, part_number: 1 }],
+      upload_id: session.upload_id,
+    },
+  })
+  return { storageRef: intent.storage_ref, uploadId: intent.id }
+}
+
 async function writeState(path: string, state: FixtureState): Promise<void> {
   await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, { flag: "w" })
 }
@@ -122,12 +217,13 @@ async function createFixture(input: {
   apiBase: string
   communityIds: string[]
   statePath: string
-  storageRef: string
+  videoFile: string
   apply: boolean
 }): Promise<void> {
   if (input.communityIds.length !== REQUIRED_COMMUNITIES) {
     throw new Error(`create requires exactly ${REQUIRED_COMMUNITIES} distinct --community values`)
   }
+  const videoBytes = Uint8Array.from(await readFile(input.videoFile))
   if (!input.apply) {
     console.log(JSON.stringify({
       apply: false,
@@ -135,7 +231,8 @@ async function createFixture(input: {
       communities: input.communityIds,
       posts: input.communityIds.length * POSTS_PER_COMMUNITY,
       state_path: input.statePath,
-      storage_ref: input.storageRef,
+      video_file: input.videoFile,
+      video_size_bytes: videoBytes.byteLength,
     }, null, 2))
     return
   }
@@ -165,31 +262,45 @@ async function createFixture(input: {
     created_at: new Date().toISOString(),
     posts: [],
     schema_version: 1,
-    storage_ref: input.storageRef,
+    video_file: input.videoFile,
     viewer_user_id: viewerUserId,
   }
   await writeState(input.statePath, state)
 
+  const joinedPairs = new Set<string>()
   for (let communityIndex = 0; communityIndex < input.communityIds.length; communityIndex += 1) {
     const communityId = input.communityIds[communityIndex]!
     for (let postIndex = 0; postIndex < POSTS_PER_COMMUNITY; postIndex += 1) {
       const authorUserId = authorUserIds[(communityIndex * POSTS_PER_COMMUNITY + postIndex) % authorUserIds.length]!
+      const pairKey = `${authorUserId}\0${communityId}`
+      if (!joinedPairs.has(pairKey)) {
+        await joinCommunity({
+          adminToken: input.adminToken,
+          apiBase: input.apiBase,
+          authorUserId,
+          communityId,
+        })
+        joinedPairs.add(pairKey)
+      }
+      const upload = await uploadVideoArtifact({
+        adminToken: input.adminToken,
+        apiBase: input.apiBase,
+        authorUserId,
+        communityId,
+        videoBytes,
+      })
       const created = await requestJson<{ id?: string; post_id?: string }>({
         apiBase: input.apiBase,
         method: "POST",
         path: `/communities/${encodeURIComponent(publicId(communityId, "com"))}/posts`,
-        headers: {
-          "x-admin-as-user-id": authorUserId,
-          "x-admin-operation-class": "home_feed_benchmark_fixture",
-          "x-admin-token": input.adminToken,
-        },
+        headers: adminHeaders(input.adminToken, authorUserId),
         body: {
           idempotency_key: `home-feed-benchmark-v1-${communityIndex + 1}-${postIndex + 1}`,
           identity_mode: "public",
           media_refs: [{
             mime_type: "video/mp4",
-            size_bytes: 1,
-            storage_ref: input.storageRef,
+            size_bytes: videoBytes.byteLength,
+            storage_ref: upload.storageRef,
           }],
           post_type: "video",
           rights_basis: "original",
@@ -203,6 +314,7 @@ async function createFixture(input: {
         author_user_id: authorUserId,
         community_id: internalId(communityId, "com"),
         post_id: internalId(postId, "post"),
+        upload_id: upload.uploadId,
       })
       await writeState(input.statePath, state)
     }
@@ -264,6 +376,7 @@ async function cleanupFixture(input: {
     }, null, 2))
     return
   }
+  const orphanedUploadIds = state.posts.map((post) => post.upload_id).filter(Boolean)
   while (state.posts.length > 0) {
     const post = state.posts[state.posts.length - 1]!
     await requestJson<unknown>({
@@ -279,7 +392,11 @@ async function cleanupFixture(input: {
     await writeState(input.statePath, state)
   }
   await unlink(input.statePath)
-  console.log(JSON.stringify({ cleaned: true, state_path: input.statePath }, null, 2))
+  console.log(JSON.stringify({
+    cleaned: true,
+    orphaned_upload_ids: orphanedUploadIds,
+    state_path: input.statePath,
+  }, null, 2))
 }
 
 const command = process.argv[2]
@@ -298,15 +415,15 @@ const statePath = resolve(arg("state") ?? DEFAULT_STATE_PATH)
 
 if (command === "create") {
   const communityIds = [...new Set(args("community").map((id) => internalId(id, "com")))]
-  const storageRef = arg("storage-ref")?.trim()
-  if (!storageRef) throw new Error("create requires --storage-ref")
+  const videoFile = arg("video-file")?.trim()
+  if (!videoFile) throw new Error("create requires --video-file")
   await createFixture({
     adminToken,
     apiBase,
     apply: flag("apply"),
     communityIds,
     statePath,
-    storageRef,
+    videoFile: resolve(videoFile),
   })
 } else if (command === "verify") {
   await verifyFixture({ adminToken, statePath })
