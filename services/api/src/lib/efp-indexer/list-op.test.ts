@@ -33,6 +33,11 @@ describe("decodeEfpListOp", () => {
 
   test("normalizes tags and rejects malformed or unsupported records", () => {
     expect(decodeEfpListOp(op(3, "MUTE")).tag).toBe("mute")
+    expect(decodeEfpListOp(op(3))).toMatchObject({
+      classification: "effective",
+      tag: "",
+      valid: true,
+    })
     expect(decodeEfpListOp("0x010101" as const).valid).toBe(false)
     expect(decodeEfpListOp(
       encodePacked(["uint8", "uint8", "uint8", "uint8", "address"], [2, 1, 1, 1, TARGET]),
@@ -58,5 +63,21 @@ describe("applyEfpListOp", () => {
 
     applyEfpListOp(entries, decodeEfpListOp(op(1)))
     expect(isEffectiveEfpFollow(entries.get(TARGET))).toBe(true)
+  })
+
+  test("keeps a follow effective after the canonical empty-tag operation seen on Base", () => {
+    const entries = new Map()
+    applyEfpListOp(
+      entries,
+      decodeEfpListOp("0x0101010197472a7796f477d89d3888b59de7667569250549"),
+    )
+    applyEfpListOp(
+      entries,
+      decodeEfpListOp("0x0103010197472a7796f477d89d3888b59de7667569250549"),
+    )
+
+    expect(isEffectiveEfpFollow(
+      entries.get("0x97472a7796f477d89d3888b59de7667569250549"),
+    )).toBe(true)
   })
 })

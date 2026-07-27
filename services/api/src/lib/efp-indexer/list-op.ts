@@ -38,10 +38,10 @@ export function decodeEfpListOp(raw: Hex): DecodedEfpListOp {
     : null
 
   let tag: string | null = null
-  if ((opcode === 3 || opcode === 4) && raw.length > 50) {
+  if ((opcode === 3 || opcode === 4) && raw.length >= 50) {
     try {
       const decoded = hexToString(`0x${raw.slice(50)}`).trim().toLowerCase()
-      tag = decoded.length > 0 ? decoded : null
+      tag = decoded
     } catch {
       tag = null
     }
@@ -96,7 +96,7 @@ export function applyEfpListOp(
     entries.delete(decoded.targetAddress)
     return
   }
-  if (!decoded.tag) return
+  if (decoded.tag === null) return
   if (decoded.opcode === 3) current.tags.add(decoded.tag)
   if (decoded.opcode === 4) current.tags.delete(decoded.tag)
   entries.set(decoded.targetAddress, current)
