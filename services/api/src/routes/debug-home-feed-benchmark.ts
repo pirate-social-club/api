@@ -1,3 +1,5 @@
+import { decodePublicCommunityId } from "../lib/public-ids"
+
 export const HOME_FEED_BENCHMARK_MAX_COMMUNITIES = 16
 
 export function parseHomeFeedBenchmarkCommunityIds(value: unknown): string[] | null {
@@ -17,5 +19,5 @@ export function parseHomeFeedBenchmarkCommunityIds(value: unknown): string[] | n
   ) {
     return null
   }
-  return communityIds
+  return communityIds.map(decodePublicCommunityId)
 }

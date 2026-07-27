@@ -9,7 +9,7 @@ describe("parseHomeFeedBenchmarkCommunityIds", () => {
       " com_alpha ",
       "com_beta",
       "com_alpha",
-    ])).toEqual(["com_alpha", "com_beta"])
+    ])).toEqual(["alpha", "beta"])
   })
 
   test("fails closed for missing, malformed, empty, or oversized scopes", () => {
@@ -55,7 +55,7 @@ describe("home-feed benchmark route guards", () => {
   test("accepts real community IDs whose raw segment embeds a legacy prefix", () => {
     expect(parseHomeFeedBenchmarkCommunityIds([
       "com_cmt_b3ede813fccf489982e93739ef1bf6b0",
-    ])).toEqual(["com_cmt_b3ede813fccf489982e93739ef1bf6b0"])
+    ])).toEqual(["cmt_b3ede813fccf489982e93739ef1bf6b0"])
     expect(parseHomeFeedBenchmarkCommunityIds(["com_cmt_b3ede813!"])).toBeNull()
   })
 })
