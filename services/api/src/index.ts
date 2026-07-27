@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { WorkerEntrypoint } from "cloudflare:workers"
 import type { ShardVersionInfo } from "@pirate/api-shared"
+import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -182,9 +183,9 @@ export function buildVersionMetadata(
   compiled: BuildVersionMetadata = COMPILED_BUILD_VERSION_METADATA,
 ): BuildVersionMetadata {
   return {
-    git_ref: env.BUILD_GIT_REF ?? compiled.git_ref,
-    git_sha: env.BUILD_GIT_SHA ?? compiled.git_sha,
-    build_timestamp: env.BUILD_TIMESTAMP ?? compiled.build_timestamp,
+    git_ref: compiled.git_ref ?? env.BUILD_GIT_REF ?? null,
+    git_sha: compiled.git_sha ?? env.BUILD_GIT_SHA ?? null,
+    build_timestamp: compiled.build_timestamp ?? env.BUILD_TIMESTAMP ?? null,
   }
 }
 
@@ -196,6 +197,7 @@ async function buildVersionPayload(env: Env) {
     git_sha: buildVersion.git_sha,
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
+    karaoke_scoring_version: KARAOKE_SCORING_VERSION,
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
   }
 }

@@ -1678,6 +1678,55 @@ describe("post study service", () => {
     expect(secondResponse.streak_summary).toEqual(secondSummary)
   })
 
+  test("streak leaderboard gives equal streaks equal rank and anonymizes missing profiles", async () => {
+    await seedSongPost()
+    const today = new Date().toISOString().slice(0, 10)
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        created_at, updated_at
+      )
+      VALUES
+        ('usr_alpha', ?1, ?2, 4, 6, ?3, ?3, 6, ?4, ?4),
+        ('usr_missing', ?1, ?2, 4, 6, ?3, ?3, 6, ?4, ?4),
+        ('usr_third', ?1, ?2, 3, 6, ?3, ?3, 6, ?4, ?4)
+    `, [POST_ID, COMMUNITY_ID, today, NOW])
+    const missingProfileRepository = {
+      ...profileRepository,
+      async listProfilesByUserIds(userIds: string[]) {
+        return new Map(userIds
+          .filter((userId) => userId !== "usr_missing")
+          .map((userId) => [userId, {
+            avatar_ref: null,
+            display_name: userId,
+            global_handle: { label: userId },
+            primary_public_handle: null,
+          } as never]))
+      },
+    }
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: missingProfileRepository as never,
+    })
+
+    expect(leaderboard.entries.map((entry) => ({
+      display_name: entry.identity.display_name ?? null,
+      rank: entry.rank,
+      user_id: entry.identity.user_id,
+    }))).toEqual([
+      { display_name: "usr_alpha", rank: 1, user_id: "usr_alpha" },
+      { display_name: null, rank: 1, user_id: "usr_missing" },
+      { display_name: "usr_third", rank: 3, user_id: "usr_third" },
+    ])
+  })
+
   test("streak summary hydration reads the viewer timezone day", async () => {
     await seedSongPost()
     const currentUtcHour = new Date().getUTCHours()
