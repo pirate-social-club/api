@@ -8,6 +8,7 @@ import {
   type TelegramBotAdminStatus,
   type TelegramChatType,
   type CompleteTelegramSetupIntentInput,
+  type TelegramSetupKind,
 } from "../lib/telegram/community-chat-service"
 import {
   approveTelegramChatJoinRequest,
@@ -86,6 +87,7 @@ import {
   transcribeTelegramAssistantVoiceForCommunity,
   transcribeTelegramGroupAssistantVoice,
 } from "./telegram-assistant-workflow"
+import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-destination-service"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -157,7 +159,7 @@ function summarizeTelegramJoinGrantApprovalResults(
   return "ignored"
 }
 
-function chatPickerAdminRights() {
+function groupPickerAdminRights() {
   return {
     is_anonymous: false,
     can_manage_chat: true,
@@ -173,16 +175,36 @@ function chatPickerAdminRights() {
   }
 }
 
-function chatPickerMarkup(requestId: number) {
+function channelPickerAdminRights() {
+  return {
+    is_anonymous: false,
+    can_manage_chat: true,
+    can_delete_messages: false,
+    can_manage_video_chats: false,
+    can_restrict_members: false,
+    can_promote_members: false,
+    can_change_info: false,
+    can_invite_users: false,
+    can_post_messages: true,
+    can_edit_messages: false,
+    can_post_stories: false,
+    can_edit_stories: false,
+    can_delete_stories: false,
+  }
+}
+
+function chatPickerMarkup(requestId: number, setupKind: TelegramSetupKind) {
+  const isChannel = setupKind === "channel"
+  const rights = isChannel ? channelPickerAdminRights() : groupPickerAdminRights()
   return {
     keyboard: [[{
-      text: "Select group",
+      text: isChannel ? "Select channel" : "Select group",
       request_chat: {
         request_id: requestId,
-        chat_is_channel: false,
+        chat_is_channel: isChannel,
         bot_is_member: true,
-        user_administrator_rights: chatPickerAdminRights(),
-        bot_administrator_rights: chatPickerAdminRights(),
+        user_administrator_rights: rights,
+        bot_administrator_rights: rights,
         request_title: true,
         request_username: true,
       },
@@ -192,8 +214,13 @@ function chatPickerMarkup(requestId: number) {
   }
 }
 
-function setupInstructions(bot: Env | TelegramBotCredential): string {
+function setupInstructions(bot: Env | TelegramBotCredential, setupKind: TelegramSetupKind): string {
   const username = telegramBotUsername(bot)
+  if (setupKind === "channel") {
+    return username
+      ? `Add @${username} to the channel as an admin with permission to post messages, then tap Select channel.`
+      : "Add this bot to the channel as an admin with permission to post messages, then tap Select channel."
+  }
   return username
     ? `Add @${username} to the group as an admin with invite-user permission, then tap Select group.`
     : "Add this bot to the group as an admin with invite-user permission, then tap Select group."
@@ -331,8 +358,8 @@ async function handleCommunityBotStartMessage(env: Env, input: {
       })
       await safeSendTelegramMessage(input.bot, {
         chat_id: input.chatId,
-        text: setupInstructions(input.bot),
-        reply_markup: chatPickerMarkup(setupRequest.request_id),
+        text: setupInstructions(input.bot, setupRequest.setup_kind),
+        reply_markup: chatPickerMarkup(setupRequest.request_id, setupRequest.setup_kind),
       })
     } catch (error) {
       await safeSendTelegramMessage(input.bot, {
@@ -470,8 +497,8 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     })
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
-      text: setupInstructions(bot),
-      reply_markup: chatPickerMarkup(setupRequest.request_id),
+      text: setupInstructions(bot, setupRequest.setup_kind),
+      reply_markup: chatPickerMarkup(setupRequest.request_id, setupRequest.setup_kind),
     })
   } catch (error) {
     await safeSendTelegramMessage(bot, {
@@ -695,6 +722,34 @@ async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage
 
   try {
     const telegramChat = await getTelegramChat(bot, sharedChatId)
+    if (telegramChat.type === "channel") {
+      if (!isCommunityBot(bot)) {
+        throw badRequestError("A community bot is required to connect a channel")
+      }
+      const member = await getTelegramChatMember(bot, sharedChatId, telegramBotUserId(bot))
+      if (
+        member.status !== "administrator"
+        && member.status !== "creator"
+        || member.can_post_messages === false
+      ) {
+        throw badRequestError("The community bot must be a channel administrator with permission to post messages")
+      }
+      await completeTelegramChannelSetupByRequest({
+        env,
+        telegramCommunityBotId: bot.id,
+        requestId: shared.request_id,
+        telegramUserId,
+        privateChatId: chatId,
+        telegramChatId: sharedChatId,
+        channelTitle: telegramChat.title ?? shared.title ?? "Telegram channel",
+        channelUsername: telegramChat.username ?? shared.username ?? null,
+      })
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "Telegram channel connected. New public Pirate posts can now be published there.",
+      })
+      return
+    }
     const chatType = mapTelegramChatType(telegramChat.type)
     if (!chatType) {
       throw badRequestError("telegram_chat.type must be group or supergroup")

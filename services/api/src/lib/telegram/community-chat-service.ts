@@ -25,6 +25,7 @@ export type TelegramBotAdminStatus =
 export type TelegramChatType = "group" | "supergroup"
 
 type TelegramSetupIntentStatus = "pending" | "completed" | "expired" | "canceled"
+export type TelegramSetupKind = "group" | "channel"
 type TelegramLinkedChatStatus = "active" | "unlinked"
 
 type TelegramSetupIntentRow = {
@@ -33,6 +34,7 @@ type TelegramSetupIntentRow = {
   community_id: string
   owner_user_id: string
   setup_token_hash: string
+  setup_kind: TelegramSetupKind
   request_id: number | null
   request_owner_telegram_user_id: string | null
   request_private_chat_id: string | null
@@ -107,6 +109,7 @@ export type TelegramSetupChatRequestResource = {
   community: string
   request_id: number
   expires_at: number
+  setup_kind: TelegramSetupKind
 }
 
 export type TelegramLinkedChatBotContext = {
@@ -321,6 +324,7 @@ function toSetupIntentRow(row: unknown): TelegramSetupIntentRow | null {
     community_id: String(rowValue(row, "community_id") ?? ""),
     owner_user_id: String(rowValue(row, "owner_user_id") ?? ""),
     setup_token_hash: String(rowValue(row, "setup_token_hash") ?? ""),
+    setup_kind: String(rowValue(row, "setup_kind") ?? "group") as TelegramSetupKind,
     request_id: requestId == null ? null : Number(requestId),
     request_owner_telegram_user_id: stringOrNull(rowValue(row, "request_owner_telegram_user_id")),
     request_private_chat_id: stringOrNull(rowValue(row, "request_private_chat_id")),
@@ -474,7 +478,7 @@ async function getSetupIntentByTokenHash(
 ): Promise<TelegramSetupIntentRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, status,
+      SELECT telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, setup_kind, status,
              request_id, request_owner_telegram_user_id, request_private_chat_id,
              request_message_id, request_sent_at,
              expires_at, completed_at, canceled_at, telegram_user_id, telegram_chat_id, created_at, updated_at
@@ -497,7 +501,7 @@ async function getSetupIntentByRequest(
 ): Promise<TelegramSetupIntentRow | null> {
   const row = await executeFirst(client, {
     sql: `
-      SELECT telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, status,
+      SELECT telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, setup_kind, status,
              request_id, request_owner_telegram_user_id, request_private_chat_id,
              request_message_id, request_sent_at,
              expires_at, completed_at, canceled_at, telegram_user_id, telegram_chat_id, created_at, updated_at
@@ -567,6 +571,9 @@ async function completePendingTelegramSetupIntent(input: {
   payload: TelegramChatCompletion
   now: string
 }): Promise<TelegramLinkedChatResource> {
+  if (input.intent.setup_kind !== "group") {
+    throw conflictError("Telegram setup intent is for a channel")
+  }
   await requireLiveCommunityForSetupIntent(input.tx, input.intent.community_id)
 
   const existingChat = await getActiveLinkedChatByTelegramChatId(input.tx, input.payload.telegramChatId)
@@ -750,6 +757,7 @@ export async function createTelegramSetupIntent(input: {
   communityRepository: Pick<CommunityReadRepository, "getCommunityById">
   communityId: string
   actor: ActorContext | AdminActorContext
+  setupKind?: TelegramSetupKind
 }): Promise<TelegramSetupIntentResource> {
   const community = await requireOwnedTelegramCommunity({
     repository: input.communityRepository,
@@ -769,10 +777,10 @@ export async function createTelegramSetupIntent(input: {
   await getControlPlaneClient(input.env).execute({
     sql: `
       INSERT INTO telegram_setup_intents (
-        telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, status,
+        telegram_setup_intent_id, telegram_community_bot_id, community_id, owner_user_id, setup_token_hash, setup_kind, status,
         expires_at, completed_at, canceled_at, telegram_user_id, telegram_chat_id, created_at, updated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, 'pending', ?6, NULL, NULL, NULL, NULL, ?7, ?7
+        ?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, NULL, NULL, NULL, NULL, ?8, ?8
       )
     `,
     args: [
@@ -781,6 +789,7 @@ export async function createTelegramSetupIntent(input: {
       community.community_id,
       community.creator_user_id,
       tokenHash,
+      input.setupKind ?? "group",
       expiresAt,
       createdAt,
     ],
@@ -878,6 +887,7 @@ export async function prepareTelegramSetupChatRequest(input: {
       community: publicCommunityId(intent.community_id),
       request_id: requestId,
       expires_at: unixSecondsFromIso(intent.expires_at),
+      setup_kind: intent.setup_kind,
     }
   } catch (error) {
     if (!transactionCommitted) {

@@ -74,6 +74,31 @@ let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
 let songPostAssetCreatorForRuntime: SongPostAssetCreator = createSongAssetForPost
 let postCommunityWriteOpenerForRuntime: PostCommunityWriteOpener = openCommunityWriteClient
 
+async function enqueueTelegramPublicationIfPublished(input: {
+  client: DbExecutor
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  if (input.post.status !== "published" || input.post.visibility !== "public") return
+  try {
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.communityId,
+      jobType: "telegram_post_publish",
+      subjectType: "post",
+      subjectId: input.post.post_id,
+      createdAt: input.createdAt,
+    })
+  } catch (error) {
+    console.error("[posts] Telegram publication enqueue failed", {
+      community_id: input.communityId,
+      post_id: input.post.post_id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 async function processImmediatePostPublishFinalize(input: {
   env: Env
   communityId: string
@@ -567,6 +592,12 @@ export async function createPost(input: {
         actorUserId: input.userId,
         createdAt,
       })
+      await enqueueTelegramPublicationIfPublished({
+        client: db.client,
+        communityId: input.communityId,
+        post,
+        createdAt,
+      })
       schedulePublicPostCachePurge({
         env: input.env,
         communityId: input.communityId,
@@ -711,6 +742,12 @@ export async function createPost(input: {
       sourceCreatedAt: post.created_at,
       projectedPayloadJson: JSON.stringify(post),
       actorUserId: input.userId,
+      createdAt,
+    })
+    await enqueueTelegramPublicationIfPublished({
+      client: db.client,
+      communityId: input.communityId,
+      post,
       createdAt,
     })
     schedulePublicPostCachePurge({
