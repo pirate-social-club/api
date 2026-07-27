@@ -54,7 +54,6 @@ export type {
 } from "./home-feed-types"
 
 const HOME_FEED_COMMUNITY_READ_CONCURRENCY = 4
-const HOME_FEED_TIMING_LOG_THRESHOLD_MS = 1_000
 
 export const HOME_FEED_SERVER_TIMING: unique symbol = Symbol("home-feed-server-timing")
 
@@ -797,24 +796,24 @@ export async function listHomeFeed(input: {
   if (communityIds.length === 0) {
     phaseTimings.resolve_communities_ms = elapsedMs(phaseStartedAt)
     const totalMs = elapsedMs(requestStartedAt)
-    if (totalMs >= HOME_FEED_TIMING_LOG_THRESHOLD_MS) {
-      console.info("[home-feed] timing", JSON.stringify({
-        total_ms: totalMs,
-        authenticated: Boolean(input.userId),
-        locale: input.locale ?? null,
-        sort: input.sort ?? null,
-        time_range: input.timeRange ?? null,
-        cursor: input.cursor ?? null,
-        active_communities: activeCommunities.length,
-        candidate_communities: 0,
-        projection_rows: 0,
-        page_rows: 0,
-        returned_items: 0,
-        top_communities: 0,
-        phases: phaseTimings,
-        slow_communities: [],
-      }))
-    }
+    console.info("[home-feed] timing", JSON.stringify({
+      build_sha: input.env.BUILD_GIT_SHA ?? null,
+      total_ms: totalMs,
+      authenticated: Boolean(input.userId),
+      locale: input.locale ?? null,
+      sort: input.sort ?? null,
+      time_range: input.timeRange ?? null,
+      cursor: input.cursor ?? null,
+      active_communities: activeCommunities.length,
+      candidate_communities: 0,
+      projection_rows: 0,
+      page_rows: 0,
+      returned_items: 0,
+      top_communities: 0,
+      degraded_profile_slices: 0,
+      phases: phaseTimings,
+      slow_communities: [],
+    }))
     return withHomeFeedServerTiming({
       items: [],
       top_communities: [],
@@ -1065,27 +1064,27 @@ export async function listHomeFeed(input: {
       })
   phaseTimings.top_communities_ms = elapsedMs(phaseStartedAt)
   const totalMs = elapsedMs(requestStartedAt)
-  if (totalMs >= HOME_FEED_TIMING_LOG_THRESHOLD_MS) {
-    console.info("[home-feed] timing", JSON.stringify({
-      total_ms: totalMs,
-      authenticated: Boolean(input.userId),
-      locale: input.locale ?? null,
-      sort: input.sort ?? null,
-      parsed_sort: sort,
-      time_range: input.timeRange ?? null,
-      cursor: input.cursor ?? null,
-      active_communities: activeCommunities.length,
-      candidate_communities: communityIds.length,
-      projection_rows: allRows.length,
-      time_filtered_rows: timeFilteredRows.length,
-      page_rows: pageRows.length,
-      page_communities: new Set(pageRows.map((row) => row.community_id)).size,
-      returned_items: bookingDecoratedItems.length,
-      top_communities: topCommunities.length,
-      phases: phaseTimings,
-      slow_communities: summarizeCommunityTimings(communityTimings),
-    }))
-  }
+  console.info("[home-feed] timing", JSON.stringify({
+    build_sha: input.env.BUILD_GIT_SHA ?? null,
+    total_ms: totalMs,
+    authenticated: Boolean(input.userId),
+    locale: input.locale ?? null,
+    sort: input.sort ?? null,
+    parsed_sort: sort,
+    time_range: input.timeRange ?? null,
+    cursor: input.cursor ?? null,
+    active_communities: activeCommunities.length,
+    candidate_communities: communityIds.length,
+    projection_rows: allRows.length,
+    time_filtered_rows: timeFilteredRows.length,
+    page_rows: pageRows.length,
+    page_communities: new Set(pageRows.map((row) => row.community_id)).size,
+    returned_items: bookingDecoratedItems.length,
+    top_communities: topCommunities.length,
+    degraded_profile_slices: communityTimings.filter((timing) => timing.derivative_profiles_degraded).length,
+    phases: phaseTimings,
+    slow_communities: summarizeCommunityTimings(communityTimings),
+  }))
 
   return withHomeFeedServerTiming({
     items: bookingDecoratedItems,
