@@ -30,6 +30,10 @@ function env(): Env {
     REWARDS_TREASURY_VAULT_POLICY_VERSION: "7",
     LIT_REWARDS_USAGE_API_KEY: "usage-secret",
     LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
+    // Mirror the ceilings pinned into the reviewed action source.
+    LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+    LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+    LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     LIT_REWARDS_SIGNING_DEADLINE_SECONDS: "300",
   } as Env
 }

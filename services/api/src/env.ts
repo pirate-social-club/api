@@ -235,6 +235,15 @@ export type Env = {
   LIT_REWARDS_REQUEST_TIMEOUT_MS?: string
   LIT_REWARDS_REQUEST_MAX_ATTEMPTS?: string
   LIT_REWARDS_SIGNING_DEADLINE_SECONDS?: string
+  /**
+   * Gas ceilings mirroring the values pinned into the reviewed Lit action
+   * source. Required when the rewards backend is lit_vault: reconciliation
+   * re-checks signed gas against them, and a default would make that check
+   * weaker than the signing-side policy it corroborates.
+   */
+  LIT_REWARDS_MAX_FEE_PER_GAS_WEI?: string
+  LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
+  LIT_REWARDS_MAX_GAS_LIMIT?: string
   REWARDS_REFUNDS_ENABLED?: string
   // Caps RPC receipt waits for routed checkout funding confirmation. Paid
   // handle claims can be retried with the same funding_tx_ref after timeout.
