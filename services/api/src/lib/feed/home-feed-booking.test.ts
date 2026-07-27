@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { HomeFeedItem } from "../../types"
 import {
   decorateHomeFeedItemsWithBookings,
+  listFeedBookingDiscoveryByHostUserIds,
   listFeedBookingsByHostUserIds,
   type FeedBookingExecutor,
 } from "./home-feed-booking"
@@ -186,6 +187,7 @@ describe("home feed booking discovery", () => {
             host_user_id: "usr_host",
             base_price_cents: 3500,
             has_available_slot: true,
+            snapshot_is_stale: false,
             starting_price_cents: 2500,
           }],
         }
@@ -200,8 +202,28 @@ describe("home feed booking discovery", () => {
     })
     expect(String((statements[0] as { sql: string }).sql)).toContain("p.is_published = TRUE")
     expect(String((statements[0] as { sql: string }).sql)).toContain("bookings.feed_discovery_snapshots")
-    expect(String((statements[0] as { sql: string }).sql)).toContain("snapshot.valid_until > NOW()")
+    expect(String((statements[0] as { sql: string }).sql)).toContain("snapshot.valid_until <= NOW() AS snapshot_is_stale")
+    expect(String((statements[0] as { sql: string }).sql)).not.toContain("snapshot.valid_until > NOW()")
     expect(result.get("usr_host")).toEqual(booking)
+  })
+
+  test("serves an expired snapshot while marking it for background refresh", async () => {
+    const executor: FeedBookingExecutor = {
+      execute: async () => ({
+        rows: [{
+          host_user_id: "usr_host",
+          base_price_cents: 3500,
+          has_available_slot: true,
+          snapshot_is_stale: true,
+          starting_price_cents: 2500,
+        }],
+      }),
+    }
+
+    const result = await listFeedBookingDiscoveryByHostUserIds(executor, ["usr_host"])
+
+    expect(result.bookingByHostUserId.get("usr_host")).toEqual(booking)
+    expect(result.staleHostUserIds).toEqual(["usr_host"])
   })
 
   test("returns a published host with a current empty-window snapshot", async () => {
@@ -211,6 +233,7 @@ describe("home feed booking discovery", () => {
           host_user_id: "usr_host",
           base_price_cents: 3500,
           has_available_slot: false,
+          snapshot_is_stale: false,
           starting_price_cents: null,
         }],
       }),
