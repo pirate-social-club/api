@@ -278,11 +278,25 @@ export async function compareIndexedEfpGraph(input: {
       relationshipMismatches.push({ target: negativeTarget, expected: false, actual: true })
     }
     const ourFollowerCountLowerBound = graph.followerCountByAddress.get(address) ?? null
+    const knownHostedFollowingOmissions = [...ours].filter(
+      (target) => isEfpKnownHostedDivergence(primaryListId, target),
+    ).length
+    let knownHostedFollowerOmissions = 0
+    for (const [follower, targets] of graph.followingByAddress) {
+      const followerListId = graph.primaryListIdByAddress.get(follower)
+      if (
+        followerListId
+        && targets.has(address)
+        && isEfpKnownHostedDivergence(followerListId, address)
+      ) {
+        knownHostedFollowerOmissions += 1
+      }
+    }
     const followerDirectionViolation = ourFollowerCountLowerBound != null
-      && ourFollowerCountLowerBound > hostedStats.followerCount
+      && ourFollowerCountLowerBound - knownHostedFollowerOmissions > hostedStats.followerCount
     if (
       relationshipMismatches.length > 0
-      || ours.size !== hostedListStats.followingCount
+      || ours.size - knownHostedFollowingOmissions !== hostedListStats.followingCount
       || followerDirectionViolation
     ) {
       mismatches.push({

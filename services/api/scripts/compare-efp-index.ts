@@ -54,7 +54,10 @@ async function loadAddresses(path: string | undefined, client: Client): Promise<
         JOIN wallet_attachments attachments
           ON attachments.wallet_attachment_id = users.primary_wallet_attachment_id
         WHERE attachments.status = 'active'
-          AND attachments.chain_namespace = 'eip155'
+          AND (
+            attachments.chain_namespace = 'eip155'
+            OR attachments.chain_namespace LIKE 'eip155:%'
+          )
         ORDER BY users.created_at DESC
         LIMIT 50
       `),
