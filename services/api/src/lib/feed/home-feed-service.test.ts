@@ -9,6 +9,7 @@ import {
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
   resolveVideoFeedBestRankingMode,
+  refreshMaterializedHomeFeedBookings,
   selectBestVideoFeedProjectionPage,
   sortCommunitySummariesByViews,
   sortCommunitySummaries,
@@ -17,6 +18,54 @@ import {
   videoFeedOrderSql,
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
+import type { Env, HomeFeedItem } from "../../types"
+
+describe("refreshMaterializedHomeFeedBookings", () => {
+  test("replaces cached booking decoration and clears hosts no longer discoverable", async () => {
+    const cachedBooking = {
+      host_user_id: "usr_host",
+      base_price_cents: 3500,
+      has_available_slot: true,
+      starting_price_cents: 3500,
+      currency: "USDC" as const,
+    }
+    const freshBooking = {
+      ...cachedBooking,
+      base_price_cents: 5000,
+      starting_price_cents: 5000,
+    }
+    const item = {
+      community: {
+        id: "com_test",
+        object: "home_feed_community_summary",
+        display_name: "Test",
+      },
+      post: {
+        post: {
+          id: "post_test",
+          author_user: "usr_host",
+          authorship_mode: "human_direct",
+          identity_mode: "public",
+        },
+      },
+      booking: cachedBooking,
+    } as HomeFeedItem
+
+    const refreshed = await refreshMaterializedHomeFeedBookings({
+      env: {} as Env,
+      result: { items: [item], next_cursor: null, top_communities: [] },
+      lookup: async () => new Map([["usr_host", freshBooking]]),
+    })
+    expect(refreshed.items[0]?.booking).toEqual(freshBooking)
+
+    const removed = await refreshMaterializedHomeFeedBookings({
+      env: {} as Env,
+      result: { items: [item], next_cursor: null, top_communities: [] },
+      lookup: async () => new Map(),
+    })
+    expect(removed.items[0]?.booking).toBeUndefined()
+  })
+})
 
 describe("nextVideoFeedBackfillBatchSize", () => {
   test("requests only enough candidates to fill the remaining response slots", () => {

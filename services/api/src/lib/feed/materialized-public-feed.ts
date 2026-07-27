@@ -12,7 +12,9 @@ import {
 import type { Env, HomeFeedResponse } from "../../types"
 import { VIDEO_SCORER_VERSION } from "./video-scorer"
 
-const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v1"
+// v2 stops reusing bodies that froze booking discovery before materialized reads began
+// reapplying that volatile projection.
+const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v2"
 const MATERIALIZED_PUBLIC_HOME_FEED_FRESH_MS = 5 * 60 * 1000
 const MATERIALIZED_PUBLIC_HOME_FEED_STALE_MS = 30 * 60 * 1000
 // Keep the homepage available through a short scheduler/control-plane incident.
