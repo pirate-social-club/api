@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { trimEnv } from "../env-strings"
+import { providerUnavailable } from "../errors"
 import { DEFAULT_OPENROUTER_MODEL } from "../openrouter-client"
 import type { Post, SongArtifactUpload } from "../../types"
 import {
@@ -7,6 +8,7 @@ import {
   hasActiveCommunityElevenLabsCredential,
 } from "../communities/assistant-policy/credential-service"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
+import { extractAudioSampleForObject } from "./video-audio-sample"
 
 type SongAlignmentReason =
   | "lyrics_missing"
@@ -46,6 +48,15 @@ const SONG_ANALYSIS_SLOW_STEP_MS = 10_000
 const SONG_ANALYSIS_STALLED_STEP_MS = 45_000
 const DEFAULT_OPENROUTER_TIMEOUT_MS = 20_000
 const DEFAULT_ACRCLOUD_TIMEOUT_MS = 30_000
+// ACRCloud identifies from 10-20 seconds of audio and rejects large uploads
+// outright (status 3016), so the song path sends a short extracted window and
+// only falls back to the raw file when no extractor is available.
+const SONG_ACR_SAMPLE_WINDOW = { start_ms: 10_000, duration_ms: 20_000 }
+const ACRCLOUD_IDENTIFY_ATTEMPTS = 2
+// Definitive ACR answers: 0 = match, 1001 = no result, 2004 = audio that
+// cannot be fingerprinted. Every other status is a provider-side failure and
+// must not silently count as "no match".
+const ACRCLOUD_DEFINITIVE_STATUS_CODES = new Set([0, 1001, 2004])
 const DEFAULT_ELEVENLABS_TIMEOUT_MS = 120_000
 
 export type SongBundleAnalysisResult = {
@@ -371,6 +382,40 @@ async function identifyAudioWithAcrCloud(input: {
   }
   const storageObjectKey = input.upload.storage_object_key
 
+  try {
+    const extracted = await withSongAnalysisStep("acrcloud extract audio sample", {
+      provider: "acrcloud",
+      size_bytes: input.upload.size_bytes,
+      upload: input.upload.id,
+      window: SONG_ACR_SAMPLE_WINDOW,
+    }, () => extractAudioSampleForObject({
+      env: input.env,
+      objectKey: storageObjectKey,
+      window: SONG_ACR_SAMPLE_WINDOW,
+    }))
+    if (extracted.kind === "sample") {
+      return identifyAudioSampleWithAcrCloud({
+        env: input.env,
+        sampleBytes: extracted.bytes,
+        filename: `${input.upload.id}-acr-sample.wav`,
+        mimeType: extracted.mimeType,
+        logContext: { upload: input.upload.id, sample_source: "extracted_window" },
+      })
+    }
+    console.info("[song-artifacts] ACR sample extraction unavailable, using full file", {
+      kind: extracted.kind,
+      provider: "acrcloud",
+      reason: extracted.kind === "skipped" ? extracted.reason : null,
+      upload: input.upload.id,
+    })
+  } catch (error) {
+    console.warn("[song-artifacts] ACR sample extraction failed, using full file", {
+      message: errorMessage(error),
+      provider: "acrcloud",
+      upload: input.upload.id,
+    })
+  }
+
   const contentResponse = await withSongAnalysisStep("acrcloud load audio sample", {
     content_hash_present: Boolean(input.upload.content_hash),
     filename: input.upload.filename,
@@ -391,7 +436,7 @@ async function identifyAudioWithAcrCloud(input: {
     sampleBytes: content,
     filename: input.upload.filename || "audio.bin",
     mimeType: input.upload.mime_type || "application/octet-stream",
-    logContext: { upload: input.upload.id },
+    logContext: { upload: input.upload.id, sample_source: "full_file" },
   })
 }
 
@@ -468,6 +513,17 @@ export async function identifyAudioSampleWithAcrCloud(input: {
         error: "invalid_response",
       }
     }
+    const status = (parsed as { status?: { code?: unknown; msg?: unknown } }).status
+    const statusCode = status && typeof status === "object" && typeof status.code === "number"
+      ? status.code
+      : null
+    if (statusCode !== null && !ACRCLOUD_DEFINITIVE_STATUS_CODES.has(statusCode)) {
+      return {
+        provider: "acrcloud",
+        error: `acr_status_${statusCode}`,
+        provider_status: status,
+      }
+    }
     return parsed as Record<string, unknown>
   } catch (error) {
     return {
@@ -513,12 +569,38 @@ async function evaluateAudioIdentification(input: {
     }
   }
 
-  const providerResult = await identifyAudioWithAcrCloud({
-    env: input.env,
-    upload: input.primaryAudioUpload,
-  })
-  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
+  let providerResult: Record<string, unknown> | null = null
+  for (let attempt = 1; attempt <= ACRCLOUD_IDENTIFY_ATTEMPTS; attempt += 1) {
+    providerResult = await identifyAudioWithAcrCloud({
+      env: input.env,
+      upload: input.primaryAudioUpload,
+    })
+    const providerError = providerResult && typeof providerResult.error === "string"
+      ? providerResult.error
+      : null
+    if (!providerError || providerError === "missing_configuration") {
+      break
+    }
+    console.warn("[song-artifacts] ACRCloud identification attempt failed", {
+      attempt,
+      max_attempts: ACRCLOUD_IDENTIFY_ATTEMPTS,
+      error: providerError,
+      provider: "acrcloud",
+      upload: input.primaryAudioUpload.id,
+    })
+  }
   const missingConfiguration = providerResult?.error === "missing_configuration"
+  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
+  if (providerFailed && !missingConfiguration) {
+    // A provider outage or transport failure is not a rights verdict: surface
+    // it as retryable provider unavailability instead of stranding the post in
+    // a terminal "review required" state no reviewer will ever see.
+    throw providerUnavailable("Song audio identification is temporarily unavailable", {
+      provider: "acrcloud",
+      provider_error: String(providerResult?.error),
+      reason: "song_audio_identification_failed",
+    })
+  }
   const metadata = (providerResult as {
     metadata?: {
       music?: unknown[]
@@ -533,15 +615,9 @@ async function evaluateAudioIdentification(input: {
   )
 
   return {
-    analysisState: providerFailed
-      ? missingConfiguration
-        ? "allow"
-        : "review_required"
-      : matchFound
-        ? "allow_with_required_reference"
-        : "allow",
-    moderationStatus: providerFailed ? "failed" : "completed",
-    moderationError: providerFailed ? String(providerResult?.error || "ACRCloud identification failed") : null,
+    analysisState: matchFound ? "allow_with_required_reference" : "allow",
+    moderationStatus: missingConfiguration ? "failed" : "completed",
+    moderationError: missingConfiguration ? "missing_configuration" : null,
     moderationResult: {
       provider: "acrcloud",
       provider_result: providerResult,

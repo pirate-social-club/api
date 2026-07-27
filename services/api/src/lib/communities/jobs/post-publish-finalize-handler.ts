@@ -770,6 +770,17 @@ export async function runPostPublishFinalize(
           updatedAt: nowIso(),
         })
       } catch (error) {
+        if (
+          error instanceof HttpError
+          && error.code === "provider_unavailable"
+          && error.retryable
+          && input.job.attempt_count < COMMUNITY_JOB_MAX_ATTEMPTS
+        ) {
+          // Transient analysis-provider failure: let the job runner retry with
+          // backoff; only the terminal attempt marks the post failed (and even
+          // then it stays user-retryable below).
+          throw error
+        }
         const failure = publishFailureFromError(error, {
           code: "provider_unavailable",
           message: "Song analysis failed",

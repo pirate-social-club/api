@@ -9,8 +9,7 @@ import {
   syncVideoAudioSampleToAcrCloudCatalog,
 } from "../../song-artifacts/song-artifact-catalog"
 import {
-  extractVideoAudioSampleForObject,
-  requestVideoAudioSampleFromService,
+  extractAudioSampleForObject,
   type VideoAudioSampleResult,
   type VideoAudioSampleWindow,
 } from "../../song-artifacts/video-audio-sample"
@@ -84,55 +83,12 @@ type VideoAudioTranscriptResult =
     providerResult?: Record<string, unknown> | null
   }
 
-const DEFAULT_EXTRACTION_TIMEOUT_MS = 180_000
 const DEFAULT_ELEVENLABS_TIMEOUT_MS = 120_000
 const DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
 const ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
-function isLocalServiceHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
-}
-
-function canRunLocalFfmpeg(env: Env): boolean {
-  if (trimEnv(env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
-    return false
-  }
-  const runtime = (globalThis as typeof globalThis & { Bun?: { spawn?: unknown } }).Bun
-  return Boolean(runtime && typeof runtime.spawn === "function")
-}
-
-function extractionServiceUrl(env: Env): string | null {
-  const configured = trimEnv(env.SONG_PREVIEW_SERVICE_URL)
-  if (!configured) return null
-  let url: URL
-  try {
-    url = new URL(configured)
-  } catch {
-    throw providerUnavailable("Song preview service URL is invalid", { reason: "invalid_song_preview_service_url" })
-  }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalServiceHost(url.hostname))) {
-    throw providerUnavailable("Song preview service URL must use HTTPS outside localhost", {
-      reason: "insecure_song_preview_service_url",
-    })
-  }
-  return url.toString()
-}
-
 const defaultExtractor: VideoAudioSampleExtractor = async (input) => {
-  if (canRunLocalFfmpeg(input.env)) {
-    return extractVideoAudioSampleForObject(input)
-  }
-  const serviceUrl = extractionServiceUrl(input.env)
-  if (!serviceUrl && !input.env.SONG_PREVIEW_SERVICE) {
-    return { kind: "skipped", reason: "extraction_unavailable" }
-  }
-  return requestVideoAudioSampleFromService({
-    env: input.env,
-    serviceUrl,
-    objectKey: input.objectKey,
-    window: input.window,
-    timeoutMs: DEFAULT_EXTRACTION_TIMEOUT_MS,
-  })
+  return extractAudioSampleForObject(input)
 }
 
 export function chooseVideoSampleWindow(durationMs: number | null | undefined): VideoAudioSampleWindow {
