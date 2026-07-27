@@ -5,6 +5,12 @@ import { openCommunityReadClient, openCommunityWriteClient } from "../lib/commun
 import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
+import { HOME_FEED_SERVER_TIMING, listHomeFeed } from "../lib/feed/home-feed-service"
+import {
+  HOME_FEED_BENCHMARK_MAX_COMMUNITIES,
+  parseHomeFeedBenchmarkCommunityIds,
+} from "./debug-home-feed-benchmark"
 import {
   getStoryRegistrationEffect,
   type StoryRegistrationEffect,
@@ -51,6 +57,43 @@ function isRecognizedStagingSmoke(row: { display_name?: unknown; description?: u
   return STAGING_SMOKE_DESCRIPTIONS.has(description)
     || /^(Community Create CI Smoke|D1 Provisioning Smoke|Song Submit CI Smoke)\b/u.test(displayName)
 }
+
+debugPipeline.post("/home-feed-benchmark", async (c) => {
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+
+  const body = await c.req.json().catch(() => null) as {
+    community_ids?: unknown
+    cursor?: unknown
+    locale?: unknown
+    sort?: unknown
+    user_id?: unknown
+  } | null
+  const communityIds = parseHomeFeedBenchmarkCommunityIds(body?.community_ids)
+  const userId = typeof body?.user_id === "string" ? body.user_id.trim() : ""
+  if (!communityIds || !/^usr_[A-Za-z0-9]+$/u.test(userId)) {
+    return c.json({
+      error: "invalid_home_feed_benchmark_request",
+      max_community_ids: HOME_FEED_BENCHMARK_MAX_COMMUNITIES,
+    }, 400)
+  }
+
+  const result = await listHomeFeed({
+    env: c.env,
+    userId,
+    communityIdsOverride: communityIds,
+    locale: typeof body?.locale === "string" ? body.locale : null,
+    sort: typeof body?.sort === "string" ? body.sort : null,
+    cursor: typeof body?.cursor === "string" ? body.cursor : null,
+    contentKind: "video",
+    communityRepository: getCommunityRepository(c.env),
+    userRepository: getUserRepository(c.env),
+    profileRepository: getProfileRepository(c.env),
+  })
+  const serverTiming = result[HOME_FEED_SERVER_TIMING]
+  if (serverTiming) c.header("Server-Timing", serverTiming)
+  return c.json(result, 200)
+})
 
 debugPipeline.post("/staging-d1/reclaim", async (c) => {
   if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)

@@ -6,6 +6,7 @@ import {
   listHomeFeedCommunityViewCounts,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
+  resolveHomeFeedCandidateCommunityIds,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
   resolveVideoFeedBestRankingMode,
@@ -374,6 +375,16 @@ function createFollowRow(input: {
 }
 
 describe("resolveHomeFeedCommunityIds", () => {
+  test("uses the explicit operator scope without leaking duplicate community reads", () => {
+    expect(resolveHomeFeedCandidateCommunityIds({
+      activeCommunities: [],
+      followRows: [],
+      membershipRows: [],
+      userId: "benchmark-user",
+      override: ["community-a", "community-b", "community-a"],
+    })).toEqual(["community-a", "community-b"])
+  })
+
   test("returns all active communities for a signed-in user", () => {
     const communityIds = resolveHomeFeedCommunityIds({
       activeCommunities: [
