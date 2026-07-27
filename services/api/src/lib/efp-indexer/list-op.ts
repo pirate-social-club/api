@@ -52,7 +52,7 @@ export function decodeEfpListOp(raw: Hex): DecodedEfpListOp {
     && recordType === EFP_ADDRESS_RECORD_TYPE
     && targetAddress !== null
   const validShape = opcode === 1 || opcode === 2
-    ? raw.length === 50
+    ? raw.length >= 50
     : (opcode === 3 || opcode === 4) && tag !== null
 
   const valid = validHeader && validShape
