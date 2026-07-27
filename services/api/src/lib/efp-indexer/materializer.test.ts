@@ -127,7 +127,16 @@ describe("EFP follow materializer", () => {
   test("new pointer replays a slot whose complete history predates the watermark", async () => {
     const client = await setup()
     const rawAdd = `0x01010101${OLD_TARGET.slice(2)}`.toLowerCase()
+    const unsupportedNftRecord =
+      "0x010180806569703135353a383435332f6572633732313a3078613130343365444245316230466665364331326132623865643541664437416342324445413339362f313132393038363537343435363530363530383133343638333733353438313231323839343030353239323636373437303434383234333334363638383933363934363233383932383031393433"
     await client.batch([
+      {
+        sql: `INSERT INTO efp_list_ops (
+          chain_id, contract_address, slot, block_number, block_hash,
+          transaction_hash, transaction_index, log_index, raw_op
+        ) VALUES (8453, ?1, '77', 4, ?3, ?3, 0, 0, ?2)`,
+        args: [CONTRACT, unsupportedNftRecord, HASH],
+      },
       {
         sql: `INSERT INTO efp_list_ops (
           chain_id, contract_address, slot, block_number, block_hash,
@@ -393,7 +402,7 @@ describe("EFP follow materializer", () => {
     expect(state.rows[0]).toEqual({
       status: "unavailable",
       projection_revision: 2,
-      last_error: expect.stringContaining("unsupported or malformed"),
+      last_error: expect.stringContaining("malformed"),
     })
   })
 
