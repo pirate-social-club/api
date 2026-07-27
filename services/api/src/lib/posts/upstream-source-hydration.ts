@@ -195,6 +195,38 @@ function fallbackSource(parsed: ParsedUpstreamRef): PostDerivativeSource | null 
   }
 }
 
+/**
+ * Creator profiles are read once per hydration slice instead of once per creator.
+ * The per-creator path issued one round trip each, and the feed's critical path is
+ * bounded by its slowest community slice, so collapsing those round trips is what
+ * moves the bound.
+ *
+ * A failed batch degrades enrichment for the whole slice rather than falling back to
+ * individual lookups: during a profile-store outage, per-creator retries would restore
+ * exactly the fan-out this batch removes, converting a degraded response into a slow one.
+ * Callers already treat a missing profile as "no handle/display name".
+ */
+type CreatorProfile = Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>
+
+async function loadCreatorProfiles(
+  profileRepository: ProfileRepository | null | undefined,
+  creatorUserIds: string[],
+): Promise<Map<string, CreatorProfile>> {
+  if (!profileRepository || creatorUserIds.length === 0) {
+    return new Map()
+  }
+
+  if (profileRepository.listProfilesByUserIds) {
+    const batched = await profileRepository.listProfilesByUserIds(creatorUserIds).catch(() => null)
+    return new Map(creatorUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const))
+  }
+
+  return new Map(await Promise.all(creatorUserIds.map(async (userId) => [
+    userId,
+    await profileRepository.getProfileByUserId(userId).catch(() => null),
+  ] as const)))
+}
+
 export async function hydrateDerivativeSourcesForResponses(input: {
   client: Client
   communityId: string
@@ -239,12 +271,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   ]
   const creatorUserIds = Array.from(new Set(rows.map((row) => row.creator_user_id)))
   const profilesStartedAt = performance.now()
-  const profilesByUserId = input.profileRepository
-    ? new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-        userId,
-        await input.profileRepository!.getProfileByUserId(userId).catch(() => null),
-      ] as const)))
-    : new Map()
+  const profilesByUserId = await loadCreatorProfiles(input.profileRepository, creatorUserIds)
   const profilesMs = elapsedMs(profilesStartedAt)
 
   for (const response of input.responses) {
