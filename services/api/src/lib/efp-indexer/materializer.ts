@@ -131,6 +131,158 @@ export async function deriveAuthoritativeFollowerEdges(
     }))
 }
 
+export async function deriveAuthoritativeFollowersEdges(
+  client: Pick<ReadClient, "execute">,
+  followerAddresses: readonly Address[],
+): Promise<Map<Address, MaterializedFollowEdge[]>> {
+  const followers = [...new Set(
+    followerAddresses.map((item) => item.toLowerCase() as Address),
+  )]
+  const derived = new Map<Address, MaterializedFollowEdge[]>(
+    followers.map((follower) => [follower, []]),
+  )
+  if (followers.length === 0) return derived
+  const values = followers.map((_, index) => `(?${index + 1})`).join(", ")
+  const result = await client.execute({
+    sql: `
+      WITH requested(follower_address) AS (VALUES ${values}),
+      ranked_primary AS (
+        SELECT events.account_address, events.list_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY events.account_address
+                 ORDER BY events.block_number DESC,
+                          events.transaction_index DESC,
+                          events.log_index DESC
+               ) AS rank
+        FROM efp_primary_list_events events
+        JOIN requested
+          ON requested.follower_address = events.account_address
+      ),
+      primary_lists AS (
+        SELECT account_address, list_id
+        FROM ranked_primary
+        WHERE rank = 1
+      ),
+      ranked_storage AS (
+        SELECT storage.list_id, storage.storage_chain_id,
+               storage.storage_contract_address, storage.storage_slot,
+               ROW_NUMBER() OVER (
+                 PARTITION BY storage.list_id
+                 ORDER BY storage.block_number DESC,
+                          storage.transaction_index DESC,
+                          storage.log_index DESC
+               ) AS rank
+        FROM efp_list_storage_location_events storage
+        JOIN primary_lists ON primary_lists.list_id = storage.list_id
+      ),
+      authoritative AS (
+        SELECT requested.follower_address,
+               storage.storage_chain_id,
+               storage.storage_contract_address,
+               storage.storage_slot
+        FROM requested
+        LEFT JOIN primary_lists
+          ON primary_lists.account_address = requested.follower_address
+        LEFT JOIN ranked_storage storage
+          ON storage.list_id = primary_lists.list_id AND storage.rank = 1
+      )
+      SELECT authoritative.follower_address,
+             authoritative.storage_chain_id,
+             authoritative.storage_contract_address,
+             authoritative.storage_slot,
+             ops.raw_op, ops.block_number, ops.transaction_hash,
+             ops.transaction_index, ops.log_index
+      FROM authoritative
+      LEFT JOIN efp_list_ops ops
+        ON ops.chain_id = authoritative.storage_chain_id
+       AND ops.contract_address = authoritative.storage_contract_address
+       AND ops.slot = authoritative.storage_slot
+      ORDER BY authoritative.follower_address,
+               ops.block_number, ops.transaction_index, ops.log_index
+    `,
+    args: followers,
+  })
+  const entriesByFollower = new Map<Address, Map<Address, EffectiveEfpEntry & {
+    sourceBlockNumber: bigint
+    sourceTransactionHash: Hex
+    sourceTransactionIndex: number
+    sourceLogIndex: number
+  }>>()
+  const listsByFollower = new Map<Address, AuthoritativeListRow>()
+  for (const row of result.rows) {
+    const follower = address(row, "follower_address")
+    if (!follower) continue
+    if (
+      row.storage_chain_id != null
+      && typeof row.storage_contract_address === "string"
+      && typeof row.storage_slot === "string"
+    ) {
+      listsByFollower.set(follower, {
+        listChainId: Number(row.storage_chain_id),
+        listContractAddress: row.storage_contract_address.toLowerCase() as Address,
+        listSlot: BigInt(row.storage_slot),
+      })
+    }
+    if (row.raw_op == null) continue
+    if (typeof row.raw_op !== "string") {
+      throw new Error("EFP authoritative slot contains an unreadable raw operation")
+    }
+    const decoded = decodeEfpListOp(row.raw_op as Hex)
+    if (!decoded.valid || !decoded.targetAddress || decoded.opcode == null) {
+      throw new Error(
+        `EFP authoritative slot contains an unsupported or malformed operation at block ${String(row.block_number)}`,
+      )
+    }
+    const entries = entriesByFollower.get(follower) ?? new Map()
+    const current = entries.get(decoded.targetAddress) ?? {
+      followed: false,
+      tags: new Set<string>(),
+      sourceBlockNumber: 0n,
+      sourceTransactionHash: `0x${"0".repeat(64)}` as Hex,
+      sourceTransactionIndex: 0,
+      sourceLogIndex: 0,
+    }
+    if (decoded.opcode === 1) {
+      entries.set(decoded.targetAddress, {
+        ...current,
+        followed: true,
+        sourceBlockNumber: BigInt(String(row.block_number)),
+        sourceTransactionHash: String(row.transaction_hash).toLowerCase() as Hex,
+        sourceTransactionIndex: Number(row.transaction_index),
+        sourceLogIndex: Number(row.log_index),
+      })
+    } else if (decoded.opcode === 2) {
+      entries.delete(decoded.targetAddress)
+    } else if (decoded.tag) {
+      if (decoded.opcode === 3) current.tags.add(decoded.tag)
+      if (decoded.opcode === 4) current.tags.delete(decoded.tag)
+      entries.set(decoded.targetAddress, current)
+    }
+    entriesByFollower.set(follower, entries)
+  }
+  for (const follower of followers) {
+    const list = listsByFollower.get(follower)
+    if (!list) continue
+    const entries = entriesByFollower.get(follower) ?? new Map()
+    derived.set(
+      follower,
+      [...entries.entries()]
+        .filter(([, entry]) => isEffectiveEfpFollow(entry))
+        .map(([followedAddress, entry]) => ({
+          followedAddress,
+          listChainId: list.listChainId,
+          listContractAddress: list.listContractAddress,
+          listSlot: list.listSlot,
+          sourceBlockNumber: entry.sourceBlockNumber,
+          sourceTransactionHash: entry.sourceTransactionHash,
+          sourceTransactionIndex: entry.sourceTransactionIndex,
+          sourceLogIndex: entry.sourceLogIndex,
+        })),
+    )
+  }
+  return derived
+}
+
 function address(row: QueryResultRow, key: string): Address | null {
   const value = row[key]
   return typeof value === "string" && /^0x[0-9a-f]{40}$/u.test(value)
@@ -301,6 +453,80 @@ export async function replaceFollowerEffectiveEdgesInTransaction(input: {
       input.projectionRevision,
       input.now,
     )
+}
+
+export async function replaceFollowersEffectiveEdgesInTransaction(input: {
+  tx: Transaction
+  edgesByFollower: ReadonlyMap<Address, readonly MaterializedFollowEdge[]>
+  projectionRevision: bigint
+  now: string
+}): Promise<void> {
+  const followers = [...input.edgesByFollower.keys()].map(
+    (item) => item.toLowerCase() as Address,
+  )
+  if (followers.length === 0) return
+  const followerPlaceholders = followers.map((_, index) => `?${index + 1}`).join(", ")
+  const old = await input.tx.execute({
+    sql: `
+      SELECT follower_address, followed_address
+      FROM efp_effective_follows
+      WHERE follower_address IN (${followerPlaceholders})
+    `,
+    args: followers,
+  })
+  const affected = new Set<Address>(followers)
+  for (const row of old.rows) {
+    const target = address(row, "followed_address")
+    if (target) affected.add(target)
+  }
+  await input.tx.execute({
+    sql: `DELETE FROM efp_effective_follows
+          WHERE follower_address IN (${followerPlaceholders})`,
+    args: followers,
+  })
+
+  const rows = followers.flatMap((follower) =>
+    (input.edgesByFollower.get(follower) ?? []).map((edge) => {
+      const followedAddress = edge.followedAddress.toLowerCase() as Address
+      affected.add(followedAddress)
+      return { follower, followedAddress, edge }
+    }))
+  for (const batch of chunks(rows)) {
+    const args: (string | number)[] = []
+    const values = batch.map(({ follower, followedAddress, edge }) => {
+      const offset = args.length
+      args.push(
+        follower,
+        followedAddress,
+        edge.listChainId,
+        edge.listContractAddress.toLowerCase(),
+        edge.listSlot.toString(),
+        edge.sourceBlockNumber.toString(),
+        edge.sourceTransactionHash.toLowerCase(),
+        edge.sourceTransactionIndex,
+        edge.sourceLogIndex,
+        input.now,
+      )
+      return `(${Array.from({ length: 10 }, (_, index) => `?${offset + index + 1}`).join(", ")})`
+    }).join(", ")
+    await input.tx.execute({
+      sql: `
+        INSERT INTO efp_effective_follows (
+          follower_address, followed_address, list_chain_id,
+          list_contract_address, list_slot, source_block_number,
+          source_transaction_hash, source_transaction_index,
+          source_log_index, updated_at
+        ) VALUES ${values}
+      `,
+      args,
+    })
+  }
+  await recomputeWalletCounts(
+    input.tx,
+    [...affected],
+    input.projectionRevision,
+    input.now,
+  )
 }
 
 /**

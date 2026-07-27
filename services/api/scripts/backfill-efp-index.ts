@@ -8,10 +8,10 @@ import {
 } from "../src/lib/efp-indexer/scanner"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "../src/lib/runtime-deps"
 import {
-  deriveAuthoritativeFollowerEdges,
+  deriveAuthoritativeFollowersEdges,
   findEfpFollowersAffectedByChain,
   refreshEfpProjectionAvailability,
-  replaceFollowerEffectiveEdgesInTransaction,
+  replaceFollowersEffectiveEdgesInTransaction,
 } from "../src/lib/efp-indexer/materializer"
 import { readEfpIndexerCursor } from "../src/lib/efp-indexer/repository"
 import { withTransaction } from "../src/lib/transactions"
@@ -190,16 +190,13 @@ export async function finalizeDeferredProjection(input: {
         )
         if (followers.length === 0) return null
         const now = new Date().toISOString()
-        for (const followerAddress of followers) {
-          const edges = await deriveAuthoritativeFollowerEdges(tx, followerAddress)
-          await replaceFollowerEffectiveEdgesInTransaction({
-            tx,
-            followerAddress,
-            edges,
-            projectionRevision: job.projectionRevision,
-            now,
-          })
-        }
+        const edgesByFollower = await deriveAuthoritativeFollowersEdges(tx, followers)
+        await replaceFollowersEffectiveEdgesInTransaction({
+          tx,
+          edgesByFollower,
+          projectionRevision: job.projectionRevision,
+          now,
+        })
         const placeholders = followers.map((_, index) => `?${index + 3}`).join(", ")
         await tx.execute({
           sql: `
