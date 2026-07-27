@@ -276,12 +276,45 @@ export async function finalizeDeferredProjection(input: {
     if (Number(pending.rows[0]?.pending_count ?? 0) !== 0) {
       throw new Error(`Cannot finalize EFP ${input.config.name}: follower batches remain`)
     }
-    await tx.execute({
+    const completed = await tx.execute({
+      sql: `
+        UPDATE efp_follow_projection_backfills
+        SET status = 'complete', last_error = NULL,
+            completed_at = ?5, updated_at = ?5
+        WHERE chain_id = ?1
+          AND target_block = ?2
+          AND target_block_hash = ?3
+          AND projection_revision = ?4
+          AND processed_followers = total_followers
+      `,
+      args: [
+        input.config.chainId,
+        targetBlock.toString(),
+        targetBlockHash,
+        job.projectionRevision.toString(),
+        now,
+      ],
+    })
+    if (completed.rowsAffected !== 1) {
+      throw new Error(
+        `Cannot watermark EFP ${input.config.name}: completed backfill evidence is missing`,
+      )
+    }
+    const watermarked = await tx.execute({
       sql: `
         INSERT INTO efp_follow_projection_chain_watermarks (
           chain_id, applied_through_block, applied_through_block_hash,
           projection_revision, last_successful_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+        )
+        SELECT chain_id, target_block, target_block_hash,
+               projection_revision, ?5, ?5
+        FROM efp_follow_projection_backfills
+        WHERE chain_id = ?1
+          AND target_block = ?2
+          AND target_block_hash = ?3
+          AND projection_revision = ?4
+          AND status = 'complete'
+          AND processed_followers = total_followers
         ON CONFLICT(chain_id) DO UPDATE SET
           applied_through_block = excluded.applied_through_block,
           applied_through_block_hash = excluded.applied_through_block_hash,
@@ -297,15 +330,11 @@ export async function finalizeDeferredProjection(input: {
         now,
       ],
     })
-    await tx.execute({
-      sql: `
-        UPDATE efp_follow_projection_backfills
-        SET status = 'complete', last_error = NULL,
-            completed_at = ?2, updated_at = ?2
-        WHERE chain_id = ?1
-      `,
-      args: [input.config.chainId, now],
-    })
+    if (watermarked.rowsAffected !== 1) {
+      throw new Error(
+        `Cannot watermark EFP ${input.config.name}: completed backfill evidence is missing`,
+      )
+    }
     await tx.execute({
       sql: `
         UPDATE efp_follow_projection_state
