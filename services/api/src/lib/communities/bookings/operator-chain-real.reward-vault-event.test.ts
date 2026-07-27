@@ -123,3 +123,49 @@ describe("capacity deferral observation", () => {
     expect(observe([]).status).toBe("missing")
   })
 })
+
+describe("exactly one recognized outcome, independent of log order", () => {
+  test.each([
+    ["settlement before deferral", () => [event("RewardPaid"), deferral(0, 1n)]],
+    ["deferral before settlement", () => [deferral(0, 1n), event("RewardPaid")]],
+  ])("%s is a mismatch", (_label, build) => {
+    const result = observe(build())
+    expect(result.status).toBe("mismatch")
+    expect(result.status === "mismatch" && result.reason).toContain(
+      "both a settlement and a deferral",
+    )
+  })
+
+  test.each([
+    ["opposite settlement before deferral", () => [event("RewardRefunded"), deferral(0, 1n)]],
+    ["deferral before opposite settlement", () => [deferral(0, 1n), event("RewardRefunded")]],
+  ])("%s is a mismatch, never a deferral", (_label, build) => {
+    // The deferral branch must not win over an opposite settlement event.
+    const result = observe(build())
+    expect(result.status).toBe("mismatch")
+    expect(result.status === "mismatch" && result.reason).toContain("event kind does not match")
+  })
+
+  test("duplicate settlements with differing payloads are a mismatch", () => {
+    // Latching would let the LAST event decide whether the tuple matched.
+    const result = observe([event("RewardPaid"), event("RewardPaid", { amount: 999n })])
+    expect(result.status).toBe("mismatch")
+    expect(result.status === "mismatch" && result.reason).toContain("duplicate settlement")
+  })
+
+  test("duplicate settlements are a mismatch even when both are valid", () => {
+    const result = observe([event("RewardPaid"), event("RewardPaid")])
+    expect(result.status).toBe("mismatch")
+  })
+
+  test("duplicate deferrals carrying different epochs are a mismatch", () => {
+    const result = observe([deferral(0, 1n), deferral(0, 2n)])
+    expect(result.status).toBe("mismatch")
+    expect(result.status === "mismatch" && result.reason).toContain("duplicate deferral")
+  })
+
+  test("a bad-payload settlement plus a deferral is a mismatch, not a deferral", () => {
+    const result = observe([event("RewardPaid", { amount: 999n }), deferral(0, 1n)])
+    expect(result.status).toBe("mismatch")
+  })
+})

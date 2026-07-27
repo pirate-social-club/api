@@ -68,13 +68,16 @@ export function matchRewardVaultEvent(input: {
   | { status: "missing" | "mismatch"; reason: string }
 {
   const expectedName = input.effectKind === "reward_cashout" ? "RewardPaid" : "RewardRefunded"
-  let sameOperationWrongEvent = false
-  let deferral: { deferredEpoch: bigint } | null = null
-  let settlement: { mismatch: string | null } | null = null
 
-  // Scan every log before deciding. Returning on the first settlement would
-  // make contradiction detection depend on log ORDER: a deferral emitted after
-  // a settlement would never be seen.
+  // COUNT rather than latch. Overwriting a single slot makes every
+  // contradiction order-dependent: the last event seen would decide, and a
+  // duplicate or an opposite event could be masked by whatever followed it.
+  let matchingSettlements = 0
+  let oppositeSettlements = 0
+  let deferrals = 0
+  let settlementMismatch: string | null = null
+  let deferredEpoch: bigint | null = null
+
   for (const log of input.logs) {
     if (getAddress(log.address) !== getAddress(input.vaultAddress)) continue
     let parsed
@@ -91,43 +94,53 @@ export function matchRewardVaultEvent(input: {
       if (BigInt(parsed.args.kind) !== DEFERRAL_KIND[input.effectKind]) {
         return { status: "mismatch", reason: "deferral kind does not match the durable effect" }
       }
-      deferral = { deferredEpoch: BigInt(parsed.args.epoch) }
+      deferrals += 1
+      deferredEpoch = BigInt(parsed.args.epoch)
       continue
     }
     if (parsed.name !== expectedName) {
-      sameOperationWrongEvent = true
+      oppositeSettlements += 1
       continue
     }
+
+    matchingSettlements += 1
     if (getAddress(String(parsed.args.recipient)) !== getAddress(input.recipient)) {
-      settlement = { mismatch: "recipient does not match the durable effect" }
+      settlementMismatch ??= "recipient does not match the durable effect"
       continue
     }
     if (BigInt(parsed.args.amount) !== input.amount) {
-      settlement = { mismatch: "amount does not match the durable effect" }
-      continue
+      settlementMismatch ??= "amount does not match the durable effect"
     }
-    settlement = { mismatch: null }
   }
 
-  // The vault never emits both for one operation, so a receipt carrying both is
-  // contradictory and must not resolve to either.
-  if (settlement !== null && deferral !== null) {
+  // Exactly one recognized outcome, independent of the order the vault's logs
+  // happen to appear in. The pinned vault cannot emit these combinations, but
+  // this observation is money-state evidence and also feeds the
+  // manual-resolution guard, so it must not depend on that.
+  if (oppositeSettlements > 0) {
+    return { status: "mismatch", reason: "event kind does not match the durable effect" }
+  }
+  if (matchingSettlements > 1) {
+    return { status: "mismatch", reason: "receipt carries duplicate settlement events" }
+  }
+  if (deferrals > 1) {
+    return { status: "mismatch", reason: "receipt carries duplicate deferral events" }
+  }
+  if (matchingSettlements > 0 && deferrals > 0) {
     return {
       status: "mismatch",
       reason: "receipt carries both a settlement and a deferral for this operation id",
     }
   }
-  if (settlement !== null) {
-    return settlement.mismatch === null
+  if (matchingSettlements === 1) {
+    return settlementMismatch === null
       ? { status: "matched" }
-      : { status: "mismatch", reason: settlement.mismatch }
+      : { status: "mismatch", reason: settlementMismatch }
   }
-  if (deferral !== null) {
-    return { status: "capacity_deferred", deferredEpoch: deferral.deferredEpoch }
+  if (deferrals === 1 && deferredEpoch !== null) {
+    return { status: "capacity_deferred", deferredEpoch }
   }
-  return sameOperationWrongEvent
-    ? { status: "mismatch", reason: "event kind does not match the durable effect" }
-    : { status: "missing", reason: "matching operation event was not emitted by the vault" }
+  return { status: "missing", reason: "matching operation event was not emitted by the vault" }
 }
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
