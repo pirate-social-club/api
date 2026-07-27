@@ -77,7 +77,13 @@ anything:
 
 ## Current holds
 
-_None._
+- **2026-07-27 18:19Z–20:00Z — Codex `/root`, feed fanout benchmark.**
+  Deploy candidate `939c52ff` (benchmark fixture upload compatibility and real
+  `com_cmt_*` scope IDs), verify the existing 27-post removable fixture, measure
+  the staging-only fanout/page-shape route, then delete every recorded post.
+  Rollback is Worker version `2d874c90-ceca-469d-8fe4-db3810256563` (v1797,
+  API `def69dad`). The fixture leaves 27 recorded ~2 KB upload artifacts because
+  the upload API has no public deletion route.
 
 ## Hold history
 
