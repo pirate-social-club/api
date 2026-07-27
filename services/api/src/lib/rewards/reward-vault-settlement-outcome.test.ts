@@ -204,11 +204,16 @@ describe("classifyRewardVaultSettlement", () => {
       expect(result.reason).toContain("policy version does not match")
     })
 
-    it("still confirms when no policy version is supplied to compare", () => {
-      expect(
-        classify([paidLog()], { expectedPolicyVersion: undefined }).disposition,
-      ).toBe("confirmed")
-    })
+    it.each([0n, -1n, (1n << 64n)])(
+      "refuses to classify against an out-of-range expected policy version %p",
+      (expectedPolicyVersion) => {
+        // The vault refuses a zero policy version, so these are caller errors,
+        // and there is no call path that skips the comparison.
+        expect(classify([paidLog()], { expectedPolicyVersion }).reason).toContain(
+          "outside the vault's uint64 range",
+        )
+      },
+    )
 
     it("rejects an address topic with dirty upper bytes rather than truncating", () => {
       const dirty = `0x${"11".repeat(12)}${RECIPIENT.slice(2).toLowerCase()}`

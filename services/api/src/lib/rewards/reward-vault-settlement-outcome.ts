@@ -67,6 +67,7 @@ const DEFERRAL_TOPIC_COUNT = 4
 const SETTLEMENT_TOPIC_COUNT = 4
 /** RewardPaid/RewardRefunded carry exactly `amount` and `epoch` as data. */
 const SETTLEMENT_DATA_RE = /^0x[0-9a-fA-F]{128}$/u
+const MAX_UINT64 = (1n << 64n) - 1n
 
 /**
  * Decodes a left-padded address topic, refusing non-zero upper bytes rather
@@ -138,8 +139,14 @@ export function classifyRewardVaultSettlement(input: {
   expectedRecipient: string
   /** The durable effect's amount, in token atoms. */
   expectedAmount: bigint
-  /** The policy version the transaction was signed for, when known. */
-  expectedPolicyVersion?: bigint
+  /**
+   * The policy version the transaction was signed for, decoded from its
+   * verified calldata. Deliberately NOT optional: an optional field would be a
+   * permanent weaker call path that future wiring could reach by accident. If
+   * the signed transaction is unavailable or cannot be re-verified, the caller
+   * must produce reconciliation_required rather than confirm with this skipped.
+   */
+  expectedPolicyVersion: bigint
 }): RewardVaultSettlementOutcome {
   if (input.receiptStatus !== 1) {
     return reconcile("receipt did not succeed; a reverted transaction is never classified here")
@@ -149,6 +156,10 @@ export function classifyRewardVaultSettlement(input: {
   }
   if (!TOPIC_RE.test(input.receiptTransactionHash)) {
     return reconcile("receipt transaction hash is not canonical")
+  }
+  if (input.expectedPolicyVersion <= 0n || input.expectedPolicyVersion > MAX_UINT64) {
+    // The vault refuses a zero policy version, so this can only be caller error.
+    return reconcile("expected policy version is outside the vault's uint64 range")
   }
 
   const operationId = input.operationId
@@ -231,7 +242,7 @@ export function classifyRewardVaultSettlement(input: {
     if (policyVersion === null) {
       return reconcile("settlement event policy-version topic is not a canonical uint64 word")
     }
-    if (input.expectedPolicyVersion !== undefined && policyVersion !== input.expectedPolicyVersion) {
+    if (policyVersion !== input.expectedPolicyVersion) {
       return reconcile("settlement policy version does not match the signed transaction")
     }
 
