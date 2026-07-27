@@ -28,6 +28,7 @@ import type {
 import {
   decorateHomeFeedItemsWithBookings,
   listFeedBookingDiscoveryByHostUserIds,
+  type FeedBookingLookup,
 } from "./home-feed-booking"
 import { refreshBookingFeedDiscoverySnapshotsInBackground } from "../bookings/booking-feed-discovery"
 import {
@@ -749,6 +750,65 @@ export async function listHomeFeedCommunityViewCounts(input: {
   return counts
 }
 
+async function decorateItemsWithBookingDiscovery(input: {
+  env: Env
+  items: HomeFeedItem[]
+  waitUntil?: HomeFeedWaitUntil
+}): Promise<HomeFeedItem[]> {
+  return decorateHomeFeedItemsWithBookings({
+    items: input.items,
+    lookup: async (hostUserIds) => {
+      const discovery = await listFeedBookingDiscoveryByHostUserIds(
+        getControlPlaneClient(input.env),
+        hostUserIds,
+      )
+      const bookingByHost = discovery.bookingByHostUserId
+      const missingSnapshotHostIds = hostUserIds.filter((hostUserId) => !bookingByHost.has(hostUserId))
+      const refreshHostUserIds = [...new Set([
+        ...missingSnapshotHostIds,
+        ...discovery.staleHostUserIds,
+      ])]
+      if (input.waitUntil && refreshHostUserIds.length > 0) {
+        input.waitUntil(
+          refreshBookingFeedDiscoverySnapshotsInBackground(input.env, refreshHostUserIds)
+            .catch((error: unknown) => {
+              console.error("[home-feed] booking discovery snapshot refresh failed", error)
+            }),
+        )
+      }
+      return bookingByHost
+    },
+  })
+}
+
+/**
+ * Booking discovery is a volatile host projection and must not be frozen inside the longer-lived
+ * materialized public feed body. Strip cached booking blocks first so an unpublished/unavailable
+ * host fails closed, then reapply the current discovery snapshot at read time.
+ */
+export async function refreshMaterializedHomeFeedBookings(input: {
+  env: Env
+  lookup?: FeedBookingLookup
+  result: HomeFeedResponseWithTiming
+  waitUntil?: HomeFeedWaitUntil
+}): Promise<HomeFeedResponseWithTiming> {
+  const undecoratedItems = input.result.items.map((item) => {
+    const { booking: _cachedBooking, ...undecoratedItem } = item
+    return undecoratedItem
+  })
+  input.result.items = input.lookup
+    ? await decorateHomeFeedItemsWithBookings({
+        items: undecoratedItems,
+        lookup: input.lookup,
+      })
+    : await decorateItemsWithBookingDiscovery({
+        env: input.env,
+        items: undecoratedItems,
+        waitUntil: input.waitUntil,
+      })
+  return input.result
+}
+
 export async function listHomeFeed(input: {
   env: Env
   userId: string | null
@@ -1028,29 +1088,10 @@ export async function listHomeFeed(input: {
   }
 
   phaseStartedAt = performance.now()
-  const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
+  const bookingDecoratedItems = await decorateItemsWithBookingDiscovery({
+    env: input.env,
     items: orderedItems,
-    lookup: async (hostUserIds) => {
-      const discovery = await listFeedBookingDiscoveryByHostUserIds(
-        getControlPlaneClient(input.env),
-        hostUserIds,
-      )
-      const bookingByHost = discovery.bookingByHostUserId
-      const missingSnapshotHostIds = hostUserIds.filter((hostUserId) => !bookingByHost.has(hostUserId))
-      const refreshHostUserIds = [...new Set([
-        ...missingSnapshotHostIds,
-        ...discovery.staleHostUserIds,
-      ])]
-      if (input.waitUntil && refreshHostUserIds.length > 0) {
-        input.waitUntil(
-          refreshBookingFeedDiscoverySnapshotsInBackground(input.env, refreshHostUserIds)
-            .catch((error: unknown) => {
-              console.error("[home-feed] booking discovery snapshot refresh failed", error)
-            }),
-        )
-      }
-      return bookingByHost
-    },
+    waitUntil: input.waitUntil,
   })
   phaseTimings.booking_discovery_ms = elapsedMs(phaseStartedAt)
 

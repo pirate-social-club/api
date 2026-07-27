@@ -3,7 +3,11 @@ import type { Context } from "hono"
 import { authenticateOptional, type OptionalAuthenticatedEnv } from "../lib/auth-middleware"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
-import { HOME_FEED_SERVER_TIMING, listHomeFeed } from "../lib/feed/home-feed-service"
+import {
+  HOME_FEED_SERVER_TIMING,
+  listHomeFeed,
+  refreshMaterializedHomeFeedBookings,
+} from "../lib/feed/home-feed-service"
 import {
   buildMaterializedPublicHomeFeedTarget,
   readMaterializedPublicHomeFeed,
@@ -92,6 +96,11 @@ feed.get("/home/public", async (c) => {
     target: materializedTarget,
   })
   if (materialized.result) {
+    await refreshMaterializedHomeFeedBookings({
+      env: c.env,
+      result: materialized.result,
+      waitUntil,
+    })
     if (materialized.state === "stale") {
       waitUntil?.(refreshMaterializedPublicHomeFeed({
         env: c.env,
@@ -177,6 +186,11 @@ feed.get("/home/videos/public", async (c) => {
     target: materializedTarget,
   })
   if (materialized.result) {
+    await refreshMaterializedHomeFeedBookings({
+      env: c.env,
+      result: materialized.result,
+      waitUntil,
+    })
     if (materialized.state === "stale") {
       waitUntil?.(refreshMaterializedPublicHomeFeed({
         env: c.env,
