@@ -283,6 +283,137 @@ describe("decideRewardVaultReceipt", () => {
     })
   })
 
+  describe("refunds, the signer-chosen-recipient path", () => {
+    const REFUND_ID = "rcf_0123456789abcdef0123456789abcdef"
+    const refundInput = () =>
+      txInput({ effectKind: "reward_funding_refund", effectId: REFUND_ID })
+
+    const refundedLog = (txHash: string) => ({
+      address: VAULT,
+      transactionHash: txHash,
+      topics: [
+        VAULT_EVENT_TOPICS.rewardRefunded,
+        rewardOperationId(REFUND_ID),
+        addressWord(RECIPIENT),
+        word(POLICY_VERSION),
+      ],
+      data: `0x${AMOUNT.toString(16).padStart(64, "0")}${EPOCH.toString(16).padStart(64, "0")}`,
+    })
+
+    const refundDeferralLog = (txHash: string) => ({
+      address: VAULT,
+      transactionHash: txHash,
+      topics: [
+        VAULT_EVENT_TOPICS.operationCapacityDeferred,
+        rewardOperationId(REFUND_ID),
+        word(1n),
+        word(EPOCH),
+      ],
+      data: "0x",
+    })
+
+    const decideRefund = (logs: (h: string) => never) =>
+      decide({
+        signedInput: refundInput(),
+        durable: { effectKind: "reward_funding_refund", effectId: REFUND_ID },
+        logs: logs as never,
+      })
+
+    it("confirms a settled refund", async () => {
+      const result = await decideRefund(((h: string) => [refundedLog(h)]) as never)
+      expect(result.disposition).toBe("confirmed")
+    })
+
+    it("defers a refund on capacity, with the refund kind", async () => {
+      const result = await decideRefund(((h: string) => [refundDeferralLog(h)]) as never)
+      expect(result.disposition).toBe("capacity_deferred")
+    })
+
+    it("does not accept a payout event as evidence for a refund", async () => {
+      // SETTLEMENT_KIND must map refunds to RewardRefunded, never RewardPaid.
+      const result = await decideRefund(((h: string) => [
+        {
+          address: VAULT,
+          transactionHash: h,
+          topics: [
+            VAULT_EVENT_TOPICS.rewardPaid,
+            rewardOperationId(REFUND_ID),
+            addressWord(RECIPIENT),
+            word(POLICY_VERSION),
+          ],
+          data: `0x${AMOUNT.toString(16).padStart(64, "0")}${EPOCH.toString(16).padStart(64, "0")}`,
+        },
+      ]) as never)
+      expect(result.disposition).toBe("reconciliation_required")
+    })
+
+    it("does not accept a payout-kind deferral as evidence for a refund", async () => {
+      const result = await decideRefund(((h: string) => [
+        {
+          address: VAULT,
+          transactionHash: h,
+          topics: [
+            VAULT_EVENT_TOPICS.operationCapacityDeferred,
+            rewardOperationId(REFUND_ID),
+            word(0n),
+            word(EPOCH),
+          ],
+          data: "0x",
+        },
+      ]) as never)
+      expect(result.disposition).toBe("reconciliation_required")
+    })
+  })
+
+  it("reports a wrong-method transaction accurately, not as a bad deadline", async () => {
+    // A refund-signed transaction reconciled as a cashout calls refund(), not
+    // pay(); the reason must name the method mismatch.
+    const refundSigned = await sign(
+      txInput({ effectKind: "reward_funding_refund", effectId: "rcf_x" }),
+    )
+    const result = decideRewardVaultReceipt({
+      snapshot: {
+        status: 1,
+        transactionHash: Transaction.from(refundSigned).hash!,
+        blockHash: BLOCK_HASH,
+        blockTimestampSeconds: BLOCK_TS,
+        logs: [],
+      },
+      durable: {
+        effectKind: "reward_cashout",
+        effectId: "rcf_x",
+        recipient: RECIPIENT,
+        amountAtomic: AMOUNT,
+        nonce: NONCE,
+        signedTx: refundSigned,
+        txHash: Transaction.from(refundSigned).hash!,
+      },
+      pinned,
+    })
+    expect(result.disposition).toBe("reconciliation_required")
+    expect(result.reason).toContain("different method")
+  })
+
+  it("carries structured evidence on both non-terminal outcomes", async () => {
+    const confirmed = await decide()
+    expect(confirmed.disposition).toBe("confirmed")
+    expect(confirmed.evidence).toMatchObject({
+      operationId: rewardOperationId(EFFECT_ID),
+      recipient: RECIPIENT,
+      amountAtomic: AMOUNT.toString(),
+      policyVersion: POLICY_VERSION.toString(),
+      epoch: EPOCH.toString(),
+      blockHash: BLOCK_HASH,
+    })
+
+    const deferred = await decide({ logs: (h) => [deferralLog(h)] })
+    expect(deferred.evidence).toMatchObject({ epoch: EPOCH.toString() })
+
+    // A reconciliation outcome asserts nothing, so it carries no evidence.
+    const failed = await decide({ logs: () => [] })
+    expect(failed.evidence).toBeNull()
+  })
+
   it("derives the operation id from the exact effect id", async () => {
     // Guards the keccak binding the whole join rests on.
     expect(rewardOperationId(EFFECT_ID)).toBe(id(EFFECT_ID))

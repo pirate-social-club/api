@@ -64,18 +64,33 @@ export type RewardVaultReceiptSnapshot = {
   }[]
 }
 
+/**
+ * Structured evidence for the manual audit record, so an operator reviewing a
+ * disposition never has to re-derive it from a prose reason string.
+ */
+export type RewardVaultDecisionEvidence = {
+  transactionHash: string
+  blockHash: string
+  operationId: string
+  recipient: string
+  amountAtomic: string
+  policyVersion: string
+  epoch: string
+}
+
 export type RewardVaultReceiptDecision =
-  | { disposition: "confirmed"; reason: string }
+  | { disposition: "confirmed"; reason: string; evidence: RewardVaultDecisionEvidence }
   | {
       disposition: "capacity_deferred"
       reason: string
       deferredEpoch: bigint
       retryAtMs: number
+      evidence: RewardVaultDecisionEvidence
     }
-  | { disposition: "reconciliation_required"; reason: string }
+  | { disposition: "reconciliation_required"; reason: string; evidence: null }
 
 function reconcile(reason: string): RewardVaultReceiptDecision {
-  return { disposition: "reconciliation_required", reason }
+  return { disposition: "reconciliation_required", reason, evidence: null }
 }
 
 const SETTLEMENT_KIND: Record<RewardVaultEffectKind, RewardVaultSettlementKind> = {
@@ -127,8 +142,12 @@ export function decideRewardVaultReceipt(input: {
   let deadline: bigint
   try {
     deadline = decodeRewardVaultDeadline(durable.signedTx, durable.effectKind)
-  } catch {
-    return reconcile("signed transaction deadline is absent or not a positive uint64")
+  } catch (error) {
+    return reconcile(
+      `signed transaction calldata is not a valid ${durable.effectKind} call: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
   }
 
   const maxFeePerGas = parsed.maxFeePerGas ?? 0n
@@ -195,8 +214,22 @@ export function decideRewardVaultReceipt(input: {
     expectedPolicyVersion: pinned.policyVersion,
   })
 
+  const evidence = (epoch: bigint): RewardVaultDecisionEvidence => ({
+    transactionHash: snapshot.transactionHash.toLowerCase(),
+    blockHash: snapshot.blockHash.toLowerCase(),
+    operationId: rewardOperationId(durable.effectId),
+    recipient: durable.recipient,
+    amountAtomic: durable.amountAtomic.toString(),
+    policyVersion: pinned.policyVersion.toString(),
+    epoch: epoch.toString(),
+  })
+
   if (outcome.disposition === "confirmed") {
-    return { disposition: "confirmed", reason: outcome.reason }
+    return {
+      disposition: "confirmed",
+      reason: outcome.reason,
+      evidence: evidence(outcome.settledEpoch),
+    }
   }
   if (outcome.disposition === "reconciliation_required") {
     return reconcile(outcome.reason)
@@ -231,5 +264,6 @@ export function decideRewardVaultReceipt(input: {
     reason: outcome.reason,
     deferredEpoch: outcome.deferredEpoch,
     retryAtMs,
+    evidence: evidence(outcome.deferredEpoch),
   }
 }

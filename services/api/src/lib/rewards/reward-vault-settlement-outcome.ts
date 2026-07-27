@@ -53,7 +53,7 @@ export type RewardVaultReceiptLog = {
 }
 
 export type RewardVaultSettlementOutcome =
-  | { disposition: "confirmed"; reason: string }
+  | { disposition: "confirmed"; reason: string; settledEpoch: bigint }
   | { disposition: "capacity_deferred"; reason: string; deferredEpoch: bigint }
   | { disposition: "reconciliation_required"; reason: string }
 
@@ -261,6 +261,7 @@ export function classifyRewardVaultSettlement(input: {
       reason:
         `vault emitted ${input.expectedKind === "payout" ? "RewardPaid" : "RewardRefunded"}`
         + ` for this operation id, recipient and amount in epoch ${epoch}`,
+      settledEpoch: epoch,
     }
   }
 

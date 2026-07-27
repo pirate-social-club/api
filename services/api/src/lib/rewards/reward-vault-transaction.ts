@@ -112,6 +112,14 @@ export function decodeRewardVaultDeadline(
 ): bigint {
   const method = rewardVaultMethod(effectKind)
   const parsed = Transaction.from(signedTx)
+  // Check the selector first so a transaction calling a DIFFERENT method
+  // reports that, rather than surfacing as a deadline-decoding failure.
+  const expectedSelector = VAULT.getFunction(method)!.selector
+  if (!parsed.data.startsWith(expectedSelector)) {
+    throw badRequestError(
+      `signed rewards vault tx calls a different method than ${method}`,
+    )
+  }
   const decoded = VAULT.decodeFunctionData(method, parsed.data)
   const deadline = BigInt(decoded[3])
   if (deadline <= 0n || deadline > MAX_UINT64) {
