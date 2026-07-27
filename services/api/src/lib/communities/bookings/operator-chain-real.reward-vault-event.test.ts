@@ -77,3 +77,49 @@ describe("reward vault event matching", () => {
     })).toEqual({ status: "matched" })
   })
 })
+
+const DEFERRAL_EVENTS = new Interface([
+  "event OperationCapacityDeferred(bytes32 indexed operationId,uint8 indexed kind,uint256 indexed epoch)",
+])
+
+function deferral(kind: number, epoch: bigint, operationId = OPERATION_ID) {
+  const encoded = DEFERRAL_EVENTS.encodeEventLog(
+    DEFERRAL_EVENTS.getEvent("OperationCapacityDeferred")!,
+    [operationId, kind, epoch],
+  )
+  return { address: VAULT, topics: encoded.topics, data: encoded.data }
+}
+
+describe("capacity deferral observation", () => {
+  test("observes a payout deferral and reports the exhausted epoch", () => {
+    const result = observe([deferral(0, 4242n)])
+    expect(result.status).toBe("capacity_deferred")
+    expect(result.status === "capacity_deferred" && result.deferredEpoch).toBe(4242n)
+  })
+
+  test("observes a refund deferral", () => {
+    const result = observe([deferral(1, 7n)], { effectKind: "reward_funding_refund" })
+    expect(result.status).toBe("capacity_deferred")
+  })
+
+  test("treats a deferral of the other kind as a mismatch", () => {
+    // A refund deferral is not evidence about a payout effect.
+    expect(observe([deferral(1, 7n)]).status).toBe("mismatch")
+  })
+
+  test("refuses a receipt carrying both a settlement and a deferral", () => {
+    const result = observe([event("RewardPaid"), deferral(0, 1n)])
+    expect(result.status).toBe("mismatch")
+    expect(result.status === "mismatch" && result.reason).toContain(
+      "both a settlement and a deferral",
+    )
+  })
+
+  test("ignores a deferral for a different operation id", () => {
+    expect(observe([deferral(0, 1n, OTHER_OPERATION_ID)]).status).toBe("missing")
+  })
+
+  test("still reports missing when the vault emitted nothing", () => {
+    expect(observe([]).status).toBe("missing")
+  })
+})
