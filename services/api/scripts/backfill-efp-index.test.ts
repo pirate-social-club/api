@@ -125,6 +125,25 @@ test("deferred projection finalization commits resumable follower batches before
   )).rows).toHaveLength(0)
   expect((await client.execute("SELECT * FROM efp_effective_follows")).rows).toHaveLength(2)
 
+  await client.execute(`
+    UPDATE efp_follow_projection_backfill_followers
+    SET processed_at = '${NOW}'
+    WHERE chain_id = 8453 AND target_block = 100 AND processed_at IS NULL
+  `)
+  await expect(finalizeDeferredProjection({
+    client: client as never,
+    config: EFP_INDEXER_CHAINS.base,
+    followerBatchSize: 1,
+  })).rejects.toThrow("completed backfill evidence is missing")
+  expect((await client.execute(
+    "SELECT chain_id FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453",
+  )).rows).toHaveLength(0)
+  await client.execute(`
+    UPDATE efp_follow_projection_backfill_followers
+    SET processed_at = NULL
+    WHERE chain_id = 8453 AND target_block = 100 AND follower_address = '${FOLLOWER_C}'
+  `)
+
   const resumedComplete = await finalizeDeferredProjection({
     client: client as never,
     config: EFP_INDEXER_CHAINS.base,
