@@ -582,6 +582,19 @@ export function resolveHomeFeedCommunityIds(input: {
   return input.activeCommunities.map((community) => community.community_id)
 }
 
+export function resolveHomeFeedCandidateCommunityIds(input: {
+  activeCommunities: CommunityRow[]
+  allowOverride?: boolean
+  followRows: CommunityFollowProjectionRow[]
+  membershipRows: CommunityMembershipProjectionRow[]
+  userId: string | null
+  override?: readonly string[]
+}): string[] {
+  return input.allowOverride && input.override
+    ? [...new Set(input.override)]
+    : resolveHomeFeedCommunityIds(input)
+}
+
 export function filterVisibleHomeFeedProjections(
   rows: HomeFeedProjectionRow[],
   memberCommunityIds: Set<string>,
@@ -822,6 +835,11 @@ export async function refreshMaterializedHomeFeedBookings(input: {
 export async function listHomeFeed(input: {
   env: Env
   userId: string | null
+  /**
+   * Operator-only candidate scope used by the staging benchmark route.
+   * Never populate this from the public feed query string.
+   */
+  communityIdsOverride?: readonly string[]
   locale?: string | null
   studyTimezone?: string
   sort?: string | null
@@ -857,11 +875,13 @@ export async function listHomeFeed(input: {
     membershipRows,
     userId: input.userId,
   }))
-  const communityIds = resolveHomeFeedCommunityIds({
+  const communityIds = resolveHomeFeedCandidateCommunityIds({
     activeCommunities,
+    allowOverride: input.env.ENVIRONMENT === "staging",
     followRows,
     membershipRows,
     userId: input.userId,
+    override: input.communityIdsOverride,
   })
 
   if (communityIds.length === 0) {
