@@ -15,6 +15,23 @@ export type RewardVaultLitConfig = {
   requestTimeoutMs: number
   requestMaxAttempts: number
   signingDeadlineSeconds: number
+  /**
+   * Gas ceilings, mirroring the values pinned into the reviewed action source.
+   * Required rather than defaulted: they must equal the action's pinned policy,
+   * and a silent default would make the reconciliation-side check weaker than
+   * the signing-side one it is meant to corroborate.
+   */
+  maxFeePerGasWei: bigint
+  maxPriorityFeePerGasWei: bigint
+  maxGasLimit: bigint
+}
+
+function positiveBigInt(raw: string | undefined, field: string): bigint {
+  const value = required(raw, field).trim()
+  if (!/^[1-9][0-9]*$/u.test(value)) {
+    throw badRequestError(`${field} must be a canonical positive integer`)
+  }
+  return BigInt(value)
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, field: string): number {
@@ -67,6 +84,15 @@ export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
       3,
       "LIT_REWARDS_REQUEST_MAX_ATTEMPTS",
     ),
+    maxFeePerGasWei: positiveBigInt(
+      env.LIT_REWARDS_MAX_FEE_PER_GAS_WEI,
+      "LIT_REWARDS_MAX_FEE_PER_GAS_WEI",
+    ),
+    maxPriorityFeePerGasWei: positiveBigInt(
+      env.LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI,
+      "LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI",
+    ),
+    maxGasLimit: positiveBigInt(env.LIT_REWARDS_MAX_GAS_LIMIT, "LIT_REWARDS_MAX_GAS_LIMIT"),
     signingDeadlineSeconds: positiveInteger(
       env.LIT_REWARDS_SIGNING_DEADLINE_SECONDS,
       300,

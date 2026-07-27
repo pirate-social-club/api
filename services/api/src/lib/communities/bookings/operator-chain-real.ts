@@ -1,4 +1,4 @@
-import { Contract, Interface, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
+import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
@@ -16,6 +16,8 @@ import {
 } from "./booking-chain-config"
 import type { ChainPrimitives, OperatorKind } from "./operator-signing-coordinator-do"
 import { LitChipotleClient } from "../../rewards/lit-chipotle-client"
+import { decideRewardVaultReceipt } from "../../rewards/reward-vault-receipt-decision"
+import { fetchRewardVaultReceiptSnapshot } from "../../rewards/reward-vault-receipt-snapshot"
 import { createProductionLitRewardVaultExecutor } from "../../rewards/lit-reward-vault-executor"
 import {
   resolveRewardsSettlementBackend,
@@ -44,104 +46,9 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ] as const
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
-const REWARD_VAULT_EVENTS = new Interface([
-  "event RewardPaid(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
-  "event RewardRefunded(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
-  "event OperationCapacityDeferred(bytes32 indexed operationId,uint8 indexed kind,uint256 indexed epoch)",
-])
-/** Mirrors the vault's `OperationKind` enum ordering. */
-const DEFERRAL_KIND = { reward_cashout: 0n, reward_funding_refund: 1n } as const
 const REWARD_VAULT_CAPACITY_ABI = [
   "function epochDuration() view returns (uint64)",
 ] as const
-
-export function matchRewardVaultEvent(input: {
-  logs: readonly { address: string; topics: readonly string[]; data: string }[]
-  vaultAddress: string
-  effectKind: "reward_cashout" | "reward_funding_refund"
-  operationId: string
-  recipient: string
-  amount: bigint
-}):
-  | { status: "matched" }
-  | { status: "capacity_deferred"; deferredEpoch: bigint }
-  | { status: "missing" | "mismatch"; reason: string }
-{
-  const expectedName = input.effectKind === "reward_cashout" ? "RewardPaid" : "RewardRefunded"
-
-  // COUNT rather than latch. Overwriting a single slot makes every
-  // contradiction order-dependent: the last event seen would decide, and a
-  // duplicate or an opposite event could be masked by whatever followed it.
-  let matchingSettlements = 0
-  let oppositeSettlements = 0
-  let deferrals = 0
-  let settlementMismatch: string | null = null
-  let deferredEpoch: bigint | null = null
-
-  for (const log of input.logs) {
-    if (getAddress(log.address) !== getAddress(input.vaultAddress)) continue
-    let parsed
-    try {
-      parsed = REWARD_VAULT_EVENTS.parseLog(log)
-    } catch {
-      continue
-    }
-    if (!parsed || String(parsed.args.operationId).toLowerCase() !== input.operationId) continue
-
-    if (parsed.name === "OperationCapacityDeferred") {
-      // A deferral for the OTHER operation kind is not evidence about this
-      // effect; it is a genuine mismatch.
-      if (BigInt(parsed.args.kind) !== DEFERRAL_KIND[input.effectKind]) {
-        return { status: "mismatch", reason: "deferral kind does not match the durable effect" }
-      }
-      deferrals += 1
-      deferredEpoch = BigInt(parsed.args.epoch)
-      continue
-    }
-    if (parsed.name !== expectedName) {
-      oppositeSettlements += 1
-      continue
-    }
-
-    matchingSettlements += 1
-    if (getAddress(String(parsed.args.recipient)) !== getAddress(input.recipient)) {
-      settlementMismatch ??= "recipient does not match the durable effect"
-      continue
-    }
-    if (BigInt(parsed.args.amount) !== input.amount) {
-      settlementMismatch ??= "amount does not match the durable effect"
-    }
-  }
-
-  // Exactly one recognized outcome, independent of the order the vault's logs
-  // happen to appear in. The pinned vault cannot emit these combinations, but
-  // this observation is money-state evidence and also feeds the
-  // manual-resolution guard, so it must not depend on that.
-  if (oppositeSettlements > 0) {
-    return { status: "mismatch", reason: "event kind does not match the durable effect" }
-  }
-  if (matchingSettlements > 1) {
-    return { status: "mismatch", reason: "receipt carries duplicate settlement events" }
-  }
-  if (deferrals > 1) {
-    return { status: "mismatch", reason: "receipt carries duplicate deferral events" }
-  }
-  if (matchingSettlements > 0 && deferrals > 0) {
-    return {
-      status: "mismatch",
-      reason: "receipt carries both a settlement and a deferral for this operation id",
-    }
-  }
-  if (matchingSettlements === 1) {
-    return settlementMismatch === null
-      ? { status: "matched" }
-      : { status: "mismatch", reason: settlementMismatch }
-  }
-  if (deferrals === 1 && deferredEpoch !== null) {
-    return { status: "capacity_deferred", deferredEpoch }
-  }
-  return { status: "missing", reason: "matching operation event was not emitted by the vault" }
-}
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   backend: RewardsSettlementBackend
@@ -382,21 +289,70 @@ export const realChain: ChainPrimitives = {
       void provider.destroy()
     }
   },
-  rewardVaultEvent: async (env, input) => {
+  rewardVaultDecision: async (env, input) => {
     const c = resolveConfig(env, "rewards")
     if (c.backend !== "lit_vault") {
-      return { status: "mismatch", reason: "rewards backend is not lit_vault" }
+      return {
+        disposition: "reconciliation_required",
+        reason: "rewards backend is not lit_vault",
+        evidence: null,
+      }
     }
     const lit = resolveRewardVaultLitConfig(env)
-    const receipt = await new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionReceipt(input.txHash)
-    if (!receipt) return { status: "missing", reason: "transaction receipt is unavailable" }
-    return matchRewardVaultEvent({
-      logs: receipt.logs,
-      vaultAddress: lit.vaultAddress,
-      effectKind: input.effectKind,
-      operationId: input.operationId,
-      recipient: input.recipient,
-      amount: transferAmount(input),
+    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    const snapshot = await fetchRewardVaultReceiptSnapshot(
+      {
+        getTransactionReceipt: (txHash) => provider.getTransactionReceipt(txHash) as never,
+        // Bound to a hash on purpose: the fetcher has no path to a timestamp
+        // from anything but the receipt's own block.
+        getBlock: (blockHash) => provider.getBlock(blockHash) as never,
+      },
+      input.txHash,
+    )
+    if (snapshot.status !== "snapshot") {
+      return { disposition: "reconciliation_required", reason: snapshot.reason, evidence: null }
+    }
+    let epochDurationSeconds: bigint
+    try {
+      const vault = new Contract(lit.vaultAddress, REWARD_VAULT_CAPACITY_ABI, provider)
+      epochDurationSeconds = BigInt(await vault.epochDuration())
+    } catch {
+      return {
+        disposition: "reconciliation_required",
+        reason: "vault epoch duration could not be read",
+        evidence: null,
+      }
+    }
+    if (epochDurationSeconds <= 0n) {
+      return {
+        disposition: "reconciliation_required",
+        reason: "vault epoch duration is not positive",
+        evidence: null,
+      }
+    }
+    return decideRewardVaultReceipt({
+      snapshot: snapshot.snapshot,
+      durable: {
+        effectKind: input.effectKind,
+        effectId: input.effectId,
+        recipient: input.recipient,
+        amountAtomic: transferAmount(input),
+        nonce: input.nonce,
+        signedTx: input.signedTx,
+        txHash: input.txHash,
+      },
+      pinned: {
+        vaultAddress: lit.vaultAddress,
+        signerAddress: c.operatorAddress,
+        chainId: c.chainId,
+        policyVersion: lit.policyVersion,
+        // Read from the pinned vault itself, so there is no local epoch value
+        // that could silently disagree with the contract.
+        epochDurationSeconds: epochDurationSeconds,
+        maxFeePerGasWei: lit.maxFeePerGasWei,
+        maxPriorityFeePerGasWei: lit.maxPriorityFeePerGasWei,
+        maxGasLimit: lit.maxGasLimit,
+      },
     })
   },
 }

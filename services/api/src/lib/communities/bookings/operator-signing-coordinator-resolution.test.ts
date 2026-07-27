@@ -33,7 +33,41 @@ describe("manual rewards settlement disposition evidence", () => {
     expect(() => assertManualRewardResolutionEvidence({
       resolution: "failed_onchain",
       liveness: "success",
-      vaultEvent: { status: "matched" },
+      decision: { disposition: "confirmed", reason: "matched", evidence: null as never },
     })).toThrow("vault transfer event matched")
   })
+})
+
+test("forbids failing an effect the vault deferred for capacity", () => {
+  // A deferral is a LIVE claim: the operation id was never consumed, so
+  // disposing it as failed and re-cashing-out is the double-pay this guards.
+  expect(() =>
+    assertManualRewardResolutionEvidence({
+      resolution: "failed_onchain",
+      liveness: "success",
+      decision: {
+        disposition: "capacity_deferred",
+        reason: "deferred",
+        deferredEpoch: 1n,
+        retryAtMs: 0,
+        evidence: null as never,
+      },
+    }),
+  ).toThrow(/deferred for epoch capacity/u)
+})
+
+test("forbids confirming an effect the vault deferred for capacity", () => {
+  expect(() =>
+    assertManualRewardResolutionEvidence({
+      resolution: "confirmed",
+      liveness: "success",
+      decision: {
+        disposition: "capacity_deferred",
+        reason: "deferred",
+        deferredEpoch: 1n,
+        retryAtMs: 0,
+        evidence: null as never,
+      },
+    }),
+  ).toThrow(/deferred for epoch capacity/u)
 })

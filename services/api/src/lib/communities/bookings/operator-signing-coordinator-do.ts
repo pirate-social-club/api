@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers"
 
 import type { Env } from "../../../env"
+import type { RewardVaultReceiptDecision } from "../../rewards/reward-vault-receipt-decision"
 import { badRequestError, conflictError } from "../../errors"
 import { captureScheduledWarning } from "../../ops-alerts/scheduled"
 
@@ -68,32 +69,36 @@ export interface OperatorSettleResult {
 
 interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
 export type TxLiveness = "success" | "failed" | "pending" | "absent"
-export type RewardVaultEventObservation =
-  | { status: "matched" }
-  /**
-   * The vault accepted the operation but the epoch was exhausted: nothing
-   * moved, the operation id was NOT consumed, and the identical operation
-   * succeeds once the epoch rolls. Carries the exhausted epoch so the retry can
-   * be scheduled against the vault's own epoch boundary.
-   */
-  | { status: "capacity_deferred"; deferredEpoch: bigint }
-  | { status: "missing" | "mismatch"; reason: string }
-
 export function assertManualRewardResolutionEvidence(input: {
   resolution: "confirmed" | "failed_onchain"
   liveness: TxLiveness
-  vaultEvent?: RewardVaultEventObservation
+  /**
+   * The SAME decision the automated path uses. Absent only when the backend is
+   * not lit_vault or no receipt exists yet.
+   */
+  decision?: RewardVaultReceiptDecision
 }): void {
   if (input.resolution === "confirmed" && input.liveness !== "success") {
     throw conflictError("Cannot manually confirm rewards settlement without a successful receipt")
   }
-  if (input.resolution === "failed_onchain" && input.vaultEvent?.status === "matched") {
+  const disposition = input.decision?.disposition
+  // Proven-settlement and deferral checks come BEFORE the generic liveness
+  // check so the most dangerous condition reports the most specific reason: an
+  // operator failing a provably paid effect should be told it was paid, not
+  // that the receipt was not failed.
+  if (input.resolution === "failed_onchain" && disposition === "confirmed") {
     throw conflictError("Cannot fail rewards settlement after its vault transfer event matched")
   }
-  // A deferral is a SUCCESSFUL receipt that moved no funds, so the liveness
-  // check above does not catch it: without this, an operator could manually
-  // confirm an effect the vault never paid.
-  if (input.resolution === "confirmed" && input.vaultEvent?.status === "capacity_deferred") {
+  // A deferral is a LIVE claim: the operation id was never consumed, so
+  // disposing it as failed and re-cashing-out is the double-pay this guard
+  // exists to prevent. A deferral is also a SUCCESSFUL receipt, so the liveness
+  // check above cannot catch either direction.
+  if (input.resolution === "failed_onchain" && disposition === "capacity_deferred") {
+    throw conflictError(
+      "Cannot fail rewards settlement that the vault deferred for epoch capacity",
+    )
+  }
+  if (input.resolution === "confirmed" && disposition === "capacity_deferred") {
     throw conflictError(
       "Cannot manually confirm rewards settlement that the vault deferred for epoch capacity",
     )
@@ -132,14 +137,16 @@ export interface ChainPrimitives {
     retryAfterMs: number | null
     compactEvidence: Record<string, string> | null
   }>
-  rewardVaultEvent?: (env: Env, input: {
+  rewardVaultDecision?: (env: Env, input: {
     txHash: string
     effectKind: Extract<OperatorEffectKind, "reward_cashout" | "reward_funding_refund">
-    operationId: string
+    effectId: string
     recipient: string
+    nonce: number
+    signedTx: string
     amountCents?: number
     amountAtomic?: string
-  }) => Promise<RewardVaultEventObservation>
+  }) => Promise<RewardVaultReceiptDecision>
 }
 
 function normalizeRecipient(raw: string): string {
@@ -365,13 +372,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       throw badRequestError("Rewards settlement manual resolver identity is invalid")
     }
     const liveness = await chain().txLiveness(this.env, expectedTxHash, "rewards")
-    const vaultEvent = liveness === "success" && this.usesLitVault()
-      ? await this.observeRewardVaultEvent(row)
-      : undefined
+    // The manual route uses the SAME verifier-first decision as reconciliation,
+    // so the human override can never rest on weaker evidence than the
+    // automated path it overrides.
+    const decision = this.usesLitVault() ? await this.decideRewardVaultReceipt(row) : undefined
     assertManualRewardResolutionEvidence({
       resolution: input.resolution,
       liveness,
-      vaultEvent,
+      decision,
     })
     const resolvedAt = Date.now()
     const resolved = this.cas(row.idempotency_key, row.version, {
@@ -474,23 +482,28 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const liveness = await chain().txLiveness(this.env, row.tx_hash, operatorKind)
     if (liveness === "success") {
       if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
-        const observation = await this.observeRewardVaultEvent(row)
-        if (observation.status !== "matched") {
-          // INTERMEDIATE STATE: `capacity_deferred` is observed but not yet
-          // consumed, so it routes here to reconciliation_required. That is
-          // fail-closed and safe — the operation id was never consumed on
-          // chain, so nothing is double-paid — but it is NOT the final
-          // behaviour. Step 3 of this stack transitions it to the
-          // capacity_deferred state and schedules the next-epoch retry. Lit
-          // vault custody is dark until then, so no live effect takes this path.
-          const reason = observation.status === "capacity_deferred"
-            ? `epoch ${observation.deferredEpoch} capacity exhausted; deferral wiring not yet enabled`
-            : observation.reason
+        const decision = await this.decideRewardVaultReceipt(row)
+        if (decision.disposition === "capacity_deferred") {
+          // Non-terminal. The operation id was never consumed on chain, so the
+          // IDENTICAL operation retries once the epoch rolls; effect id,
+          // operation id, recipient, amount and policy version all persist
+          // unchanged and only the deadline is reminted at signing.
+          return this.cas(row.idempotency_key, row.version, {
+            state: "capacity_deferred",
+            // Derived from the vault's own epoch, never a short timer: each
+            // deferred attempt is a SUCCESSFUL on-chain no-op that burns
+            // signer ETH.
+            next_attempt_at: decision.retryAtMs,
+            last_error: `capacity deferred in epoch ${decision.deferredEpoch}: ${decision.reason}`.slice(0, 1_000),
+          }) ?? this.read(row.idempotency_key)!
+        }
+        if (decision.disposition !== "confirmed") {
+          const reason = decision.reason
           const reconciliationCount = row.reconciliation_count + 1
           const updated = this.cas(row.idempotency_key, row.version, {
             state: "reconciliation_required",
             next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
-            last_error: `reward vault event ${observation.status}: ${reason}`.slice(0, 1_000),
+            last_error: `reward vault settlement unresolved: ${reason}`.slice(0, 1_000),
             reconciliation_count: reconciliationCount,
           }) ?? this.read(row.idempotency_key)!
           if (updated.reconciliation_count >= 3) {
@@ -650,22 +663,34 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault"
   }
 
-  private async observeRewardVaultEvent(row: EffectRow): Promise<RewardVaultEventObservation> {
-    if (!row.tx_hash) throw new Error("reward vault event lookup requires a transaction hash")
-    if (!row.operation_id) {
-      console.warn(JSON.stringify({
-        message: "Lit rewards effect reached receipt confirmation without operation ID",
-        effect: row.idempotency_key,
-      }))
-      return { status: "missing", reason: "operation ID was not persisted" }
+  /**
+   * The SOLE receipt parser for rewards vault settlement. Verification of the
+   * stored signed transaction happens inside the decision, before any receipt
+   * evidence is interpreted, for the automated and manual paths alike.
+   */
+  private async decideRewardVaultReceipt(row: EffectRow): Promise<RewardVaultReceiptDecision> {
+    if (!row.tx_hash) throw new Error("reward vault decision requires a transaction hash")
+    if (!row.signed_tx || row.nonce == null) {
+      return {
+        disposition: "reconciliation_required",
+        reason: "signed transaction or nonce was not persisted; evidence cannot be verified",
+        evidence: null,
+      }
     }
-    const observe = chain().rewardVaultEvent
-    if (!observe) throw new Error("reward vault event reconciliation is not configured")
-    return observe(this.env, {
+    const decide = chain().rewardVaultDecision
+    if (!decide) throw new Error("reward vault reconciliation is not configured")
+    return decide(this.env, {
       txHash: row.tx_hash,
       effectKind: row.effect_kind as "reward_cashout" | "reward_funding_refund",
-      operationId: row.operation_id,
+      // The effect id IS the idempotency key; the operation id is re-derived
+      // from it by keccak rather than trusted from the row.
+      effectId: row.idempotency_key,
       recipient: row.recipient_address,
+      nonce: row.nonce,
+      signedTx: row.signed_tx,
+      // Cashouts are denominated in cents and converted with the SAME
+      // conversion used at signing; wrong-amount custody refunds are natively
+      // atomic. A wrong choice here fails closed on byte-exact verification.
       amountCents: row.effect_kind === "reward_cashout" ? row.amount_cents : undefined,
       amountAtomic: row.effect_kind === "reward_funding_refund" ? row.amount_atomic ?? undefined : undefined,
     })

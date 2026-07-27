@@ -16,6 +16,9 @@ function env(overrides: Partial<Env> = {}): Env {
     REWARDS_TREASURY_VAULT_POLICY_VERSION: "7",
     LIT_REWARDS_USAGE_API_KEY: "usage-secret",
     LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
+    LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+    LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+    LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     ...overrides,
   } as Env
 }
@@ -39,6 +42,9 @@ describe("reward vault Lit config", () => {
       requestTimeoutMs: 20_000,
       requestMaxAttempts: 3,
       signingDeadlineSeconds: 300,
+      maxFeePerGasWei: 50_000_000_000n,
+      maxPriorityFeePerGasWei: 25_000_000_000n,
+      maxGasLimit: 300_000n,
     })
   })
 
