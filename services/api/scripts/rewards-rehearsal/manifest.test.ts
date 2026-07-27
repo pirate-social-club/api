@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test"
+import { createHash } from "node:crypto"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { id } from "ethers"
 
 import {
+  createEvidenceFileResolver,
   PINNED_STAGING_ACTION_CID_HASH,
   PINNED_STAGING_ACTION_SOURCE_CID,
   PINNED_STAGING_GROUP_ID,
@@ -26,13 +31,52 @@ const PINS: ReviewedStagingPins = {
   actionSourceCid: ACTION_SOURCE_CID,
 }
 
+/**
+ * Stub archive. Digests are fixed strings rather than real sha256 values
+ * because the parser only ever compares the manifest's claim against whatever
+ * the resolver reports — computing a genuine digest here would test node's
+ * crypto, not the gate.
+ */
+const CAPTURE_SHA = "a".repeat(64)
+const RESERVE_REFILL_SHA = "d".repeat(64)
+const FUNDING_QUOTE_SHA = "e".repeat(64)
+const ARCHIVE: Record<string, { sha256: string; byteLength: number }> = {
+  "capture-2026-07-26.md": { sha256: CAPTURE_SHA, byteLength: 4096 },
+  "dry-run-reserve-refill.md": { sha256: RESERVE_REFILL_SHA, byteLength: 2048 },
+  "dry-run-funding-quote.md": { sha256: FUNDING_QUOTE_SHA, byteLength: 2048 },
+  // Present, and its digest MATCHES what the reserve-refill fixture claims, so
+  // pointing at it changes size and nothing else. A stub with a mismatched
+  // digest would be rejected either way and would prove nothing about size.
+  "stub.md": { sha256: RESERVE_REFILL_SHA, byteLength: 3 },
+}
+const EVIDENCE = { resolve: (path: string) => ARCHIVE[path] ?? null }
+
+const dryRun = (switchName: "reserveRefill" | "fundingQuote") =>
+  switchName === "reserveRefill"
+    ? {
+        switchName,
+        performedAt: "2026-07-26T10:00:00.000Z",
+        evidenceFile: "dry-run-reserve-refill.md",
+        evidenceSha256: RESERVE_REFILL_SHA,
+        observedBefore: "reserve refill job topped the float up by 1_000_000 atomic",
+        observedAfter: "reserve refill job logged disabled_by_flag and moved no funds",
+      }
+    : {
+        switchName,
+        performedAt: "2026-07-26T10:20:00.000Z",
+        evidenceFile: "dry-run-funding-quote.md",
+        evidenceSha256: FUNDING_QUOTE_SHA,
+        observedBefore: "POST /funding/quote returned 200 with a quote id",
+        observedAfter: "POST /funding/quote returned 503 funding_admission_disabled",
+      }
+
 const valid = () => ({
   attestation: {
     capturedAt: "2026-07-26T11:30:00.000Z",
     capturedBy: "rehearsal-operator",
     approvedBy: "independent-approver",
-    evidenceReference: "https://dashboard.chipotle.litprotocol.com/ capture 2026-07-26",
-    evidenceSha256: "a".repeat(64),
+    evidenceReference: "capture-2026-07-26.md",
+    evidenceSha256: CAPTURE_SHA,
   },
   lit: {
     usageKeyExecuteInGroups: [GROUP],
@@ -65,17 +109,32 @@ const valid = () => ({
     fundingQuoteDisableProcedure: "flip PIRATE_REWARDS_FUNDING_ADMISSION=0",
     vaultPauseProcedure: "Safe tx nonce n: setPauseState(true,true)",
     operatorRotationProcedure: "Safe tx nonce n+1: setSettlementOperator(<fresh>)",
-    offChainKillSwitchDryRunEvidence: "dry-run 2026-07-26: both flags observed to reject live traffic",
+    offChainKillSwitchDryRuns: [dryRun("reserveRefill"), dryRun("fundingQuote")],
   },
 })
 
 const parse = (raw: unknown, pins: ReviewedStagingPins = PINS) =>
-  parseRehearsalManifest(raw, { now: NOW, pins })
+  parseRehearsalManifest(raw, { now: NOW, pins, evidence: EVIDENCE })
 
 const withSection = (section: string, patch: Record<string, unknown>) => {
   const base = valid() as Record<string, Record<string, unknown>>
   return { ...base, [section]: { ...base[section], ...patch } }
 }
+
+/**
+ * Mutates exactly ONE field of ONE dry run, leaving the other switch's entry
+ * untouched. A negative fixture that differs in several fields at once proves
+ * only that something was rejected, not which check fired.
+ */
+const withDryRun = (
+  switchName: "reserveRefill" | "fundingQuote",
+  patch: Record<string, unknown>,
+) =>
+  withSection("killSwitches", {
+    offChainKillSwitchDryRuns: (["reserveRefill", "fundingQuote"] as const).map((name) =>
+      name === switchName ? { ...dryRun(name), ...patch } : dryRun(name),
+    ),
+  })
 
 describe("parseRehearsalManifest", () => {
   it("accepts a fully captured, independently attested manifest", () => {
@@ -331,11 +390,173 @@ describe("parseRehearsalManifest", () => {
       "fundingQuoteDisableProcedure",
       "vaultPauseProcedure",
       "operatorRotationProcedure",
-      "offChainKillSwitchDryRunEvidence",
     ])("requires %s before the drill", (field) => {
       expect(() => parse(withSection("killSwitches", { [field]: "" }))).toThrow(
         new RegExp(field, "u"),
       )
+    })
+  })
+
+  describe("off-chain kill-switch dry runs", () => {
+    // The defect this section exists for: the field it replaced was checked
+    // only for non-emptiness, so the literal string "NOT PERFORMED" passed.
+    it("refuses prose in place of archived dry runs", () => {
+      expect(() =>
+        parse(withSection("killSwitches", { offChainKillSwitchDryRuns: "NOT PERFORMED" })),
+      ).toThrow(/must be an array/u)
+    })
+
+    it("refuses when one switch was never exercised", () => {
+      expect(() =>
+        parse(withSection("killSwitches", { offChainKillSwitchDryRuns: [dryRun("reserveRefill")] })),
+      ).toThrow(/missing an entry for: fundingQuote/u)
+    })
+
+    it("refuses two runs of the same switch dressed up as full coverage", () => {
+      expect(() =>
+        parse(
+          withSection("killSwitches", {
+            offChainKillSwitchDryRuns: [dryRun("reserveRefill"), dryRun("reserveRefill")],
+          }),
+        ),
+      ).toThrow(/more than one entry for a switch/u)
+    })
+
+    it("refuses an unknown switch name", () => {
+      expect(() =>
+        parse(
+          withSection("killSwitches", {
+            offChainKillSwitchDryRuns: [
+              { ...dryRun("reserveRefill"), switchName: "vaultPause" },
+              dryRun("fundingQuote"),
+            ],
+          }),
+        ),
+      ).toThrow(/switchName must be one of/u)
+    })
+
+    it("refuses evidence that is not in the archive", () => {
+      expect(() => parse(withDryRun("reserveRefill", { evidenceFile: "missing.md" }))).toThrow(
+        /not in the evidence archive/u,
+      )
+    })
+
+    it("refuses an evidence file too small to record anything", () => {
+      expect(() => parse(withDryRun("reserveRefill", { evidenceFile: "stub.md" }))).toThrow(
+        /records nothing/u,
+      )
+    })
+
+    it("refuses a digest that does not match the archived bytes", () => {
+      expect(() => parse(withDryRun("reserveRefill", { evidenceSha256: "b".repeat(64) }))).toThrow(
+        /digest does not match the archived bytes/u,
+      )
+    })
+
+    it.each(["/etc/passwd", "../outside.md", "nested/../../outside.md"])(
+      "refuses the escaping path %s",
+      (evidenceFile) => {
+        expect(() => parse(withDryRun("reserveRefill", { evidenceFile }))).toThrow(
+          /archive-relative|relative path segments/u,
+        )
+      },
+    )
+
+    it("refuses a stale dry run", () => {
+      expect(() =>
+        parse(withDryRun("reserveRefill", { performedAt: "2026-07-01T00:00:00.000Z" })),
+      ).toThrow(/only describes the deployment it ran against/u)
+    })
+
+    it("refuses a dry run performed after the capture it is attested by", () => {
+      expect(() =>
+        parse(withDryRun("reserveRefill", { performedAt: "2026-07-26T11:45:00.000Z" })),
+      ).toThrow(/performed after attestation.capturedAt/u)
+    })
+
+    // The check with the most teeth: a switch that was flipped and changed
+    // nothing observable is a FAILED dry run, however carefully it is written up.
+    it("refuses identical before and after observations", () => {
+      expect(() =>
+        parse(
+          withDryRun("reserveRefill", {
+            observedBefore: "refill request accepted",
+            observedAfter: "refill request accepted",
+          }),
+        ),
+      ).toThrow(/changed no observable behavior/u)
+    })
+
+    it("accepts one verified dry run per switch", () => {
+      const parsed = parse(valid())
+      expect(parsed.killSwitches.offChainKillSwitchDryRuns.map((run) => run.switchName)).toEqual([
+        "reserveRefill",
+        "fundingQuote",
+      ])
+    })
+  })
+
+  describe("attestation evidence", () => {
+    it("refuses a capture whose evidence file is not archived", () => {
+      expect(() =>
+        parse(withSection("attestation", { evidenceReference: "missing.md" })),
+      ).toThrow(/not in the evidence archive/u)
+    })
+
+    it("refuses a capture whose digest does not match the archived bytes", () => {
+      expect(() =>
+        parse(withSection("attestation", { evidenceSha256: "c".repeat(64) })),
+      ).toThrow(/digest does not match the archived bytes/u)
+    })
+
+    it("refuses a URL where an archived path is required", () => {
+      expect(() =>
+        parse(withSection("attestation", { evidenceReference: "/dashboard/capture.png" })),
+      ).toThrow(/archive-relative/u)
+    })
+  })
+
+  // Exercised against a real directory because this is the resolver production
+  // uses, and its containment check is the last line of defence if
+  // requireArchivePath is ever loosened.
+  describe("createEvidenceFileResolver", () => {
+    const root = mkdtempSync(join(tmpdir(), "rehearsal-evidence-"))
+    const body = "dry run output\n".repeat(8)
+    writeFileSync(join(root, "run.md"), body)
+    mkdirSync(join(root, "nested"))
+    writeFileSync(join(root, "..", "outside.md"), body)
+    const resolver = createEvidenceFileResolver(root)
+
+    it("reports the real digest and byte length", () => {
+      expect(resolver.resolve("run.md")).toEqual({
+        sha256: createHash("sha256").update(body).digest("hex"),
+        byteLength: Buffer.byteLength(body),
+      })
+    })
+
+    it("returns null for an absent file", () => {
+      expect(resolver.resolve("absent.md")).toBeNull()
+    })
+
+    it("returns null for a directory", () => {
+      expect(resolver.resolve("nested")).toBeNull()
+    })
+
+    it("refuses to read outside the archive root", () => {
+      expect(resolver.resolve("../outside.md")).toBeNull()
+    })
+
+    it("refuses an absolute path outside the archive root", () => {
+      expect(resolver.resolve(join(root, "..", "outside.md"))).toBeNull()
+    })
+
+    // The file genuinely exists and is readable, so only the prefix check can
+    // reject it. A non-existent sibling would return null either way.
+    it("does not treat a sibling directory with the same prefix as inside", () => {
+      const sibling = `${root}-sibling`
+      mkdirSync(sibling, { recursive: true })
+      writeFileSync(join(sibling, "run.md"), body)
+      expect(resolver.resolve(join(sibling, "run.md"))).toBeNull()
     })
   })
 
