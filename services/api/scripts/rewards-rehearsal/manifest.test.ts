@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test"
+import { id } from "ethers"
 
 import {
   PINNED_STAGING_ACTION_CID_HASH,
@@ -92,15 +93,26 @@ describe("parseRehearsalManifest", () => {
       expect(PINNED_STAGING_GROUP_ID).toBe("1")
     })
 
-    it("ships with NO action CID hash pinned, so the drill cannot yet run", () => {
-      // The action's source pins the vault address, so its CID cannot exist
-      // until the staging vault is deployed. The group also still permits the
-      // [0] wildcard.
-      expect(PINNED_STAGING_ACTION_CID_HASH).toBeNull()
+    it("pins the registered action's CID hash", () => {
+      // Registered 2026-07-27 against the deployed Sepolia vault, replacing the
+      // group's [0] wildcard. Equal to keccak256 of the raw CID string, which
+      // is how Lit derives hashed_cid — asserted below rather than asserted
+      // here as a bare literal.
+      expect(PINNED_STAGING_ACTION_CID_HASH).toBe(
+        "0x7abda558406d7d34e805e2cd4cb45872cfd9abf70793ab9c0afdc0a27565a6d3",
+      )
     })
 
-    it("ships with NO raw source CID pinned either", () => {
-      expect(PINNED_STAGING_ACTION_SOURCE_CID).toBeNull()
+    it("pins a CID hash that is keccak256 of the pinned raw CID", () => {
+      // The two pins must describe ONE action. Deriving rather than comparing
+      // two literals means a future edit to either cannot silently desync them.
+      expect(PINNED_STAGING_ACTION_CID_HASH).toBe(id(PINNED_STAGING_ACTION_SOURCE_CID as string))
+    })
+
+    it("pins the raw IPFS CID the executor is configured with", () => {
+      expect(PINNED_STAGING_ACTION_SOURCE_CID).toBe(
+        "QmR9EqhLEK7jE1wp44wLanmeJwK3Wr3kPtsfD4pjAmogm7",
+      )
     })
 
     it("refuses while the raw source CID is unpinned", () => {

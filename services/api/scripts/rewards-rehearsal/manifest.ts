@@ -60,7 +60,8 @@ export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b63168644
  * having executed during the runtime probes. Until a reviewed CID is registered
  * and the wildcard replaced, no executable manifest can be produced.
  */
-export const PINNED_STAGING_ACTION_CID_HASH: string | null = null
+export const PINNED_STAGING_ACTION_CID_HASH: string | null =
+  "0x7abda558406d7d34e805e2cd4cb45872cfd9abf70793ab9c0afdc0a27565a6d3"
 
 /**
  * The raw IPFS CID of the reviewed action — the identifier the production
@@ -71,7 +72,8 @@ export const PINNED_STAGING_ACTION_CID_HASH: string | null = null
  * evidence and could disagree with the executor's configuration. Commit both
  * from the SAME action-registration record.
  */
-export const PINNED_STAGING_ACTION_SOURCE_CID: string | null = null
+export const PINNED_STAGING_ACTION_SOURCE_CID: string | null =
+  "QmR9EqhLEK7jE1wp44wLanmeJwK3Wr3kPtsfD4pjAmogm7"
 
 /** A capture older than this is refused; topology drifts. */
 export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
