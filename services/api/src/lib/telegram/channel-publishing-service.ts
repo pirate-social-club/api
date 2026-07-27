@@ -126,13 +126,17 @@ function existingDelivery(row: unknown): Delivery | null {
 // Bot API offers neither an idempotency key nor a read-back, so retrying is a
 // coin flip that previously duplicated the channel post once per attempt (up to
 // COMMUNITY_JOB_MAX_ATTEMPTS). Fail closed and leave it for operator review.
-function isUnconfirmedSend(delivery: Delivery | null): boolean {
-  return Boolean(
-    delivery
-    && delivery.status === "pending"
-    && delivery.attemptCount > 0
-    && delivery.messageId == null,
-  )
+// A delivery whose outcome cannot be known. 'uncertain' has already been
+// classified; 'sending' means an attempt reached the reserve and then died
+// without recording anything, so it may or may not have hit Telegram. Both must
+// never be retried automatically: the Bot API has no idempotency key and cannot
+// read back channel history, so a retry is a coin flip on duplicating the post.
+//
+// The false-positive cost is accepted deliberately: a crash between the reserve
+// and the send never reached Telegram, but is indistinguishable from one that
+// did. Stranding it for an operator beats silently double-posting.
+function isAmbiguousDelivery(delivery: Delivery | null): boolean {
+  return delivery?.status === "uncertain" || delivery?.status === "sending"
 }
 
 function parsePost(projection: CommunityPostProjectionRow): ProjectedPost {
@@ -266,10 +270,12 @@ async function findDelivery(client: ControlPlaneLike, destinationId: string, pos
   return existingDelivery(result.rows[0])
 }
 
-// Claims the delivery slot BEFORE anything is handed to Telegram. If this write
-// fails nothing is sent, so a send can never outlive the record of it. The
-// message id and delivered_at are deliberately left untouched so an edit of an
-// already-delivered post keeps its identity.
+// Claims the delivery slot BEFORE anything is handed to Telegram, as 'sending'.
+// If this write fails nothing is sent, so a send can never outlive the record of
+// it; and because 'sending' is durable, a crash after this point is KNOWN to be
+// ambiguous rather than mistaken for a row that never left. The message id and
+// delivered_at are deliberately left untouched so an edit of an already
+// delivered post keeps its identity.
 async function reserveDelivery(input: {
   destination: ChannelDestination
   deliveryId: string
@@ -286,11 +292,11 @@ async function reserveDelivery(input: {
         telegram_post_delivery_id, telegram_channel_destination_id, community_id, post_id,
         telegram_chat_id, telegram_message_id, projection_updated_at, content_hash, status,
         attempt_count, last_error, delivered_at, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 'pending', 1, NULL, NULL, ?8, ?8)
+      ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 'sending', 1, NULL, NULL, ?8, ?8)
       ON CONFLICT (telegram_channel_destination_id, post_id) DO UPDATE SET
         projection_updated_at = excluded.projection_updated_at,
         content_hash = excluded.content_hash,
-        status = 'pending',
+        status = 'sending',
         attempt_count = telegram_post_deliveries.attempt_count + 1,
         last_error = NULL,
         updated_at = excluded.updated_at
@@ -348,9 +354,12 @@ async function markDeliveryFailure(input: {
   })
 }
 
-// Leaves the row `pending` on purpose: that is what keeps isUnconfirmedSend
-// true on every later pass, so no retry can duplicate the channel post.
-async function markDeliveryUnconfirmed(input: {
+// Records the ambiguity as its own terminal-until-resolved state. No automatic
+// path leaves 'uncertain'; only an explicit operator resolution does.
+export const UNCERTAIN_DELIVERY_NOTE =
+  "Sent to Telegram without recording the outcome. Skipped to avoid duplicating the channel post; needs operator review."
+
+async function markDeliveryUncertain(input: {
   client: ControlPlaneLike
   deliveryId: string
 }): Promise<void> {
@@ -358,13 +367,14 @@ async function markDeliveryUnconfirmed(input: {
   await input.client.execute({
     sql: `
       UPDATE telegram_post_deliveries
-      SET last_error = ?2,
+      SET status = 'uncertain',
+          last_error = ?2,
           updated_at = ?3
       WHERE telegram_post_delivery_id = ?1
     `,
     args: [
       input.deliveryId,
-      "A previous attempt sent to Telegram without recording the outcome. Skipped to avoid duplicating the channel post; needs operator review.",
+      UNCERTAIN_DELIVERY_NOTE,
       now,
     ],
   })
@@ -403,8 +413,11 @@ export async function publishPostProjectionToTelegram(input: {
   if (existing?.messageId && existing.contentHash === contentHash) return existing.id
   const deliveryId = existing?.id ?? makeId("tpd")
 
-  if (isUnconfirmedSend(existing)) {
-    await markDeliveryUnconfirmed({ client, deliveryId })
+  // Promote a stale 'sending' row to the explicit 'uncertain' state and stop.
+  // Already-'uncertain' rows are refreshed rather than re-classified, which
+  // keeps this idempotent across repeated job attempts.
+  if (isAmbiguousDelivery(existing)) {
+    await markDeliveryUncertain({ client, deliveryId })
     return null
   }
 
@@ -469,9 +482,9 @@ export async function publishPostProjectionToTelegram(input: {
   } catch (error) {
     if (sent) {
       // Telegram already has the message; only the confirmation write failed.
-      // Leaving the row `pending` with no message id is what makes every later
-      // pass take the isUnconfirmedSend branch instead of sending again.
-      await markDeliveryUnconfirmed({ client, deliveryId }).catch(() => undefined)
+      // Recording 'uncertain' with no message id is what makes every later
+      // pass take the isAmbiguousDelivery branch instead of sending again.
+      await markDeliveryUncertain({ client, deliveryId }).catch(() => undefined)
     } else {
       await markDeliveryFailure({ client, deliveryId, error }).catch(() => undefined)
     }
