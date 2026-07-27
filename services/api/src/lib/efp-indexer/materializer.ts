@@ -166,6 +166,52 @@ async function recomputeWalletCount(
   })
 }
 
+const PROJECTION_WRITE_BATCH_SIZE = 1_000
+
+function chunks<T>(values: readonly T[], size = PROJECTION_WRITE_BATCH_SIZE): T[][] {
+  const result: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size))
+  }
+  return result
+}
+
+async function recomputeWalletCounts(
+  tx: Transaction,
+  walletAddresses: readonly Address[],
+  revision: bigint,
+  now: string,
+): Promise<void> {
+  for (const batch of chunks([...new Set(walletAddresses)])) {
+    const values = batch.map((_, index) => `(?${index + 1})`).join(", ")
+    await tx.execute({
+      sql: `
+        WITH wallets(wallet_address) AS (VALUES ${values})
+        INSERT INTO efp_follow_counts (
+          wallet_address, follower_count, following_count,
+          projection_revision, updated_at
+        )
+        SELECT
+          wallets.wallet_address,
+          (SELECT COUNT(*) FROM efp_effective_follows
+           WHERE followed_address = wallets.wallet_address),
+          (SELECT COUNT(*) FROM efp_effective_follows
+           WHERE follower_address = wallets.wallet_address),
+          ?${batch.length + 1},
+          ?${batch.length + 2}
+        FROM wallets
+        WHERE TRUE
+        ON CONFLICT(wallet_address) DO UPDATE SET
+          follower_count = excluded.follower_count,
+          following_count = excluded.following_count,
+          projection_revision = excluded.projection_revision,
+          updated_at = excluded.updated_at
+      `,
+      args: [...batch, revision.toString(), now],
+    })
+  }
+}
+
 /**
  * Atomically replaces every effective edge for one follower. This is the only
  * primary-list repoint path: old-list edges are deleted before new-list edges
@@ -190,7 +236,7 @@ export async function replaceFollowerEffectiveEdges(input: {
   })
 }
 
-async function replaceFollowerEffectiveEdgesInTransaction(input: {
+export async function replaceFollowerEffectiveEdgesInTransaction(input: {
   tx: Transaction
   followerAddress: Address
   edges: readonly MaterializedFollowEdge[]
@@ -213,21 +259,18 @@ async function replaceFollowerEffectiveEdgesInTransaction(input: {
       sql: "DELETE FROM efp_effective_follows WHERE follower_address = ?1",
       args: [follower],
     })
-    for (const edge of input.edges) {
-      const target = edge.followedAddress.toLowerCase() as Address
-      affected.add(target)
-      await tx.execute({
-        sql: `
-          INSERT INTO efp_effective_follows (
-            follower_address, followed_address, list_chain_id,
-            list_contract_address, list_slot, source_block_number,
-            source_transaction_hash, source_transaction_index,
-            source_log_index, updated_at
-          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-        `,
-        args: [
+    const normalizedEdges = input.edges.map((edge) => {
+      const followedAddress = edge.followedAddress.toLowerCase() as Address
+      affected.add(followedAddress)
+      return { ...edge, followedAddress }
+    })
+    for (const batch of chunks(normalizedEdges)) {
+      const args: (string | number)[] = []
+      const values = batch.map((edge) => {
+        const offset = args.length
+        args.push(
           follower,
-          target,
+          edge.followedAddress,
           edge.listChainId,
           edge.listContractAddress.toLowerCase(),
           edge.listSlot.toString(),
@@ -236,13 +279,28 @@ async function replaceFollowerEffectiveEdgesInTransaction(input: {
           edge.sourceTransactionIndex,
           edge.sourceLogIndex,
           input.now,
-        ],
+        )
+        return `(${Array.from({ length: 10 }, (_, index) => `?${offset + index + 1}`).join(", ")})`
+      }).join(", ")
+      await tx.execute({
+        sql: `
+          INSERT INTO efp_effective_follows (
+            follower_address, followed_address, list_chain_id,
+            list_contract_address, list_slot, source_block_number,
+            source_transaction_hash, source_transaction_index,
+            source_log_index, updated_at
+          ) VALUES ${values}
+        `,
+        args,
       })
     }
 
-    for (const wallet of affected) {
-      await recomputeWalletCount(tx, wallet, input.projectionRevision, input.now)
-    }
+    await recomputeWalletCounts(
+      tx,
+      [...affected],
+      input.projectionRevision,
+      input.now,
+    )
 }
 
 /**
