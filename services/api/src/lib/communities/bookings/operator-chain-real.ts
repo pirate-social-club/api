@@ -300,6 +300,7 @@ export const realChain: ChainPrimitives = {
     }
     const lit = resolveRewardVaultLitConfig(env)
     const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    try {
     const snapshot = await fetchRewardVaultReceiptSnapshot(
       {
         getTransactionReceipt: (txHash) => provider.getTransactionReceipt(txHash) as never,
@@ -354,5 +355,9 @@ export const realChain: ChainPrimitives = {
         maxGasLimit: lit.maxGasLimit,
       },
     })
+    } finally {
+      // Mirror the sibling chain method: release the RPC connection.
+      void provider.destroy()
+    }
   },
 }

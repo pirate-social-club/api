@@ -69,6 +69,54 @@ export interface OperatorSettleResult {
 
 interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLimit: bigint }
 export type TxLiveness = "success" | "failed" | "pending" | "absent"
+/**
+ * Maps a durable effect row to the settlement-decision input.
+ *
+ * Exported and pure so the field bindings are directly testable. The one that
+ * matters: the effect id is `booking_id`, which holds
+ * `canonicalFields(req).bookingId` from signing (the rpe_/rcf_ id whose keccak
+ * is the operation id). It is NOT `idempotency_key`, which is a JSON envelope
+ * like ["reward_payout", …] that requestFromRow parses. Deriving the operation
+ * id from the wrong column fails every byte-exact verification and silently
+ * voids the manual-resolution double-pay guard, while every self-consistent
+ * fixture keeps passing.
+ */
+export function rewardVaultDecisionInputFromRow(row: {
+  effect_kind: string
+  booking_id: string
+  idempotency_key: string
+  recipient_address: string
+  amount_cents: number
+  amount_atomic: string | null
+  nonce: number
+  signed_tx: string
+  tx_hash: string
+}): {
+  txHash: string
+  effectKind: "reward_cashout" | "reward_funding_refund"
+  effectId: string
+  recipient: string
+  nonce: number
+  signedTx: string
+  amountCents?: number
+  amountAtomic?: string
+} {
+  return {
+    txHash: row.tx_hash,
+    effectKind: row.effect_kind as "reward_cashout" | "reward_funding_refund",
+    effectId: row.booking_id,
+    recipient: row.recipient_address,
+    nonce: row.nonce,
+    signedTx: row.signed_tx,
+    // Cashouts are cents and convert with the SAME transferAmount used at
+    // signing; wrong-amount custody refunds are natively atomic.
+    amountCents: row.effect_kind === "reward_cashout" ? row.amount_cents : undefined,
+    amountAtomic: row.effect_kind === "reward_funding_refund"
+      ? row.amount_atomic ?? undefined
+      : undefined,
+  }
+}
+
 export function assertManualRewardResolutionEvidence(input: {
   resolution: "confirmed" | "failed_onchain"
   liveness: TxLiveness
@@ -679,21 +727,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     }
     const decide = chain().rewardVaultDecision
     if (!decide) throw new Error("reward vault reconciliation is not configured")
-    return decide(this.env, {
-      txHash: row.tx_hash,
-      effectKind: row.effect_kind as "reward_cashout" | "reward_funding_refund",
-      // The effect id IS the idempotency key; the operation id is re-derived
-      // from it by keccak rather than trusted from the row.
-      effectId: row.idempotency_key,
-      recipient: row.recipient_address,
+    return decide(this.env, rewardVaultDecisionInputFromRow({
+      ...row,
       nonce: row.nonce,
-      signedTx: row.signed_tx,
-      // Cashouts are denominated in cents and converted with the SAME
-      // conversion used at signing; wrong-amount custody refunds are natively
-      // atomic. A wrong choice here fails closed on byte-exact verification.
-      amountCents: row.effect_kind === "reward_cashout" ? row.amount_cents : undefined,
-      amountAtomic: row.effect_kind === "reward_funding_refund" ? row.amount_atomic ?? undefined : undefined,
-    })
+      signed_tx: row.signed_tx,
+      tx_hash: row.tx_hash,
+    }))
   }
 
   private assertAmount(req: OperatorSettleRequest): void {
