@@ -98,6 +98,28 @@ export function rewardVaultActionRequest(
   }
 }
 
+/**
+ * Decodes ONLY the deadline from signed calldata.
+ *
+ * The deadline is minted per signing attempt and is not persisted, so it has no
+ * durable authority to be checked against — it can only be decoded and
+ * range-validated. Every other field has a real authority and must be supplied
+ * from it, never recovered from the transaction being verified.
+ */
+export function decodeRewardVaultDeadline(
+  signedTx: string,
+  effectKind: OperatorEffectKind,
+): bigint {
+  const method = rewardVaultMethod(effectKind)
+  const parsed = Transaction.from(signedTx)
+  const decoded = VAULT.decodeFunctionData(method, parsed.data)
+  const deadline = BigInt(decoded[3])
+  if (deadline <= 0n || deadline > MAX_UINT64) {
+    throw badRequestError("signed rewards vault tx deadline is not a positive uint64")
+  }
+  return deadline
+}
+
 export function encodeRewardVaultCalldata(request: RewardVaultActionRequest): string {
   return VAULT.encodeFunctionData(request.method, [
     request.operationId,
