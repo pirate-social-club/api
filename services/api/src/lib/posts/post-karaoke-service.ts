@@ -387,6 +387,7 @@ function buildTokenStreamKaraokeLines(input: {
 }
 
 export function buildSongKaraokeLines(input: {
+  durationMs?: number | null
   lyrics?: string | null
   timedLyrics: unknown
 }): SongKaraokeLine[] {
@@ -395,17 +396,38 @@ export function buildSongKaraokeLines(input: {
     return []
   }
 
+  let lines: SongKaraokeLine[]
   if (looksLikeTokenStream(entries)) {
     const groupedLines = buildTokenStreamKaraokeLines({
       entries,
       lyrics: input.lyrics,
     })
     if (groupedLines.length) {
-      return groupedLines
+      lines = groupedLines
+    } else {
+      lines = buildLineShapedKaraokeLines(entries)
     }
+  } else {
+    lines = buildLineShapedKaraokeLines(entries)
   }
 
-  return buildLineShapedKaraokeLines(entries)
+  const durationMs = input.durationMs
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return lines
+  }
+
+  return lines
+    .filter((line) => line.start_ms < durationMs)
+    .map((line) => ({
+      ...line,
+      end_ms: Math.min(line.end_ms, durationMs),
+      words: line.words
+        .filter((word) => word.start_ms < durationMs)
+        .map((word) => ({
+          ...word,
+          end_ms: Math.max(word.start_ms, Math.min(word.end_ms, durationMs)),
+        })),
+    }))
 }
 
 async function fetchJsonRef(ref: string): Promise<unknown | null> {
@@ -695,7 +717,12 @@ export async function getPostKaraokePayload(input: {
   if (!rawLines.length) {
     throw notFoundError("Karaoke is not available")
   }
+  const durationMs = Number.isFinite(bundle.primary_audio.duration_ms)
+    && Number(bundle.primary_audio.duration_ms) > 0
+    ? Math.round(Number(bundle.primary_audio.duration_ms))
+    : null
   const karaokeLines = timedKaraokeSyncStep(input, "karaoke_lines", () => buildSongKaraokeLines({
+      durationMs,
       lyrics: post.lyrics,
       timedLyrics,
     }))
@@ -713,6 +740,7 @@ export async function getPostKaraokePayload(input: {
     title: bundle.title || post.song_title || post.title || null,
     artwork_src: artworkSrc,
     instrumental_audio_url: instrumentalAudioUrl,
+    duration_ms: durationMs,
     karaoke_lines: karaokeLines,
     raw_lines: rawLines,
   }
