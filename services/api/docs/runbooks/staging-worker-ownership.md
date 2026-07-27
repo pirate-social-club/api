@@ -77,7 +77,10 @@ anything:
 
 ## Current holds
 
-_None._
+- **2026-07-27 20:13Z — Lit rewards E2E rehearsal.** Codex holds
+  `pirate-api-staging` on API `ef87f6069c06aff402f9df2cc7ab08bd67b80db4`
+  while collecting the paused, hash-pinned rehearsal preflight and handing off
+  Session B. Do not redeploy until this entry is released.
 
 ## Hold history
 
