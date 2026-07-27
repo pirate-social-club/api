@@ -43,6 +43,16 @@ describe("decodeEfpListOp", () => {
       encodePacked(["uint8", "uint8", "uint8", "uint8", "address"], [2, 1, 1, 1, TARGET]),
     ).classification).toBe("unsupported")
     expect(decodeEfpListOp(`${op(2)}0000000000000000`).classification).toBe("malformed")
+    expect(decodeEfpListOp(
+      "0x010180806569703135353a383435332f6572633732313a3078613130343365444245316230466665364331326132623865643541664437416342324445413339362f313132393038363537343435363530363530383133343638333733353438313231323839343030353239323636373437303434383234333334363638383933363934363233383932383031393433",
+    )).toMatchObject({
+      classification: "unsupported",
+      opVersion: 1,
+      opcode: 1,
+      recordVersion: 128,
+      recordType: 128,
+      valid: false,
+    })
   })
 })
 

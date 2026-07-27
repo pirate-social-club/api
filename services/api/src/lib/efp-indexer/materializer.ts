@@ -87,9 +87,10 @@ export async function deriveAuthoritativeFollowerEdges(
       throw new Error("EFP authoritative slot contains an unreadable raw operation")
     }
     const decoded = decodeEfpListOp(row.raw_op as Hex)
+    if (decoded.classification === "unsupported") continue
     if (!decoded.valid || !decoded.targetAddress || decoded.opcode == null) {
       throw new Error(
-        `EFP authoritative slot contains an unsupported or malformed operation at block ${String(row.block_number)}`,
+        `EFP authoritative slot contains a malformed operation at block ${String(row.block_number)}`,
       )
     }
     const current = entries.get(decoded.targetAddress) ?? {
@@ -228,9 +229,10 @@ export async function deriveAuthoritativeFollowersEdges(
       throw new Error("EFP authoritative slot contains an unreadable raw operation")
     }
     const decoded = decodeEfpListOp(row.raw_op as Hex)
+    if (decoded.classification === "unsupported") continue
     if (!decoded.valid || !decoded.targetAddress || decoded.opcode == null) {
       throw new Error(
-        `EFP authoritative slot contains an unsupported or malformed operation at block ${String(row.block_number)}`,
+        `EFP authoritative slot contains a malformed operation at block ${String(row.block_number)}`,
       )
     }
     const entries = entriesByFollower.get(follower) ?? new Map()
