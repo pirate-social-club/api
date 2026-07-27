@@ -341,6 +341,17 @@ export function videoFeedOrderSql(sort: HomeFeedSort): string {
   return "source_created_at DESC, source_post_id DESC"
 }
 
+/**
+ * Cursors are logged by shape, never by value. These records are emitted for every
+ * request, and cursors are opaque tokens that will carry generation/seed/policy
+ * state once ranking lands — the version prefix is all latency analysis needs.
+ */
+function cursorVersionLabel(cursor: string | null | undefined): string | null {
+  if (!cursor) return null
+  const prefix = cursor.split(":", 1)[0] ?? ""
+  return /^[a-z0-9]{1,8}$/u.test(prefix) ? prefix : "unknown"
+}
+
 async function listVideoHomeFeedProjectionRows(input: {
   communityIds: string[]
   cursor?: string | null
@@ -803,7 +814,8 @@ export async function listHomeFeed(input: {
       locale: input.locale ?? null,
       sort: input.sort ?? null,
       time_range: input.timeRange ?? null,
-      cursor: input.cursor ?? null,
+      has_cursor: Boolean(input.cursor),
+      cursor_version: cursorVersionLabel(input.cursor),
       active_communities: activeCommunities.length,
       candidate_communities: 0,
       projection_rows: 0,
@@ -1072,7 +1084,8 @@ export async function listHomeFeed(input: {
     sort: input.sort ?? null,
     parsed_sort: sort,
     time_range: input.timeRange ?? null,
-    cursor: input.cursor ?? null,
+    has_cursor: Boolean(input.cursor),
+    cursor_version: cursorVersionLabel(input.cursor),
     active_communities: activeCommunities.length,
     candidate_communities: communityIds.length,
     projection_rows: allRows.length,
