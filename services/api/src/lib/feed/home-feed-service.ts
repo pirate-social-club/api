@@ -27,7 +27,7 @@ import type {
 } from "./home-feed-types"
 import {
   decorateHomeFeedItemsWithBookings,
-  listFeedBookingsByHostUserIds,
+  listFeedBookingDiscoveryByHostUserIds,
 } from "./home-feed-booking"
 import { refreshBookingFeedDiscoverySnapshotsInBackground } from "../bookings/booking-feed-discovery"
 import {
@@ -1031,11 +1031,19 @@ export async function listHomeFeed(input: {
   const bookingDecoratedItems = await decorateHomeFeedItemsWithBookings({
     items: orderedItems,
     lookup: async (hostUserIds) => {
-      const bookingByHost = await listFeedBookingsByHostUserIds(getControlPlaneClient(input.env), hostUserIds)
+      const discovery = await listFeedBookingDiscoveryByHostUserIds(
+        getControlPlaneClient(input.env),
+        hostUserIds,
+      )
+      const bookingByHost = discovery.bookingByHostUserId
       const missingSnapshotHostIds = hostUserIds.filter((hostUserId) => !bookingByHost.has(hostUserId))
-      if (input.waitUntil && missingSnapshotHostIds.length > 0) {
+      const refreshHostUserIds = [...new Set([
+        ...missingSnapshotHostIds,
+        ...discovery.staleHostUserIds,
+      ])]
+      if (input.waitUntil && refreshHostUserIds.length > 0) {
         input.waitUntil(
-          refreshBookingFeedDiscoverySnapshotsInBackground(input.env, missingSnapshotHostIds)
+          refreshBookingFeedDiscoverySnapshotsInBackground(input.env, refreshHostUserIds)
             .catch((error: unknown) => {
               console.error("[home-feed] booking discovery snapshot refresh failed", error)
             }),

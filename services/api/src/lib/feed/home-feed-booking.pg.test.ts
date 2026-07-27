@@ -15,7 +15,7 @@ import { writeFile } from "node:fs/promises"
 import { recomputeBookingFeedDiscoverySnapshot } from "../bookings/booking-feed-discovery"
 import { applyCanonicalBookingMigrations } from "../bookings/test-migrations"
 import {
-  listFeedBookingsByHostUserIds,
+  listFeedBookingDiscoveryByHostUserIds,
   type FeedBookingExecutor,
 } from "./home-feed-booking"
 
@@ -168,24 +168,31 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
     }
   })
 
-  test("reads only current snapshots for published hosts", async () => {
-    const result = await listFeedBookingsByHostUserIds(executor, [
+  test("serves current and stale snapshots for published hosts while identifying refresh work", async () => {
+    const result = await listFeedBookingDiscoveryByHostUserIds(executor, [
       "host_ready",
       "host_expired",
       "host_unpublished",
       "host_missing",
     ])
 
-    expect([...result.entries()]).toEqual([[
-      "host_ready",
-      {
+    expect([...result.bookingByHostUserId.entries()]).toEqual([
+      ["host_expired", {
+        host_user_id: "host_expired",
+        base_price_cents: 3500,
+        has_available_slot: true,
+        starting_price_cents: 1500,
+        currency: "USDC",
+      }],
+      ["host_ready", {
         host_user_id: "host_ready",
         base_price_cents: 3500,
         has_available_slot: true,
         starting_price_cents: 2500,
         currency: "USDC",
-      },
-    ]])
+      }],
+    ])
+    expect(result.staleHostUserIds).toEqual(["host_expired"])
   })
 
   test("derives floors from canonical available slots with first-match override pricing", async () => {
