@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
 import { app, buildVersionMetadata } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -47,10 +48,20 @@ describe("admin auth middleware", () => {
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
     })).toEqual({
-      git_sha: "runtime-api123",
-      git_ref: "runtime-main",
-      build_timestamp: "2026-05-26T17:51:00Z",
+      git_sha: "compiled-api123",
+      git_ref: "compiled-main",
+      build_timestamp: "2026-05-26T17:50:00Z",
     })
+  })
+
+  test("version endpoint exposes the active karaoke scoring contract", async () => {
+    const response = await app.request("http://pirate.test/__version", undefined, {
+      ENVIRONMENT: "test",
+      PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
+    })
+    expect(response.status).toBe(200)
+    const body = await json(response) as { karaoke_scoring_version: number }
+    expect(body.karaoke_scoring_version).toBe(KARAOKE_SCORING_VERSION)
   })
 
   test("admin token can validate against admin health route", async () => {

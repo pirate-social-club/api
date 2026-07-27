@@ -94,12 +94,11 @@ export function clampStreakLeaderboardLimit(value?: number | null): number {
   return Math.min(STREAK_LEADERBOARD_MAX_LIMIT, Math.max(1, Math.trunc(value)))
 }
 
-function profileIdentity(userId: string, profile: Profile | null | undefined): SongStreakLeaderboardIdentity | null {
-  if (!profile) return null
+function profileIdentity(userId: string, profile: Profile | null | undefined): SongStreakLeaderboardIdentity {
   return {
-    avatar_ref: profile.avatar_ref ?? null,
-    display_name: profile.display_name ?? null,
-    handle: profile.primary_public_handle?.label ?? profile.global_handle?.label ?? null,
+    avatar_ref: profile?.avatar_ref ?? null,
+    display_name: profile?.display_name ?? null,
+    handle: profile?.primary_public_handle?.label ?? profile?.global_handle?.label ?? null,
     user_id: userId,
   }
 }
@@ -114,10 +113,19 @@ async function resolveLeaderboardIdentities(
     : new Map(await Promise.all(uniqueUserIds.map(async (userId) => [userId, await profileRepository.getProfileByUserId(userId)] as const)))
   const identities = new Map<string, SongStreakLeaderboardIdentity>()
   for (const userId of uniqueUserIds) {
-    const identity = profileIdentity(userId, profiles.get(userId))
-    if (identity) identities.set(userId, identity)
+    identities.set(userId, profileIdentity(userId, profiles.get(userId)))
   }
   return identities
+}
+
+type StreakRankMetrics = {
+  bestStreak: number
+  currentStreak: number
+}
+
+function sameStreakRank(left: StreakRankMetrics | null, right: StreakRankMetrics): boolean {
+  return left?.currentStreak === right.currentStreak
+    && left.bestStreak === right.bestStreak
 }
 
 function viewerStanding(input: {
@@ -183,21 +191,29 @@ export async function readSongStreakSummary(input: {
   const rows = boardResult.rows as SongStreakRow[]
   const identities = await resolveLeaderboardIdentities(input.profileRepository, rows.map((row) => readString(row.user_id) ?? ""))
   const entries: SongStreakLeaderboardEntry[] = []
+  let previousRankMetrics: StreakRankMetrics | null = null
+  let rank = 0
   for (const row of rows) {
     const userId = readString(row.user_id)
     if (!userId) continue
-    const identity = identities.get(userId)
-    if (!identity) continue
+    const rankMetrics = {
+      bestStreak: Number(row.best_streak ?? 0),
+      currentStreak: Number(row.current_streak ?? 0),
+    }
+    if (!sameStreakRank(previousRankMetrics, rankMetrics)) {
+      rank = entries.length + 1
+    }
     entries.push({
-      best_streak: Number(row.best_streak ?? 0),
-      current_streak: Number(row.current_streak ?? 0),
-      identity,
+      best_streak: rankMetrics.bestStreak,
+      current_streak: rankMetrics.currentStreak,
+      identity: identities.get(userId) ?? profileIdentity(userId, null),
       is_viewer: userId === input.userId,
       last_qualified_date: readString(row.last_qualified_date) ?? today,
-      rank: entries.length + 1,
+      rank,
       streak_started_date: readString(row.streak_started_date) ?? today,
       total_qualified_days: Number(row.total_qualified_days ?? 0),
     })
+    previousRankMetrics = rankMetrics
     if (entries.length >= input.limit) break
   }
 
@@ -308,21 +324,29 @@ export async function listPostStreakSummaries(input: {
   const summaries = new Map<string, SongStreakSummary>()
   for (const postId of postIds) {
     const entries: SongStreakLeaderboardEntry[] = []
+    let previousRankMetrics: StreakRankMetrics | null = null
+    let rank = 0
     for (const row of boardRowsByPostId.get(postId) ?? []) {
       const userId = readString(row.user_id)
       if (!userId) continue
-      const identity = identities.get(userId)
-      if (!identity) continue
+      const rankMetrics = {
+        bestStreak: Number(row.best_streak ?? 0),
+        currentStreak: Number(row.current_streak ?? 0),
+      }
+      if (!sameStreakRank(previousRankMetrics, rankMetrics)) {
+        rank = entries.length + 1
+      }
       entries.push({
-        best_streak: Number(row.best_streak ?? 0),
-        current_streak: Number(row.current_streak ?? 0),
-        identity,
+        best_streak: rankMetrics.bestStreak,
+        current_streak: rankMetrics.currentStreak,
+        identity: identities.get(userId) ?? profileIdentity(userId, null),
         is_viewer: userId === input.userId,
         last_qualified_date: readString(row.last_qualified_date) ?? today,
-        rank: entries.length + 1,
+        rank,
         streak_started_date: readString(row.streak_started_date) ?? today,
         total_qualified_days: Number(row.total_qualified_days ?? 0),
       })
+      previousRankMetrics = rankMetrics
       if (entries.length >= limit) break
     }
     summaries.set(postId, {
