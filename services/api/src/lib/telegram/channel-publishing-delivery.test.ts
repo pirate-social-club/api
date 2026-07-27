@@ -23,7 +23,7 @@ function classify(sql: string): string {
   if (text.startsWith("INSERT") && text.includes("TELEGRAM_POST_DELIVERIES")) return "reserve"
   if (text.includes("STATUS = 'DELIVERED'")) return "confirm"
   if (text.includes("STATUS = 'FAILED'")) return "fail"
-  if (text.startsWith("UPDATE") && text.includes("LAST_ERROR")) return "unconfirmed"
+  if (text.includes("STATUS = 'UNCERTAIN'")) return "uncertain"
   return "other"
 }
 
@@ -129,7 +129,7 @@ describe("Telegram delivery reservation", () => {
     sendFails = true
     await expect(publish()).rejects.toThrow()
     expect(calls).toContain("fail")
-    expect(calls).not.toContain("unconfirmed")
+    expect(calls).not.toContain("uncertain")
   })
 
   test("does not mark a post-send write failure retryable", async () => {
@@ -137,17 +137,17 @@ describe("Telegram delivery reservation", () => {
     await expect(publish()).rejects.toThrow()
     // Telegram already has the message. Recording 'failed' here is what would
     // let the job retry and post a duplicate.
-    expect(calls).toContain("unconfirmed")
+    expect(calls).toContain("uncertain")
     expect(calls).not.toContain("fail")
   })
 
-  test("never re-sends a reserved-but-unconfirmed delivery", async () => {
+  test("never re-sends a delivery already classified uncertain", async () => {
     // Exactly the row the previous test leaves behind.
     deliveryRow = {
       telegram_post_delivery_id: "tpd_1",
       telegram_message_id: null,
       content_hash: "stale",
-      status: "pending",
+      status: "uncertain",
       attempt_count: 1,
     }
 
@@ -156,7 +156,34 @@ describe("Telegram delivery reservation", () => {
     expect(result).toBeNull()
     expect(calls).not.toContain("telegram:sendMessage")
     expect(calls).not.toContain("reserve")
-    expect(calls).toContain("unconfirmed")
+    expect(calls).toContain("uncertain")
+  })
+
+  test("reserves as 'sending', the durable in-flight marker", async () => {
+    await publish()
+    const reserve = executions.find((execution) => classify(execution.sql) === "reserve")
+    // 'pending' here would be the original bug: a crash after the send would be
+    // indistinguishable from a row that never left, and get retried.
+    expect(reserve?.sql).toContain("'sending'")
+  })
+
+  test("promotes a stale 'sending' row to uncertain instead of re-sending it", async () => {
+    // A previous attempt died between the reserve and recording any outcome —
+    // process kill, isolate eviction — so it may or may not have hit Telegram.
+    deliveryRow = {
+      telegram_post_delivery_id: "tpd_1",
+      telegram_message_id: null,
+      content_hash: "stale",
+      status: "sending",
+      attempt_count: 1,
+    }
+
+    const result = await publish()
+
+    expect(result).toBeNull()
+    expect(calls).not.toContain("telegram:sendMessage")
+    expect(calls).not.toContain("reserve")
+    expect(calls).toContain("uncertain")
   })
 
   test("retries a delivery that definitively failed before the send", async () => {
