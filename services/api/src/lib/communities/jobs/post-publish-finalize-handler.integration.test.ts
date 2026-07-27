@@ -23,6 +23,7 @@ type State = {
   projectionStatuses: string[]
   reconcileRows: Array<{ post_id: string }>
   requestStatuses: string[]
+  throwAnalysisProviderError: boolean
   throwAssetError: boolean
   throwCatalogError: boolean
   throwListingError: boolean
@@ -101,6 +102,7 @@ const state: State = {
   projectionStatuses: [],
   reconcileRows: [],
   requestStatuses: [],
+  throwAnalysisProviderError: false,
   throwAssetError: false,
   throwCatalogError: false,
   throwListingError: false,
@@ -175,6 +177,13 @@ mock.module("../../posts/community-post-publish-request-store", () => ({
 mock.module("../../song-artifacts/song-artifact-analysis", () => ({
   analyzeSongBundle: mock(async (input: { skipAcrIdentification?: boolean }) => {
     state.analyzeCalls.push({ skipAcrIdentification: input.skipAcrIdentification })
+    if (state.throwAnalysisProviderError) {
+      throw providerUnavailable("Song audio identification is temporarily unavailable", {
+        provider: "acrcloud",
+        provider_error: "acr_status_3016",
+        reason: "song_audio_identification_failed",
+      })
+    }
     return {
       ageGatePolicy: "none",
       alignmentError: null,
@@ -303,7 +312,7 @@ function communityRepository() {
   }
 }
 
-function handlerInput() {
+function handlerInput(jobOverrides: Record<string, unknown> = {}) {
   return {
     communityRepository: communityRepository(),
     env: {},
@@ -311,6 +320,7 @@ function handlerInput() {
       community_id: COMMUNITY_ID,
       payload_json: JSON.stringify({ post_id: POST_ID }),
       subject_id: POST_ID,
+      ...jobOverrides,
     },
   } as never
 }
@@ -343,6 +353,7 @@ beforeEach(() => {
   state.projectionStatuses = []
   state.reconcileRows = []
   state.requestStatuses = []
+  state.throwAnalysisProviderError = false
   state.throwAssetError = false
   state.throwCatalogError = false
   state.throwListingError = false
@@ -476,6 +487,30 @@ describe("runPostPublishFinalize integration", () => {
       code: "provider_unavailable",
       retryable: true,
     })
+  })
+
+  test("rethrows a transient analysis provider failure so the job runner retries it", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.throwAnalysisProviderError = true
+
+    await expect(runPostPublishFinalize(handlerInput({ attempt_count: 1 })))
+      .rejects.toThrow("Song audio identification is temporarily unavailable")
+
+    // The post is not marked failed while the job runner still has retries.
+    expect(state.markedFailed).toEqual([])
+    expect(state.markedPublished).toBe(0)
+    expect(state.projectionStatuses).toEqual([])
+  })
+
+  test("marks the post failed but user-retryable when analysis providers stay down", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.throwAnalysisProviderError = true
+
+    await expect(runPostPublishFinalize(handlerInput({ attempt_count: 8 })))
+      .resolves.toBe(`failed:post_publish_finalize:${POST_ID}`)
+
+    expect(state.markedFailed).toEqual([{ failureCode: "provider_unavailable", retryable: true }])
+    expect(state.markedPublished).toBe(0)
   })
 
   test("passes the staging ACR bypass into deferred song analysis for allowlisted communities", async () => {
