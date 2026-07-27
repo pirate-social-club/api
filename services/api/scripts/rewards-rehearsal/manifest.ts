@@ -46,10 +46,8 @@ export const REHEARSAL_LIMITS = {
 /**
  * Reviewed pins for the staging topology.
  *
- * `groupId` is intentionally null: it is still PENDING CAPTURE in the
- * credential ledger, and until a reviewed value is committed here the drill
- * cannot run. That is the intended blocker, expressed in code rather than
- * relying on someone remembering.
+ * These values were captured from the registered staging group and committed
+ * together. Returning either pin to null intentionally blocks execution.
  */
 export const PINNED_STAGING_GROUP_ID: string | null = "1"
 export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
@@ -62,10 +60,7 @@ export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b63168644
  * CID is pinned separately in the production executor configuration; the
  * manifest records both so their relationship is auditable.
  *
- * Ships null: the group is currently configured with the `[0]` CID wildcard,
- * which permits every action and is the leading explanation for arbitrary code
- * having executed during the runtime probes. Until a reviewed CID is registered
- * and the wildcard replaced, no executable manifest can be produced.
+ * The former `[0]` CID wildcard was replaced by this single reviewed hash.
  */
 export const PINNED_STAGING_ACTION_CID_HASH: string | null =
   "0x7abda558406d7d34e805e2cd4cb45872cfd9abf70793ab9c0afdc0a27565a6d3"
@@ -95,9 +90,11 @@ export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
  */
 export const MAX_DRY_RUN_AGE_SECONDS = 7 * 24 * 60 * 60
 
-/** The two off-chain switches. Each needs its OWN dry run. */
+/** The two off-chain switches. Each must be exercised or explicitly excluded. */
 export const OFF_CHAIN_KILL_SWITCHES = ["reserveRefill", "fundingQuote"] as const
 export type OffChainKillSwitchName = (typeof OFF_CHAIN_KILL_SWITCHES)[number]
+export const EXCLUDED_SWITCH_CONTAINMENT_IMPACT =
+  "victim_inflows_before_pause_is_not_controlled" as const
 
 /**
  * The Lit wildcard group. A usage key scoped to `[0]` can execute in every
@@ -112,6 +109,7 @@ export type RehearsalManifest = {
     capturedAt: string
     capturedBy: string
     approvedBy: string
+    deploymentGitSha: string
     evidenceReference: string
     evidenceSha256: string
   }
@@ -152,31 +150,51 @@ export type RehearsalManifest = {
     operatorRotationProcedure: string
     /**
      * Proof each off-chain switch actually changes live behavior — one entry
-     * per switch, in {@link OFF_CHAIN_KILL_SWITCHES} order.
+     * per exercised switch.
      */
     offChainKillSwitchDryRuns: OffChainKillSwitchDryRun[]
+    /**
+     * Explicitly excluded switches. This does not claim the switch exists or
+     * works; it narrows the containment claim in a machine-readable way.
+     */
+    offChainKillSwitchExclusions: OffChainKillSwitchExclusion[]
   }
+}
+
+export type OffChainKillSwitchObservation = {
+  controlState: "enabled" | "disabled"
+  outcome: "allowed" | "blocked"
+  /** Request id, transaction hash, or archived probe id joining to the evidence file. */
+  evidenceId: string
 }
 
 /**
  * A single archived dry run of one off-chain kill switch.
  *
  * Structured rather than free text because the previous free-text field
- * accepted the literal string "NOT PERFORMED": any non-empty prose passed. The
- * fields below are the minimum that cannot be satisfied by prose — an archived
- * file whose bytes hash to a committed digest, a bounded timestamp, and two
- * observations that must actually differ.
+ * accepted the literal string "NOT PERFORMED": any non-empty prose passed.
+ * The fields bind an archived record and machine-shaped before/after probes to
+ * the exact Worker build that was exercised.
  */
 export type OffChainKillSwitchDryRun = {
   switchName: OffChainKillSwitchName
   performedAt: string
+  /** Exact Worker build exercised by the dry run. */
+  deploymentGitSha: string
   /** Archive-relative path to the run's recorded output. */
   evidenceFile: string
   /** sha256 of that file's bytes, verified by the resolver. */
   evidenceSha256: string
-  /** Observed live behavior with the switch ON, and then OFF. */
-  observedBefore: string
-  observedAfter: string
+  /** Machine-shaped observations with the switch enabled, then disabled. */
+  observedBefore: OffChainKillSwitchObservation
+  observedAfter: OffChainKillSwitchObservation
+}
+
+export type OffChainKillSwitchExclusion = {
+  switchName: OffChainKillSwitchName
+  reason: string
+  approvedBy: string
+  containmentImpact: typeof EXCLUDED_SWITCH_CONTAINMENT_IMPACT
 }
 
 /**
@@ -206,6 +224,7 @@ export class RehearsalManifestError extends Error {}
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/u
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/u
 const SHA256_RE = /^[0-9a-f]{64}$/u
+const GIT_SHA_RE = /^[0-9a-f]{40}$/u
 /** Canonical UTC only. `Date.parse` accepts far too much to be a gate. */
 const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 
@@ -229,9 +248,15 @@ function requireAddress(value: unknown, field: string): string {
 }
 
 function requirePositiveBigInt(value: unknown, field: string): bigint {
-  if (typeof value !== "bigint") fail(`${field} must be supplied as a bigint`)
-  if (value <= 0n) fail(`${field} must be positive`)
-  return value
+  if (
+    typeof value !== "bigint"
+    && (typeof value !== "string" || !/^[1-9][0-9]*$/u.test(value))
+  ) {
+    fail(`${field} must be supplied as a bigint or canonical positive-integer string`)
+  }
+  const parsed = typeof value === "bigint" ? value : BigInt(value)
+  if (parsed <= 0n) fail(`${field} must be positive`)
+  return parsed
 }
 
 /**
@@ -285,6 +310,12 @@ function requireSha256(value: unknown, field: string): string {
   return raw
 }
 
+function requireGitSha(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field)
+  if (!GIT_SHA_RE.test(raw)) fail(`${field} must be a 40-character lowercase git SHA`)
+  return raw
+}
+
 /**
  * Archive-relative path, restricted so evidence cannot be read from outside the
  * archive. A resolver that accepted `../` or an absolute path would let a
@@ -330,7 +361,7 @@ function requireVerifiedEvidenceFile(
 function parseDryRun(
   raw: unknown,
   field: string,
-  options: { now: Date; evidence: EvidenceFileResolver },
+  options: { now: Date; evidence: EvidenceFileResolver; deploymentGitSha: string },
 ): OffChainKillSwitchDryRun {
   if (typeof raw !== "object" || raw === null) fail(`${field} must be an object`)
   const input = raw as Record<string, unknown>
@@ -350,24 +381,50 @@ function parseDryRun(
     )
   }
 
+  const deploymentGitSha = requireGitSha(input.deploymentGitSha, `${field}.deploymentGitSha`)
+  if (deploymentGitSha !== options.deploymentGitSha) {
+    fail(`${field}.deploymentGitSha does not match the attested deployment`)
+  }
+
   const evidenceFile = requireArchivePath(input.evidenceFile, `${field}.evidenceFile`)
   const evidenceSha256 = requireSha256(input.evidenceSha256, `${field}.evidenceSha256`)
   requireVerifiedEvidenceFile(options.evidence, evidenceFile, evidenceSha256, field)
 
-  const observedBefore = requireNonEmptyString(input.observedBefore, `${field}.observedBefore`)
-  const observedAfter = requireNonEmptyString(input.observedAfter, `${field}.observedAfter`)
-  // The whole point of a dry run. Identical observations mean the switch was
-  // flipped and nothing changed — or was never flipped at all.
-  if (observedBefore.trim() === observedAfter.trim()) {
-    fail(
-      `${field}.observedAfter is identical to observedBefore; the switch changed no observable`
-        + " behavior, which is a failed dry run, not a passed one",
-    )
+  const parseObservation = (
+    value: unknown,
+    observationField: string,
+    expected: { controlState: "enabled" | "disabled"; outcome: "allowed" | "blocked" },
+  ): OffChainKillSwitchObservation => {
+    if (typeof value !== "object" || value === null) fail(`${observationField} must be an object`)
+    const observation = value as Record<string, unknown>
+    if (observation.controlState !== expected.controlState) {
+      fail(`${observationField}.controlState must be ${expected.controlState}`)
+    }
+    if (observation.outcome !== expected.outcome) {
+      fail(`${observationField}.outcome must be ${expected.outcome}`)
+    }
+    return {
+      controlState: expected.controlState,
+      outcome: expected.outcome,
+      evidenceId: requireNonEmptyString(observation.evidenceId, `${observationField}.evidenceId`),
+    }
+  }
+  const observedBefore = parseObservation(input.observedBefore, `${field}.observedBefore`, {
+    controlState: "enabled",
+    outcome: "allowed",
+  })
+  const observedAfter = parseObservation(input.observedAfter, `${field}.observedAfter`, {
+    controlState: "disabled",
+    outcome: "blocked",
+  })
+  if (observedBefore.evidenceId === observedAfter.evidenceId) {
+    fail(`${field} must reference distinct before and after probe evidence`)
   }
 
   return {
     switchName: switchName as OffChainKillSwitchName,
     performedAt,
+    deploymentGitSha,
     evidenceFile,
     evidenceSha256,
     observedBefore,
@@ -376,7 +433,7 @@ function parseDryRun(
 }
 
 /**
- * Requires exactly one dry run per off-chain switch.
+ * Parses the switches that were actually exercised.
  *
  * A single shared record — which is what the previous free-text field was —
  * cannot distinguish "both switches were exercised" from "one was, and the
@@ -384,7 +441,12 @@ function parseDryRun(
  */
 function parseDryRuns(
   raw: unknown,
-  options: { now: Date; evidence: EvidenceFileResolver; capturedAt: string },
+  options: {
+    now: Date
+    evidence: EvidenceFileResolver
+    capturedAt: string
+    deploymentGitSha: string
+  },
 ): OffChainKillSwitchDryRun[] {
   if (!Array.isArray(raw)) {
     fail("killSwitches.offChainKillSwitchDryRuns must be an array with one entry per off-chain switch")
@@ -409,14 +471,37 @@ function parseDryRuns(
   if (seen.size !== runs.length) {
     fail("killSwitches.offChainKillSwitchDryRuns contains more than one entry for a switch")
   }
-  const missing = OFF_CHAIN_KILL_SWITCHES.filter((name) => !seen.has(name))
-  if (missing.length > 0) {
-    fail(
-      `killSwitches.offChainKillSwitchDryRuns is missing an entry for: ${missing.join(", ")};`
-        + " each switch needs its own dry run",
-    )
-  }
   return runs
+}
+
+function parseExclusions(raw: unknown, approvedBy: string): OffChainKillSwitchExclusion[] {
+  if (!Array.isArray(raw)) fail("killSwitches.offChainKillSwitchExclusions must be an array")
+  const exclusions = raw.map((entry, index): OffChainKillSwitchExclusion => {
+    const field = `killSwitches.offChainKillSwitchExclusions[${index}]`
+    if (typeof entry !== "object" || entry === null) fail(`${field} must be an object`)
+    const input = entry as Record<string, unknown>
+    const switchName = requireNonEmptyString(input.switchName, `${field}.switchName`)
+    if (!OFF_CHAIN_KILL_SWITCHES.includes(switchName as OffChainKillSwitchName)) {
+      fail(`${field}.switchName must be one of ${OFF_CHAIN_KILL_SWITCHES.join(", ")}`)
+    }
+    const exclusionApprover = requireNonEmptyString(input.approvedBy, `${field}.approvedBy`)
+    if (exclusionApprover !== approvedBy) {
+      fail(`${field}.approvedBy must match attestation.approvedBy`)
+    }
+    if (input.containmentImpact !== EXCLUDED_SWITCH_CONTAINMENT_IMPACT) {
+      fail(`${field}.containmentImpact must explicitly state ${EXCLUDED_SWITCH_CONTAINMENT_IMPACT}`)
+    }
+    return {
+      switchName: switchName as OffChainKillSwitchName,
+      reason: requireNonEmptyString(input.reason, `${field}.reason`),
+      approvedBy: exclusionApprover,
+      containmentImpact: EXCLUDED_SWITCH_CONTAINMENT_IMPACT,
+    }
+  })
+  if (new Set(exclusions.map((entry) => entry.switchName)).size !== exclusions.length) {
+    fail("killSwitches.offChainKillSwitchExclusions contains more than one entry for a switch")
+  }
+  return exclusions
 }
 
 /**
@@ -475,6 +560,10 @@ export function parseRehearsalManifest(
   }
   const capturedBy = requireNonEmptyString(attestation.capturedBy, "attestation.capturedBy")
   const approvedBy = requireNonEmptyString(attestation.approvedBy, "attestation.approvedBy")
+  const deploymentGitSha = requireGitSha(
+    attestation.deploymentGitSha,
+    "attestation.deploymentGitSha",
+  )
   if (capturedBy.trim() === approvedBy.trim()) {
     fail("attestation.approvedBy must be an independent party, not attestation.capturedBy")
   }
@@ -622,6 +711,21 @@ export function parseRehearsalManifest(
   }
 
   // --- Gate 5: containment levers documented AND proven to work.
+  const dryRuns = parseDryRuns(killSwitches.offChainKillSwitchDryRuns, {
+    now: options.now,
+    evidence: options.evidence,
+    capturedAt,
+    deploymentGitSha,
+  })
+  const exclusions = parseExclusions(killSwitches.offChainKillSwitchExclusions, approvedBy)
+  const coveredNames = [...dryRuns, ...exclusions].map((entry) => entry.switchName)
+  if (new Set(coveredNames).size !== coveredNames.length) {
+    fail("an off-chain kill switch cannot be both exercised and excluded")
+  }
+  const uncovered = OFF_CHAIN_KILL_SWITCHES.filter((name) => !coveredNames.includes(name))
+  if (uncovered.length > 0) {
+    fail(`off-chain kill-switch coverage is missing: ${uncovered.join(", ")}`)
+  }
   const containment = {
     reserveRefillDisableProcedure: requireNonEmptyString(
       killSwitches.reserveRefillDisableProcedure,
@@ -639,15 +743,19 @@ export function parseRehearsalManifest(
       killSwitches.operatorRotationProcedure,
       "killSwitches.operatorRotationProcedure",
     ),
-    offChainKillSwitchDryRuns: parseDryRuns(killSwitches.offChainKillSwitchDryRuns, {
-      now: options.now,
-      evidence: options.evidence,
-      capturedAt,
-    }),
+    offChainKillSwitchDryRuns: dryRuns,
+    offChainKillSwitchExclusions: exclusions,
   }
 
   return {
-    attestation: { capturedAt, capturedBy, approvedBy, evidenceReference, evidenceSha256 },
+    attestation: {
+      capturedAt,
+      capturedBy,
+      approvedBy,
+      deploymentGitSha,
+      evidenceReference,
+      evidenceSha256,
+    },
     lit: {
       usageKeyExecuteInGroups: executeInGroups,
       stagingGroupId,

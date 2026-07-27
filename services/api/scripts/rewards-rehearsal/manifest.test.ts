@@ -7,6 +7,7 @@ import { id } from "ethers"
 
 import {
   createEvidenceFileResolver,
+  OFF_CHAIN_KILL_SWITCHES,
   PINNED_STAGING_ACTION_CID_HASH,
   PINNED_STAGING_ACTION_SOURCE_CID,
   PINNED_STAGING_GROUP_ID,
@@ -40,6 +41,7 @@ const PINS: ReviewedStagingPins = {
 const CAPTURE_SHA = "a".repeat(64)
 const RESERVE_REFILL_SHA = "d".repeat(64)
 const FUNDING_QUOTE_SHA = "e".repeat(64)
+const DEPLOYMENT_SHA = "b".repeat(40)
 const ARCHIVE: Record<string, { sha256: string; byteLength: number }> = {
   "capture-2026-07-26.md": { sha256: CAPTURE_SHA, byteLength: 4096 },
   "dry-run-reserve-refill.md": { sha256: RESERVE_REFILL_SHA, byteLength: 2048 },
@@ -56,18 +58,36 @@ const dryRun = (switchName: "reserveRefill" | "fundingQuote") =>
     ? {
         switchName,
         performedAt: "2026-07-26T10:00:00.000Z",
+        deploymentGitSha: DEPLOYMENT_SHA,
         evidenceFile: "dry-run-reserve-refill.md",
         evidenceSha256: RESERVE_REFILL_SHA,
-        observedBefore: "reserve refill job topped the float up by 1_000_000 atomic",
-        observedAfter: "reserve refill job logged disabled_by_flag and moved no funds",
+        observedBefore: {
+          controlState: "enabled",
+          outcome: "allowed",
+          evidenceId: "tx:reserve-refill-before",
+        },
+        observedAfter: {
+          controlState: "disabled",
+          outcome: "blocked",
+          evidenceId: "probe:reserve-refill-after",
+        },
       }
     : {
         switchName,
         performedAt: "2026-07-26T10:20:00.000Z",
+        deploymentGitSha: DEPLOYMENT_SHA,
         evidenceFile: "dry-run-funding-quote.md",
         evidenceSha256: FUNDING_QUOTE_SHA,
-        observedBefore: "POST /funding/quote returned 200 with a quote id",
-        observedAfter: "POST /funding/quote returned 503 funding_admission_disabled",
+        observedBefore: {
+          controlState: "enabled",
+          outcome: "allowed",
+          evidenceId: "request:funding-quote-before",
+        },
+        observedAfter: {
+          controlState: "disabled",
+          outcome: "blocked",
+          evidenceId: "request:funding-quote-after",
+        },
       }
 
 const valid = () => ({
@@ -75,6 +95,7 @@ const valid = () => ({
     capturedAt: "2026-07-26T11:30:00.000Z",
     capturedBy: "rehearsal-operator",
     approvedBy: "independent-approver",
+    deploymentGitSha: DEPLOYMENT_SHA,
     evidenceReference: "capture-2026-07-26.md",
     evidenceSha256: CAPTURE_SHA,
   },
@@ -110,6 +131,7 @@ const valid = () => ({
     vaultPauseProcedure: "Safe tx nonce n: setPauseState(true,true)",
     operatorRotationProcedure: "Safe tx nonce n+1: setSettlementOperator(<fresh>)",
     offChainKillSwitchDryRuns: [dryRun("reserveRefill"), dryRun("fundingQuote")],
+    offChainKillSwitchExclusions: [],
   },
 })
 
@@ -379,8 +401,12 @@ describe("parseRehearsalManifest", () => {
 
     it("refuses a numeric value supplied as a number rather than a bigint", () => {
       expect(() => parse(withSection("vault", { policyVersion: 1 as unknown as bigint }))).toThrow(
-        /must be supplied as a bigint/u,
+        /must be supplied as a bigint or canonical positive-integer string/u,
       )
+    })
+
+    it("accepts canonical integer strings from a JSON manifest", () => {
+      expect(() => parse(withSection("vault", { policyVersion: "1" }))).not.toThrow()
     })
   })
 
@@ -409,7 +435,7 @@ describe("parseRehearsalManifest", () => {
     it("refuses when one switch was never exercised", () => {
       expect(() =>
         parse(withSection("killSwitches", { offChainKillSwitchDryRuns: [dryRun("reserveRefill")] })),
-      ).toThrow(/missing an entry for: fundingQuote/u)
+      ).toThrow(/coverage is missing: fundingQuote/u)
     })
 
     it("refuses two runs of the same switch dressed up as full coverage", () => {
@@ -480,11 +506,19 @@ describe("parseRehearsalManifest", () => {
       expect(() =>
         parse(
           withDryRun("reserveRefill", {
-            observedBefore: "refill request accepted",
-            observedAfter: "refill request accepted",
+            observedBefore: {
+              controlState: "enabled",
+              outcome: "allowed",
+              evidenceId: "same-probe",
+            },
+            observedAfter: {
+              controlState: "disabled",
+              outcome: "blocked",
+              evidenceId: "same-probe",
+            },
           }),
         ),
-      ).toThrow(/changed no observable behavior/u)
+      ).toThrow(/distinct before and after probe evidence/u)
     })
 
     it("accepts one verified dry run per switch", () => {
@@ -493,6 +527,31 @@ describe("parseRehearsalManifest", () => {
         "reserveRefill",
         "fundingQuote",
       ])
+    })
+
+    it("accepts an explicitly narrowed first-drill scope without claiming a dry run", () => {
+      const parsed = parse(withSection("killSwitches", {
+        offChainKillSwitchDryRuns: [],
+        offChainKillSwitchExclusions: OFF_CHAIN_KILL_SWITCHES.map((switchName) => ({
+          switchName,
+          reason: `${switchName} is not implemented in staging`,
+          approvedBy: "independent-approver",
+          containmentImpact: "victim_inflows_before_pause_is_not_controlled",
+        })),
+      }))
+      expect(parsed.killSwitches.offChainKillSwitchExclusions).toHaveLength(2)
+    })
+
+    it("refuses an exclusion that hides its containment impact", () => {
+      expect(() => parse(withSection("killSwitches", {
+        offChainKillSwitchDryRuns: [dryRun("reserveRefill")],
+        offChainKillSwitchExclusions: [{
+          switchName: "fundingQuote",
+          reason: "not implemented",
+          approvedBy: "independent-approver",
+          containmentImpact: "none",
+        }],
+      }))).toThrow(/containmentImpact/u)
     })
   })
 
