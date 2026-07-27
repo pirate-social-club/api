@@ -2278,6 +2278,7 @@ export type SongKaraokePayload = {
   artist_name?: string | null;
   artwork_src?: string | null;
   instrumental_audio_url?: string | null;
+  duration_ms?: number | null;
   karaoke_lines?: Array<SongKaraokeLine> | null;
   raw_lines?: Array<Record<string, unknown>> | null;
 };

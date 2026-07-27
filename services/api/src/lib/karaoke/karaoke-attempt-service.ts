@@ -38,6 +38,65 @@ export interface RecordKaraokeAttemptResult {
   streakCredited: boolean
 }
 
+function karaokeScoringDiagnosticsJson(summary: KaraokeSessionSummary): string {
+  const extended = summary as KaraokeSessionSummary & {
+    timingCalibration?: {
+      matchedWordCount: number
+      measuredLineCount: number
+      offsetMs: number
+      rawOffsetMs: number
+      reason: "incoherent_residuals" | "insufficient_evidence" | "offset_out_of_range" | null
+      residualSpreadMs: number
+      state: "calibrated" | "uncalibrated"
+    }
+    lineDiagnostics?: Array<{
+      confidenceScore?: number | null
+      finalizedReason?: string
+      lineId?: string
+      medianSignedDeltaMs?: number | null
+      recognizedWordCount?: number
+      score?: number
+      textScore?: number
+      timingScore?: number | null
+    }>
+  }
+  const calibration = extended.timingCalibration ?? {
+    matchedWordCount: 0,
+    measuredLineCount: 0,
+    offsetMs: 0,
+    rawOffsetMs: 0,
+    reason: "insufficient_evidence" as const,
+    residualSpreadMs: 0,
+    state: "uncalibrated" as const,
+  }
+  const calibrated = calibration.state === "calibrated"
+
+  return JSON.stringify({
+    calibration: {
+      matchedWordCount: calibration.matchedWordCount,
+      measuredLineCount: calibration.measuredLineCount,
+      offsetMs: calibrated ? calibration.offsetMs : null,
+      rawOffsetMs: calibration.rawOffsetMs,
+      reason: calibration.reason,
+      residualSpreadMs: calibration.reason === "insufficient_evidence"
+        ? null
+        : calibration.residualSpreadMs,
+      state: calibration.state,
+      timingTrend: calibrated ? summary.timingTrend : null,
+    },
+    lines: (extended.lineDiagnostics ?? []).map((line) => ({
+      confidenceScore: line.confidenceScore ?? null,
+      finalizedReason: line.finalizedReason ?? null,
+      lineId: line.lineId ?? null,
+      medianSignedDeltaMs: line.medianSignedDeltaMs ?? null,
+      recognizedWordCount: line.recognizedWordCount ?? 0,
+      score: line.score ?? null,
+      textScore: line.textScore ?? null,
+      timingScore: line.timingScore ?? null,
+    })),
+  })
+}
+
 type KaraokeLeaderboardIdentity = {
   avatar_ref: string | null
   display_name: string | null
@@ -126,6 +185,7 @@ function karaokeLeaderboardRankedCte(): string {
 }
 
 export const karaokeAttemptServiceTestHooks = {
+  karaokeScoringDiagnosticsJson,
   karaokeLeaderboardRankedCte,
 }
 
@@ -356,6 +416,7 @@ export async function recordKaraokeAttempt(input: {
   const finalScoreBps = scoreBps(input.summary.finalScore) ?? 0
   const lyricsScoreBps = scoreBps(input.summary.lyricsScore) ?? 0
   const timingScoreBps = scoreBps(input.summary.timingScore)
+  const scoringDiagnosticsJson = karaokeScoringDiagnosticsJson(input.summary)
   const rankEligible = isRankEligible({
     completionReason: input.completionReason,
     finalScoreBps,
@@ -368,17 +429,17 @@ export async function recordKaraokeAttempt(input: {
       ${insertKeyword} INTO karaoke_attempt (
         id, session_id, attempt_id, user_id, post_id, community_id,
         karaoke_revision_id, scoring_version, scoring_provider, scoring_model,
-        final_score, lyrics_score, timing_score, timing_trend,
+        final_score, lyrics_score, timing_score, timing_trend, scoring_diagnostics_json,
         scored_line_count, line_count, uncertain_line_count,
         no_recognition_line_count, low_confidence_line_count,
         completion_reason, rank_eligible, activity_date, completed_at, created_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6,
         ?7, ?8, ?9, ?10,
-        ?11, ?12, ?13, ?14,
-        ?15, ?16, ?17,
-        ?18, ?19,
-        ?20, ?21, ?22, ?23, ?23
+        ?11, ?12, ?13, ?14, ?15,
+        ?16, ?17, ?18,
+        ?19, ?20,
+        ?21, ?22, ?23, ?24, ?24
       )
       RETURNING id
     `,
@@ -397,6 +458,7 @@ export async function recordKaraokeAttempt(input: {
       lyricsScoreBps,
       timingScoreBps,
       input.summary.timingTrend,
+      scoringDiagnosticsJson,
       input.summary.scoredLineCount,
       input.summary.lineCount,
       input.summary.uncertainLineCount,

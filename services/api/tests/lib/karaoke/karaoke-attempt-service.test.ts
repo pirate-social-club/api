@@ -24,6 +24,7 @@ async function createKaraokeAttemptSchema(client: ReturnType<typeof createClient
       timing_trend TEXT NOT NULL CHECK (
         timing_trend IN ('early', 'late', 'mixed', 'on_time')
       ),
+      scoring_diagnostics_json TEXT,
       scored_line_count INTEGER NOT NULL,
       line_count INTEGER NOT NULL,
       uncertain_line_count INTEGER NOT NULL,
@@ -80,6 +81,16 @@ function passingSummary() {
     confidenceMean: 0.95,
     finalScore: 0.92,
     lineCount: 10,
+    lineDiagnostics: [{
+      confidenceScore: 0.95,
+      finalizedReason: "line_end" as const,
+      lineId: "line-1",
+      medianSignedDeltaMs: 120,
+      recognizedWordCount: 5,
+      score: 0.92,
+      textScore: 0.9,
+      timingScore: 0.88,
+    }],
     lowConfidenceLineCount: 0,
     lyricsScore: 0.9,
     missedWords: [],
@@ -188,6 +199,31 @@ describe("karaoke attempt leaderboard ranking", () => {
   })
 })
 
+describe("karaoke scoring diagnostics", () => {
+  test("uses null for uncomputed spread and untrusted trend", () => {
+    const summary = {
+      ...passingSummary(),
+      timingCalibration: {
+        matchedWordCount: 2,
+        measuredLineCount: 1,
+        offsetMs: 0,
+        rawOffsetMs: 430,
+        reason: "insufficient_evidence" as const,
+        residualSpreadMs: 0,
+        state: "uncalibrated" as const,
+      },
+      timingScore: null,
+      timingTrend: "late" as const,
+    }
+
+    const diagnostics = JSON.parse(
+      karaokeAttemptServiceTestHooks.karaokeScoringDiagnosticsJson(summary),
+    )
+    expect(diagnostics.calibration.residualSpreadMs).toBeNull()
+    expect(diagnostics.calibration.timingTrend).toBeNull()
+  })
+})
+
 describe("recordKaraokeAttempt streak persistence", () => {
   test("buffers the full D1 write unit after an authoritative absence check", async () => {
     const client = createClient({ url: ":memory:" })
@@ -258,6 +294,29 @@ describe("recordKaraokeAttempt streak persistence", () => {
 
       const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days")
       expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+      const attempt = await client.execute("SELECT scoring_diagnostics_json FROM karaoke_attempt")
+      expect(JSON.parse(String(attempt.rows[0]?.scoring_diagnostics_json))).toEqual({
+        calibration: {
+          matchedWordCount: 30,
+          measuredLineCount: 10,
+          offsetMs: 120,
+          rawOffsetMs: 120,
+          reason: null,
+          residualSpreadMs: 40,
+          state: "calibrated",
+          timingTrend: "on_time",
+        },
+        lines: [{
+          confidenceScore: 0.95,
+          finalizedReason: "line_end",
+          lineId: "line-1",
+          medianSignedDeltaMs: 120,
+          recognizedWordCount: 5,
+          score: 0.92,
+          textScore: 0.9,
+          timingScore: 0.88,
+        }],
+      })
       const streak = await client.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
       expect(streak.rows[0]).toEqual({ current_streak: 1, best_streak: 1, total_qualified_days: 1 })
       const outbox = await client.execute("SELECT activity, qualification_policy_version FROM reward_qualification_outbox")

@@ -113,4 +113,33 @@ describe("buildSongKaraokeLines", () => {
       { kind: "lyric", text: "Line two", words: ["Line two"] },
     ])
   })
+
+  test("clamps overlong lyric timestamps to the supplied audio duration", () => {
+    const lines = buildSongKaraokeLines({
+      durationMs: 182_086,
+      lyrics: "Just play all night and day",
+      timedLyrics: {
+        segments: [
+          { text: "Just", start_ms: 169_740, end_ms: 169_900 },
+          { text: " ", start_ms: 169_900, end_ms: 169_940 },
+          { text: "play", start_ms: 169_940, end_ms: 170_160 },
+          { text: " ", start_ms: 170_160, end_ms: 170_200 },
+          { text: "all", start_ms: 173_500, end_ms: 173_840 },
+          { text: " ", start_ms: 173_840, end_ms: 173_960 },
+          { text: "night", start_ms: 173_960, end_ms: 174_220 },
+          { text: " ", start_ms: 174_220, end_ms: 174_280 },
+          { text: "and", start_ms: 174_280, end_ms: 174_460 },
+          { text: " ", start_ms: 174_460, end_ms: 174_580 },
+          { text: "day", start_ms: 174_580, end_ms: 185_940 },
+        ],
+      },
+    })
+
+    expect(lines[0]?.end_ms).toBe(182_086)
+    expect(lines[0]?.words.at(-1)).toEqual({
+      end_ms: 182_086,
+      start_ms: 174_580,
+      text: "day",
+    })
+  })
 })
