@@ -573,17 +573,29 @@ async function fetchApi(req: Request, env: Env, ctx: ExecutionContext): Promise<
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
-  if (!isAnalyticsEnabled(env)) {
-    return
-  }
-
   const db = getControlPlaneClient(env)
   try {
-    await flushAnalyticsOutbox(env, db)
-    await pruneAnalyticsOutbox(db)
-  } catch (error) {
-    console.error("[analytics] scheduled flush failed", error)
-    await captureScheduledError(env, error, "analytics_flush")
+    try {
+      await pruneAnalyticsOutbox(db)
+    } catch (error) {
+      console.error("[analytics] scheduled prune failed", error)
+      try {
+        await captureScheduledError(env, error, "analytics_prune")
+      } catch (captureError) {
+        console.error("[analytics] scheduled prune error capture failed", captureError)
+      }
+    }
+
+    if (!isAnalyticsEnabled(env)) {
+      return
+    }
+
+    try {
+      await flushAnalyticsOutbox(env, db)
+    } catch (error) {
+      console.error("[analytics] scheduled flush failed", error)
+      await captureScheduledError(env, error, "analytics_flush")
+    }
   } finally {
     db.close?.()
   }
