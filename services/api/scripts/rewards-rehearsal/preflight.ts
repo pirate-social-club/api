@@ -156,6 +156,9 @@ export async function runRehearsalPreflight(input: {
   // describes.
   const block = await input.reader.latestConfirmedBlock()
 
+  // Self-identify the target in archived evidence. Without this row, a valid
+  // 16-check archive does not say which address those calls were sent to.
+  record("vault.address", manifest.vault.address, manifest.vault.address)
   const code = await input.reader.getCode(manifest.vault.address, block)
   if (!code || code === "0x") fail("vault address has no deployed bytecode at the pinned block")
   record("vault.bytecodeHash", manifest.vault.bytecodeHash, keccak256(code).toLowerCase())

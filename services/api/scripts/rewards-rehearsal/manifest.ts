@@ -16,10 +16,17 @@
  * There are no defaults and no optional fields on purpose. A missing value is
  * an error, never an assumption.
  *
- * Nothing here executes anything. A parsed manifest is necessary but not
- * sufficient to run the drill; the on-chain preflight must additionally prove
- * the live chain matches what was captured.
+ * Nothing here executes anything, and nothing here touches the network. The
+ * parser is pure; the only I/O is reading archived evidence files, which the
+ * parser reaches solely through an injected resolver so tests never need a
+ * filesystem. A parsed manifest is necessary but not sufficient to run the
+ * drill; the on-chain preflight must additionally prove the live chain matches
+ * what was captured.
  */
+
+import { createHash } from "node:crypto"
+import { readFileSync, statSync } from "node:fs"
+import { resolve as resolvePath } from "node:path"
 
 /** Base Sepolia. The rehearsal action must target this chain and no other. */
 export const REHEARSAL_CHAIN_ID = 84532
@@ -39,10 +46,8 @@ export const REHEARSAL_LIMITS = {
 /**
  * Reviewed pins for the staging topology.
  *
- * `groupId` is intentionally null: it is still PENDING CAPTURE in the
- * credential ledger, and until a reviewed value is committed here the drill
- * cannot run. That is the intended blocker, expressed in code rather than
- * relying on someone remembering.
+ * These values were captured from the registered staging group and committed
+ * together. Returning either pin to null intentionally blocks execution.
  */
 export const PINNED_STAGING_GROUP_ID: string | null = "1"
 export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b6316864468c46"
@@ -55,10 +60,7 @@ export const PINNED_STAGING_PKP_ADDRESS = "0x6a1c1a6c780e9f2eb23e564c04b63168644
  * CID is pinned separately in the production executor configuration; the
  * manifest records both so their relationship is auditable.
  *
- * Ships null: the group is currently configured with the `[0]` CID wildcard,
- * which permits every action and is the leading explanation for arbitrary code
- * having executed during the runtime probes. Until a reviewed CID is registered
- * and the wildcard replaced, no executable manifest can be produced.
+ * The former `[0]` CID wildcard was replaced by this single reviewed hash.
  */
 export const PINNED_STAGING_ACTION_CID_HASH: string | null =
   "0x7abda558406d7d34e805e2cd4cb45872cfd9abf70793ab9c0afdc0a27565a6d3"
@@ -79,6 +81,22 @@ export const PINNED_STAGING_ACTION_SOURCE_CID: string | null =
 export const MAX_CAPTURE_AGE_SECONDS = 24 * 60 * 60
 
 /**
+ * A kill-switch dry run older than this is refused.
+ *
+ * Longer than the capture window because a dry run costs real live traffic and
+ * cannot be repeated hourly, but still bounded: a dry run proves how the switch
+ * behaved against the deployment it ran against, and says nothing about a
+ * deployment shipped afterwards.
+ */
+export const MAX_DRY_RUN_AGE_SECONDS = 7 * 24 * 60 * 60
+
+/** The two off-chain switches. Each must be exercised or explicitly excluded. */
+export const OFF_CHAIN_KILL_SWITCHES = ["reserveRefill", "fundingQuote"] as const
+export type OffChainKillSwitchName = (typeof OFF_CHAIN_KILL_SWITCHES)[number]
+export const EXCLUDED_SWITCH_CONTAINMENT_IMPACT =
+  "victim_inflows_before_pause_is_not_controlled" as const
+
+/**
  * The Lit wildcard group. A usage key scoped to `[0]` can execute in every
  * group. Its presence is disqualifying regardless of what else is listed.
  */
@@ -91,6 +109,7 @@ export type RehearsalManifest = {
     capturedAt: string
     capturedBy: string
     approvedBy: string
+    deploymentGitSha: string
     evidenceReference: string
     evidenceSha256: string
   }
@@ -129,16 +148,83 @@ export type RehearsalManifest = {
     fundingQuoteDisableProcedure: string
     vaultPauseProcedure: string
     operatorRotationProcedure: string
-    /** Proof the two off-chain switches actually change live behavior. */
-    offChainKillSwitchDryRunEvidence: string
+    /**
+     * Proof each off-chain switch actually changes live behavior — one entry
+     * per exercised switch.
+     */
+    offChainKillSwitchDryRuns: OffChainKillSwitchDryRun[]
+    /**
+     * Explicitly excluded switches. This does not claim the switch exists or
+     * works; it narrows the containment claim in a machine-readable way.
+     */
+    offChainKillSwitchExclusions: OffChainKillSwitchExclusion[]
   }
 }
+
+export type OffChainKillSwitchObservation = {
+  controlState: "enabled" | "disabled"
+  outcome: "allowed" | "blocked"
+  /** Request id, transaction hash, or archived probe id joining to the evidence file. */
+  evidenceId: string
+}
+
+/**
+ * A single archived dry run of one off-chain kill switch.
+ *
+ * Structured rather than free text because the previous free-text field
+ * accepted the literal string "NOT PERFORMED": any non-empty prose passed.
+ * The fields bind an archived record and machine-shaped before/after probes to
+ * the exact Worker build that was exercised.
+ */
+export type OffChainKillSwitchDryRun = {
+  switchName: OffChainKillSwitchName
+  performedAt: string
+  /** Exact Worker build exercised by the dry run. */
+  deploymentGitSha: string
+  /** Archive-relative path to the run's recorded output. */
+  evidenceFile: string
+  /** sha256 of that file's bytes, verified by the resolver. */
+  evidenceSha256: string
+  /** Machine-shaped observations with the switch enabled, then disabled. */
+  observedBefore: OffChainKillSwitchObservation
+  observedAfter: OffChainKillSwitchObservation
+}
+
+export type OffChainKillSwitchExclusion = {
+  switchName: OffChainKillSwitchName
+  reason: string
+  approvedBy: string
+  containmentImpact: typeof EXCLUDED_SWITCH_CONTAINMENT_IMPACT
+}
+
+/**
+ * Resolves archived evidence files.
+ *
+ * Injected rather than imported so the parser stays pure and testable, exactly
+ * as the reviewed pins are. The executable entrypoint
+ * ({@link loadReviewedRehearsalManifest}) supplies the real filesystem-backed
+ * resolver; a manifest can never supply its own.
+ *
+ * Returning the file's digest rather than a boolean is deliberate: existence
+ * alone is satisfied by an empty placeholder, and the manifest already carries
+ * a sha256 that until now hashed nothing verifiable.
+ */
+export type EvidenceFileResolver = {
+  resolve(archiveRelativePath: string): { sha256: string; byteLength: number } | null
+}
+
+/**
+ * An evidence file smaller than this is treated as absent. A dry-run record
+ * that fits in a few bytes has not recorded a dry run.
+ */
+export const MIN_EVIDENCE_FILE_BYTES = 64
 
 export class RehearsalManifestError extends Error {}
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/u
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/u
 const SHA256_RE = /^[0-9a-f]{64}$/u
+const GIT_SHA_RE = /^[0-9a-f]{40}$/u
 /** Canonical UTC only. `Date.parse` accepts far too much to be a gate. */
 const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u
 
@@ -162,9 +248,15 @@ function requireAddress(value: unknown, field: string): string {
 }
 
 function requirePositiveBigInt(value: unknown, field: string): bigint {
-  if (typeof value !== "bigint") fail(`${field} must be supplied as a bigint`)
-  if (value <= 0n) fail(`${field} must be positive`)
-  return value
+  if (
+    typeof value !== "bigint"
+    && (typeof value !== "string" || !/^[1-9][0-9]*$/u.test(value))
+  ) {
+    fail(`${field} must be supplied as a bigint or canonical positive-integer string`)
+  }
+  const parsed = typeof value === "bigint" ? value : BigInt(value)
+  if (parsed <= 0n) fail(`${field} must be positive`)
+  return parsed
 }
 
 /**
@@ -212,6 +304,206 @@ function requireUtcTimestamp(value: unknown, field: string): string {
   return raw
 }
 
+function requireSha256(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field)
+  if (!SHA256_RE.test(raw)) fail(`${field} must be 64 lowercase hex characters`)
+  return raw
+}
+
+function requireGitSha(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field)
+  if (!GIT_SHA_RE.test(raw)) fail(`${field} must be a 40-character lowercase git SHA`)
+  return raw
+}
+
+/**
+ * Archive-relative path, restricted so evidence cannot be read from outside the
+ * archive. A resolver that accepted `../` or an absolute path would let a
+ * manifest point at any file on the machine that happens to hash correctly.
+ */
+function requireArchivePath(value: unknown, field: string): string {
+  const raw = requireNonEmptyString(value, field).trim()
+  if (raw.startsWith("/") || /^[a-zA-Z]:[\\/]/u.test(raw)) {
+    fail(`${field} must be archive-relative, not absolute`)
+  }
+  if (raw.split(/[\\/]/u).some((segment) => segment === ".." || segment === ".")) {
+    fail(`${field} must not contain relative path segments`)
+  }
+  return raw
+}
+
+/**
+ * Binds a claimed digest to bytes that actually exist.
+ *
+ * Existence, size and digest are all checked here rather than split across
+ * caller and resolver, so there is exactly one place where "we have evidence"
+ * is decided.
+ */
+function requireVerifiedEvidenceFile(
+  resolver: EvidenceFileResolver,
+  path: string,
+  sha256: string,
+  field: string,
+): void {
+  const resolved = resolver.resolve(path)
+  if (resolved === null) fail(`${field} references ${path}, which is not in the evidence archive`)
+  if (resolved.byteLength < MIN_EVIDENCE_FILE_BYTES) {
+    fail(
+      `${field} references ${path}, which is ${resolved.byteLength} bytes;`
+        + ` an evidence file under ${MIN_EVIDENCE_FILE_BYTES} bytes records nothing`,
+    )
+  }
+  if (resolved.sha256 !== sha256) {
+    fail(`${field} digest does not match the archived bytes of ${path}`)
+  }
+}
+
+function parseDryRun(
+  raw: unknown,
+  field: string,
+  options: { now: Date; evidence: EvidenceFileResolver; deploymentGitSha: string },
+): OffChainKillSwitchDryRun {
+  if (typeof raw !== "object" || raw === null) fail(`${field} must be an object`)
+  const input = raw as Record<string, unknown>
+
+  const switchName = requireNonEmptyString(input.switchName, `${field}.switchName`)
+  if (!OFF_CHAIN_KILL_SWITCHES.includes(switchName as OffChainKillSwitchName)) {
+    fail(`${field}.switchName must be one of ${OFF_CHAIN_KILL_SWITCHES.join(", ")}`)
+  }
+
+  const performedAt = requireUtcTimestamp(input.performedAt, `${field}.performedAt`)
+  const ageSeconds = (options.now.getTime() - Date.parse(performedAt)) / 1000
+  if (ageSeconds < 0) fail(`${field}.performedAt is in the future`)
+  if (ageSeconds > MAX_DRY_RUN_AGE_SECONDS) {
+    fail(
+      `${field}.performedAt is ${Math.floor(ageSeconds)}s old; a dry run only describes the`
+        + " deployment it ran against",
+    )
+  }
+
+  const deploymentGitSha = requireGitSha(input.deploymentGitSha, `${field}.deploymentGitSha`)
+  if (deploymentGitSha !== options.deploymentGitSha) {
+    fail(`${field}.deploymentGitSha does not match the attested deployment`)
+  }
+
+  const evidenceFile = requireArchivePath(input.evidenceFile, `${field}.evidenceFile`)
+  const evidenceSha256 = requireSha256(input.evidenceSha256, `${field}.evidenceSha256`)
+  requireVerifiedEvidenceFile(options.evidence, evidenceFile, evidenceSha256, field)
+
+  const parseObservation = (
+    value: unknown,
+    observationField: string,
+    expected: { controlState: "enabled" | "disabled"; outcome: "allowed" | "blocked" },
+  ): OffChainKillSwitchObservation => {
+    if (typeof value !== "object" || value === null) fail(`${observationField} must be an object`)
+    const observation = value as Record<string, unknown>
+    if (observation.controlState !== expected.controlState) {
+      fail(`${observationField}.controlState must be ${expected.controlState}`)
+    }
+    if (observation.outcome !== expected.outcome) {
+      fail(`${observationField}.outcome must be ${expected.outcome}`)
+    }
+    return {
+      controlState: expected.controlState,
+      outcome: expected.outcome,
+      evidenceId: requireNonEmptyString(observation.evidenceId, `${observationField}.evidenceId`),
+    }
+  }
+  const observedBefore = parseObservation(input.observedBefore, `${field}.observedBefore`, {
+    controlState: "enabled",
+    outcome: "allowed",
+  })
+  const observedAfter = parseObservation(input.observedAfter, `${field}.observedAfter`, {
+    controlState: "disabled",
+    outcome: "blocked",
+  })
+  if (observedBefore.evidenceId === observedAfter.evidenceId) {
+    fail(`${field} must reference distinct before and after probe evidence`)
+  }
+
+  return {
+    switchName: switchName as OffChainKillSwitchName,
+    performedAt,
+    deploymentGitSha,
+    evidenceFile,
+    evidenceSha256,
+    observedBefore,
+    observedAfter,
+  }
+}
+
+/**
+ * Parses the switches that were actually exercised.
+ *
+ * A single shared record — which is what the previous free-text field was —
+ * cannot distinguish "both switches were exercised" from "one was, and the
+ * prose says both".
+ */
+function parseDryRuns(
+  raw: unknown,
+  options: {
+    now: Date
+    evidence: EvidenceFileResolver
+    capturedAt: string
+    deploymentGitSha: string
+  },
+): OffChainKillSwitchDryRun[] {
+  if (!Array.isArray(raw)) {
+    fail("killSwitches.offChainKillSwitchDryRuns must be an array with one entry per off-chain switch")
+  }
+  const runs = raw.map((entry, index) =>
+    parseDryRun(entry, `killSwitches.offChainKillSwitchDryRuns[${index}]`, options),
+  )
+
+  const capturedAtMs = Date.parse(options.capturedAt)
+  for (const run of runs) {
+    // The approver signs off on evidence that already exists; a dry run dated
+    // after the capture was not part of what was attested.
+    if (Date.parse(run.performedAt) > capturedAtMs) {
+      fail(
+        `killSwitches.offChainKillSwitchDryRuns entry for ${run.switchName} was performed after`
+          + " attestation.capturedAt; it cannot be part of the attested capture",
+      )
+    }
+  }
+
+  const seen = new Set(runs.map((run) => run.switchName))
+  if (seen.size !== runs.length) {
+    fail("killSwitches.offChainKillSwitchDryRuns contains more than one entry for a switch")
+  }
+  return runs
+}
+
+function parseExclusions(raw: unknown, approvedBy: string): OffChainKillSwitchExclusion[] {
+  if (!Array.isArray(raw)) fail("killSwitches.offChainKillSwitchExclusions must be an array")
+  const exclusions = raw.map((entry, index): OffChainKillSwitchExclusion => {
+    const field = `killSwitches.offChainKillSwitchExclusions[${index}]`
+    if (typeof entry !== "object" || entry === null) fail(`${field} must be an object`)
+    const input = entry as Record<string, unknown>
+    const switchName = requireNonEmptyString(input.switchName, `${field}.switchName`)
+    if (!OFF_CHAIN_KILL_SWITCHES.includes(switchName as OffChainKillSwitchName)) {
+      fail(`${field}.switchName must be one of ${OFF_CHAIN_KILL_SWITCHES.join(", ")}`)
+    }
+    const exclusionApprover = requireNonEmptyString(input.approvedBy, `${field}.approvedBy`)
+    if (exclusionApprover !== approvedBy) {
+      fail(`${field}.approvedBy must match attestation.approvedBy`)
+    }
+    if (input.containmentImpact !== EXCLUDED_SWITCH_CONTAINMENT_IMPACT) {
+      fail(`${field}.containmentImpact must explicitly state ${EXCLUDED_SWITCH_CONTAINMENT_IMPACT}`)
+    }
+    return {
+      switchName: switchName as OffChainKillSwitchName,
+      reason: requireNonEmptyString(input.reason, `${field}.reason`),
+      approvedBy: exclusionApprover,
+      containmentImpact: EXCLUDED_SWITCH_CONTAINMENT_IMPACT,
+    }
+  })
+  if (new Set(exclusions.map((entry) => entry.switchName)).size !== exclusions.length) {
+    fail("killSwitches.offChainKillSwitchExclusions contains more than one entry for a switch")
+  }
+  return exclusions
+}
+
 /**
  * Reviewed staging pins the manifest is judged against.
  *
@@ -244,7 +536,7 @@ export type ParsedRehearsalManifest = RehearsalManifest
 
 export function parseRehearsalManifest(
   raw: unknown,
-  options: { now: Date; pins: ReviewedStagingPins },
+  options: { now: Date; pins: ReviewedStagingPins; evidence: EvidenceFileResolver },
 ): ParsedRehearsalManifest {
   if (typeof raw !== "object" || raw === null) fail("manifest must be an object")
   const input = raw as Record<string, unknown>
@@ -268,17 +560,27 @@ export function parseRehearsalManifest(
   }
   const capturedBy = requireNonEmptyString(attestation.capturedBy, "attestation.capturedBy")
   const approvedBy = requireNonEmptyString(attestation.approvedBy, "attestation.approvedBy")
+  const deploymentGitSha = requireGitSha(
+    attestation.deploymentGitSha,
+    "attestation.deploymentGitSha",
+  )
   if (capturedBy.trim() === approvedBy.trim()) {
     fail("attestation.approvedBy must be an independent party, not attestation.capturedBy")
   }
-  const evidenceReference = requireNonEmptyString(
+  // The capture's own evidence gets the same treatment as the dry runs: until
+  // now `evidenceSha256` was a well-formed digest of nothing in particular,
+  // and `evidenceReference` was any non-empty string.
+  const evidenceReference = requireArchivePath(
     attestation.evidenceReference,
     "attestation.evidenceReference",
   )
-  const evidenceSha256 = requireNonEmptyString(attestation.evidenceSha256, "attestation.evidenceSha256")
-  if (!SHA256_RE.test(evidenceSha256)) {
-    fail("attestation.evidenceSha256 must be 64 lowercase hex characters")
-  }
+  const evidenceSha256 = requireSha256(attestation.evidenceSha256, "attestation.evidenceSha256")
+  requireVerifiedEvidenceFile(
+    options.evidence,
+    evidenceReference,
+    evidenceSha256,
+    "attestation.evidenceReference",
+  )
 
   // --- Gate 1: usage-key scope matches the reviewed pin, with no wildcard.
   if (options.pins.groupId === null) {
@@ -409,6 +711,21 @@ export function parseRehearsalManifest(
   }
 
   // --- Gate 5: containment levers documented AND proven to work.
+  const dryRuns = parseDryRuns(killSwitches.offChainKillSwitchDryRuns, {
+    now: options.now,
+    evidence: options.evidence,
+    capturedAt,
+    deploymentGitSha,
+  })
+  const exclusions = parseExclusions(killSwitches.offChainKillSwitchExclusions, approvedBy)
+  const coveredNames = [...dryRuns, ...exclusions].map((entry) => entry.switchName)
+  if (new Set(coveredNames).size !== coveredNames.length) {
+    fail("an off-chain kill switch cannot be both exercised and excluded")
+  }
+  const uncovered = OFF_CHAIN_KILL_SWITCHES.filter((name) => !coveredNames.includes(name))
+  if (uncovered.length > 0) {
+    fail(`off-chain kill-switch coverage is missing: ${uncovered.join(", ")}`)
+  }
   const containment = {
     reserveRefillDisableProcedure: requireNonEmptyString(
       killSwitches.reserveRefillDisableProcedure,
@@ -426,14 +743,19 @@ export function parseRehearsalManifest(
       killSwitches.operatorRotationProcedure,
       "killSwitches.operatorRotationProcedure",
     ),
-    offChainKillSwitchDryRunEvidence: requireNonEmptyString(
-      killSwitches.offChainKillSwitchDryRunEvidence,
-      "killSwitches.offChainKillSwitchDryRunEvidence",
-    ),
+    offChainKillSwitchDryRuns: dryRuns,
+    offChainKillSwitchExclusions: exclusions,
   }
 
   return {
-    attestation: { capturedAt, capturedBy, approvedBy, evidenceReference, evidenceSha256 },
+    attestation: {
+      capturedAt,
+      capturedBy,
+      approvedBy,
+      deploymentGitSha,
+      evidenceReference,
+      evidenceSha256,
+    },
     lit: {
       usageKeyExecuteInGroups: executeInGroups,
       stagingGroupId,
@@ -554,10 +876,43 @@ export type ExecutableRehearsalManifest = RehearsalManifest & {
 }
 
 /**
- * The only supported way to obtain an executable manifest. Uses the reviewed
- * pins and the current clock; neither is caller-supplied.
+ * Filesystem-backed resolver rooted at an evidence archive directory.
+ *
+ * The root is resolved once and every candidate is checked to be inside it, so
+ * a path that escapes the archive is refused even if {@link requireArchivePath}
+ * is ever loosened. Absence, directories and unreadable files all resolve to
+ * null; the caller decides what that means.
  */
-export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsalManifest {
+export function createEvidenceFileResolver(archiveRoot: string): EvidenceFileResolver {
+  return {
+    resolve(archiveRelativePath) {
+      const root = resolvePath(archiveRoot)
+      const candidate = resolvePath(root, archiveRelativePath)
+      if (candidate !== root && !candidate.startsWith(`${root}/`)) return null
+      try {
+        const stats = statSync(candidate)
+        if (!stats.isFile()) return null
+        const bytes = readFileSync(candidate)
+        return {
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          byteLength: bytes.byteLength,
+        }
+      } catch {
+        return null
+      }
+    },
+  }
+}
+
+/**
+ * The only supported way to obtain an executable manifest. Uses the reviewed
+ * pins, the current clock and a real evidence archive; none is caller-supplied
+ * except the archive root, which is a location, not a verdict.
+ */
+export function loadReviewedRehearsalManifest(
+  raw: unknown,
+  archiveRoot: string,
+): ExecutableRehearsalManifest {
   const parsed = parseRehearsalManifest(raw, {
     now: new Date(),
     pins: {
@@ -566,6 +921,7 @@ export function loadReviewedRehearsalManifest(raw: unknown): ExecutableRehearsal
       actionCidHash: PINNED_STAGING_ACTION_CID_HASH,
       actionSourceCid: PINNED_STAGING_ACTION_SOURCE_CID,
     },
+    evidence: createEvidenceFileResolver(archiveRoot),
   })
   return parsed as ExecutableRehearsalManifest
 }
