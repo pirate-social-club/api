@@ -10,6 +10,8 @@ const FOLLOWER_A = "0x1111111111111111111111111111111111111111" as Address
 const FOLLOWER_B = "0x2222222222222222222222222222222222222222" as Address
 const TARGET_A = "0x3333333333333333333333333333333333333333" as Address
 const TARGET_B = "0x4444444444444444444444444444444444444444" as Address
+const FOLLOWER_C = "0x5555555555555555555555555555555555555555" as Address
+const TARGET_C = "0x6666666666666666666666666666666666666666" as Address
 const HASH = `0x${"55".repeat(32)}` as Hex
 const NOW = "2026-07-27T00:00:00.000Z"
 
@@ -83,6 +85,7 @@ test("deferred projection finalization commits resumable follower batches before
   for (const [index, follower, target] of [
     [1, FOLLOWER_A, TARGET_A],
     [2, FOLLOWER_B, TARGET_B],
+    [3, FOLLOWER_C, TARGET_C],
   ] as const) {
     const rawOp = encodePacked(
       ["uint8", "uint8", "uint8", "uint8", "address"],
@@ -110,17 +113,17 @@ test("deferred projection finalization commits resumable follower batches before
   const firstRunComplete = await finalizeDeferredProjection({
     client: client as never,
     config: EFP_INDEXER_CHAINS.base,
-    followerBatchSize: 1,
+    followerBatchSize: 2,
     maxFollowerBatches: 1,
   })
   expect(firstRunComplete).toBeFalse()
   expect(Number((await client.execute(
     "SELECT processed_followers FROM efp_follow_projection_backfills WHERE chain_id = 8453",
-  )).rows[0]?.processed_followers)).toBe(1)
+  )).rows[0]?.processed_followers)).toBe(2)
   expect((await client.execute(
     "SELECT chain_id FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453",
   )).rows).toHaveLength(0)
-  expect((await client.execute("SELECT * FROM efp_effective_follows")).rows).toHaveLength(1)
+  expect((await client.execute("SELECT * FROM efp_effective_follows")).rows).toHaveLength(2)
 
   const resumedComplete = await finalizeDeferredProjection({
     client: client as never,
@@ -130,9 +133,9 @@ test("deferred projection finalization commits resumable follower batches before
   expect(resumedComplete).toBeTrue()
   expect(Number((await client.execute(
     "SELECT processed_followers FROM efp_follow_projection_backfills WHERE chain_id = 8453",
-  )).rows[0]?.processed_followers)).toBe(2)
+  )).rows[0]?.processed_followers)).toBe(3)
   expect((await client.execute(
     "SELECT applied_through_block FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453",
   )).rows[0]?.applied_through_block).toBe(100)
-  expect((await client.execute("SELECT * FROM efp_effective_follows")).rows).toHaveLength(2)
+  expect((await client.execute("SELECT * FROM efp_effective_follows")).rows).toHaveLength(3)
 })
