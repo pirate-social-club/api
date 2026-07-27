@@ -70,6 +70,13 @@ interface GasParams { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint; gasLim
 export type TxLiveness = "success" | "failed" | "pending" | "absent"
 export type RewardVaultEventObservation =
   | { status: "matched" }
+  /**
+   * The vault accepted the operation but the epoch was exhausted: nothing
+   * moved, the operation id was NOT consumed, and the identical operation
+   * succeeds once the epoch rolls. Carries the exhausted epoch so the retry can
+   * be scheduled against the vault's own epoch boundary.
+   */
+  | { status: "capacity_deferred"; deferredEpoch: bigint }
   | { status: "missing" | "mismatch"; reason: string }
 
 export function assertManualRewardResolutionEvidence(input: {
@@ -82,6 +89,14 @@ export function assertManualRewardResolutionEvidence(input: {
   }
   if (input.resolution === "failed_onchain" && input.vaultEvent?.status === "matched") {
     throw conflictError("Cannot fail rewards settlement after its vault transfer event matched")
+  }
+  // A deferral is a SUCCESSFUL receipt that moved no funds, so the liveness
+  // check above does not catch it: without this, an operator could manually
+  // confirm an effect the vault never paid.
+  if (input.resolution === "confirmed" && input.vaultEvent?.status === "capacity_deferred") {
+    throw conflictError(
+      "Cannot manually confirm rewards settlement that the vault deferred for epoch capacity",
+    )
   }
   if (input.resolution === "failed_onchain" && input.liveness !== "failed") {
     throw conflictError("Cannot manually fail rewards settlement without a failed receipt")
@@ -461,11 +476,21 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
         const observation = await this.observeRewardVaultEvent(row)
         if (observation.status !== "matched") {
+          // INTERMEDIATE STATE: `capacity_deferred` is observed but not yet
+          // consumed, so it routes here to reconciliation_required. That is
+          // fail-closed and safe — the operation id was never consumed on
+          // chain, so nothing is double-paid — but it is NOT the final
+          // behaviour. Step 3 of this stack transitions it to the
+          // capacity_deferred state and schedules the next-epoch retry. Lit
+          // vault custody is dark until then, so no live effect takes this path.
+          const reason = observation.status === "capacity_deferred"
+            ? `epoch ${observation.deferredEpoch} capacity exhausted; deferral wiring not yet enabled`
+            : observation.reason
           const reconciliationCount = row.reconciliation_count + 1
           const updated = this.cas(row.idempotency_key, row.version, {
             state: "reconciliation_required",
             next_attempt_at: Date.now() + BROADCAST_RECONCILE_DELAY_MS,
-            last_error: `reward vault event ${observation.status}: ${observation.reason}`.slice(0, 1_000),
+            last_error: `reward vault event ${observation.status}: ${reason}`.slice(0, 1_000),
             reconciliation_count: reconciliationCount,
           }) ?? this.read(row.idempotency_key)!
           if (updated.reconciliation_count >= 3) {

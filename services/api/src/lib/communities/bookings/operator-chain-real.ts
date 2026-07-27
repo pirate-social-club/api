@@ -47,7 +47,10 @@ const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_A
 const REWARD_VAULT_EVENTS = new Interface([
   "event RewardPaid(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
   "event RewardRefunded(bytes32 indexed operationId,address indexed recipient,uint256 amount,uint64 indexed policyVersion,uint256 epoch)",
+  "event OperationCapacityDeferred(bytes32 indexed operationId,uint8 indexed kind,uint256 indexed epoch)",
 ])
+/** Mirrors the vault's `OperationKind` enum ordering. */
+const DEFERRAL_KIND = { reward_cashout: 0n, reward_funding_refund: 1n } as const
 const REWARD_VAULT_CAPACITY_ABI = [
   "function epochDuration() view returns (uint64)",
 ] as const
@@ -59,9 +62,22 @@ export function matchRewardVaultEvent(input: {
   operationId: string
   recipient: string
   amount: bigint
-}): { status: "matched" } | { status: "missing" | "mismatch"; reason: string } {
+}):
+  | { status: "matched" }
+  | { status: "capacity_deferred"; deferredEpoch: bigint }
+  | { status: "missing" | "mismatch"; reason: string }
+{
   const expectedName = input.effectKind === "reward_cashout" ? "RewardPaid" : "RewardRefunded"
-  let sameOperationWrongEvent = false
+
+  // COUNT rather than latch. Overwriting a single slot makes every
+  // contradiction order-dependent: the last event seen would decide, and a
+  // duplicate or an opposite event could be masked by whatever followed it.
+  let matchingSettlements = 0
+  let oppositeSettlements = 0
+  let deferrals = 0
+  let settlementMismatch: string | null = null
+  let deferredEpoch: bigint | null = null
+
   for (const log of input.logs) {
     if (getAddress(log.address) !== getAddress(input.vaultAddress)) continue
     let parsed
@@ -71,21 +87,60 @@ export function matchRewardVaultEvent(input: {
       continue
     }
     if (!parsed || String(parsed.args.operationId).toLowerCase() !== input.operationId) continue
-    if (parsed.name !== expectedName) {
-      sameOperationWrongEvent = true
+
+    if (parsed.name === "OperationCapacityDeferred") {
+      // A deferral for the OTHER operation kind is not evidence about this
+      // effect; it is a genuine mismatch.
+      if (BigInt(parsed.args.kind) !== DEFERRAL_KIND[input.effectKind]) {
+        return { status: "mismatch", reason: "deferral kind does not match the durable effect" }
+      }
+      deferrals += 1
+      deferredEpoch = BigInt(parsed.args.epoch)
       continue
     }
+    if (parsed.name !== expectedName) {
+      oppositeSettlements += 1
+      continue
+    }
+
+    matchingSettlements += 1
     if (getAddress(String(parsed.args.recipient)) !== getAddress(input.recipient)) {
-      return { status: "mismatch", reason: "recipient does not match the durable effect" }
+      settlementMismatch ??= "recipient does not match the durable effect"
+      continue
     }
     if (BigInt(parsed.args.amount) !== input.amount) {
-      return { status: "mismatch", reason: "amount does not match the durable effect" }
+      settlementMismatch ??= "amount does not match the durable effect"
     }
-    return { status: "matched" }
   }
-  return sameOperationWrongEvent
-    ? { status: "mismatch", reason: "event kind does not match the durable effect" }
-    : { status: "missing", reason: "matching operation event was not emitted by the vault" }
+
+  // Exactly one recognized outcome, independent of the order the vault's logs
+  // happen to appear in. The pinned vault cannot emit these combinations, but
+  // this observation is money-state evidence and also feeds the
+  // manual-resolution guard, so it must not depend on that.
+  if (oppositeSettlements > 0) {
+    return { status: "mismatch", reason: "event kind does not match the durable effect" }
+  }
+  if (matchingSettlements > 1) {
+    return { status: "mismatch", reason: "receipt carries duplicate settlement events" }
+  }
+  if (deferrals > 1) {
+    return { status: "mismatch", reason: "receipt carries duplicate deferral events" }
+  }
+  if (matchingSettlements > 0 && deferrals > 0) {
+    return {
+      status: "mismatch",
+      reason: "receipt carries both a settlement and a deferral for this operation id",
+    }
+  }
+  if (matchingSettlements === 1) {
+    return settlementMismatch === null
+      ? { status: "matched" }
+      : { status: "mismatch", reason: settlementMismatch }
+  }
+  if (deferrals === 1 && deferredEpoch !== null) {
+    return { status: "capacity_deferred", deferredEpoch }
+  }
+  return { status: "missing", reason: "matching operation event was not emitted by the vault" }
 }
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
