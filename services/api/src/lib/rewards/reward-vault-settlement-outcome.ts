@@ -65,6 +65,32 @@ const CANONICAL_OPERATION_ID_RE = /^0x[0-9a-f]{64}$/u
 /** Indexed-parameter counts, so a malformed event never becomes evidence. */
 const DEFERRAL_TOPIC_COUNT = 4
 const SETTLEMENT_TOPIC_COUNT = 4
+/** RewardPaid/RewardRefunded carry exactly `amount` and `epoch` as data. */
+const SETTLEMENT_DATA_RE = /^0x[0-9a-fA-F]{128}$/u
+
+/**
+ * Decodes a left-padded address topic, refusing non-zero upper bytes rather
+ * than truncating them — a word with dirty upper bits is a malformed event,
+ * not an address.
+ */
+function decodeAddressTopic(topic: string): string | null {
+  if (!TOPIC_RE.test(topic)) return null
+  const body = topic.slice(2)
+  if (!/^0{24}$/u.test(body.slice(0, 24))) return null
+  try {
+    return getAddress(`0x${body.slice(24)}`)
+  } catch {
+    return null
+  }
+}
+
+/** Decodes a uint64 topic, refusing values that overflow the declared width. */
+function decodeUint64Topic(topic: string): bigint | null {
+  if (!TOPIC_RE.test(topic)) return null
+  const body = topic.slice(2)
+  if (!/^0{48}$/u.test(body.slice(0, 48))) return null
+  return BigInt(`0x${body.slice(48)}`)
+}
 
 function reconcile(reason: string): RewardVaultSettlementOutcome {
   return { disposition: "reconciliation_required", reason }
@@ -108,6 +134,12 @@ export function classifyRewardVaultSettlement(input: {
   /** Canonical lowercase bytes32, as persisted on the effect row. */
   operationId: string
   expectedKind: RewardVaultSettlementKind
+  /** The durable effect's recipient. A settlement must pay exactly this. */
+  expectedRecipient: string
+  /** The durable effect's amount, in token atoms. */
+  expectedAmount: bigint
+  /** The policy version the transaction was signed for, when known. */
+  expectedPolicyVersion?: bigint
 }): RewardVaultSettlementOutcome {
   if (input.receiptStatus !== 1) {
     return reconcile("receipt did not succeed; a reverted transaction is never classified here")
@@ -185,9 +217,39 @@ export function classifyRewardVaultSettlement(input: {
   }
 
   if (settlement !== null) {
+    // Confirmation must mean the whole durable tuple matched, not merely that
+    // the operation id appeared in a log of the right shape.
+    const recipient = decodeAddressTopic(settlement.topics[2] as string)
+    if (recipient === null) {
+      return reconcile("settlement event recipient topic is not a canonical address word")
+    }
+    if (!sameAddress(recipient, input.expectedRecipient)) {
+      return reconcile("settlement recipient does not match the durable effect")
+    }
+
+    const policyVersion = decodeUint64Topic(settlement.topics[3] as string)
+    if (policyVersion === null) {
+      return reconcile("settlement event policy-version topic is not a canonical uint64 word")
+    }
+    if (input.expectedPolicyVersion !== undefined && policyVersion !== input.expectedPolicyVersion) {
+      return reconcile("settlement policy version does not match the signed transaction")
+    }
+
+    const data = settlement.data
+    if (typeof data !== "string" || !SETTLEMENT_DATA_RE.test(data)) {
+      return reconcile("settlement event data is not exactly two ABI words")
+    }
+    const amount = BigInt(`0x${data.slice(2, 66)}`)
+    const epoch = BigInt(`0x${data.slice(66, 130)}`)
+    if (amount !== input.expectedAmount) {
+      return reconcile("settlement amount does not match the durable effect")
+    }
+
     return {
       disposition: "confirmed",
-      reason: `vault emitted ${input.expectedKind === "payout" ? "RewardPaid" : "RewardRefunded"} for this operation id`,
+      reason:
+        `vault emitted ${input.expectedKind === "payout" ? "RewardPaid" : "RewardRefunded"}`
+        + ` for this operation id, recipient and amount in epoch ${epoch}`,
     }
   }
 

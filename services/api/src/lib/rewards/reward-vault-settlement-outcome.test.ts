@@ -28,17 +28,36 @@ const deferralLog = (overrides: Partial<RewardVaultReceiptLog> = {}, kind = 0n, 
   ...overrides,
 })
 
+const RECIPIENT = "0x000000000000000000000000000000000000dEaD"
+const AMOUNT = 500_000n
+const POLICY_VERSION = 1n
+/** RewardPaid/RewardRefunded data is exactly `amount` then `epoch`. */
+const settlementData = (amount = AMOUNT, epoch = 42n) =>
+  `0x${amount.toString(16).padStart(64, "0")}${epoch.toString(16).padStart(64, "0")}`
+
 const paidLog = (overrides: Partial<RewardVaultReceiptLog> = {}) => ({
   address: VAULT,
   transactionHash: TX,
-  topics: [VAULT_EVENT_TOPICS.rewardPaid, OPERATION_ID, addressWord(VAULT), word(1n)],
+  topics: [
+    VAULT_EVENT_TOPICS.rewardPaid,
+    OPERATION_ID,
+    addressWord(RECIPIENT),
+    word(POLICY_VERSION),
+  ],
+  data: settlementData(),
   ...overrides,
 })
 
 const refundedLog = (overrides: Partial<RewardVaultReceiptLog> = {}) => ({
   address: VAULT,
   transactionHash: TX,
-  topics: [VAULT_EVENT_TOPICS.rewardRefunded, OPERATION_ID, addressWord(VAULT), word(1n)],
+  topics: [
+    VAULT_EVENT_TOPICS.rewardRefunded,
+    OPERATION_ID,
+    addressWord(RECIPIENT),
+    word(POLICY_VERSION),
+  ],
+  data: settlementData(),
   ...overrides,
 })
 
@@ -53,6 +72,9 @@ const classify = (
     pinnedVaultAddress: VAULT,
     operationId: OPERATION_ID,
     expectedKind: "payout",
+    expectedRecipient: RECIPIENT,
+    expectedAmount: AMOUNT,
+    expectedPolicyVersion: POLICY_VERSION,
     ...overrides,
   })
 
@@ -144,6 +166,83 @@ describe("classifyRewardVaultSettlement", () => {
       expect(result.disposition).toBe("reconciliation_required")
       expect(result.reason).toContain("does not match the expected payout")
     })
+  })
+
+  describe("confirmation requires the whole durable tuple", () => {
+    it("rejects a settlement paying a different recipient", () => {
+      const result = classify([
+        paidLog({
+          topics: [
+            VAULT_EVENT_TOPICS.rewardPaid,
+            OPERATION_ID,
+            addressWord("0x00000000000000000000000000000000000000ff"),
+            word(POLICY_VERSION),
+          ],
+        }),
+      ])
+      expect(result.disposition).toBe("reconciliation_required")
+      expect(result.reason).toContain("recipient does not match the durable effect")
+    })
+
+    it("rejects a settlement for a different amount", () => {
+      const result = classify([paidLog({ data: settlementData(AMOUNT + 1n) })])
+      expect(result.disposition).toBe("reconciliation_required")
+      expect(result.reason).toContain("amount does not match the durable effect")
+    })
+
+    it("rejects a settlement under a different policy version", () => {
+      const result = classify([
+        paidLog({
+          topics: [
+            VAULT_EVENT_TOPICS.rewardPaid,
+            OPERATION_ID,
+            addressWord(RECIPIENT),
+            word(POLICY_VERSION + 1n),
+          ],
+        }),
+      ])
+      expect(result.reason).toContain("policy version does not match")
+    })
+
+    it("still confirms when no policy version is supplied to compare", () => {
+      expect(
+        classify([paidLog()], { expectedPolicyVersion: undefined }).disposition,
+      ).toBe("confirmed")
+    })
+
+    it("rejects an address topic with dirty upper bytes rather than truncating", () => {
+      const dirty = `0x${"11".repeat(12)}${RECIPIENT.slice(2).toLowerCase()}`
+      const result = classify([
+        paidLog({
+          topics: [VAULT_EVENT_TOPICS.rewardPaid, OPERATION_ID, dirty, word(POLICY_VERSION)],
+        }),
+      ])
+      expect(result.reason).toContain("not a canonical address word")
+    })
+
+    it("rejects a uint64 topic that overflows its declared width", () => {
+      const overflowing = `0x${"00".repeat(23)}ff${"00".repeat(8)}`
+      const result = classify([
+        paidLog({
+          topics: [
+            VAULT_EVENT_TOPICS.rewardPaid,
+            OPERATION_ID,
+            addressWord(RECIPIENT),
+            overflowing,
+          ],
+        }),
+      ])
+      expect(result.reason).toContain("not a canonical uint64 word")
+    })
+
+    it.each(["0x", `0x${"00".repeat(32)}`, `0x${"00".repeat(96)}`, undefined])(
+      "rejects settlement data that is not exactly two ABI words (%p)",
+      (data) => {
+        expect(classify([paidLog({ data: data as string })]).reason).toContain(
+          "not exactly two ABI words",
+        )
+      },
+    )
   })
 
   describe("malformed input", () => {
