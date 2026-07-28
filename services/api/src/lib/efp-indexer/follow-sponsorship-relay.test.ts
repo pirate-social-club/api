@@ -72,7 +72,7 @@ function relayClient(): Client & { statements: InStatement[] } {
 }
 
 describe("relaySponsoredFollowTransaction", () => {
-  test("reserves both bootstrap transactions before relaying the first", async () => {
+  test("sponsors without an alert webhook and reserves both bootstrap transactions first", async () => {
     const client = relayClient()
     const result = await relaySponsoredFollowTransaction({
       actorUserId: "viewer",
@@ -80,7 +80,6 @@ describe("relaySponsoredFollowTransaction", () => {
       env: {
         PRIVY_APP_ID: "app",
         PRIVY_APP_SECRET: "secret",
-        OPS_ALERT_WEBHOOK_URL: "https://pager.invalid",
         EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
         EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
       } as Env,

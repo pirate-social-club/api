@@ -24,12 +24,11 @@ function positiveInteger(value: string | undefined): number | null {
 function requiredConfig(env: Env) {
   const appId = env.PRIVY_APP_ID?.trim()
   const appSecret = env.PRIVY_APP_SECRET?.trim()
-  const pagingWebhookUrl = env.OPS_ALERT_WEBHOOK_URL?.trim()
   const dailyLimit = positiveInteger(env.EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT)
   const estimatedUsdMicros = positiveInteger(
     env.EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION,
   )
-  if (!appId || !appSecret || !pagingWebhookUrl || !dailyLimit || !estimatedUsdMicros) {
+  if (!appId || !appSecret || !dailyLimit || !estimatedUsdMicros) {
     throw eligibilityFailed("Follow sponsorship is unavailable")
   }
   return { appId, appSecret, dailyLimit, estimatedUsdMicros }
