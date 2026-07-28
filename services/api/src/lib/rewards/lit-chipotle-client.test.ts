@@ -34,7 +34,7 @@ describe("LitChipotleClient", () => {
     expect(requests).toHaveLength(1)
     expect(requests[0]?.url).toBe("https://api.chipotle.litprotocol.com/core/v1/lit_action")
     expect(new Headers(requests[0]?.init.headers).get("X-Api-Key")).toBe(SECRET)
-    expect(requests[0]?.init.redirect).toBe("error")
+    expect(requests[0]?.init.redirect).toBe("manual")
     const body = String(requests[0]?.init.body)
     expect(body).not.toContain(SECRET)
     expect(JSON.parse(body)).toEqual({
@@ -163,6 +163,32 @@ describe("LitChipotleClient", () => {
       expect((error as LitChipotleError).litErrorToken).toBe("unauthorized_action")
       expect(String(error)).not.toContain(SECRET)
     }
+  })
+
+  test("rejects redirects without following them or exposing Location", async () => {
+    let calls = 0
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      fetchImpl: (async () => {
+        calls += 1
+        return new Response(null, {
+          status: 307,
+          headers: { location: `https://redirect.invalid/${SECRET}` },
+        })
+      }) as typeof fetch,
+    })
+
+    let thrown: unknown
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(LitChipotleError)
+    expect((thrown as LitChipotleError).transportCategory).toBe("redirect")
+    expect((thrown as LitChipotleError).status).toBe(307)
+    expect(String(thrown)).not.toContain(SECRET)
+    expect(calls).toBe(1)
   })
 
   test("classifies an aborted request as a retryable timeout", async () => {

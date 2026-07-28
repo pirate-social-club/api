@@ -225,6 +225,19 @@ export class LitChipotleClient {
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       try {
         const response = await this.request(body)
+        if (response.status >= 300 && response.status < 400) {
+          // Workerd rejects `redirect: "error"` with Cloudflare 1042 before a
+          // catchable fetch response. Manual mode preserves the no-forwarding
+          // guarantee for X-Api-Key; reject the 3xx without reading Location.
+          throw new LitChipotleError(
+            "network",
+            "Lit action request was redirected",
+            false,
+            response.status,
+            "redirect",
+            "other",
+          )
+        }
         if (!response.ok) throw statusError(response.status)
 
         let decoded: unknown
@@ -275,7 +288,7 @@ export class LitChipotleClient {
         },
         body,
         signal: controller.signal,
-        redirect: "error",
+        redirect: "manual",
       })
     } finally {
       clearTimeout(timeout)
