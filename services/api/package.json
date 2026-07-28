@@ -17,6 +17,7 @@
     "efp:backfill-index": "bun run scripts/backfill-efp-index.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "rewards:rehearsal:preflight": "bun run scripts/rewards-rehearsal/run-preflight.ts",
+    "rewards:rehearsal:seed-baseline": "bun run scripts/rewards-rehearsal/seed-baseline.ts",
     "worker:community-jobs:local": "bun run scripts/run-community-job-worker.ts",
     "deploy": "bun run scripts/deploy-with-version.ts",
     "smoke:community-create": "bun run scripts/smoke-staging-community-create.ts",
