@@ -132,6 +132,19 @@ describe("sendOpsAlerts", () => {
     expect(result).toEqual({ delivered: false, sent: 0, sink: "email", providerMessageId: null })
   })
 
+  test("does not mark production alerts delivered when no external sink is configured", async () => {
+    const result = await sendOpsAlerts({
+      ENVIRONMENT: "production",
+    } as unknown as Env, [alert])
+
+    expect(result).toEqual({
+      delivered: false,
+      sent: 0,
+      sink: "log",
+      providerMessageId: null,
+    })
+  })
+
   test("includes Story signer funding and explorer details in email summaries", async () => {
     const sent: Array<{ html?: string; text?: string }> = []
     const env = {
