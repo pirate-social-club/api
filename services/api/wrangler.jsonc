@@ -503,6 +503,7 @@
         "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "true",
         "REWARDS_PAYOUTS_ENABLED": "true",
+        "REWARDS_MIN_CASHOUT_CENTS": "50",
         "REWARDS_CAMPAIGNS_ENABLED": "true",
         "REWARDS_REFUNDS_ENABLED": "true",
         "REWARDS_IDENTITY_PROVIDER": "very",
