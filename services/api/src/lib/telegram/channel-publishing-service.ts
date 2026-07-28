@@ -232,11 +232,19 @@ export function telegramPublicationMedia(post: ProjectedPost): TelegramPublicati
   return chosen ? { kind: chosen.kind, url: chosen.url } : null
 }
 
+// A `web_app` inline button is valid ONLY in a private chat between a user and
+// the bot. Posting one to a channel is rejected outright with
+// "Bad Request: BUTTON_TYPE_INVALID", which made every channel send fail — the
+// feature could never deliver a post. A plain `url` button is the supported
+// form outside private chats and still opens the same destination.
+//
+// The onboarding flow keeps its `web_app` button: that one is sent to a private
+// chat, where it is allowed.
 function openMarkup(url: string) {
   return {
     inline_keyboard: [[{
       text: "Open in Pirate",
-      web_app: { url },
+      url,
     }]],
   }
 }
