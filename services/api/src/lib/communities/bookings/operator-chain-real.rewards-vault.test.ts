@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { Interface, Wallet } from "ethers"
 
 import type { Env } from "../../../env"
-import { realChain } from "./operator-chain-real"
+import { realChain, settlementGasLimit } from "./operator-chain-real"
 
 const VAULT = "0x1000000000000000000000000000000000000001"
 const RECIPIENT = "0x2000000000000000000000000000000000000002"
@@ -39,6 +39,11 @@ function env(): Env {
 }
 
 describe("real rewards Lit vault signer wiring", () => {
+  test("uses the reviewed Lit vault gas ceiling instead of the local-transfer default", () => {
+    expect(settlementGasLimit(env(), "lit_vault")).toBe(300_000n)
+    expect(settlementGasLimit(env(), "local")).toBe(100_000n)
+  })
+
   test("creates a fresh deadline at each signing attempt without changing the effect identity", async () => {
     const deadlines: string[] = []
     const operationIds: string[] = []

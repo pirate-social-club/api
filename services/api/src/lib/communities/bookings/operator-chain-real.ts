@@ -133,13 +133,23 @@ function litFailureStage(error: unknown): PreparationFailureStage {
     : "lit_response"
 }
 
+export function settlementGasLimit(env: Env, backend: RewardsSettlementBackend): bigint {
+  return backend === "lit_vault"
+    ? resolveRewardVaultLitConfig(env).maxGasLimit
+    : 100_000n
+}
+
 export const realChain: ChainPrimitives = {
   pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "pending") },
   latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "latest") },
   gasParams: async (env, operatorKind) => {
     const c = resolveConfig(env, operatorKind)
     const fee = await new JsonRpcProvider(c.rpcUrl, c.chainId).getFeeData()
-    return { maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n, maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n, gasLimit: 100_000n }
+    return {
+      maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n,
+      maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n,
+      gasLimit: settlementGasLimit(env, c.backend),
+    }
   },
   signVerifiedTransfer: async (env, input) => {
     const startedAt = performance.now()
