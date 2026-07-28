@@ -50,7 +50,7 @@ import {
 } from "../communities/jobs/store"
 import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
-import type { CommunityJobRepository } from "../communities/jobs/runner-types"
+import { getBackgroundCommunityJobRepository } from "../communities/jobs/background-job-repository"
 import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
 import { conflictError, eligibilityFailed, internalError, notFoundError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
@@ -104,13 +104,17 @@ async function processImmediatePostPublishFinalize(input: {
   communityId: string
   jobId: string
   songArtifactBundleId: string | null
-  communityRepository: CommunityJobRepository
 }): Promise<void> {
-  const finalizeResult = await processCommunityJobById({
+  // Constructed here — inside the background control-plane scope — never
+  // passed in from the request: a request-scoped repository's control-plane
+  // client is closed once the response is produced, while this task is still
+  // running (the "Client was closed and is not queryable" finalize failure).
+  const communityRepository = getBackgroundCommunityJobRepository(input.env)
+  const finalizeResult = await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: input.jobId,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
   if (
     finalizeResult?.status !== "failed"
@@ -125,7 +129,7 @@ async function processImmediatePostPublishFinalize(input: {
   // finalize instead of waiting for the global community rotation.
   const db = await postCommunityWriteOpenerForRuntime(
     input.env,
-    input.communityRepository,
+    communityRepository,
     input.communityId,
   )
   let previewJob
@@ -143,21 +147,48 @@ async function processImmediatePostPublishFinalize(input: {
     return
   }
 
-  const previewResult = await processCommunityJobById({
+  const previewResult = await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: previewJob.job_id,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
   if (previewResult?.status !== "succeeded") {
     return
   }
-  await processCommunityJobById({
+  await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: input.jobId,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
+}
+
+export function scheduleImmediatePostPublishFinalize(input: {
+  env: Env
+  communityId: string
+  postId: string
+  jobId: string
+  songArtifactBundleId: string | null
+  waitUntil?: PostWaitUntil
+}): void {
+  input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
+    try {
+      await processImmediatePostPublishFinalize({
+        env: input.env,
+        communityId: input.communityId,
+        jobId: input.jobId,
+        songArtifactBundleId: input.songArtifactBundleId,
+      })
+    } catch (error) {
+      console.error("[posts] immediate publish finalize job processing failed", {
+        community_id: input.communityId,
+        post_id: input.postId,
+        job_id: input.jobId,
+        error,
+      })
+    }
+  }))
 }
 
 export function setPostAssetCreatorsForTests(input: {
@@ -170,6 +201,13 @@ export function setPostAssetCreatorsForTests(input: {
 
 export function setPostCommunityWriteOpenerForTests(input: PostCommunityWriteOpener | null): void {
   postCommunityWriteOpenerForRuntime = input ?? openCommunityWriteClient
+}
+
+type CommunityJobProcessor = typeof processCommunityJobById
+let communityJobProcessorForRuntime: CommunityJobProcessor = processCommunityJobById
+
+export function setCommunityJobProcessorForTests(processor: CommunityJobProcessor | null): void {
+  communityJobProcessorForRuntime = processor ?? processCommunityJobById
 }
 
 export { moderationSeverityFromProviderResult } from "./post-moderation-recording"
@@ -271,11 +309,11 @@ export async function retryPostPublish(input: {
       updatedAt: retryAt,
     })
     input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
-      await processCommunityJobById({
+      await communityJobProcessorForRuntime({
         env: input.env,
         communityId: input.communityId,
         jobId: job.job_id,
-        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+        communityRepository: getBackgroundCommunityJobRepository(input.env),
       })
     }))
     return updated
@@ -316,11 +354,11 @@ async function enqueueLockedAssetDeliveryJobIfRequested(input: {
 
   input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
     try {
-      await processCommunityJobById({
+      await communityJobProcessorForRuntime({
         env: input.env,
         communityId: input.communityId,
         jobId: job.job_id,
-        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+        communityRepository: getBackgroundCommunityJobRepository(input.env),
       })
     } catch (error) {
       console.error("[posts] immediate locked delivery job processing failed", {
@@ -559,25 +597,14 @@ export async function createPost(input: {
 
     if (input.body.publish_mode === "async") {
       if (postPublishFinalizeJobId) {
-        const jobId = postPublishFinalizeJobId
-        input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
-          try {
-            await processImmediatePostPublishFinalize({
-              env: input.env,
-              communityId: input.communityId,
-              jobId,
-              songArtifactBundleId: post.song_artifact_bundle_id ?? null,
-              communityRepository: input.communityRepository as unknown as CommunityJobRepository,
-            })
-          } catch (error) {
-            console.error("[posts] immediate publish finalize job processing failed", {
-              community_id: input.communityId,
-              post_id: post.post_id,
-              job_id: jobId,
-              error,
-            })
-          }
-        }))
+        scheduleImmediatePostPublishFinalize({
+          env: input.env,
+          communityId: input.communityId,
+          postId: post.post_id,
+          jobId: postPublishFinalizeJobId,
+          songArtifactBundleId: post.song_artifact_bundle_id ?? null,
+          waitUntil: input.waitUntil,
+        })
       }
       await input.communityRepository.recordCommunityPostProjection({
         communityId: input.communityId,
