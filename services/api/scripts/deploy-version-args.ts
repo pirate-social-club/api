@@ -7,6 +7,31 @@ export type BuildVersionMetadata = {
 
 export type RunTextCommand = (command: string, args: string[]) => string
 
+export function validateSiblingWebCheckout(
+  webCheckout: string,
+  expectedWebSha: string,
+  runText: RunTextCommand,
+): void {
+  const expected = expectedWebSha.trim()
+  if (!expected) {
+    throw new Error("Refusing to deploy without a pinned Web SHA.")
+  }
+
+  const dirty = runText("git", ["-C", webCheckout, "status", "--porcelain"]).trim()
+  if (dirty) {
+    throw new Error(
+      `Refusing to deploy with a dirty sibling Web checkout at ${webCheckout}; the file: karaoke-runtime dependency would bundle uncommitted sources.`,
+    )
+  }
+
+  const actual = runText("git", ["-C", webCheckout, "rev-parse", "HEAD"]).trim()
+  if (actual !== expected) {
+    throw new Error(
+      `Refusing to deploy with sibling Web SHA ${actual || "(missing)"}; expected pinned SHA ${expected}.`,
+    )
+  }
+}
+
 export function defineString(name: string, value: string): string {
   return `${name}:${JSON.stringify(value)}`
 }

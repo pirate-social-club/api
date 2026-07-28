@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 
 import { spawn, spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
   buildStampedWranglerDeployArgs,
   resolveBuildVersionMetadata,
+  validateSiblingWebCheckout,
 } from "./deploy-version-args"
 
 function runText(command: string, args: string[]): string {
@@ -16,6 +19,14 @@ function runText(command: string, args: string[]): string {
   }
   return result.stdout.trim()
 }
+
+const apiRepoRoot = resolve(import.meta.dir, "../../..")
+const webCheckout = resolve(apiRepoRoot, "../web")
+const expectedWebSha = readFileSync(
+  resolve(apiRepoRoot, ".github/ci-refs/web.sha"),
+  "utf8",
+)
+validateSiblingWebCheckout(webCheckout, expectedWebSha, runText)
 
 const metadata = resolveBuildVersionMetadata(process.env, runText)
 const args = buildStampedWranglerDeployArgs(process.argv.slice(2), metadata)
