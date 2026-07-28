@@ -221,7 +221,7 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
       keys: alerts.map((alert) => alert.key),
       alerts,
     })
-    return { delivered: true, sent: 0, sink: "log", providerMessageId: null }
+    return { delivered: false, sent: 0, sink: "log", providerMessageId: null }
   }
 
   try {
