@@ -533,6 +533,22 @@ describe("comment-service", () => {
       communityRepository: repo,
     })
     expect(removed.status).toBe("removed")
+
+    const jobsDb = await openCommunityDb(env, repo, communityId)
+    try {
+      const jobs = await fetchCommunityJobs(jobsDb.client)
+      const projectionPayloads = jobs
+        .filter((job) => job.job_type === "comment_projection_sync")
+        .map((job) => JSON.parse(job.payload_json ?? "{}") as { comment_id?: string; status?: string })
+      expect(projectionPayloads.some((payload) =>
+        payload.comment_id === authorDeleted.comment_id && payload.status === "deleted"
+      )).toBe(true)
+      expect(projectionPayloads.some((payload) =>
+        payload.comment_id === modRemoved.comment_id && payload.status === "removed"
+      )).toBe(true)
+    } finally {
+      jobsDb.close()
+    }
   })
 
   test("enqueues projection retry jobs when control-plane projection writes fail", async () => {
