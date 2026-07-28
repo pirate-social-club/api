@@ -484,6 +484,7 @@ export async function readHomeFeedCommunityItems(input: {
         },
         ageGateViewerState: post.age_gate_policy === "18_plus" ? input.ageGateState ?? "proof_required" : null,
         studyElevenLabsCredentialResolver,
+        studyArtifactWriteClient: db.client,
         studyEnabledCache,
         viewerUserId: input.userId,
       })

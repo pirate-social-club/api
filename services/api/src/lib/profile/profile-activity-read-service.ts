@@ -18,6 +18,7 @@ import { isPubliclyReadablePost } from "../posts/post-access"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, type StudyElevenLabsCredentialResolver } from "../posts/post-read-response"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
+import type { Client } from "../sql-client"
 import type { ProfileRepository } from "../auth/repositories"
 import type { Env } from "../../env"
 import type {
@@ -322,6 +323,7 @@ async function hydratePostRows(input: {
           threadSnapshot: null,
           ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
           studyElevenLabsCredentialResolver,
+          studyArtifactWriteClient: db.client,
           studyEnabledCache,
           viewerUserId: input.viewerUserId,
         })
@@ -346,7 +348,7 @@ async function hydratePostRows(input: {
 }
 
 async function buildThreadRootPost(input: {
-  client: DbExecutor
+  client: Client
   env: Env
   profileRepository?: ProfileRepository | null
   postId: string
@@ -373,6 +375,7 @@ async function buildThreadRootPost(input: {
     threadSnapshot: null,
     ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
     studyElevenLabsCredentialResolver: input.studyElevenLabsCredentialResolver,
+    studyArtifactWriteClient: input.client,
     studyEnabledCache: input.studyEnabledCache,
     viewerUserId: input.viewerUserId,
   })

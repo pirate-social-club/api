@@ -7,6 +7,7 @@ import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } fr
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 import type { Env } from "../../env"
+import type { Client } from "../sql-client"
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
@@ -552,6 +553,7 @@ async function getAuthorCommunityRole(input: {
 }
 
 async function buildStudyCapability(input: {
+  artifactWriteClient?: Client | null
   executor: DbExecutor
   env?: Env | null
   post: Post
@@ -577,6 +579,7 @@ async function buildStudyCapability(input: {
   }
 
   return resolvePostStudyCapability({
+    artifactWriteClient: input.artifactWriteClient,
     client: input.executor,
     env: input.env,
     hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
@@ -699,6 +702,7 @@ async function getLocalizedMarketEmbedTranslations(input: {
 }
 
 export async function buildLocalizedPostResponse(input: {
+  studyArtifactWriteClient?: Client | null
   executor: DbExecutor
   env?: Env | null
   songArtifactExecutor?: DbExecutor | null
@@ -744,6 +748,7 @@ export async function buildLocalizedPostResponse(input: {
     post,
     song_presentation: songPresentation,
     study_capability: await buildStudyCapability({
+      artifactWriteClient: input.studyArtifactWriteClient,
       executor: input.executor,
       env: input.env,
       post: input.post,
