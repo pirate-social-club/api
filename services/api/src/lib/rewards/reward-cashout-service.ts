@@ -40,6 +40,7 @@ const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000]
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 const MAX_RECONCILE_ATTEMPTS = 3
 const DEFAULT_PAYOUT_RECONCILE_LIMIT = 50
+const MAX_SCHEDULED_PREPARATION_ATTEMPTS = 12
 const IDEMPOTENCY_KEY_RE = /^[a-zA-Z0-9:_-]{8,160}$/
 
 export interface RewardSettlementCoordinator {
@@ -920,9 +921,14 @@ export async function reconcileSubmittedRewardPayouts(input: {
             WHERE reward_payout_effect_id = ?1
               AND status = 'submitted'
               AND settlement_ref IS NULL
+              AND attempt_count < ?2
             LIMIT 1
           `,
-          args: [candidate.effectId],
+          // Receipt reconciliation above remains unbounded: once a transaction
+          // exists, the scheduler must keep observing it. Only pre-broadcast
+          // preparation is capped; an explicit idempotent user/operator replay
+          // can still retry the same effect after diagnosing the outage.
+          args: [candidate.effectId, MAX_SCHEDULED_PREPARATION_ATTEMPTS],
         })
         if (!selected.rows[0]) continue
         effects.push(decodePayoutEffect(selected.rows[0]))
