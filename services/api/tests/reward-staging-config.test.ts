@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 import { readWranglerVars } from "../scripts/_lib/dev-vars"
@@ -6,6 +7,11 @@ import { readWranglerVars } from "../scripts/_lib/dev-vars"
 const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
 
 describe("staging reward money-loop configuration", () => {
+  test("permits public Worker-to-Worker fetches for the Lit endpoint", () => {
+    const config = readFileSync(wranglerConfigPath, "utf8")
+    expect(config).toContain("\"global_fetch_strictly_public\"")
+  })
+
   function expectCampaignEnablementIsCoordinated(vars: Record<string, string>): void {
     if (vars.REWARDS_CAMPAIGNS_ENABLED !== "true") return
     expect(vars.REWARDS_ACCRUAL_ENABLED).toBe("true")
