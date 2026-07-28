@@ -7,6 +7,7 @@ import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } fr
 import { getContentTranslation } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 import type { Env } from "../../env"
+import type { Client } from "../sql-client"
 
 type DecentralizedStorageProof = NonNullable<SongPresentationDownloadableAudio["decentralized_storage"]>
 type SongPresentationAlignmentStatus = NonNullable<LocalizedPostResponse["song_presentation"]>["alignment_status"]
@@ -577,7 +578,7 @@ async function buildStudyCapability(input: {
   }
 
   return resolvePostStudyCapability({
-    client: input.executor,
+    client: input.executor as Client,
     env: input.env,
     hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
     post: input.post,

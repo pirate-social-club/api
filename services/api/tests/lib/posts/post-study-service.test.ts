@@ -18,6 +18,7 @@ import {
   getPostStreakLeaderboard,
   getPostStreakSummary,
   getPostStudyPayload,
+  resolvePostStudyCapability,
   submitPostStudyAttempt as submitPostStudyAttemptRaw,
   transcribePostStudyAudio,
   upsertStudyStreakProgress,
@@ -3758,6 +3759,45 @@ describe("post study unit punctuation canonicalization", () => {
     expect(Number(review.rows[0]?.reps ?? 0)).toBe(3)
     expect(Number(review.rows[0]?.lapses ?? 0)).toBe(1)
     expect(review.rows[0]?.state).toBe("review")
+  })
+
+  test("heals stale units during capability resolution without opening the study route", async () => {
+    await seedSongPostWithLyrics("Blues have overtaken me,")
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES ('stu_stale', ?1, 'line_001', 0, 'en',
+              'Blues have overtaken me,', 'Blues have overtaken me,',
+              'ready', 1, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+
+    await resolvePostStudyCapability({
+      client: client!,
+      env: env(),
+      hasActiveElevenLabsCredential: async () => true,
+      post: {
+        access_mode: "public",
+        asset_id: "ast_song",
+        author_user_id: AUTHOR_ID,
+        community_id: COMMUNITY_ID,
+        lyrics: "Blues have overtaken me,",
+        post_id: POST_ID,
+        post_type: "song",
+        source_language: "en",
+      },
+      targetLanguage: "en",
+      viewerUserId: LEARNER_ID,
+    })
+
+    const unit = await client!.execute(
+      "SELECT prompt_text, unit_version FROM song_study_unit WHERE post_id = ?1 AND line_id = 'line_001'",
+      [POST_ID],
+    )
+    expect(unit.rows[0]?.prompt_text).toBe("Blues have overtaken me")
+    expect(Number(unit.rows[0]?.unit_version ?? 0)).toBe(2)
   })
 
   test("deletes stale units the re-split no longer produces and cascades their localizations", async () => {
