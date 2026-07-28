@@ -20,6 +20,23 @@ function success(result: unknown = { signedTx: "0x1234" }): Response {
 }
 
 describe("LitChipotleClient", () => {
+  test("invokes the default platform fetch without binding it to the client", async () => {
+    const originalFetch = globalThis.fetch
+    let observedThis: unknown = "not-called"
+    globalThis.fetch = (async function (this: unknown) {
+      observedThis = this
+      return success()
+    }) as typeof fetch
+
+    try {
+      const client = new LitChipotleClient({ usageApiKey: SECRET })
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+      expect(observedThis).toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("sends the usage key only in the header and maps ipfsId to ipfs_id", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = []
     const client = new LitChipotleClient({
