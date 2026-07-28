@@ -88,6 +88,24 @@ describe("LitChipotleClient", () => {
     expect(String(thrown)).not.toContain(SECRET)
   })
 
+  test("classifies a cross-realm workerd failure without copying its message", async () => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      maxAttempts: 1,
+      fetchImpl: (async () => {
+        throw { message: `Network connection lost; sensitive=${SECRET}` }
+      }) as typeof fetch,
+    })
+
+    await expect(client.execute({ ipfsId: "QmPinned", jsParams: null }))
+      .rejects.toThrow("Lit action request failed (connection_lost)")
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+    } catch (error) {
+      expect(String(error)).not.toContain(SECRET)
+    }
+  })
+
   test("classifies 402 as non-retryable without exposing the key or body", async () => {
     let calls = 0
     const client = new LitChipotleClient({
