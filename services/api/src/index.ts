@@ -1298,16 +1298,12 @@ async function observeScheduledHnsRoots(env: Env): Promise<void> {
   }
 }
 
-// The cron fires every minute. Each scheduled job opens its OWN control-plane
-// connection (via withRequestControlPlaneClients) — one connection, opened and
-// closed independently, to respect Workers' 15-min waitUntil limit. Running all
-// jobs at once opened N connections simultaneously and, coinciding with request
-// traffic, burst the control-plane Postgres primary's small max_connections
-// (observed: intermittent `remaining connection slots are reserved for SUPERUSER`).
-// Cap concurrency so the cron contributes at most SCHEDULED_JOB_CONCURRENCY
-// connections at a time; jobs are short so total runtime stays well under 15 min.
-// At most this many scheduled jobs run concurrently → the cron contributes
-// ≤ SCHEDULED_JOB_CONCURRENCY control-plane connections per invocation.
+// The cron fires every minute. Each scheduler worker owns one control-plane
+// scope for its whole task lane, so sequential jobs reuse that connection while
+// concurrent lanes remain isolated (transactions must never interleave on one
+// pg.Client). This caps both peak sessions and per-tick session churn at
+// SCHEDULED_JOB_CONCURRENCY; the worker scope closes on normal completion,
+// task failure, and deadline-deferred return.
 const SCHEDULED_JOB_CONCURRENCY = 2
 // Stop STARTING new jobs after this elapsed wall-time; in-flight jobs (≤ the
 // concurrency cap, each internally bounded) finish. Keeps a batch comfortably
@@ -1470,10 +1466,9 @@ const handler: ExportedHandler<Env> = {
       }),
     )
 
-    // Each job opens its OWN control-plane connection (its own
-    // withRequestControlPlaneClients — one connection, opened and closed
-    // independently). Bounded concurrency caps peak connections; the deadline
-    // bounds when new connections stop opening (it does NOT cancel in-flight
+    // Each concurrency worker opens one control-plane scope below. Jobs in one
+    // lane reuse its connection; the two concurrent lanes remain isolated.
+    // The deadline bounds when new jobs start (it does NOT cancel in-flight
     // jobs — see runner docs / overlap caveat).
     const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
     const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
@@ -1538,13 +1533,13 @@ const handler: ExportedHandler<Env> = {
     ]
     const rotatedJobs: NamedTask[] = [
       ...(reconcilerOnly ? [] : generalJobs),
-    ].map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) }))
+    ]
     // Rotate the start order each minute so a deadline-trimmed tail never starves
     // the same jobs run after run.
     const minute = Math.floor((controller.scheduledTime || Date.now()) / 60_000)
     const offset = rotatedJobs.length > 0 ? ((minute % rotatedJobs.length) + rotatedJobs.length) % rotatedJobs.length : 0
     const ordered = [
-      ...priorityJobs.map((job) => ({ name: job.name, run: () => withRequestControlPlaneClients(job.run) })),
+      ...priorityJobs,
       ...rotatedJobs.slice(offset),
       ...rotatedJobs.slice(0, offset),
     ].map((job) => ({
@@ -1592,6 +1587,7 @@ const handler: ExportedHandler<Env> = {
         onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),
         owner,
         tasks: ordered,
+        workerScope: withRequestControlPlaneClients,
       }),
     )
   },

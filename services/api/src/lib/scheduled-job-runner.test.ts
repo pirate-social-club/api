@@ -140,19 +140,103 @@ describe("runWithConcurrencyLimit", () => {
     expect(result.skipped).toEqual([])
     expect(result.started.length).toBe(4)
   })
+
+  test("holds one scope per concurrency worker across sequential tasks", async () => {
+    const events: string[] = []
+    let nextScope = 0
+    const tasks: NamedTask[] = Array.from({ length: 6 }, (_unused, index) => ({
+      name: `job-${index}`,
+      run: async () => {
+        events.push(`task-${index}`)
+        await tick()
+      },
+    }))
+
+    await runWithConcurrencyLimit(tasks, 2, {
+      workerScope: async (operation) => {
+        const scope = nextScope
+        nextScope += 1
+        events.push(`scope-${scope}-open`)
+        try {
+          return await operation()
+        } finally {
+          events.push(`scope-${scope}-close`)
+        }
+      },
+    })
+
+    expect(nextScope).toBe(2)
+    expect(events.filter((event) => event.endsWith("-open"))).toHaveLength(2)
+    expect(events.filter((event) => event.endsWith("-close"))).toHaveLength(2)
+    expect(events.filter((event) => event.startsWith("task-"))).toHaveLength(6)
+  })
+
+  test("closes worker scope after task failure and deadline trimming", async () => {
+    let clock = 0
+    let opened = 0
+    let closed = 0
+    const errors: string[] = []
+    const tasks: NamedTask[] = [
+      {
+        name: "throws",
+        run: async () => {
+          clock += 100
+          throw new Error("boom")
+        },
+      },
+      {
+        name: "last-before-deadline",
+        run: async () => {
+          clock += 100
+        },
+      },
+      { name: "deferred", run: async () => {} },
+    ]
+
+    const result = await runWithConcurrencyLimit(tasks, 1, {
+      deadlineMs: 150,
+      now: () => clock,
+      onError: (_error, name) => errors.push(name),
+      workerScope: async (operation) => {
+        opened += 1
+        try {
+          return await operation()
+        } finally {
+          closed += 1
+        }
+      },
+    })
+
+    expect(errors).toEqual(["throws"])
+    expect(result.started).toEqual(["throws", "last-before-deadline"])
+    expect(result.skipped).toEqual(["deferred"])
+    expect({ opened, closed }).toEqual({ opened: 1, closed: 1 })
+  })
 })
 
 describe("runScheduledBatch", () => {
   test("acquires the lease, runs all jobs, then releases it", async () => {
     const lock = fakeLock()
     let ran = 0
+    let scopes = 0
     const tasks: NamedTask[] = [
       { name: "j1", run: async () => { ran += 1 } },
       { name: "j2", run: async () => { ran += 1 } },
     ]
-    const out = await runScheduledBatch({ leaseTtlMs: 60_000, limit: 2, lock, owner: "A", tasks })
+    const out = await runScheduledBatch({
+      leaseTtlMs: 60_000,
+      limit: 2,
+      lock,
+      owner: "A",
+      tasks,
+      workerScope: async (operation) => {
+        scopes += 1
+        return operation()
+      },
+    })
     expect(out.acquired).toBe(true)
     expect(ran).toBe(2)
+    expect(scopes).toBe(2)
     expect(out.result?.started.length).toBe(2)
     expect(lock.peek()).toBeNull() // released in finally
   })
