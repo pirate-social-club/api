@@ -639,10 +639,17 @@ export async function processAvailableCommunityJobs(input: {
   }
 
   let startedCommunities = 0
-  for (const communityId of sweep.sweptCommunityIds) {
+  // Iterate the SELECTED communities, not the swept ones. Stale sweeping is
+  // bounded maintenance and is allowed to defer; queued jobs are foreground
+  // delivery work and must not inherit the sweep's coverage. Coupling them made
+  // a slow sweep silently gate execution: on a fleet of ~950 routed communities
+  // the sweep reached 10 per tick, so at most 10 could run jobs however large
+  // maxCommunities was, and a queued job outside that subset waited hours.
+  // A community that was skipped by the sweep still runs its jobs here; it just
+  // keeps any stale RUNNING rows until a later tick sweeps it.
+  for (const communityId of communityIds) {
     // The batch deadline stops this tick from starting more communities; it never
-    // interrupts work already in flight. If the stale sweep consumed the budget,
-    // start no job work so the outer scheduler can move on to reward monitors.
+    // interrupts work already in flight.
     if (deadlineAtMs != null && now() >= deadlineAtMs) {
       console.warn("[community-job] tick deadline reached", JSON.stringify({
         swept_communities: sweptCommunities,
