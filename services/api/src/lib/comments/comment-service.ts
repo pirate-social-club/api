@@ -95,15 +95,25 @@ async function syncThreadRootPostProjectionMetrics(input: {
   if (typeof input.communityRepository.updateCommunityPostProjectionMetrics !== "function") {
     return
   }
-  const metrics = await getPostProjectionMetrics(input.client, input.threadRootPostId)
-  await input.communityRepository.updateCommunityPostProjectionMetrics({
-    postId: input.threadRootPostId,
-    upvoteCount: metrics.upvoteCount,
-    downvoteCount: metrics.downvoteCount,
-    commentCount: metrics.commentCount,
-    likeCount: metrics.likeCount,
-    updatedAt: input.updatedAt,
-  })
+  // Fail-soft: nonessential post-commit work. The comment row (and its
+  // projection-sync job) are already durable, so a metrics hiccup must not
+  // fail the request — the next comment/vote re-syncs these cached counters.
+  try {
+    const metrics = await getPostProjectionMetrics(input.client, input.threadRootPostId)
+    await input.communityRepository.updateCommunityPostProjectionMetrics({
+      postId: input.threadRootPostId,
+      upvoteCount: metrics.upvoteCount,
+      downvoteCount: metrics.downvoteCount,
+      commentCount: metrics.commentCount,
+      likeCount: metrics.likeCount,
+      updatedAt: input.updatedAt,
+    })
+  } catch (error) {
+    console.error("[comments] failed to sync thread root post projection metrics", {
+      threadRootPostId: input.threadRootPostId,
+      error,
+    })
+  }
 }
 
 function resolveAnonymousScope(input: {
@@ -448,6 +458,30 @@ export async function createComment(input: {
         comment: draft,
         createdAt,
         dedupe: false, // inside write tx: INSERT-only prewarm jobs (fresh comment)
+      })
+
+      // Durable backstop for the central comment projection: the synchronous
+      // recordCommunityCommentProjection below runs AFTER commit, so a worker
+      // crash in between would otherwise leave the comment without a projection
+      // (and no retry job) forever. The job is atomic with the comment insert
+      // and the handler is an idempotent upsert, so the common path just
+      // duplicates the projection write once.
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: input.communityId,
+        jobType: "comment_projection_sync",
+        subjectType: "comment",
+        subjectId: draft.comment_id,
+        payloadJson: JSON.stringify({
+          comment_id: draft.comment_id,
+          thread_root_post_id: draft.thread_root_post_id,
+          parent_comment_id: draft.parent_comment_id,
+          depth: draft.depth,
+          status: draft.status,
+          source_created_at: draft.created_at,
+        }),
+        createdAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
       })
 
       await tx.commit()
