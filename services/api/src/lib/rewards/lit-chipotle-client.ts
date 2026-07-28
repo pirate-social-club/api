@@ -89,6 +89,23 @@ function retryableStatus(status: number): boolean {
   return status === 429 || status >= 500
 }
 
+function networkFailureCategory(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : ""
+  const categories: Array<[string, string]> = [
+    ["certificate", "certificate"],
+    ["tls", "tls"],
+    ["dns", "dns"],
+    ["connection reset", "connection_reset"],
+    ["connection refused", "connection_refused"],
+    ["network connection lost", "connection_lost"],
+    ["too many redirects", "redirect"],
+    ["redirect", "redirect"],
+    ["timed out", "timeout"],
+    ["fetch failed", "fetch_failed"],
+  ]
+  return categories.find(([needle]) => message.includes(needle))?.[1] ?? "unclassified"
+}
+
 function statusError(status: number): LitChipotleError {
   if (status === 402) {
     return new LitChipotleError(
@@ -205,7 +222,13 @@ export class LitChipotleClient {
     if (error instanceof DOMException && error.name === "AbortError") {
       return new LitChipotleError("timeout", "Lit action request timed out", true)
     }
-    return new LitChipotleError("network", "Lit action request failed", true)
+    // Only expose a fixed category. Native fetch errors must never copy request
+    // headers, action params, or arbitrary provider text into Worker/DO logs.
+    return new LitChipotleError(
+      "network",
+      `Lit action request failed (${networkFailureCategory(error)})`,
+      true,
+    )
   }
 }
 

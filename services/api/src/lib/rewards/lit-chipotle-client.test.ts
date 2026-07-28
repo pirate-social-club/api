@@ -67,6 +67,27 @@ describe("LitChipotleClient", () => {
     expect(delays).toEqual([10, 20, 40])
   })
 
+  test("reports only a fixed network failure category", async () => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      maxAttempts: 1,
+      fetchImpl: (async () => {
+        throw new TypeError(`Network connection lost; sensitive=${SECRET}`)
+      }) as typeof fetch,
+    })
+
+    let thrown: unknown
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(LitChipotleError)
+    expect((thrown as LitChipotleError).code).toBe("network")
+    expect((thrown as Error).message).toBe("Lit action request failed (connection_lost)")
+    expect(String(thrown)).not.toContain(SECRET)
+  })
+
   test("classifies 402 as non-retryable without exposing the key or body", async () => {
     let calls = 0
     const client = new LitChipotleClient({
