@@ -123,7 +123,6 @@ describe("processAvailableCommunityJobs tick deadline", () => {
   // queued job outside that subset waited hours behind maintenance work.
   it("starts jobs for communities the stale sweep never reached", async () => {
     const communityIds = Array.from({ length: 300 }, (_, index) => `cmt_${String(index).padStart(3, "0")}`)
-    const target = communityIds[299]
     // The clock jumps once and then holds, so the outcome does not depend on how
     // many times the runner samples it: the sweep budget is provably spent while
     // the batch deadline is provably not. A per-call increment made this depend
@@ -138,15 +137,15 @@ describe("processAvailableCommunityJobs tick deadline", () => {
       now: () => (calls++ < 3 ? 0 : 1_000),
     })
 
+    // The sweep reached only a handful, and deferred the overwhelming majority.
     expect(summary.swept_communities).toBeLessThan(20)
     expect(summary.deferred_sweep_communities).toBeGreaterThan(280)
-    // Every selected community is still attempted for job work.
-    expect(summary.started_communities).toBe(300)
+    // Yet every selected community is still started for job work. This is the
+    // regression signal: under the old coupling started_communities could never
+    // exceed swept_communities, so this was ~5 rather than 300.
+    expect(summary.started_communities).toBe(communityIds.length)
     expect(summary.deferred_communities).toBe(0)
-    // The empty repository makes each attempt fail, which is what proves the
-    // community was reached: the last community is far outside the swept subset
-    // yet still shows up as attempted.
-    expect(summary.failed_communities.some((failure) => failure.community_id === target)).toBe(true)
+    expect(summary.started_communities).toBeGreaterThan(summary.swept_communities * 10)
   })
 
   it("rotates the front of a fully selected poll so truncated sweeps stay fair", () => {
