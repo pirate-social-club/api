@@ -213,6 +213,78 @@ describe("server-owned study sessions", () => {
     })).rejects.toMatchObject({ status: 400 })
   })
 
+  // A session can only be completed as a side effect of a presentation, so any session
+  // that runs out of attemptable cards without one is stranded 'active' until its 24h
+  // TTL, and every read hands the learner a lesson they cannot advance.
+  test("retires an active session whose exercises were regenerated away", async () => {
+    const stranded = await createSession(1)
+    const strandedId = stranded.summary.id!
+
+    // ex_0 no longer resolves (regenerated under a new id), so nothing in the session
+    // is presentable even though every card is unspent.
+    const replacement = [exercise(1)]
+    const recovered = await ensureStudySession({
+      available: replacement,
+      candidates: replacement,
+      client,
+      communityId: "cmt_1",
+      dueCount: 0,
+      now: "2026-07-20T10:05:00.000Z",
+      postId: "pst_1",
+      targetLanguage: "en",
+      totalUnits: 1,
+      userId: "usr_1",
+    })
+
+    expect(recovered.summary.id).not.toBe(strandedId)
+    expect(recovered.summary.status).toBe("active")
+    expect(recovered.exercises.map((entry) => entry.row.id)).toEqual(["ex_1"])
+    const strandedSummary = await getStudySessionSummary(client, strandedId)
+    expect(strandedSummary?.status).toBe("completed")
+  })
+
+  test("retires an active session whose only card is spent and serves it fresh", async () => {
+    const stranded = await createSession(1)
+    const strandedId = stranded.summary.id!
+    await client.execute({
+      sql: "UPDATE song_study_session_exercise SET presentation_count = 3, mastered = 0 WHERE session_id = ?1",
+      args: [strandedId],
+    })
+
+    const recovered = await createSession(1, "2026-07-20T10:05:00.000Z")
+
+    expect(recovered.summary.id).not.toBe(strandedId)
+    expect(recovered.exercises).toHaveLength(1)
+    expect(recovered.exercises[0]?.progress.presentationCount).toBe(0)
+    expect((await getStudySessionSummary(client, strandedId))?.status).toBe("completed")
+  })
+
+  test("reports caught up rather than looping when a retired session has no replacement", async () => {
+    const stranded = await createSession(1)
+    const strandedId = stranded.summary.id!
+    await client.execute({
+      sql: "UPDATE song_study_session_exercise SET presentation_count = 3 WHERE session_id = ?1",
+      args: [strandedId],
+    })
+
+    const recovered = await ensureStudySession({
+      available: [],
+      candidates: [],
+      client,
+      communityId: "cmt_1",
+      dueCount: 0,
+      now: "2026-07-20T10:05:00.000Z",
+      postId: "pst_1",
+      targetLanguage: "en",
+      totalUnits: 1,
+      userId: "usr_1",
+    })
+
+    expect(recovered.summary.status).toBe("caught_up")
+    expect(recovered.exercises).toEqual([])
+    expect((await getStudySessionSummary(client, strandedId))?.status).toBe("completed")
+  })
+
   test("expires stale sessions and creates a fresh server-owned set", async () => {
     const first = await createSession(2, "2026-07-20T10:00:00.000Z")
     const second = await createSession(2, "2026-07-21T10:00:01.000Z")
