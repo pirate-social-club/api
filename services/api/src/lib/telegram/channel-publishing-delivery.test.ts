@@ -13,6 +13,7 @@ type Execution = { sql: string; args: unknown[] }
 let calls: string[] = []
 let executions: Execution[] = []
 let deliveryRow: Record<string, unknown> | null = null
+let lastSendPayload: Record<string, unknown> | null = null
 let sendFails = false
 let confirmWriteFails = false
 
@@ -55,8 +56,9 @@ function deps(): TelegramPublishDeps {
     },
     loadBot: (async () => ({ id: "tgb_1" })) as unknown as TelegramPublishDeps["loadBot"],
     telegram: {
-      sendMessage: (async () => {
+      sendMessage: (async (_bot: unknown, payload: Record<string, unknown>) => {
         calls.push("telegram:sendMessage")
+        lastSendPayload = payload
         if (sendFails) throw new Error("telegram rejected the send")
         return { message_id: 555 }
       }) as unknown as TelegramPublishDeps["telegram"]["sendMessage"],
@@ -106,6 +108,7 @@ describe("Telegram delivery reservation", () => {
     calls = []
     executions = []
     deliveryRow = null
+    lastSendPayload = null
     sendFails = false
     confirmWriteFails = false
   })
@@ -209,5 +212,36 @@ describe("Telegram delivery reservation", () => {
     expect(failure).toBeDefined()
     // The reservation already counted this attempt.
     expect(failure?.sql.toUpperCase()).not.toContain("ATTEMPT_COUNT = TELEGRAM_POST_DELIVERIES.ATTEMPT_COUNT + 1")
+  })
+})
+
+describe("Telegram channel inline keyboard", () => {
+  beforeEach(() => {
+    calls = []
+    executions = []
+    deliveryRow = null
+    lastSendPayload = null
+    sendFails = false
+    confirmWriteFails = false
+  })
+
+  // Regression: the channel post carried a `web_app` inline button, which
+  // Telegram permits ONLY in a private chat with the bot. Every channel send was
+  // rejected with "Bad Request: BUTTON_TYPE_INVALID", so the feature could not
+  // deliver a single post. Outside private chats the supported form is `url`.
+  test("uses a url button, never a web_app button", async () => {
+    await publish()
+
+    const markup = lastSendPayload?.reply_markup as {
+      inline_keyboard: Array<Array<Record<string, unknown>>>
+    } | undefined
+    const button = markup?.inline_keyboard?.[0]?.[0]
+
+    expect(button).toBeDefined()
+    expect(button).toHaveProperty("url")
+    expect(button).not.toHaveProperty("web_app")
+    expect(String(button?.url)).toStartWith("https://pirate.test/")
+    // Telegram requires exactly one type field per inline button.
+    expect(Object.keys(button ?? {}).filter((key) => key !== "text")).toEqual(["url"])
   })
 })
