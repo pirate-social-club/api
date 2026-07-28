@@ -132,8 +132,42 @@ export async function runOpsAlerts(input: {
         },
       })
     }
+    const followSponsorBudget = (await controlPlane.execute(`
+      SELECT transaction_limit, reserved_transactions, consumed_transactions,
+             estimated_usd_micros_per_transaction
+      FROM efp_follow_sponsorship_daily_budgets
+      WHERE budget_date = CURRENT_DATE
+      LIMIT 1
+    `)).rows[0]
+    if (followSponsorBudget) {
+      const limit = Number(followSponsorBudget.transaction_limit)
+      const reserved = Number(followSponsorBudget.reserved_transactions)
+      const consumed = Number(followSponsorBudget.consumed_transactions)
+      const estimatedUsdMicros = Number(followSponsorBudget.estimated_usd_micros_per_transaction)
+      const admitted = reserved + consumed
+      if (
+        Number.isSafeInteger(limit) && limit > 0
+        && Number.isSafeInteger(admitted) && admitted >= Math.ceil(limit * 0.8)
+      ) {
+        alerts.push({
+          key: "efp_follow_sponsorship_budget",
+          severity: "high",
+          title: "Follow sponsorship spend reached 80% of the daily ceiling",
+          count: admitted,
+          community_ids: [],
+          details: {
+            consumed_transactions: consumed,
+            reserved_transactions: reserved,
+            transaction_limit: limit,
+            estimated_spend_usd: Number.isFinite(estimatedUsdMicros)
+              ? ((consumed * estimatedUsdMicros) / 1_000_000).toFixed(2)
+              : null,
+          },
+        })
+      }
+    }
   } catch (error) {
-    logPipelineError("[ops-alerts] failed to collect funding refund reviews", {
+    logPipelineError("[ops-alerts] failed to collect control-plane operational signals", {
       error: error instanceof Error ? error.message : String(error),
     })
   } finally {

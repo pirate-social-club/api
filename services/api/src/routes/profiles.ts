@@ -33,6 +33,10 @@ import {
   readProfileFollowState,
   shadowCompareProfileFollowState,
 } from "../lib/efp-indexer/profile-follow-read-service"
+import {
+  confirmProfileFollowWrite,
+  prepareProfileFollowWrite,
+} from "../lib/efp-indexer/follow-write-service"
 
 const profiles = new Hono<AuthenticatedEnv>()
 const COURTYARD_INVENTORY_RATE_LIMIT_WINDOW_MS = 60_000
@@ -487,6 +491,62 @@ function shouldShadowFollowRead(value: string | undefined): boolean {
   const percent = Number(value)
   return Number.isFinite(percent) && percent > 0 && Math.random() * 100 < Math.min(percent, 100)
 }
+
+async function prepareFollowWriteRoute(
+  c: Context<AuthenticatedEnv>,
+  desiredFollowing: boolean,
+) {
+  const actor = c.get("actor")
+  const targetPublicUserId = (c.req.param("userId") ?? "").trim()
+  const targetUserId = decodePublicUserId(targetPublicUserId)
+  const profileRepository = getProfileRepository(c.env)
+  if (!await profileRepository.getProfileByUserId(targetUserId)) {
+    throw notFoundError("Profile not found")
+  }
+  const idempotencyKey = c.req.header("idempotency-key")?.trim() ?? ""
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    throw badRequestError("A valid Idempotency-Key header is required")
+  }
+  const prepared = await prepareProfileFollowWrite({
+    client: getControlPlaneClient(c.env),
+    env: c.env,
+    users: getUserRepository(c.env),
+    actorUserId: actor.userId,
+    targetUserId,
+    targetPublicUserId,
+    desiredFollowing,
+    idempotencyKey,
+  })
+  return c.json(prepared, prepared.consistency.status === "already_reflected" ? 200 : 202)
+}
+
+profiles.use("/:userId/follow", authenticateAdminOrUser)
+profiles.use("/:userId/unfollow", authenticateAdminOrUser)
+profiles.use("/:userId/follow-confirmation", authenticateAdminOrUser)
+profiles.post("/:userId/follow", (c) => prepareFollowWriteRoute(c, true))
+profiles.post("/:userId/unfollow", (c) => prepareFollowWriteRoute(c, false))
+profiles.post("/:userId/follow-confirmation", async (c) => {
+  const body = await c.req.json<{
+    intent_id?: unknown
+    transaction_hashes?: unknown
+  }>().catch(() => null)
+  if (
+    !body
+    || typeof body.intent_id !== "string"
+    || !Array.isArray(body.transaction_hashes)
+    || !body.transaction_hashes.every((hash) => typeof hash === "string")
+  ) {
+    throw badRequestError("Invalid follow confirmation payload")
+  }
+  const confirmed = await confirmProfileFollowWrite({
+    actorUserId: c.get("actor").userId,
+    client: getControlPlaneClient(c.env),
+    env: c.env,
+    intentId: body.intent_id,
+    transactionHashes: body.transaction_hashes as `0x${string}`[],
+  })
+  return c.json(confirmed, 202)
+})
 
 profiles.get("/:userId/follow-state", async (c) => {
   const targetPublicUserId = c.req.param("userId").trim()

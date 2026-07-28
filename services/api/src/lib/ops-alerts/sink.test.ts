@@ -90,6 +90,31 @@ describe("sendOpsAlerts", () => {
     expect(text).toContain("details: {\"source\":\"test\"}")
   })
 
+  test("also pages high-severity alerts when a paging webhook is configured", async () => {
+    const originalFetch = globalThis.fetch
+    const pages: string[] = []
+    globalThis.fetch = async (input, init) => {
+      pages.push(String(input))
+      expect(JSON.parse(String(init?.body)).text).toContain("[HIGH][production]")
+      return new Response(null, { status: 204 })
+    }
+    try {
+      const result = await sendOpsAlerts({
+        ENVIRONMENT: "production",
+        OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+        OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+        OPS_ALERT_WEBHOOK_URL: "https://pager.invalid/alert",
+        OPS_ALERT_EMAIL: {
+          send: async () => ({ messageId: "msg_paged" }),
+        },
+      } as unknown as Env, [alert])
+      expect(result.delivered).toBe(true)
+      expect(pages).toEqual(["https://pager.invalid/alert"])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("does not mark delivery successful when email send throws", async () => {
     const env = {
       ENVIRONMENT: "staging",

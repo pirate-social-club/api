@@ -48,6 +48,7 @@ Mounted in `services/api/src/index.ts`:
 - `/users`
 - `/onboarding`
 - `/profiles`
+- `/api/privy-relay`
 - `/telegram`
 - `/wallet-identities`
 - `/` for verification routes
@@ -99,6 +100,7 @@ Mounted in `services/api/src/index.ts`:
 | `/public-names/*` | `src/routes/public-names.ts` | `tests/routes/public-names/public-names-routes.test.ts` | direct | Covers public Pirate-name resolution and status responses. |
 | `/public-namespaces/*` | `src/routes/public-namespaces.ts` | `tests/routes/public-namespaces-routes.test.ts` | direct | Resolves verified, unexpired, Pirate-routed HNS namespaces for gateway and Freedom clients. |
 | `/profiles/*` | `src/routes/profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts` | direct | Includes patch, read, rename, upgrade quote, linked handles, primary handle. |
+| `/api/privy-relay` | `src/routes/privy-relay.ts` | `src/lib/efp-indexer/follow-sponsorship-relay.test.ts` | service | Authenticated route is thin validation over the exact-transaction relay; bootstrap reservation and forwarded Privy payload are covered at the service boundary. |
 | `/bookings/*` | `src/routes/bookings.ts` | `tests/routes/bookings-routes.test.ts`, `src/lib/bookings/*\.pg.test.ts`, `src/lib/bookings/host-config-repository.production-path.pg.test.ts` | direct/service/PG | Global booking API surface. Route suite covers auth, parameter/body normalization, aliases, status mapping, and service wiring; real-Postgres service tests cover durable behavior. |
 | `/host-bookings/me/*` | `src/routes/host-bookings.ts` | `tests/routes/host-bookings-routes.test.ts` | direct | Covers host profile upsert, publish/unpublish, availability rules / exceptions / price rules CRUD, hard bounds, FK precondition, and envelope shape. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |

@@ -190,6 +190,21 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
         to: emailTo,
         from: emailFrom,
       })
+      const pagingUrl = alerts.some((alert) => alert.severity === "high")
+        ? env.OPS_ALERT_WEBHOOK_URL?.trim()
+        : null
+      if (pagingUrl) {
+        const pagingResponse = await fetch(pagingUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(OPS_ALERT_WEBHOOK_TIMEOUT_MS),
+        })
+        if (!pagingResponse.ok) {
+          logPipelineError("[ops-alerts] paging webhook post failed", { status: pagingResponse.status })
+          return { delivered: false, sent: 0, sink: "webhook", providerMessageId: response.messageId }
+        }
+      }
       return { delivered: true, sent: alerts.length, sink: "email", providerMessageId: response.messageId }
     } catch (error) {
       logPipelineError("[ops-alerts] email send threw", {
