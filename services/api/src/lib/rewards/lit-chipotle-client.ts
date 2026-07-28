@@ -210,7 +210,10 @@ export class LitChipotleClient {
     this.timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, "Lit timeout")
     this.maxAttempts = positiveInteger(options.maxAttempts, DEFAULT_MAX_ATTEMPTS, "Lit max attempts")
     this.retryBaseMs = positiveInteger(options.retryBaseMs, DEFAULT_RETRY_BASE_MS, "Lit retry base")
-    this.fetchImpl = options.fetchImpl ?? fetch
+    // Keep the platform fetch as a direct global call. Calling a stored native
+    // fetch as `this.fetchImpl(...)` supplies the client as its `this` value;
+    // workerd rejects native APIs invoked with that incorrect receiver.
+    this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.sleep = options.sleep ?? defaultSleep
   }
 
