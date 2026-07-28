@@ -46,27 +46,23 @@ git merge-base --is-ancestor <your-sha> <running-sha>
 ## Stamped deploy
 
 From `services/api`, use the package deploy command. It routes through
-`scripts/deploy-with-version.ts`, which stamps compile-time provenance and
-refuses to deploy when the sibling `web/` checkout is dirty or does not match
-the API commit's `.github/ci-refs/web.sha`:
+`scripts/deploy-with-version.ts`, which stamps compile-time provenance:
 
 ```
 rtk bun run deploy -- --env staging
 ```
 
 Do not invoke `wrangler deploy` directly. A direct invocation bypasses both the
-source guard and compile-time version stamping.
-
-Shared workspaces commonly have unrelated changes in their canonical `web/`
-checkout. For a manual deploy, create a disposable parent directory containing
-an API worktree named `api/` and a Web worktree named `web/`; check the latter
-out at the exact SHA in `api/.github/ci-refs/web.sha`. This mirrors the
-`file:../../../web/packages/karaoke-runtime` layout and keeps the guarded
-checkout isolated from other sessions.
+source checks and compile-time version stamping. The karaoke runtime is an
+immutable GitHub Packages dependency, so a sibling Web checkout is neither read
+nor validated during deployment. If the deploy shell must install dependencies
+first, provide `NODE_AUTH_TOKEN` with `read:packages` as documented in the API
+README.
 
 Then confirm with
 `curl -s https://api-staging.pirate.sc/__version`. Verify `git_sha`,
-`git_ref`, and `karaoke_scoring_version` before collecting evidence.
+`git_ref`, `karaoke_scoring_version`, and `karaoke_runtime` package provenance
+before collecting evidence.
 
 ## Reading the scheduler on staging
 

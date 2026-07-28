@@ -161,6 +161,31 @@ rtk bun run coverage
 
 The current coverage command does not enforce thresholds. Use it to inspect drift before adding policy gates.
 
+## GitHub Packages auth (`@pirate-social-club/karaoke-runtime`)
+
+The API installs the private `@pirate-social-club/karaoke-runtime` package from
+GitHub Packages. The committed `.npmrc` maps the `@pirate-social-club` scope to
+GitHub Packages and reads authentication from `NODE_AUTH_TOKEN`; it never stores
+a credential.
+
+Before running `bun install` locally in `services/api`, provide a token with
+`read:packages` for an account that can access the `pirate-social-club`
+organization package:
+
+```sh
+gh auth refresh -h github.com -s read:packages
+export NODE_AUTH_TOKEN="$(gh auth token)"
+bun install
+```
+
+API Actions use only their short-lived `github.token` with `packages: read`;
+the package grants the `pirate-social-club/api` repository read access.
+Publishing stays exclusively in the web repository workflow with
+`packages: write`; API workflows never receive write access.
+
+Manual deploy shells must also provide `NODE_AUTH_TOKEN` if dependency
+installation is required. Never print, persist, or commit a package token.
+
 ## Local Dev
 
 Memory mode:

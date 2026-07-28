@@ -3,6 +3,7 @@ import { cors } from "hono/cors"
 import { WorkerEntrypoint } from "cloudflare:workers"
 import type { ShardVersionInfo } from "@pirate/api-shared"
 import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
+import { KARAOKE_RUNTIME_BUILD } from "@pirate-social-club/karaoke-runtime/build"
 import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
@@ -203,6 +204,10 @@ async function buildVersionPayload(env: Env) {
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
     karaoke_scoring_version: KARAOKE_SCORING_VERSION,
+    karaoke_runtime: {
+      version: KARAOKE_RUNTIME_BUILD.version,
+      git_sha: KARAOKE_RUNTIME_BUILD.gitSha,
+    },
     api_origin: env.PIRATE_API_PUBLIC_ORIGIN ?? null,
   }
 }
