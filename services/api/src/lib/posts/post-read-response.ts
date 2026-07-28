@@ -85,6 +85,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       threadSnapshot,
       ageGateViewerState,
       studyElevenLabsCredentialResolver,
+      studyArtifactWriteClient: input.client,
       studyEnabledCache,
       karaokeEnabledCache,
       viewerUserId: input.viewerUserId,
@@ -118,6 +119,7 @@ export async function buildLocalizedPostReadResponse(input: {
     threadSnapshot,
     ageGateViewerState: input.ageGateViewerState,
     studyElevenLabsCredentialResolver: createStudyElevenLabsCredentialResolver({ env: input.env }),
+    studyArtifactWriteClient: input.client,
     viewerUserId: input.viewerUserId,
   })
 }

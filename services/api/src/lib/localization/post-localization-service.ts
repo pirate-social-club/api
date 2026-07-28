@@ -553,6 +553,7 @@ async function getAuthorCommunityRole(input: {
 }
 
 async function buildStudyCapability(input: {
+  artifactWriteClient?: Client | null
   executor: DbExecutor
   env?: Env | null
   post: Post
@@ -578,7 +579,8 @@ async function buildStudyCapability(input: {
   }
 
   return resolvePostStudyCapability({
-    client: input.executor as Client,
+    artifactWriteClient: input.artifactWriteClient,
+    client: input.executor,
     env: input.env,
     hasActiveElevenLabsCredential: input.studyElevenLabsCredentialResolver,
     post: input.post,
@@ -700,6 +702,7 @@ async function getLocalizedMarketEmbedTranslations(input: {
 }
 
 export async function buildLocalizedPostResponse(input: {
+  studyArtifactWriteClient?: Client | null
   executor: DbExecutor
   env?: Env | null
   songArtifactExecutor?: DbExecutor | null
@@ -745,6 +748,7 @@ export async function buildLocalizedPostResponse(input: {
     post,
     song_presentation: songPresentation,
     study_capability: await buildStudyCapability({
+      artifactWriteClient: input.studyArtifactWriteClient,
       executor: input.executor,
       env: input.env,
       post: input.post,

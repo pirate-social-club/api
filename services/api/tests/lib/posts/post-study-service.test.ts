@@ -3775,6 +3775,7 @@ describe("post study unit punctuation canonicalization", () => {
     `, [POST_ID, NOW])
 
     await resolvePostStudyCapability({
+      artifactWriteClient: client!,
       client: client!,
       env: env(),
       hasActiveElevenLabsCredential: async () => true,
@@ -3798,6 +3799,64 @@ describe("post study unit punctuation canonicalization", () => {
     )
     expect(unit.rows[0]?.prompt_text).toBe("Blues have overtaken me")
     expect(Number(unit.rows[0]?.unit_version ?? 0)).toBe(2)
+  })
+
+  test("re-queues stale localization packs during capability resolution", async () => {
+    await seedSongPostWithLyrics("I was lost in the midnight waves")
+    await exec(`
+      INSERT INTO song_study_unit (
+        id, post_id, line_id, line_index, source_language, prompt_text,
+        reference_text, say_it_back_status, unit_version, max_attempts,
+        created_at, updated_at
+      )
+      VALUES ('stu_current', ?1, 'line_001', 0, 'en',
+              'I was lost in the midnight waves', 'I was lost in the midnight waves',
+              'ready', 2, 2, ?2, ?2)
+    `, [POST_ID, NOW])
+    await exec(`
+      INSERT INTO song_study_unit_localization (
+        id, unit_id, target_language, localization_version, status,
+        question, translation_text, options_json, correct_option_id,
+        max_attempts, generated_at, created_at, updated_at
+      )
+      VALUES ('sul_old', 'stu_current', 'es', 4, 'ready',
+              'Choose the best translation.', 'traducción vieja', ?1, 'opt_a',
+              2, ?2, ?2, ?2)
+    `, [JSON.stringify([
+      { id: "opt_a", text: "traducción vieja" },
+      { id: "opt_b", text: "otra" },
+      { id: "opt_c", text: "tercera" },
+    ]), NOW])
+
+    await resolvePostStudyCapability({
+      artifactWriteClient: client!,
+      client: client!,
+      env: env({ OPENROUTER_API_KEY: "test-openrouter-key" }),
+      hasActiveElevenLabsCredential: async () => false,
+      post: {
+        access_mode: "public",
+        asset_id: "ast_song",
+        author_user_id: AUTHOR_ID,
+        community_id: COMMUNITY_ID,
+        lyrics: "I was lost in the midnight waves",
+        post_id: POST_ID,
+        post_type: "song",
+        source_language: "en",
+      },
+      targetLanguage: "es",
+      viewerUserId: LEARNER_ID,
+    })
+
+    const localization = await client!.execute(
+      "SELECT status, localization_version FROM song_study_unit_localization WHERE id = 'sul_old'",
+    )
+    expect(localization.rows[0]?.status).toBe("processing")
+    expect(Number(localization.rows[0]?.localization_version ?? 0)).toBe(5)
+    const jobs = await client!.execute(
+      "SELECT COUNT(*) AS count FROM community_jobs WHERE job_type = 'song_study_generate' AND subject_id = ?1",
+      [`${POST_ID}:es`],
+    )
+    expect(Number(jobs.rows[0]?.count ?? 0)).toBe(1)
   })
 
   test("deletes stale units the re-split no longer produces and cascades their localizations", async () => {

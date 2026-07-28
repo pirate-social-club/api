@@ -352,28 +352,31 @@ function virtualStudyUnitsFromLyrics(post: StudyCapabilityPost): StudyUnitRow[] 
 }
 
 async function resolveCapabilityStudyUnits(input: {
-  client: Client
+  artifactWriteClient?: Client | null
+  client: DbExecutor
   env?: Env | null
   post: StudyCapabilityPost
   targetLanguage: string
 }): Promise<{ persisted: boolean; units: StudyUnitRow[] }> {
   const existing = await selectStudyUnits(input.client, input.post.post_id)
-  if (existing.length > 0 && existing.every((unit) => unit.unit_version >= STUDY_UNIT_GENERATION_VERSION)) {
-    return { persisted: true, units: existing }
-  }
+  const unitsCurrent = existing.length > 0
+    && existing.every((unit) => unit.unit_version >= STUDY_UNIT_GENERATION_VERSION)
 
   // Capability reads drive the video-feed actions, so stale units must heal here
-  // rather than waiting for someone to open the Study route. Generation enqueueing
-  // is idempotent for the current post/language/version.
-  if (input.env) {
+  // rather than waiting for someone to open the Study route. Even current units
+  // need the generation check: a localization-version bump can stale the pack
+  // independently. Generation enqueueing is idempotent for post/language/version.
+  if (input.env && input.artifactWriteClient) {
     try {
-      const units = await ensureStudyUnits(input.client, {
-        lyrics: input.post.lyrics ?? null,
-        post_id: input.post.post_id,
-        source_language: input.post.source_language ?? null,
-      })
+      const units = unitsCurrent
+        ? existing
+        : await ensureStudyUnits(input.artifactWriteClient, {
+            lyrics: input.post.lyrics ?? null,
+            post_id: input.post.post_id,
+            source_language: input.post.source_language ?? null,
+          })
       await enqueueStudyGenerationIfNeeded({
-        client: input.client,
+        client: input.artifactWriteClient,
         communityId: input.post.community_id,
         env: input.env,
         postId: input.post.post_id,
@@ -390,6 +393,8 @@ async function resolveCapabilityStudyUnits(input: {
       })
     }
   }
+
+  if (unitsCurrent) return { persisted: true, units: existing }
 
   return {
     persisted: false,
@@ -498,7 +503,8 @@ async function resolveStudyExerciseAvailability(input: {
 }
 
 export async function resolvePostStudyCapability(input: {
-  client: Client
+  artifactWriteClient?: Client | null
+  client: DbExecutor
   env?: Env | null
   hasActiveElevenLabsCredential?: ((communityId: string) => Promise<boolean>)
   post: StudyCapabilityPost
@@ -534,6 +540,7 @@ export async function resolvePostStudyCapability(input: {
   }
 
   const { persisted, units } = await resolveCapabilityStudyUnits({
+    artifactWriteClient: input.artifactWriteClient,
     client: input.client,
     env: input.env,
     post: input.post,
