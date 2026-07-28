@@ -1964,6 +1964,24 @@ describe("rewards routes", () => {
     })
     expect(rows.rows).toEqual([{ status: "submitted", failure_reason: null, attempt_count: 3 }])
 
+    await ctx.client.execute({
+      sql: `
+        UPDATE reward_payout_effects
+        SET attempt_count = 12
+        WHERE user_id = ?1 AND idempotency_key = ?2
+      `,
+      args: [session.userId, "reward-cashout-prep-fails"],
+    })
+    const cappedRetry = await reconcileSubmittedRewardPayouts({
+      env: ctx.env,
+      client: ctx.client,
+      nowUtc: now,
+      limit: 10,
+      confirmPollMs: [],
+    })
+    expect(cappedRetry.scanned).toBe(0)
+    expect(cappedRetry.pending).toBe(0)
+
     const summary = await app.request(
       "http://pirate.test/me/rewards",
       { headers: authHeaders(session.accessToken) },

@@ -90,7 +90,12 @@ function retryableStatus(status: number): boolean {
 }
 
 function networkFailureCategory(error: unknown): string {
-  const message = error instanceof Error ? error.message.toLowerCase() : ""
+  // Workerd exceptions may cross a realm boundary and fail `instanceof Error`.
+  // Read only the structural message and emit only a fixed category below.
+  const message = error && typeof error === "object" && "message" in error
+    && typeof error.message === "string"
+    ? error.message.toLowerCase()
+    : ""
   const categories: Array<[string, string]> = [
     ["certificate", "certificate"],
     ["tls", "tls"],
