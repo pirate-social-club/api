@@ -33,6 +33,7 @@ import publicNamespaces from "./routes/public-namespaces"
 import publicProfiles from "./routes/public-profiles"
 import profileMedia from "./routes/profile-media"
 import profiles from "./routes/profiles"
+import privyRelay from "./routes/privy-relay"
 import rewards from "./routes/rewards"
 import hostBookings from "./routes/host-bookings"
 import telegram from "./routes/telegram"
@@ -81,6 +82,10 @@ import {
   scanEfpChainOnce,
   type EfpIndexerChainConfig,
 } from "./lib/efp-indexer/scanner"
+import {
+  reconcilePendingFollowWrites,
+  recordEfpFollowAdoptionSnapshot,
+} from "./lib/efp-indexer/follow-write-service"
 import {
   isHnsRootObserverEnabled,
   observeDueHnsRoots,
@@ -451,6 +456,7 @@ app.route("/profile-media", profileMedia)
 app.route("/users", users)
 app.route("/onboarding", onboarding)
 app.route("/profiles", profiles)
+app.route("/api/privy-relay", privyRelay)
 app.route("/", rewards)
 app.route("/host-bookings", hostBookings)
 app.route("/telegram", telegram)
@@ -648,6 +654,21 @@ async function scanScheduledEfpChain(
     operation: `scan_${config.name}`,
     ...summary,
   }))
+}
+
+async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
+  const summary = await reconcilePendingFollowWrites({
+    client: getControlPlaneClient(env),
+    limit: 100,
+  })
+  await recordEfpFollowAdoptionSnapshot({ client: getControlPlaneClient(env) })
+  if (summary.examined > 0) {
+    console.info(JSON.stringify({
+      component: "efp_follow_writes",
+      operation: "reconcile_projection",
+      ...summary,
+    }))
+  }
 }
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
@@ -1500,6 +1521,9 @@ const handler: ExportedHandler<Env> = {
             name: "scan_efp_ethereum",
             run: () => scanScheduledEfpChain(env, EFP_INDEXER_CHAINS.ethereum, env.ETHEREUM_RPC_URL),
           }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL
+        ? [{ name: "reconcile_efp_follow_writes", run: () => reconcileScheduledEfpFollowWrites(env) }]
         : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
