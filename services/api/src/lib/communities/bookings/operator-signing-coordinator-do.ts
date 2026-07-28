@@ -52,6 +52,53 @@ export type OperatorSettleState =
   | "replaced"
   | "failed_onchain"
 
+export type PreparationFailureStage =
+  | "config_resolution"
+  | "rpc_nonce_fetch"
+  | "lit_request_dispatch"
+  | "lit_response"
+  | "transaction_verification"
+  | "other"
+
+export type PreparationTransportCategory =
+  | "certificate"
+  | "tls"
+  | "dns"
+  | "connection_reset"
+  | "connection_refused"
+  | "connection_lost"
+  | "redirect"
+  | "timeout"
+  | "fetch_failed"
+  | "unclassified"
+
+export type PreparationLitErrorToken =
+  | "unauthorized_action"
+  | "action_fetch_failed"
+  | "invalid_params"
+  | "timeout"
+  | "other"
+
+export interface PreparationFailureDiagnostic {
+  stage: PreparationFailureStage
+  transportCategory: PreparationTransportCategory | null
+  httpStatus: number | null
+  litErrorToken: PreparationLitErrorToken | null
+  latencyMs: number
+  classifiedAt: number
+}
+
+export class OperatorPreparationError extends Error {
+  constructor(
+    readonly stage: PreparationFailureStage,
+    readonly diagnosticCause: unknown,
+    readonly latencyMs: number,
+  ) {
+    super("Operator settlement preparation failed")
+    this.name = "OperatorPreparationError"
+  }
+}
+
 export interface OperatorSettleResult {
   idempotencyKey: string
   /** Present on real coordinator results; optional for legacy RPC/test adapters. */
@@ -59,6 +106,7 @@ export interface OperatorSettleResult {
   txHash: string | null
   nonce: number | null
   state: OperatorSettleState
+  preparationFailure?: PreparationFailureDiagnostic | null
   manualResolution?: {
     resolution: "confirmed" | "failed_onchain"
     reason: string
@@ -214,6 +262,38 @@ function normalizeAtomicAmount(raw: string | undefined): string | null {
   }
 }
 function errMsg(e: unknown): string { return e instanceof Error ? e.message : String(e) }
+function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): PreparationFailureDiagnostic {
+  const wrapped = error instanceof OperatorPreparationError ? error : null
+  const cause = wrapped?.diagnosticCause ?? error
+  const record = cause && typeof cause === "object" ? cause as Record<string, unknown> : {}
+  const transportCategories = new Set<PreparationTransportCategory>([
+    "certificate", "tls", "dns", "connection_reset", "connection_refused",
+    "connection_lost", "redirect", "timeout", "fetch_failed", "unclassified",
+  ])
+  const litTokens = new Set<PreparationLitErrorToken>([
+    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout", "other",
+  ])
+  const transport = typeof record.transportCategory === "string"
+    && transportCategories.has(record.transportCategory as PreparationTransportCategory)
+    ? record.transportCategory as PreparationTransportCategory
+    : null
+  const token = typeof record.litErrorToken === "string"
+    && litTokens.has(record.litErrorToken as PreparationLitErrorToken)
+    ? record.litErrorToken as PreparationLitErrorToken
+    : null
+  const status = typeof record.status === "number"
+    && Number.isInteger(record.status) && record.status >= 100 && record.status <= 599
+    ? record.status
+    : null
+  return {
+    stage: wrapped?.stage ?? "other",
+    transportCategory: transport,
+    httpStatus: status,
+    litErrorToken: token,
+    latencyMs: Math.max(0, Math.min(wrapped?.latencyMs ?? 0, 300_000)),
+    classifiedAt,
+  }
+}
 function requestOperatorKind(req: OperatorSettleRequest): OperatorKind {
   return req.operatorKind ?? (req.effectKind === "reward_cashout" || req.effectKind === "reward_funding_refund" ? "rewards" : "booking")
 }
@@ -271,6 +351,12 @@ interface EffectRow {
   manual_resolution_reason: string | null
   manual_resolved_by: string | null
   manual_resolved_at: number | null
+  preparation_stage: PreparationFailureStage | null
+  preparation_transport_category: PreparationTransportCategory | null
+  preparation_http_status: number | null
+  preparation_lit_error_token: PreparationLitErrorToken | null
+  preparation_latency_ms: number | null
+  preparation_classified_at: number | null
 }
 
 export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
@@ -319,6 +405,17 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
           this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolved_by TEXT")
           this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN manual_resolved_at INTEGER")
           this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (5, ?1)", Date.now())
+        })
+      }
+      if (schemaVersion < 6) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_stage TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_transport_category TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_http_status INTEGER")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_lit_error_token TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_latency_ms INTEGER")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN preparation_classified_at INTEGER")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (6, ?1)", Date.now())
         })
       }
     })
@@ -388,6 +485,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (!row) return null
     this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
     return this.result(row)
+  }
+
+  lookupByKey(idempotencyKey: string): OperatorSettleResult | null {
+    const row = this.read(String(idempotencyKey ?? ""))
+    return row ? this.result(row) : null
   }
 
   async resolveRewardReconciliation(input: {
@@ -515,7 +617,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       }) ?? this.read(row.idempotency_key)!
     }
     if (row.state === "reserving" || row.state === "failed_preparation") {
-      row = await this.reserveNonce(row)
+      row = await this.withPreparationStage("rpc_nonce_fetch", () => this.reserveNonce(row))
       if (row.nonce == null) return row
       row = await this.signClaimedRow(row, this.requestFromRow(row), row.recipient_address)
     }
@@ -768,6 +870,19 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return Math.min(RETRY_BASE_DELAY_MS * (2 ** Math.min(attemptCount, 6)), RETRY_MAX_DELAY_MS)
   }
 
+  private async withPreparationStage<T>(
+    stage: PreparationFailureStage,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now()
+    try {
+      return await operation()
+    } catch (error) {
+      if (error instanceof OperatorPreparationError) throw error
+      throw new OperatorPreparationError(stage, error, Math.max(0, Date.now() - startedAt))
+    }
+  }
+
   /** Explicit convergence requests may wake a delayed operation; ordinary settle polling may not. */
   private expedite(row: EffectRow): EffectRow {
     return this.cas(row.idempotency_key, row.version, { next_attempt_at: Date.now() }) ?? this.read(row.idempotency_key)!
@@ -775,10 +890,17 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
 
   private recordRetry(row: EffectRow, error: unknown): EffectRow {
     const attemptCount = row.attempt_count + 1
+    const diagnostic = boundedPreparationDiagnostic(error, Date.now())
     return this.cas(row.idempotency_key, row.version, {
       attempt_count: attemptCount,
       next_attempt_at: Date.now() + this.retryDelay(attemptCount),
       last_error: errMsg(error).slice(0, 1_000),
+      preparation_stage: diagnostic.stage,
+      preparation_transport_category: diagnostic.transportCategory,
+      preparation_http_status: diagnostic.httpStatus,
+      preparation_lit_error_token: diagnostic.litErrorToken,
+      preparation_latency_ms: diagnostic.latencyMs,
+      preparation_classified_at: diagnostic.classifiedAt,
     }) ?? this.read(row.idempotency_key)!
   }
 
@@ -823,8 +945,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     try {
       const operatorKind = requestOperatorKind(req)
       const effectId = canonicalFields(req).bookingId
-      const gas = await chain().gasParams(this.env, operatorKind)
-      const signed = await chain().signVerifiedTransfer(this.env, {
+      const gas = await this.withPreparationStage(
+        "rpc_nonce_fetch",
+        () => chain().gasParams(this.env, operatorKind),
+      )
+      const signed = await this.withPreparationStage("transaction_verification", () => chain().signVerifiedTransfer(this.env, {
         to: recipient,
         amountCents: req.amountCents,
         amountAtomic: req.amountAtomic,
@@ -833,7 +958,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         operatorKind,
         effectKind: req.effectKind,
         effectId,
-      })
+      }))
       const operationId = signed.operationId ?? null
       if (operatorKind === "rewards" && (!operationId || !OPERATION_ID_RE.test(operationId))) {
         throw new Error("verified rewards signing result is missing a canonical operation ID")
@@ -851,6 +976,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         claim_expires_at: null,
         next_attempt_at: null,
         last_error: null,
+        preparation_stage: null,
+        preparation_transport_category: null,
+        preparation_http_status: null,
+        preparation_lit_error_token: null,
+        preparation_latency_ms: null,
+        preparation_classified_at: null,
       })
       return updated ?? this.read(row.idempotency_key)!
     } catch (error) {
@@ -914,13 +1045,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   /** Expected-state CAS on version; returns the new row or null if the row changed concurrently. */
-  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
+  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
     return this.casInternal(key, fromVersion, null, fields)
   }
-  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
+  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
     return this.casInternal(key, fromVersion, claimToken, fields)
   }
-  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at">>): EffectRow | null {
+  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
     const cur = this.read(key)
     if (!cur) return null
     const next: EffectRow = { ...cur, ...fields }
@@ -930,12 +1061,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
          claim_expires_at = ?8, attempt_count = ?9, next_attempt_at = ?10, last_error = ?11,
          reconciliation_count = ?12, manual_resolution = ?13, manual_resolution_reason = ?14,
          manual_resolved_by = ?15, manual_resolved_at = ?16,
-         version = version + 1, updated_at = ?17
-       WHERE idempotency_key = ?1 AND version = ?18${claimToken == null ? "" : " AND claim_token = ?19"}
+         preparation_stage = ?17, preparation_transport_category = ?18,
+         preparation_http_status = ?19, preparation_lit_error_token = ?20,
+         preparation_latency_ms = ?21, preparation_classified_at = ?22,
+         version = version + 1, updated_at = ?23
+       WHERE idempotency_key = ?1 AND version = ?24${claimToken == null ? "" : " AND claim_token = ?25"}
        RETURNING idempotency_key`,
       ...(claimToken == null
-        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, Date.now(), fromVersion]
-        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, Date.now(), fromVersion, claimToken]),
+        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, Date.now(), fromVersion]
+        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, Date.now(), fromVersion, claimToken]),
     ).toArray()
     return matched.length === 1 ? this.read(key) : null
   }
@@ -963,6 +1097,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       manual_resolution_reason: r.manual_resolution_reason == null ? null : String(r.manual_resolution_reason),
       manual_resolved_by: r.manual_resolved_by == null ? null : String(r.manual_resolved_by),
       manual_resolved_at: r.manual_resolved_at == null ? null : Number(r.manual_resolved_at),
+      preparation_stage: r.preparation_stage == null ? null : String(r.preparation_stage) as PreparationFailureStage,
+      preparation_transport_category: r.preparation_transport_category == null
+        ? null
+        : String(r.preparation_transport_category) as PreparationTransportCategory,
+      preparation_http_status: r.preparation_http_status == null ? null : Number(r.preparation_http_status),
+      preparation_lit_error_token: r.preparation_lit_error_token == null
+        ? null
+        : String(r.preparation_lit_error_token) as PreparationLitErrorToken,
+      preparation_latency_ms: r.preparation_latency_ms == null ? null : Number(r.preparation_latency_ms),
+      preparation_classified_at: r.preparation_classified_at == null ? null : Number(r.preparation_classified_at),
     }
   }
 
@@ -973,6 +1117,17 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       txHash: row.tx_hash,
       nonce: row.nonce,
       state: row.state,
+      preparationFailure: row.preparation_stage && row.preparation_latency_ms != null
+        && row.preparation_classified_at != null
+        ? {
+            stage: row.preparation_stage,
+            transportCategory: row.preparation_transport_category,
+            httpStatus: row.preparation_http_status,
+            litErrorToken: row.preparation_lit_error_token,
+            latencyMs: row.preparation_latency_ms,
+            classifiedAt: row.preparation_classified_at,
+          }
+        : null,
       manualResolution: row.manual_resolution && row.manual_resolution_reason
         && row.manual_resolved_by && row.manual_resolved_at != null
         ? {

@@ -2,6 +2,7 @@ import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
+  OperatorPreparationError,
   setOperatorChainPrimitivesForTests,
   type OperatorSettleRequest,
 } from "../../src/lib/communities/bookings/operator-signing-coordinator-do"
@@ -18,6 +19,11 @@ interface ChainConfig {
   liveness: Record<string, Liveness>
   broadcastError?: string
   encodeAtomicAmountInHash?: boolean
+  signFailure?: {
+    stage: "lit_response"
+    cause: { status: number; transportCategory: string; litErrorToken: string }
+    latencyMs: number
+  }
 }
 
 type Stub = ReturnType<typeof env.OPERATOR_SIGNING_COORDINATOR.getByName>
@@ -31,12 +37,21 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
       pendingNonce: async () => config.pending,
       latestNonce: async () => config.latest,
       gasParams: async () => ({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, gasLimit: 1n }),
-      signVerifiedTransfer: async (_e, input) => ({
-        signedTx: `signed_${input.nonce}`,
-        txHash: config.encodeAtomicAmountInHash && input.amountAtomic != null
-          ? `0xhash_${input.nonce}_${input.amountAtomic}`
-          : `0xhash_${input.nonce}`,
-      }),
+      signVerifiedTransfer: async (_e, input) => {
+        if (config.signFailure) {
+          throw new OperatorPreparationError(
+            config.signFailure.stage,
+            config.signFailure.cause,
+            config.signFailure.latencyMs,
+          )
+        }
+        return {
+          signedTx: `signed_${input.nonce}`,
+          txHash: config.encodeAtomicAmountInHash && input.amountAtomic != null
+            ? `0xhash_${input.nonce}_${input.amountAtomic}`
+            : `0xhash_${input.nonce}`,
+        }
+      },
       broadcast: async () => {
         if (config.broadcastError) throw new Error(config.broadcastError)
       },
@@ -47,7 +62,7 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
 
 async function effects(stub: Stub): Promise<Array<Record<string, unknown>>> {
   return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at FROM effects ORDER BY nonce").toArray(),
+    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at FROM effects ORDER BY nonce").toArray(),
   )
 }
 
@@ -210,6 +225,47 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect(row.tx_hash).toBe("0xhash_9")
     expect(row.attempt_count).toBe(1)
     expect(Number(row.next_attempt_at)).toBeGreaterThan(Date.now())
+  })
+
+  it("atomically persists bounded preparation diagnostics with the retry increment", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 12,
+      latest: 12,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: {
+          status: 403,
+          transportCategory: "dns",
+          litErrorToken: "unauthorized_action",
+        },
+        latencyMs: 4_321,
+      },
+    })
+    await stub.settle(rewardsReq())
+
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      state: "failed_preparation",
+      attempt_count: 1,
+      preparation_stage: "lit_response",
+      preparation_transport_category: "dns",
+      preparation_http_status: 403,
+      preparation_lit_error_token: "unauthorized_action",
+      preparation_latency_ms: 4_321,
+    })
+    expect(Number(row.preparation_classified_at)).toBeGreaterThan(0)
+    expect((await stub.lookup(rewardsReq())).preparationFailure).toEqual({
+      stage: "lit_response",
+      transportCategory: "dns",
+      httpStatus: 403,
+      litErrorToken: "unauthorized_action",
+      latencyMs: 4_321,
+      classifiedAt: Number(row.preparation_classified_at),
+    })
   })
 
   it("reconciles an ambiguous broadcast timeout without signing a replacement", async () => {
