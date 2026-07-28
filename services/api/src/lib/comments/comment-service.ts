@@ -712,6 +712,9 @@ export async function deleteComment(input: {
     }
 
     const updatedAt = nowIso()
+    // Reconstruct deterministically from the pre-tx row: the write tx can't read
+    // the updated row back, and markCommentDeleted sets exactly these fields.
+    const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
     const tx = await db.client.transaction("write")
     try {
       await markCommentDeleted({
@@ -719,11 +722,24 @@ export async function deleteComment(input: {
         commentId: input.commentId,
         now: updatedAt,
       })
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: deleted.community_id,
+        jobType: "comment_projection_sync",
+        subjectType: "comment_status",
+        subjectId: `${deleted.comment_id}:deleted`,
+        payloadJson: JSON.stringify({
+          comment_id: deleted.comment_id,
+          thread_root_post_id: deleted.thread_root_post_id,
+          parent_comment_id: deleted.parent_comment_id,
+          depth: deleted.depth,
+          status: deleted.status,
+          source_created_at: deleted.created_at,
+        }),
+        createdAt: updatedAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
+      })
       await tx.commit()
-
-      // Reconstruct deterministically from the pre-tx row: the write tx can't read
-      // the updated row back, and markCommentDeleted sets exactly these fields.
-      const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -802,6 +818,9 @@ export async function removeCommentAsModerator(input: {
     }
 
     const updatedAt = nowIso()
+    // Reconstruct deterministically from the pre-tx row (buffered write tx can't
+    // read it back); setCommentStatus only changes status + updated_at.
+    const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
     const tx = await db.client.transaction("write")
     try {
       await setCommentStatus({
@@ -810,11 +829,24 @@ export async function removeCommentAsModerator(input: {
         status: "removed",
         now: updatedAt,
       })
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: removed.community_id,
+        jobType: "comment_projection_sync",
+        subjectType: "comment_status",
+        subjectId: `${removed.comment_id}:removed`,
+        payloadJson: JSON.stringify({
+          comment_id: removed.comment_id,
+          thread_root_post_id: removed.thread_root_post_id,
+          parent_comment_id: removed.parent_comment_id,
+          depth: removed.depth,
+          status: removed.status,
+          source_created_at: removed.created_at,
+        }),
+        createdAt: updatedAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
+      })
       await tx.commit()
-
-      // Reconstruct deterministically from the pre-tx row (buffered write tx can't
-      // read it back); setCommentStatus only changes status + updated_at.
-      const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
