@@ -16,7 +16,7 @@ import {
   listRegistryAbi,
   normalizeAddress,
   type FollowWriteTransaction,
-} from "@pirate/efp-shared"
+} from "./follow-contracts"
 import type { Env } from "../../env"
 import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"

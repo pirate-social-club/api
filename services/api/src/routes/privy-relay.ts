@@ -1,7 +1,7 @@
 import { Hono } from "hono"
 import type { Address, Hex } from "viem"
 
-import { normalizeAddress } from "@pirate/efp-shared"
+import { normalizeAddress } from "../lib/efp-indexer/follow-contracts"
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { badRequestError } from "../lib/errors"
 import {

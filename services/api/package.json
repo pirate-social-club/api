@@ -76,7 +76,6 @@
     "@noble/hashes": "^1.8.0",
     "@pirate-social-club/karaoke-runtime": "file:../../../web/packages/karaoke-runtime",
     "@pirate/api-contracts": "file:../contracts",
-    "@pirate/efp-shared": "file:../efp-shared",
     "@pirate/api-shared": "file:../shared",
     "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
     "@pirate/hns-delegation": "file:../../../core/packages/hns-delegation",

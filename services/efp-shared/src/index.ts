@@ -1,7 +1,8 @@
 import {
   encodePacked,
-  fromHex,
   isAddress,
+  keccak256,
+  toHex,
   type Address,
   type Hex,
 } from "viem";
@@ -153,30 +154,9 @@ export function createFollowListOp(targetAddress: Address, followed: boolean): H
 }
 
 export function generateListNonce(): bigint {
-  const entropy = new Uint8Array(32);
-  crypto.getRandomValues(entropy);
-  return BigInt(`0x${Array.from(entropy, (byte) => byte.toString(16).padStart(2, "0")).join("")}`)
-    & ((1n << 255n) - 1n);
-}
-
-export function decodePrimaryListId(value: Hex): string | null {
-  if (!value || value === "0x") return null;
-  try {
-    const listId = fromHex(value, "bigint");
-    return listId > 0n ? listId.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-export function decodeStorageLocation(storageLocation: Hex): { chainId: number; slot: bigint } {
-  if (storageLocation.length < 134) {
-    throw new Error("Invalid EFP list storage location.");
-  }
-  return {
-    chainId: fromHex(`0x${storageLocation.slice(6, 70)}`, "number"),
-    slot: BigInt(`0x${storageLocation.slice(-64)}`),
-  };
+  const entropy = `${Date.now()}-${Math.random()}-${Math.random()}`;
+  const hash = keccak256(toHex(entropy));
+  return BigInt(hash) & ((1n << 255n) - 1n);
 }
 
 export function createMintStorageLocation(input: {
