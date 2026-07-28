@@ -45,17 +45,28 @@ git merge-base --is-ancestor <your-sha> <running-sha>
 
 ## Stamped deploy
 
-RTK's hook drops `--define` arguments, which is why some deploys show
-`git_sha: null`. Deploy through `rtk proxy` from `services/api`:
+From `services/api`, use the package deploy command. It routes through
+`scripts/deploy-with-version.ts`, which stamps compile-time provenance and
+refuses to deploy when the sibling `web/` checkout is dirty or does not match
+the API commit's `.github/ci-refs/web.sha`:
 
 ```
-rtk proxy bunx wrangler@4.100.0 deploy --env staging \
-  --define "__PIRATE_BUILD_GIT_SHA__:\"<sha>\"" \
-  --define "__PIRATE_BUILD_GIT_REF__:\"<ref>\"" \
-  --define "__PIRATE_BUILD_TIMESTAMP__:\"<iso>\""
+rtk bun run deploy -- --env staging
 ```
 
-Then confirm with `curl -s https://api-staging.pirate.sc/__version`.
+Do not invoke `wrangler deploy` directly. A direct invocation bypasses both the
+source guard and compile-time version stamping.
+
+Shared workspaces commonly have unrelated changes in their canonical `web/`
+checkout. For a manual deploy, create a disposable parent directory containing
+an API worktree named `api/` and a Web worktree named `web/`; check the latter
+out at the exact SHA in `api/.github/ci-refs/web.sha`. This mirrors the
+`file:../../../web/packages/karaoke-runtime` layout and keeps the guarded
+checkout isolated from other sessions.
+
+Then confirm with
+`curl -s https://api-staging.pirate.sc/__version`. Verify `git_sha`,
+`git_ref`, and `karaoke_scoring_version` before collecting evidence.
 
 ## Reading the scheduler on staging
 

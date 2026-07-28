@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
   buildStampedWranglerDeployArgs,
   resolveBuildVersionMetadata,
@@ -6,6 +8,14 @@ import {
 } from "./deploy-version-args"
 
 describe("deploy version stamping", () => {
+  test("routes the package deploy script through the guarded wrapper", () => {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../package.json"), "utf8"),
+    ) as { scripts?: Record<string, string> }
+
+    expect(packageJson.scripts?.deploy).toBe("bun run scripts/deploy-with-version.ts")
+  })
+
   test("resolves metadata from CI env before git fallbacks", () => {
     const metadata = resolveBuildVersionMetadata({
       GITHUB_SHA: "sha-from-github",
