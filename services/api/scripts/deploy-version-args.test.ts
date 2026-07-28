@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   buildStampedWranglerDeployArgs,
   resolveBuildVersionMetadata,
+  validateSiblingWebCheckout,
 } from "./deploy-version-args"
 
 describe("deploy version stamping", () => {
@@ -55,6 +56,35 @@ describe("deploy version stamping", () => {
         throw new Error(`unexpected command after dirty-tree check: ${args.join(" ")}`)
       })
     ).toThrow("dirty community-d1-shard/shared sources")
+  })
+
+  test("accepts a clean sibling Web checkout at the pinned SHA", () => {
+    expect(() =>
+      validateSiblingWebCheckout("/workspace/web", "web-sha\n", (_command, args) => {
+        if (args.includes("status")) return ""
+        if (args.includes("rev-parse")) return "web-sha"
+        throw new Error(`unexpected command: ${args.join(" ")}`)
+      })
+    ).not.toThrow()
+  })
+
+  test("refuses a dirty sibling Web checkout", () => {
+    expect(() =>
+      validateSiblingWebCheckout("/workspace/web", "web-sha", (_command, args) => {
+        if (args.includes("status")) return " M packages/karaoke-runtime/src/index.ts"
+        throw new Error(`unexpected command after dirty-tree check: ${args.join(" ")}`)
+      })
+    ).toThrow("dirty sibling Web checkout")
+  })
+
+  test("refuses a sibling Web checkout that does not match the pin", () => {
+    expect(() =>
+      validateSiblingWebCheckout("/workspace/web", "expected-web-sha", (_command, args) => {
+        if (args.includes("status")) return ""
+        if (args.includes("rev-parse")) return "stale-web-sha"
+        throw new Error(`unexpected command: ${args.join(" ")}`)
+      })
+    ).toThrow("expected pinned SHA expected-web-sha")
   })
 
   test("builds wrangler deploy args with compile-time defines after passthrough args", () => {
