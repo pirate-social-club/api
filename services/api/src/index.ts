@@ -77,6 +77,7 @@ import {
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
+import { splitScheduledLanes } from "./lib/scheduled-lanes"
 import { checkHnsEdgeHeartbeatFreshness } from "./lib/ops-alerts/hns-edge-heartbeats"
 import {
   EFP_INDEXER_CHAINS,
@@ -1349,6 +1350,15 @@ const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
 // promptly on normal completion.
 const SCHEDULED_LEASE_TTL_MS = 120_000
+// The community-job lane holds its OWN lease under a distinct DO key, so a slow
+// maintenance batch can never make it skip. Named separately from
+// SCHEDULED_CRON_LOCK_NAME so the two leases can never collide.
+export const SCHEDULED_COMMUNITY_JOB_LOCK_NAME = "scheduled-cron-community-jobs"
+// Sized to the lane's own deadline plus headroom for the slowest in-flight
+// community scan, mirroring how SCHEDULED_LEASE_TTL_MS exceeds its batch
+// deadline. Bounded so a crashed lane self-heals rather than wedging the lane
+// permanently.
+const SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS = 150_000
 
 type ScheduledPriorityJobName =
   | "reconcile_reward_payouts"
@@ -1567,29 +1577,87 @@ const handler: ExportedHandler<Env> = {
       ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
       return
     }
-    // A DO lease guarantees only ONE batch runs cluster-wide: if a prior
-    // invocation is still in flight, this one acquires nothing and starts zero
-    // jobs (so overlapping invocations can't stack control-plane connections).
-    const lock = createDurableObjectCronLock(env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO>)
+    // Two lanes, two leases, run concurrently.
+    //
+    // Community jobs are foreground delivery work — the retry engine for every
+    // community job, including Telegram channel publishing. Maintenance
+    // (reward reconciles, monitors, HNS observers) is slow and bounded only by
+    // its own deadlines. Sharing ONE lease made the slow side gate the fast
+    // one: a maintenance batch overrunning the 60s cron interval left every
+    // subsequent tick logging "lease held … 0 jobs started", so ready community
+    // jobs waited tens of minutes behind work nobody was waiting on. Measured
+    // on staging: task_ms 92371 against a 90s deadline, and 2/2 observed ticks
+    // skipped outright.
+    //
+    // Each lane keeps its own DO lease, so overlap protection is UNCHANGED:
+    // exactly one batch per lane runs cluster-wide, and the per-job CAS/lease
+    // inside the community runner is untouched. A lane whose lease is held
+    // still skips — it just can no longer make the other lane skip with it.
+    const lanes = splitScheduledLanes(ordered)
     const owner = crypto.randomUUID()
-    ctx.waitUntil(
-      runScheduledBatch({
+    const namespace = env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO>
+    const laneStartedAtMs = Date.now()
+
+    const runLane = async (input: {
+      lane: string
+      lockName?: string
+      deadlineMs: number
+      leaseTtlMs: number
+      limit: number
+      minimumStartsBeforeDeadline?: number
+      tasks: typeof ordered
+    }): Promise<void> => {
+      if (input.tasks.length === 0) return
+      const startedAt = Date.now()
+      try {
+        await runScheduledBatch({
+          deadlineMs: input.deadlineMs,
+          leaseTtlMs: input.leaseTtlMs,
+          limit: input.limit,
+          lock: createDurableObjectCronLock(namespace, input.lockName),
+          minimumStartsBeforeDeadline: input.minimumStartsBeforeDeadline,
+          onError: (error, name) => console.error(`[scheduled:${input.lane}] job failed: ${name}`, error),
+          onLeaseHeld: () => console.warn(`[scheduled:${input.lane}] lease held by another invocation — skipping batch (0 jobs started)`),
+          onSkipped: (skipped) => console.warn(`[scheduled:${input.lane}] deferred ${skipped.length} job(s) past the ${input.deadlineMs}ms deadline: ${skipped.join(", ")}`),
+          owner,
+          tasks: input.tasks,
+          workerScope: withRequestControlPlaneClients,
+        })
+      } finally {
+        // Per-lane duration is the signal that tells the two lanes apart when
+        // one of them is the reason a tick ran long.
+        console.info(`[scheduled:${input.lane}] lane finished`, JSON.stringify({
+          lane: input.lane,
+          lane_ms: Date.now() - startedAt,
+          tick_ms: Date.now() - laneStartedAtMs,
+          tasks: input.tasks.length,
+        }))
+      }
+    }
+
+    ctx.waitUntil(Promise.allSettled([
+      runLane({
+        lane: "community-jobs",
+        lockName: SCHEDULED_COMMUNITY_JOB_LOCK_NAME,
+        // The drain bounds itself internally (task/tick/sweep budgets); this is
+        // the outer stop so a wedged lane cannot hold its lease indefinitely.
+        deadlineMs: COMMUNITY_JOB_TASK_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS,
+        limit: 1,
+        tasks: lanes.community,
+      }),
+      runLane({
+        lane: "maintenance",
         deadlineMs: SCHEDULED_BATCH_DEADLINE_MS,
         leaseTtlMs: SCHEDULED_LEASE_TTL_MS,
         limit: SCHEDULED_JOB_CONCURRENCY,
-        lock,
         minimumStartsBeforeDeadline: scheduledMinimumPriorityStarts(
           canRunD1Reconciler,
           isHnsRootObserverEnabled(env),
         ),
-        onError: (error, name) => console.error(`[scheduled] job failed: ${name}`, error),
-        onLeaseHeld: () => console.warn("[scheduled] lease held by another invocation — skipping batch (0 jobs started)"),
-        onSkipped: (skipped) => console.warn(`[scheduled] deferred ${skipped.length} job(s) past the ${SCHEDULED_BATCH_DEADLINE_MS}ms deadline: ${skipped.join(", ")}`),
-        owner,
-        tasks: ordered,
-        workerScope: withRequestControlPlaneClients,
+        tasks: lanes.maintenance,
       }),
-    )
+    ]).then(() => undefined))
   },
 }
 
