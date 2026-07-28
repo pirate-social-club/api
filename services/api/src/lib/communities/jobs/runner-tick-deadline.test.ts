@@ -17,6 +17,7 @@ function runTick(options: {
   communityIds: string[]
   deadlineMs?: number | null
   sweepDeadlineMs?: number | null
+  maxCommunities?: number
   now?: () => number
 }) {
   return processAvailableCommunityJobs({
@@ -25,6 +26,7 @@ function runTick(options: {
     communityIds: options.communityIds,
     deadlineMs: options.deadlineMs,
     sweepDeadlineMs: options.sweepDeadlineMs,
+    maxCommunities: options.maxCommunities,
     now: options.now,
   })
 }
@@ -107,9 +109,46 @@ describe("processAvailableCommunityJobs tick deadline", () => {
 
     expect(summary.swept_communities).toBe(1)
     expect(summary.deferred_sweep_communities).toBe(2)
-    expect(summary.started_communities).toBe(1)
+    // Processing is NOT limited to the swept community. The sweep hitting its
+    // phase budget hands the rest of the tick to job work, which then walks the
+    // selected list until the batch deadline stops it.
+    expect(summary.started_communities).toBeGreaterThan(summary.swept_communities)
     expect(summary.sweep_ms).toBeGreaterThanOrEqual(15_000)
     expect(summary.process_ms).toBeGreaterThan(0)
+  })
+
+  // Regression: job execution used to iterate the stale sweep's output, so a
+  // truncated sweep silently capped how many communities could run jobs at all.
+  // On staging (~950 routed communities) the sweep reached ten per tick, so a
+  // queued job outside that subset waited hours behind maintenance work.
+  it("starts jobs for communities the stale sweep never reached", async () => {
+    const communityIds = Array.from({ length: 300 }, (_, index) => `cmt_${String(index).padStart(3, "0")}`)
+    const target = communityIds[299]
+    // A tiny sweep budget truncates the sweep almost immediately, while the
+    // batch deadline leaves plenty of room for job work.
+    let clock = 0
+    const summary = await runTick({
+      communityIds,
+      // The default cap is 100; this fleet-scale case selects all of them.
+      maxCommunities: communityIds.length,
+      deadlineMs: 10_000_000,
+      sweepDeadlineMs: 5,
+      now: () => {
+        const value = clock
+        clock += 1
+        return value
+      },
+    })
+
+    expect(summary.swept_communities).toBeLessThan(20)
+    expect(summary.deferred_sweep_communities).toBeGreaterThan(280)
+    // Every selected community is still attempted for job work.
+    expect(summary.started_communities).toBe(300)
+    expect(summary.deferred_communities).toBe(0)
+    // The empty repository makes each attempt fail, which is what proves the
+    // community was reached: the last community is far outside the swept subset
+    // yet still shows up as attempted.
+    expect(summary.failed_communities.some((failure) => failure.community_id === target)).toBe(true)
   })
 
   it("rotates the front of a fully selected poll so truncated sweeps stay fair", () => {
