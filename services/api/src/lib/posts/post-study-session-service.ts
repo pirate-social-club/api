@@ -140,6 +140,32 @@ async function activeSession(input: {
   }) as SessionRow | null
 }
 
+// Closes a session outside the attempt path. recordStudySessionPresentation only ever
+// completes a session as a side effect of a presentation, so a session with nothing
+// left to present cannot close itself: it stays 'active' until its 24h TTL while every
+// read hands the learner a lesson they cannot advance.
+async function completeUnattemptableSession(input: {
+  client: Client
+  now: string
+  sessionId: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE song_study_session
+      SET status = 'completed',
+          qualified = CASE
+            WHEN completed_exercise_count >= exercise_count
+             AND first_pass_correct_count >= required_correct_count THEN 1
+            ELSE 0
+          END,
+          completed_at = ?2,
+          updated_at = ?2
+      WHERE id = ?1 AND status = 'active'
+    `,
+    args: [input.sessionId, input.now],
+  })
+}
+
 export async function ensureStudySession(input: {
   available: StudyExerciseRow[]
   candidates: StudyExerciseRow[]
@@ -151,6 +177,9 @@ export async function ensureStudySession(input: {
   targetLanguage: string
   totalUnits: number
   userId: string
+  // Set on the single internal retry after retiring an unattemptable session, so a
+  // pathological session can never drive an unbounded recursion.
+  retriedAfterRetire?: boolean
 }): Promise<{ exercises: Array<{ progress: StudySessionExerciseProgress; row: StudyExerciseRow }>; summary: StudySessionSummary }> {
   await expireStaleSession(input)
   let session = await activeSession(input)
@@ -235,6 +264,17 @@ export async function ensureStudySession(input: {
       row,
     }]
   })
+  // Two ways an active session ends up with nothing attemptable: every card was spent
+  // without being mastered, or the exercises it points at were regenerated and no
+  // longer resolve against `available` (the flatMap above drops those). Both leave the
+  // learner staring at a complete-looking lesson with no way forward, so retire the
+  // session and hand back a fresh one instead.
+  const attemptable = exercises.some((entry) => !entry.progress.mastered
+    && entry.progress.presentationCount < STUDY_SESSION_MAX_CARD_PRESENTATIONS)
+  if (!attemptable && !input.retriedAfterRetire) {
+    await completeUnattemptableSession({ client: input.client, now: input.now, sessionId })
+    return await ensureStudySession({ ...input, retriedAfterRetire: true })
+  }
   return { exercises, summary: mapSummary(session, input.dueCount, input.totalUnits) }
 }
 
