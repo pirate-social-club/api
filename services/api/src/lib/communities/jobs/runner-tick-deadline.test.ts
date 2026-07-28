@@ -124,20 +124,18 @@ describe("processAvailableCommunityJobs tick deadline", () => {
   it("starts jobs for communities the stale sweep never reached", async () => {
     const communityIds = Array.from({ length: 300 }, (_, index) => `cmt_${String(index).padStart(3, "0")}`)
     const target = communityIds[299]
-    // A tiny sweep budget truncates the sweep almost immediately, while the
-    // batch deadline leaves plenty of room for job work.
-    let clock = 0
+    // The clock jumps once and then holds, so the outcome does not depend on how
+    // many times the runner samples it: the sweep budget is provably spent while
+    // the batch deadline is provably not. A per-call increment made this depend
+    // on internal call counts and failed under CI while passing locally.
+    let calls = 0
     const summary = await runTick({
       communityIds,
       // The default cap is 100; this fleet-scale case selects all of them.
       maxCommunities: communityIds.length,
       deadlineMs: 10_000_000,
-      sweepDeadlineMs: 5,
-      now: () => {
-        const value = clock
-        clock += 1
-        return value
-      },
+      sweepDeadlineMs: 100,
+      now: () => (calls++ < 3 ? 0 : 1_000),
     })
 
     expect(summary.swept_communities).toBeLessThan(20)
