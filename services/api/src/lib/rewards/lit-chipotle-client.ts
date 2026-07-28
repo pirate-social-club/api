@@ -13,12 +13,33 @@ export type LitChipotleErrorCode =
   | "network"
   | "invalid_response"
 
+export type LitTransportCategory =
+  | "certificate"
+  | "tls"
+  | "dns"
+  | "connection_reset"
+  | "connection_refused"
+  | "connection_lost"
+  | "redirect"
+  | "timeout"
+  | "fetch_failed"
+  | "unclassified"
+
+export type LitErrorToken =
+  | "unauthorized_action"
+  | "action_fetch_failed"
+  | "invalid_params"
+  | "timeout"
+  | "other"
+
 export class LitChipotleError extends Error {
   constructor(
     readonly code: LitChipotleErrorCode,
     message: string,
     readonly retryable: boolean,
     readonly status?: number,
+    readonly transportCategory?: LitTransportCategory,
+    readonly litErrorToken?: LitErrorToken,
   ) {
     super(message)
     this.name = "LitChipotleError"
@@ -89,14 +110,14 @@ function retryableStatus(status: number): boolean {
   return status === 429 || status >= 500
 }
 
-function networkFailureCategory(error: unknown): string {
+function networkFailureCategory(error: unknown): LitTransportCategory {
   // Workerd exceptions may cross a realm boundary and fail `instanceof Error`.
   // Read only the structural message and emit only a fixed category below.
   const message = error && typeof error === "object" && "message" in error
     && typeof error.message === "string"
     ? error.message.toLowerCase()
     : ""
-  const categories: Array<[string, string]> = [
+  const categories: Array<[string, LitTransportCategory]> = [
     ["certificate", "certificate"],
     ["tls", "tls"],
     ["dns", "dns"],
@@ -112,27 +133,59 @@ function networkFailureCategory(error: unknown): string {
 }
 
 function statusError(status: number): LitChipotleError {
+  const token: LitErrorToken = status === 401 || status === 403
+    ? "unauthorized_action"
+    : status === 404
+      ? "action_fetch_failed"
+      : status >= 400 && status < 500
+        ? "invalid_params"
+        : "other"
   if (status === 402) {
     return new LitChipotleError(
       "billing_required",
       "Lit action execution requires account credits",
       false,
       status,
+      undefined,
+      token,
     )
   }
   if (status === 429) {
-    return new LitChipotleError("overloaded", "Lit action service is overloaded", true, status)
+    return new LitChipotleError("overloaded", "Lit action service is overloaded", true, status, undefined, token)
   }
   if (status >= 500) {
-    return new LitChipotleError("upstream", "Lit action service failed", true, status)
+    return new LitChipotleError("upstream", "Lit action service failed", true, status, undefined, token)
   }
-  return new LitChipotleError("invalid_request", "Lit action request was rejected", false, status)
+  return new LitChipotleError("invalid_request", "Lit action request was rejected", false, status, undefined, token)
 }
 
 function responseShape(value: unknown): value is LitActionResponse {
   if (!value || typeof value !== "object") return false
   const response = value as Record<string, unknown>
   return typeof response.has_error === "boolean" && typeof response.logs === "string" && "response" in response
+}
+
+function litErrorTokenFromEnvelope(input: LitActionResponse): LitErrorToken {
+  // Classification only: provider text is never returned, logged, or persisted.
+  const bounded = `${input.logs.slice(0, 2_000)} ${typeof input.response === "string"
+    ? input.response.slice(0, 2_000)
+    : ""}`.toLowerCase()
+  if (bounded.includes("unauthorized") || bounded.includes("not permitted") || bounded.includes("not allowed")) {
+    return "unauthorized_action"
+  }
+  if (
+    bounded.includes("ipfs")
+    || bounded.includes("action fetch")
+    || bounded.includes("fetch action")
+    || bounded.includes("action not found")
+  ) {
+    return "action_fetch_failed"
+  }
+  if (bounded.includes("invalid") || bounded.includes("missing parameter") || bounded.includes("invalid params")) {
+    return "invalid_params"
+  }
+  if (bounded.includes("timeout") || bounded.includes("timed out")) return "timeout"
+  return "other"
 }
 
 async function defaultSleep(milliseconds: number): Promise<void> {
@@ -186,7 +239,14 @@ export class LitChipotleClient {
         if (decoded.has_error) {
           // Deliberately omit response/logs: action output may contain secrets or
           // transaction material and must not be copied into Worker error logs.
-          throw new LitChipotleError("action_failed", "Lit action reported an error", false)
+          throw new LitChipotleError(
+            "action_failed",
+            "Lit action reported an error",
+            false,
+            undefined,
+            undefined,
+            litErrorTokenFromEnvelope(decoded),
+          )
         }
         return decoded.response
       } catch (error) {
@@ -225,7 +285,7 @@ export class LitChipotleClient {
   private classify(error: unknown): LitChipotleError {
     if (error instanceof LitChipotleError) return error
     if (error instanceof DOMException && error.name === "AbortError") {
-      return new LitChipotleError("timeout", "Lit action request timed out", true)
+      return new LitChipotleError("timeout", "Lit action request timed out", true, undefined, "timeout", "timeout")
     }
     // Only expose a fixed category. Native fetch errors must never copy request
     // headers, action params, or arbitrary provider text into Worker/DO logs.
@@ -233,6 +293,9 @@ export class LitChipotleClient {
       "network",
       `Lit action request failed (${networkFailureCategory(error)})`,
       true,
+      undefined,
+      networkFailureCategory(error),
+      "other",
     )
   }
 }

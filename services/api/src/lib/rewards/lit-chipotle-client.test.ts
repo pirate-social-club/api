@@ -84,6 +84,7 @@ describe("LitChipotleClient", () => {
     }
     expect(thrown).toBeInstanceOf(LitChipotleError)
     expect((thrown as LitChipotleError).code).toBe("network")
+    expect((thrown as LitChipotleError).transportCategory).toBe("connection_lost")
     expect((thrown as Error).message).toBe("Lit action request failed (connection_lost)")
     expect(String(thrown)).not.toContain(SECRET)
   })
@@ -133,7 +134,7 @@ describe("LitChipotleClient", () => {
       usageApiKey: SECRET,
       fetchImpl: (async () => response(200, {
         response: `signed material ${SECRET}`,
-        logs: `logs ${SECRET}`,
+        logs: `IPFS action fetch failed ${SECRET}`,
         has_error: true,
       })) as typeof fetch,
     })
@@ -143,6 +144,23 @@ describe("LitChipotleClient", () => {
     try {
       await client.execute({ ipfsId: "QmPinned", jsParams: null })
     } catch (error) {
+      expect(String(error)).not.toContain(SECRET)
+      expect((error as LitChipotleError).litErrorToken).toBe("action_fetch_failed")
+    }
+  })
+
+  test("maps HTTP authorization failures to a bounded token without reading the body", async () => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      fetchImpl: (async () => response(403, { error: `raw ${SECRET}` })) as typeof fetch,
+    })
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+      throw new Error("expected rejection")
+    } catch (error) {
+      expect(error).toBeInstanceOf(LitChipotleError)
+      expect((error as LitChipotleError).status).toBe(403)
+      expect((error as LitChipotleError).litErrorToken).toBe("unauthorized_action")
       expect(String(error)).not.toContain(SECRET)
     }
   })

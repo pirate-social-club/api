@@ -58,3 +58,18 @@ describe("GET /admin/ops/wallets", () => {
     expect(body.wallets.every((wallet) => Boolean(wallet.error))).toBe(true)
   })
 })
+
+describe("GET /admin/ops/rewards-settlement-diagnostics", () => {
+  test("requires admin auth and a bounded reward coordinator reference", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+    const url = "http://pirate.test/admin/ops/rewards-settlement-diagnostics"
+
+    expect((await app.request(url, {}, ctx.env)).status).toBe(401)
+    const invalid = await app.request(`${url}?coordinator_ref=not-json`, {
+      headers: { "x-admin-token": ADMIN_TOKEN },
+    }, ctx.env)
+    expect(invalid.status).toBe(400)
+    expect(await json(invalid)).toEqual({ error: "invalid_coordinator_ref" })
+  })
+})

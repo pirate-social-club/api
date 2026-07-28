@@ -14,8 +14,13 @@ import {
   resolveRewardsSettlementRpcUrl,
   resolveRewardsSettlementUsdcTokenAddress,
 } from "./booking-chain-config"
-import type { ChainPrimitives, OperatorKind } from "./operator-signing-coordinator-do"
-import { LitChipotleClient } from "../../rewards/lit-chipotle-client"
+import {
+  OperatorPreparationError,
+  type ChainPrimitives,
+  type OperatorKind,
+  type PreparationFailureStage,
+} from "./operator-signing-coordinator-do"
+import { LitChipotleClient, LitChipotleError } from "../../rewards/lit-chipotle-client"
 import { decideRewardVaultReceipt } from "../../rewards/reward-vault-receipt-decision"
 import { fetchRewardVaultReceiptSnapshot } from "../../rewards/reward-vault-receipt-snapshot"
 import { createProductionLitRewardVaultExecutor } from "../../rewards/lit-reward-vault-executor"
@@ -113,6 +118,21 @@ function transferAmount(input: { amountCents?: number; amountAtomic?: string }):
   return centsToAtomic(input.amountCents)
 }
 
+function preparationError(
+  stage: PreparationFailureStage,
+  error: unknown,
+  startedAt: number,
+): OperatorPreparationError {
+  return new OperatorPreparationError(stage, error, Math.max(0, Math.round(performance.now() - startedAt)))
+}
+
+function litFailureStage(error: unknown): PreparationFailureStage {
+  if (!(error instanceof LitChipotleError)) return "transaction_verification"
+  return error.code === "network" || error.code === "timeout"
+    ? "lit_request_dispatch"
+    : "lit_response"
+}
+
 export const realChain: ChainPrimitives = {
   pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "pending") },
   latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "latest") },
@@ -122,11 +142,22 @@ export const realChain: ChainPrimitives = {
     return { maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n, maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n, gasLimit: 100_000n }
   },
   signVerifiedTransfer: async (env, input) => {
-    const c = resolveConfig(env, input.operatorKind)
+    const startedAt = performance.now()
+    let c: ReturnType<typeof resolveConfig>
+    try {
+      c = resolveConfig(env, input.operatorKind)
+    } catch (error) {
+      throw preparationError("config_resolution", error, startedAt)
+    }
     const to = checksumRecipient(input.to)
     const amount = transferAmount(input)
     if (c.backend === "lit_vault") {
-      const lit = resolveRewardVaultLitConfig(env)
+      let lit: ReturnType<typeof resolveRewardVaultLitConfig>
+      try {
+        lit = resolveRewardVaultLitConfig(env)
+      } catch (error) {
+        throw preparationError("config_resolution", error, startedAt)
+      }
       const client = new LitChipotleClient({
         usageApiKey: lit.usageApiKey,
         baseUrl: lit.apiUrl,
@@ -138,19 +169,24 @@ export const realChain: ChainPrimitives = {
       // effect is enqueued. A stale/queued effect can be safely re-signed with
       // fresh calldata because the vault replay key remains the operation ID.
       const deadline = rewardVaultSigningDeadline(Date.now(), lit.signingDeadlineSeconds)
-      const verified = await executeAndVerifyRewardVaultTransaction(execute, {
-        effectKind: input.effectKind,
-        effectId: input.effectId,
-        recipient: to,
-        amount,
-        deadline,
-        policyVersion: lit.policyVersion,
-        vaultAddress: lit.vaultAddress,
-        signerAddress: c.operatorAddress,
-        chainId: c.chainId,
-        nonce: input.nonce,
-        gas: input.gas,
-      })
+      let verified: Awaited<ReturnType<typeof executeAndVerifyRewardVaultTransaction>>
+      try {
+        verified = await executeAndVerifyRewardVaultTransaction(execute, {
+          effectKind: input.effectKind,
+          effectId: input.effectId,
+          recipient: to,
+          amount,
+          deadline,
+          policyVersion: lit.policyVersion,
+          vaultAddress: lit.vaultAddress,
+          signerAddress: c.operatorAddress,
+          chainId: c.chainId,
+          nonce: input.nonce,
+          gas: input.gas,
+        })
+      } catch (error) {
+        throw preparationError(litFailureStage(error), error, startedAt)
+      }
       return { ...verified, operationId: rewardOperationId(input.effectId) }
     }
     if (!c.privateKey) throw badRequestError("Local settlement signer is not configured")
