@@ -42,6 +42,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: api-ci-${{ github.event.pull_request.number || github.ref }}
@@ -196,17 +197,9 @@ jobs:
           fi
           echo "Using Core commit $actual_core_sha"
 
-      - name: Check out web repo for cross-repo file deps
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ${{ needs.ci-inputs.outputs.web_sha }}
-          path: .cross-repo/web
-
       - name: Link cross-repo file deps
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -219,6 +212,8 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
       - name: Run bookings repository real-Postgres tests
@@ -317,17 +312,9 @@ jobs:
           ref: ${{ needs.ci-inputs.outputs.core_sha }}
           path: core
 
-      - name: Check out Web workspace dependency
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ${{ needs.ci-inputs.outputs.web_sha }}
-          path: .cross-repo/web
-
       - name: Link workspace dependencies and test fixtures
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
           ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
 
       - name: Set up Bun
@@ -342,11 +329,9 @@ jobs:
       - name: Install API dependencies
         id: install-api-dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
-
-      - name: Generate karaoke runtime build provenance
-        working-directory: .cross-repo/web/packages/karaoke-runtime
-        run: bun run build:provenance
 
       - name: Run top-level API tests
         shell: bash
@@ -517,38 +502,15 @@ jobs:
         working-directory: services/zkpassport-verifier-runtime
         run: bun audit --audit-level=high
 
-      - name: Check out web repo for cross-repo file deps
-        # services/api depends on @pirate-social-club/karaoke-runtime via
-        # file:../../../web/packages/karaoke-runtime — CI must mirror the
-        # workspace layout (web as a sibling) so the file: path resolves.
-        #
-        # PINNED to a SHA, not a mutable branch, so web drift cannot cause a
-        # time-dependent failure with no change in this repo.
-        #
-        # The SHA lives in .github/ci-refs/web.sha (single source of truth, mirroring
-        # core.sha) and is resolved once by the ci-inputs job. Bump it there.
-        #
-        # The api karaoke tests REQUIRE a web ref carrying the `initialSequence` field on
-        # KaraokeStreamingSttAdapter.start(). Against the previous pin (ecda035d) they fail:
-        #   - "restores JSON, binary, STT, and server-output sequence counters after eviction"
-        #   - "resumes STT scoring after a fresh DO restores the session"
-        # Note `tsc` stays CLEAN against the old pin (TypeScript method parameter
-        # bivariance hides the missing field), so the runtime tests are the only guard.
-        #
-        # The previous pin's stated blocker is resolved: cd4b93fb's required
-        # `uncertainLineCount` on KaraokeSessionSummary no longer breaks this repo — the api
-        # suite and `tsc` both pass against web main.
+      - name: Check out Web dependency-audit baseline
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
           ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
-      - name: Link web repo for cross-repo file deps
+      - name: Link Core repo for cross-repo file deps
         run: |
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
-          # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
-          # core repo is checked out at $GITHUB_WORKSPACE/core, so link it as a sibling too.
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
 
       - name: Install song preview container dependencies
@@ -571,6 +533,8 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
       - name: Typecheck API service
@@ -689,17 +653,9 @@ jobs:
           ref: ${{ needs.ci-inputs.outputs.core_sha }}
           path: core
 
-      - name: Check out Web workspace dependency
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ${{ needs.ci-inputs.outputs.web_sha }}
-          path: .cross-repo/web
-
       - name: Link workspace dependencies and test fixtures
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
           ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
 
       - name: Set up Bun
@@ -713,11 +669,9 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
-
-      - name: Generate karaoke runtime build provenance
-        working-directory: .cross-repo/web/packages/karaoke-runtime
-        run: bun run build:provenance
 
       - name: Run route-test shard
         working-directory: services/api

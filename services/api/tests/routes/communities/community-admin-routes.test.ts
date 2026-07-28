@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
+import { KARAOKE_RUNTIME_BUILD } from "@pirate-social-club/karaoke-runtime/build"
 import { app, buildVersionMetadata } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -60,8 +61,15 @@ describe("admin auth middleware", () => {
       PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
     })
     expect(response.status).toBe(200)
-    const body = await json(response) as { karaoke_scoring_version: number }
+    const body = await json(response) as {
+      karaoke_scoring_version: number
+      karaoke_runtime: { version: string; git_sha: string }
+    }
     expect(body.karaoke_scoring_version).toBe(KARAOKE_SCORING_VERSION)
+    expect(body.karaoke_runtime).toEqual({
+      version: "0.2.0",
+      git_sha: KARAOKE_RUNTIME_BUILD.gitSha,
+    })
   })
 
   test("admin token can validate against admin health route", async () => {

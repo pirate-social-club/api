@@ -43,6 +43,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   e2e:
@@ -79,6 +80,8 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
       - name: Run Story locked derivative video E2E
