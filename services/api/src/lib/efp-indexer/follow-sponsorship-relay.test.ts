@@ -86,6 +86,7 @@ describe("relaySponsoredFollowTransaction", () => {
       now: new Date("2026-07-28T12:00:00.000Z"),
       request: {
         authorizationSignature: "signature",
+        requestExpiry: String(new Date("2026-07-28T12:15:00.000Z").getTime()),
         intentId: `efw_${"b".repeat(32)}`,
         transactionIndex: 0,
         privyWalletId: "wallet-id",
@@ -100,6 +101,9 @@ describe("relaySponsoredFollowTransaction", () => {
           sponsor: true,
           params: { transaction: { data: DATA_ONE, to: RECORDS } },
         })
+        expect(new Headers(init?.headers).get("privy-request-expiry")).toBe(
+          String(new Date("2026-07-28T12:15:00.000Z").getTime()),
+        )
         return Response.json({ data: { hash: HASH } })
       },
     })
@@ -116,5 +120,42 @@ describe("relaySponsoredFollowTransaction", () => {
       statement.sql.includes("sponsorship_reserved_transaction_count = ?6")
     )
     expect(finalizedIntent?.args?.[5]).toBe(1)
+  })
+
+  test("polls an accepted sponsored transaction until Privy exposes its on-chain hash", async () => {
+    const client = relayClient()
+    let calls = 0
+    const result = await relaySponsoredFollowTransaction({
+      actorUserId: "viewer",
+      client,
+      env: {
+        PRIVY_APP_ID: "app",
+        PRIVY_APP_SECRET: "secret",
+        EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
+        EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
+      } as Env,
+      now: new Date("2026-07-28T12:00:00.000Z"),
+      request: {
+        authorizationSignature: "signature",
+        requestExpiry: String(new Date("2026-07-28T12:15:00.000Z").getTime()),
+        intentId: `efw_${"b".repeat(32)}`,
+        transactionIndex: 0,
+        privyWalletId: "wallet-id",
+        walletAddress: VIEWER,
+        transaction: { data: DATA_ONE, to: RECORDS },
+      },
+      fetcher: async (url) => {
+        calls += 1
+        if (String(url).includes("/rpc")) {
+          return Response.json({
+            data: { hash: "", transaction_id: "privy-transaction-id", user_operation_hash: HASH },
+          })
+        }
+        expect(String(url)).toContain("/v1/transactions/privy-transaction-id")
+        return Response.json({ status: "broadcasted", transaction_hash: HASH })
+      },
+    })
+    expect(calls).toBe(2)
+    expect(result.txHash).toBe(HASH)
   })
 })
