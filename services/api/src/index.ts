@@ -435,6 +435,29 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
+/** Operational responses are never cacheable — including error responses. */
+function applyNoStore(response: Response | undefined): void {
+  if (!response) return
+  try {
+    response.headers.set("cache-control", "private, no-store, max-age=0, must-revalidate")
+    response.headers.set("pragma", "no-cache")
+  } catch {
+    // Immutable headers on some synthetic responses; the onError path below
+    // rebuilds those and applies the same directives.
+  }
+}
+
+app.use("/admin/*", async (c, next) => {
+  // try/finally, and a direct write to the final response headers, because
+  // c.header() alone does NOT survive a THROWN error: the error propagates past
+  // await next() and the error handler builds a fresh Response. That gap was
+  // real — /admin/debug/post-pipeline returned 400 with no cache-control.
+  try {
+    await next()
+  } finally {
+    applyNoStore(c.res)
+  }
+})
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
 // Operational state must never be served from a cache. These endpoints report
@@ -448,15 +471,16 @@ app.route("/admin/debug", debugPipeline)
 // because they were different cache keys that had not been populated yet.
 //
 // `no-store` is set BEFORE the handler runs and on every response, including
-// errors, so nothing downstream has to remember to opt out. It also applies to
-// the whole /admin/ops namespace rather than the one route that surfaced the
-// bug, because every endpoint here reports mutable operational state.
+// errors, so nothing downstream has to remember to opt out.
+//
+// Scoped to the ENTIRE /admin namespace, not just /admin/ops. Auditing the
+// mounts found /admin/debug/post-pipeline and
+// /admin/debug/story-registration-effect: admin-authenticated GETs with no
+// cache-control, i.e. the same shape that leaked. All four /admin mounts
+// (bot-users, debug, ops, ops/telegram) are admin-gated and none is public, so
+// nothing here is safely cacheable and a future admin route is covered by
+// default rather than by remembering.
 
-app.use("/admin/ops/*", async (c, next) => {
-  await next()
-  c.header("cache-control", "private, no-store, max-age=0, must-revalidate")
-  c.header("pragma", "no-cache")
-})
 app.route("/admin/ops", opsWallets)
 app.route("/admin/ops/telegram", opsTelegramDeliveries)
 app.route("/internal/hns-edge-alerts", hnsEdgeAlerts)
@@ -515,7 +539,14 @@ app.post("/__debug/ops-alert", async (c) => {
 
 app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
-app.onError(apiErrorHandler)
+app.onError(async (error, c) => {
+  const response = await apiErrorHandler(error, c)
+  // A thrown error inside /admin must not become a cacheable body either.
+  if (new URL(c.req.url).pathname.startsWith("/admin/")) {
+    applyNoStore(response)
+  }
+  return response
+})
 
 async function fetchPublicRead(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const forwarded = buildPublicReadEntrypointRequest(req)

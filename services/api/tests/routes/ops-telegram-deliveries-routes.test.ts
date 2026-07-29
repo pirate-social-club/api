@@ -122,7 +122,40 @@ describe("operational reads are never cached", () => {
     expect(response.headers.get("cache-control") ?? "").toContain("no-store")
   })
 
-  test("the whole /admin/ops namespace is covered, not just telegram", async () => {
+  // Mount order is load-bearing: Hono matches in registration order, so a route
+  // mounted BEFORE the middleware bypasses it entirely. The first version of
+  // this fix covered /admin/ops only because it happens to be mounted last, and
+  // its tests passed while /admin/debug was completely uncovered.
+  test.each([
+    ["mounted BEFORE the middleware", "http://pirate.test/admin/bot-users"],
+    ["mounted BEFORE the middleware", "http://pirate.test/admin/debug/post-pipeline"],
+    ["mounted AFTER the middleware", "http://pirate.test/admin/ops/wallets"],
+    ["mounted AFTER the middleware", "http://pirate.test/admin/ops/telegram/uncertain-deliveries/count"],
+  ])("covers a route %s: %s", async (_when, url) => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+  })
+
+  // A thrown/returned error builds a fresh Response, which discarded the
+  // middleware headers: /admin/debug/post-pipeline returned 400 with none.
+  test("covers an ERROR response, not just success", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    // Missing the required post_id query parameter.
+    const response = await Promise.resolve(app.request(
+      "http://pirate.test/admin/debug/post-pipeline",
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+  })
+
+  test("the ops namespace specifically stays covered", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
 
