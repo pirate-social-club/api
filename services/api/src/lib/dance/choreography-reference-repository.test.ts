@@ -54,6 +54,9 @@ function row(status: "processing" | "ready" | "failed", failureCode: string | nu
     feature_schema_version: status === "ready" ? readyFacts.featureSchemaVersion : null,
     scorer_version: status === "ready" ? readyFacts.scorerVersion : null,
     artifact_version: status === "ready" ? readyFacts.artifactVersion : null,
+    reference_dispatch_attempt_count: 1,
+    reference_dispatch_claim_token: "claim_1",
+    reference_dispatch_id: null,
   }
 }
 
@@ -145,10 +148,14 @@ describe("dance choreography reference repository", () => {
       danceChoreographyRevisionId: "dcr_1",
       facts: { outcome: "failed", reason: "scoring_unavailable" },
       now: "2026-07-29T00:00:00.000Z",
+      transientRetryAt: "2026-07-29T00:01:00.000Z",
     })
 
     expect(result.kind).toBe("retryable_failure")
-    expect(statements.filter(({ sql }) => sql.trimStart().startsWith("UPDATE"))).toHaveLength(0)
+    expect(statements.some(({ sql, args }) =>
+      sql.includes("reference_next_dispatch_at = ?2")
+      && args?.includes("2026-07-29T00:01:00.000Z")
+    )).toBe(true)
   })
 
   test("accepts identical ready callback replay", async () => {

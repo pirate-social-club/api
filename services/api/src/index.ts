@@ -99,6 +99,10 @@ import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconc
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
+import {
+  dispatchDueDanceReferences,
+  isDanceReferenceDispatchConfigured,
+} from "./lib/dance/choreography-reference-dispatch"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
@@ -1616,6 +1620,23 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(isDanceReferenceDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_references",
+            run: async () => {
+              const summary = await dispatchDueDanceReferences({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance reference dispatch", {
+                  claimed: summary.claimed,
+                  dispatched: summary.dispatched,
+                  retry_scheduled: summary.retry_scheduled,
+                  exhausted: summary.exhausted,
+                  claim_lost: summary.claim_lost,
+                })
+              }
+            },
+          }]
+        : []),
       ...(env.CONTROL_PLANE_DATABASE_URL && env.BASE_MAINNET_RPC_URL
         ? [{
             name: "scan_efp_base",

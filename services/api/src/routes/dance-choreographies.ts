@@ -11,6 +11,7 @@ import {
   type OperatorDanceChoreographySeed,
 } from "../lib/dance/choreography-reference-repository"
 import { verifyDanceGraderCallback } from "../lib/dance/grader-callback-auth"
+import { danceReferenceFeatureStorageRef } from "../lib/dance/choreography-reference-storage"
 import { badRequestError } from "../lib/errors"
 import {
   authenticateOperatorCredential as realAuthenticateOperatorCredential,
@@ -23,10 +24,6 @@ const SHA256 = /^[0-9a-f]{64}$/
 const MIME_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"])
 const MIRROR_POLICIES = new Set(["strict", "allowed"])
 const MAX_CALLBACK_BODY_BYTES = 64 * 1024
-
-export function danceReferenceFeatureStorageRef(revisionId: string): string {
-  return `dance/reference-features/${revisionId}.json`
-}
 
 type DanceChoreographyRouteServices = {
   getControlPlaneClient: typeof realGetControlPlaneClient
@@ -189,6 +186,9 @@ danceChoreographies.post("/revisions/:revisionId/reference-callback", async (c) 
       ? danceReferenceFeatureStorageRef(revisionId)
       : undefined,
     now: new Date(routeServices.now()).toISOString(),
+    transientRetryAt: facts.outcome === "failed" && facts.reason === "scoring_unavailable"
+      ? new Date(routeServices.now() + 60_000).toISOString()
+      : undefined,
   })
   return c.json({
     revision: revisionId,

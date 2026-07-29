@@ -65,6 +65,9 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_FORCE_ALIGNMENT_URL=https://api.elevenlabs.io/v1/forced-alignment
 DANCE_GRADER_CALLBACK_HMAC_KEY=replace-me-with-a-long-random-secret
 DANCE_GRADER_CALLBACK_KEY_VERSION=dev-v1
+DANCE_GRADER_DISPATCH_URL=
+DANCE_GRADER_DISPATCH_HMAC_KEY=replace-me-with-a-different-long-random-secret
+DANCE_GRADER_DISPATCH_KEY_VERSION=dev-v1
 
 # ALTCHA proof-of-work (required when any community uses altcha_pow gates or guest comments)
 ALTCHA_HMAC_SECRET=replace-me-with-a-long-random-secret
