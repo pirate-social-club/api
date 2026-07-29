@@ -1,0 +1,22 @@
+[project]
+name = "pirate-dance-grader"
+version = "0.1.0"
+description = "Platform-independent pose-sequence grading core for Pirate dance rewards"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

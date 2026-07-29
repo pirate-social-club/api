@@ -1,0 +1,24 @@
+# Pirate dance grader
+
+This package is the platform-independent Gate-0 scoring core described by the dance reward
+qualification spec. It consumes pose JSON, not video. MediaPipe extraction and the thin Modal
+entry point are intentionally deferred until the scorer's adversarial tests and calibration gates
+pass.
+
+The default calibration is explicitly provisional. It produces stable basis-point-shaped output
+for corpus analysis, but `calibration_admitted` is false and must never authorize a reward.
+
+Run the focused suite:
+
+```bash
+python -m pytest -q
+```
+
+Evaluate saved pose JSON:
+
+```bash
+PYTHONPATH=src python scripts/evaluate_corpus.py \
+  --reference /path/to/reference_pose.json \
+  --attempt honest=/path/to/attempt_pose.json
+```
+
