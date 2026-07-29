@@ -71,5 +71,19 @@ describe("GET /admin/ops/rewards-settlement-diagnostics", () => {
     }, ctx.env)
     expect(invalid.status).toBe(400)
     expect(await json(invalid)).toEqual({ error: "invalid_coordinator_ref" })
+
+    const arbitrary = await app.request(
+      `${url}?coordinator_ref=${encodeURIComponent(JSON.stringify(["booking_settlement", "fixture"]))}`,
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    )
+    expect(arbitrary.status).toBe(400)
+
+    const refund = await app.request(
+      `${url}?coordinator_ref=${encodeURIComponent(JSON.stringify(["reward_funding_refund", "rcf_fixture"]))}`,
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    )
+    expect(refund.status).toBe(404)
   })
 })
