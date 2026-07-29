@@ -86,6 +86,25 @@ export type PreparationLitErrorToken =
   | "other_json_unknown"
   | "other_plain_text"
   | "other"
+  | "request_invalid"
+  | "vault_address_invalid"
+  | "vault_address_mismatch"
+  | "signer_address_invalid"
+  | "signer_address_mismatch"
+  | "chain_id_mismatch"
+  | "policy_version_mismatch"
+  | "method_not_permitted"
+  | "operation_id_invalid"
+  | "amount_invalid"
+  | "deadline_invalid"
+  | "deadline_out_of_policy"
+  | "nonce_invalid"
+  | "gas_policy_missing"
+  | "max_fee_per_gas_invalid"
+  | "max_priority_fee_per_gas_invalid"
+  | "gas_limit_invalid"
+  | "gas_policy_exceeded"
+  | "pkp_signer_mismatch"
 
 export interface PreparationFailureDiagnostic {
   stage: PreparationFailureStage
@@ -292,6 +311,13 @@ function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): Pre
     "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout",
     "other_json_error", "other_json_message", "other_json_nested_error",
     "other_json_unknown", "other_plain_text", "other",
+    "request_invalid", "vault_address_invalid", "vault_address_mismatch",
+    "signer_address_invalid", "signer_address_mismatch", "chain_id_mismatch",
+    "policy_version_mismatch", "method_not_permitted", "operation_id_invalid",
+    "amount_invalid", "deadline_invalid", "deadline_out_of_policy",
+    "nonce_invalid", "gas_policy_missing", "max_fee_per_gas_invalid",
+    "max_priority_fee_per_gas_invalid", "gas_limit_invalid",
+    "gas_policy_exceeded", "pkp_signer_mismatch",
   ])
   const transport = typeof record.transportCategory === "string"
     && transportCategories.has(record.transportCategory as PreparationTransportCategory)

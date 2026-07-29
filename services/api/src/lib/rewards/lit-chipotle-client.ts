@@ -1,3 +1,8 @@
+import {
+  pinnedRewardVaultActionErrorToken,
+  type PinnedRewardVaultActionErrorToken,
+} from "./reward-vault-lit-action-errors"
+
 const DEFAULT_BASE_URL = "https://api.chipotle.litprotocol.com"
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_MAX_ATTEMPTS = 3
@@ -36,6 +41,7 @@ export type LitErrorToken =
   | "other_json_unknown"
   | "other_plain_text"
   | "other"
+  | PinnedRewardVaultActionErrorToken
 
 export class LitChipotleError extends Error {
   constructor(
@@ -201,18 +207,12 @@ function litErrorTokenFromEnvelope(input: LitActionResponse): LitErrorToken {
 }
 
 function litErrorTokenFromPlainText(input: string): LitErrorToken {
-  // Chipotle currently returns action-thrown exceptions as a plain-text HTTP
-  // 500 stack rather than its JSON envelope. Match only the exact, reviewed
-  // policy messages frozen into the registered action; never return, log, or
-  // persist the provider body.
-  const bounded = input.slice(0, 4_000).toLowerCase()
-  return bounded.includes("deadline is outside pinned policy")
-    || bounded.includes("policyversion does not match pinned policy")
-    ? "invalid_params"
-    : "other"
+  return pinnedRewardVaultActionErrorToken(input) ?? "other"
 }
 
 function litErrorTokenFromHttpErrorEnvelope(input: unknown): LitErrorToken {
+  const pinnedToken = pinnedRewardVaultActionErrorToken(input)
+  if (pinnedToken) return pinnedToken
   if (!input || typeof input !== "object" || Array.isArray(input)) return "other_json_unknown"
   const record = input as Record<string, unknown>
   const candidates = ["error", "message", "detail", "details"]
