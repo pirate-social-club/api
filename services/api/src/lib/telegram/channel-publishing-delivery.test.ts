@@ -15,6 +15,7 @@ let executions: Execution[] = []
 let deliveryRow: Record<string, unknown> | null = null
 let lastSendPayload: Record<string, unknown> | null = null
 let sendFails = false
+let sendError: unknown = null
 let confirmWriteFails = false
 
 function classify(sql: string): string {
@@ -59,6 +60,7 @@ function deps(): TelegramPublishDeps {
       sendMessage: (async (_bot: unknown, payload: Record<string, unknown>) => {
         calls.push("telegram:sendMessage")
         lastSendPayload = payload
+        if (sendError) throw sendError
         if (sendFails) throw new Error("telegram rejected the send")
         return { message_id: 555 }
       }) as unknown as TelegramPublishDeps["telegram"]["sendMessage"],
@@ -110,6 +112,7 @@ describe("Telegram delivery reservation", () => {
     deliveryRow = null
     lastSendPayload = null
     sendFails = false
+    sendError = null
     confirmWriteFails = false
   })
 
@@ -222,6 +225,7 @@ describe("Telegram channel inline keyboard", () => {
     deliveryRow = null
     lastSendPayload = null
     sendFails = false
+    sendError = null
     confirmWriteFails = false
   })
 
@@ -243,5 +247,73 @@ describe("Telegram channel inline keyboard", () => {
     expect(String(button?.url)).toStartWith("https://pirate.test/")
     // Telegram requires exactly one type field per inline button.
     expect(Object.keys(button ?? {}).filter((key) => key !== "text")).toEqual(["url"])
+  })
+})
+
+describe("Telegram dispatch-uncertainty classification", () => {
+  beforeEach(() => {
+    calls = []
+    executions = []
+    deliveryRow = null
+    lastSendPayload = null
+    sendFails = false
+    sendError = null
+    confirmWriteFails = false
+  })
+
+  // Regression: a timeout is NOT evidence that nothing was sent. Staging proved
+  // it — two sends timed out, both had actually posted, and because the rows
+  // were marked 'failed' (retryable) the retries posted them a SECOND time.
+  // Only an explicit refusal from Telegram proves no message exists.
+  test("a dispatch timeout is uncertain, never retryable", async () => {
+    sendError = Object.assign(new Error("Telegram sendMessage timed out"), {
+      telegram_dispatch_uncertain: true,
+    })
+
+    await expect(publish()).rejects.toThrow(/timed out/u)
+
+    expect(calls).toContain("telegram:sendMessage")
+    expect(calls).toContain("uncertain")
+    // 'failed' would let the job run again and duplicate the channel post.
+    expect(calls).not.toContain("fail")
+  })
+
+  test("a network failure before any response is uncertain too", async () => {
+    sendError = Object.assign(new Error("Telegram sendMessage failed"), {
+      telegram_dispatch_uncertain: true,
+    })
+
+    await expect(publish()).rejects.toThrow()
+
+    expect(calls).toContain("uncertain")
+    expect(calls).not.toContain("fail")
+  })
+
+  test("an explicit Telegram refusal stays retryable", async () => {
+    // Telegram answered ok:false — no message was created, so retrying cannot
+    // duplicate anything. This must NOT be downgraded to uncertain, or a real
+    // fixable error would strand the post for an operator.
+    sendError = new Error("Bad Request: BUTTON_TYPE_INVALID")
+
+    await expect(publish()).rejects.toThrow(/BUTTON_TYPE_INVALID/u)
+
+    expect(calls).toContain("fail")
+    expect(calls).not.toContain("uncertain")
+  })
+
+  test("an uncertain delivery is not retried on the next pass", async () => {
+    deliveryRow = {
+      telegram_post_delivery_id: "tpd_1",
+      telegram_message_id: null,
+      content_hash: "stale",
+      status: "uncertain",
+      attempt_count: 1,
+    }
+
+    const result = await publish()
+
+    expect(result).toBeNull()
+    expect(calls).not.toContain("telegram:sendMessage")
+    expect(calls).not.toContain("reserve")
   })
 })
