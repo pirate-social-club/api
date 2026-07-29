@@ -126,6 +126,18 @@ function preparationError(
   return new OperatorPreparationError(stage, error, Math.max(0, Math.round(performance.now() - startedAt)))
 }
 
+export function createStaticSettlementProvider(rpcUrl: string, chainId: number): JsonRpcProvider {
+  // The chain ID is an explicit, validated settlement policy input. Mark it
+  // static so ethers does not prepend an eth_chainId detection request to
+  // every short-lived Worker provider; that probe intermittently fails at the
+  // public Base RPC before the requested nonce/read call is attempted.
+  return new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true })
+}
+
+function providerFor(config: Pick<ReturnType<typeof resolveConfig>, "rpcUrl" | "chainId">): JsonRpcProvider {
+  return createStaticSettlementProvider(config.rpcUrl, config.chainId)
+}
+
 function litFailureStage(error: unknown): PreparationFailureStage {
   if (!(error instanceof LitChipotleError)) return "transaction_verification"
   return error.code === "network" || error.code === "timeout"
@@ -140,11 +152,11 @@ export function settlementGasLimit(env: Env, backend: RewardsSettlementBackend):
 }
 
 export const realChain: ChainPrimitives = {
-  pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "pending") },
-  latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return new JsonRpcProvider(c.rpcUrl, c.chainId).getTransactionCount(c.operatorAddress, "latest") },
+  pendingNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return providerFor(c).getTransactionCount(c.operatorAddress, "pending") },
+  latestNonce: async (env, operatorKind) => { const c = resolveConfig(env, operatorKind); return providerFor(c).getTransactionCount(c.operatorAddress, "latest") },
   gasParams: async (env, operatorKind) => {
     const c = resolveConfig(env, operatorKind)
-    const fee = await new JsonRpcProvider(c.rpcUrl, c.chainId).getFeeData()
+    const fee = await providerFor(c).getFeeData()
     return {
       maxFeePerGas: fee.maxFeePerGas ?? 2_000_000_000n,
       maxPriorityFeePerGas: fee.maxPriorityFeePerGas ?? 1_000_000_000n,
@@ -213,7 +225,7 @@ export const realChain: ChainPrimitives = {
       return { ...verified, operationId: rewardOperationId(input.effectId) }
     }
     if (!c.privateKey) throw badRequestError("Local settlement signer is not configured")
-    const signer = new Wallet(c.privateKey, new JsonRpcProvider(c.rpcUrl, c.chainId))
+    const signer = new Wallet(c.privateKey, providerFor(c))
     const usdc = new Contract(c.usdc, ERC20_ABI, signer)
     // The amount math assumes 6 decimals — verify the token actually is, so a misconfigured token
     // address can never transfer the wrong order of magnitude.
@@ -244,10 +256,10 @@ export const realChain: ChainPrimitives = {
       operationId: input.operatorKind === "rewards" ? rewardOperationId(input.effectId) : null,
     }
   },
-  broadcast: async (env, input) => { const c = resolveConfig(env, input.operatorKind); await new JsonRpcProvider(c.rpcUrl, c.chainId).broadcastTransaction(input.signedTx) },
+  broadcast: async (env, input) => { const c = resolveConfig(env, input.operatorKind); await providerFor(c).broadcastTransaction(input.signedTx) },
   txLiveness: async (env, txHash, operatorKind) => {
     const c = resolveConfig(env, operatorKind)
-    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    const provider = providerFor(c)
     const receipt = await provider.getTransactionReceipt(txHash)
     if (receipt) return receipt.status === 1 ? "success" : "failed"
     return (await provider.getTransaction(txHash)) ? "pending" : "absent"
@@ -263,7 +275,7 @@ export const realChain: ChainPrimitives = {
       }
     }
     const lit = resolveRewardVaultLitConfig(env)
-    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    const provider = providerFor(c)
     try {
       const receipt = await provider.getTransactionReceipt(input.txHash)
       if (!receipt || receipt.status !== 0 || !receipt.blockHash) {
@@ -367,7 +379,7 @@ export const realChain: ChainPrimitives = {
       }
     }
     const lit = resolveRewardVaultLitConfig(env)
-    const provider = new JsonRpcProvider(c.rpcUrl, c.chainId)
+    const provider = providerFor(c)
     try {
     const snapshot = await fetchRewardVaultReceiptSnapshot(
       {
