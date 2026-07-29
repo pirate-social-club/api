@@ -3,12 +3,22 @@ import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
 import {
   isRewardRehearsalScenario,
+  rewardEpochCapCashoutFixture,
   rewardRehearsalRequest,
 } from "./reward-rehearsal"
 
 describe("reward rehearsal fixtures", () => {
-  test("accepts only the five scenario enums", () => {
-    expect(["replay", "over_limit", "deadline_expired", "stale_policy", "refund_while_payouts_paused"]
+  test("accepts only the fixed scenario enums", () => {
+    expect([
+      "replay",
+      "over_limit",
+      "deadline_expired",
+      "stale_policy",
+      "refund_while_payouts_paused",
+      "epoch_cap_fill_1",
+      "epoch_cap_fill_2",
+      "epoch_cap_defer",
+    ]
       .every(isRewardRehearsalScenario)).toBe(true)
     expect(isRewardRehearsalScenario("amount=1")).toBe(false)
   })
@@ -40,6 +50,22 @@ describe("reward rehearsal fixtures", () => {
       recipientAddress: replay.recipientAddress,
       rehearsalScenario: "refund_while_payouts_paused",
     })
+  })
+
+  test("derives three distinct fixed 50-cent epoch-cap cashouts", () => {
+    const fixtures = [
+      rewardEpochCapCashoutFixture("epoch_cap_fill_1"),
+      rewardEpochCapCashoutFixture("epoch_cap_fill_2"),
+      rewardEpochCapCashoutFixture("epoch_cap_defer"),
+    ]
+    expect(fixtures.map((fixture) => fixture.amountCents)).toEqual([50, 50, 50])
+    expect(new Set(fixtures.map((fixture) => fixture.idempotencyKey)).size).toBe(3)
+    expect(new Set(fixtures.map((fixture) => fixture.userId)).size).toBe(1)
+    expect(fixtures.map((fixture) => fixture.idempotencyKey)).toEqual([
+      "rehearsal:scenario7:fill1:20260729",
+      "rehearsal:scenario7:fill2:20260729",
+      "rehearsal:scenario7:defer:20260729",
+    ])
   })
 
   test("fails closed outside staging", () => {

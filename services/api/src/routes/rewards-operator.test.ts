@@ -3,6 +3,7 @@ import { Hono } from "hono"
 import rewards, {
   createRewardBackendFlipReadinessHandler,
   createRewardCampaignRecoveryHandler,
+  createRewardEpochCapRehearsalSnapshotHandler,
   createRewardRefundPolicyReadinessHandler,
   createRewardRehearsalHandler,
   createRewardSettlementResolutionHandler,
@@ -17,7 +18,6 @@ import {
   REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
 } from "../lib/operator-credential-auth"
-import type { OperatorSettleResult } from "../lib/communities/bookings/operator-signing-coordinator-do"
 
 function withErrors(app: Hono<{ Bindings: Env }>): Hono<{ Bindings: Env }> {
   app.onError((error, c) => {
@@ -160,12 +160,12 @@ function rehearsalApp(input: {
       input.invoked?.(scenario)
       return {
         idempotencyKey: `["reward_payout","rehearsal:${scenario}"]`,
-        operationId: null,
-        txHash: null,
-        nonce: null,
         state: "reserving",
-      } satisfies OperatorSettleResult
+        payoutEffectId: null,
+        transactionHash: null,
+      }
     },
+    snapshot: async () => ({ userId: "usr_test", amountCentsEach: 50, rows: [] }),
   }))
   return {
     app,
@@ -232,7 +232,48 @@ describe("reward settlement rehearsal route", () => {
     }, fixture.env)
     expect(refund.status).toBe(202)
     expect(refund.headers.get("cache-control")).toBe("private, no-store")
-    expect(seen).toEqual(["over_limit", "refund_while_payouts_paused"])
+    const epochCap = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "epoch_cap_defer" }),
+    }, fixture.env)
+    expect(epochCap.status).toBe(202)
+    expect(seen).toEqual(["over_limit", "refund_while_payouts_paused", "epoch_cap_defer"])
+  })
+
+  test("exposes the fixed epoch-cap snapshot only in staging with private no-store", async () => {
+    const app = withErrors(new Hono<{ Bindings: Env }>())
+    app.get("/operator/reward_settlements/rehearsal/epoch-cap", createRewardEpochCapRehearsalSnapshotHandler({
+      authenticate: async () => ({
+        authType: "operator_credential",
+        operatorCredentialId: "opc_test",
+        operatorActorId: "rehearsal-operator",
+        scopes: [REWARD_REHEARSAL_EXECUTE_SCOPE],
+      }),
+      enqueue: async () => {
+        throw new Error("not used")
+      },
+      snapshot: async () => ({
+        userId: "usr_test",
+        amountCentsEach: 50,
+        rows: [],
+      }),
+    }))
+    const staging = await app.request(
+      "/operator/reward_settlements/rehearsal/epoch-cap",
+      {},
+      { ENVIRONMENT: "staging" } as Env,
+    )
+    expect(staging.status).toBe(200)
+    expect(staging.headers.get("cache-control")).toBe("private, no-store")
+    expect(await staging.json()).toEqual({ userId: "usr_test", amountCentsEach: 50, rows: [] })
+
+    const production = await app.request(
+      "/operator/reward_settlements/rehearsal/epoch-cap",
+      {},
+      { ENVIRONMENT: "production" } as Env,
+    )
+    expect(production.status).toBe(404)
   })
 })
 

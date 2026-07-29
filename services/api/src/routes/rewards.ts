@@ -39,6 +39,7 @@ import { getRewardBackendFlipReadiness } from "../lib/rewards/reward-backend-fli
 import { getRewardSolvencyGateStatus } from "../lib/rewards/reward-solvency-gate"
 import {
   enqueueRewardRehearsalScenario,
+  getRewardEpochCapRehearsalSnapshot,
   isRewardRehearsalScenario,
 } from "../lib/rewards/reward-rehearsal"
 
@@ -75,6 +76,7 @@ type RewardReadinessRouteServices = Pick<
 >
 type RewardRehearsalRouteServices = Pick<RewardOperatorRouteServices, "authenticate"> & {
   enqueue: typeof enqueueRewardRehearsalScenario
+  snapshot: typeof getRewardEpochCapRehearsalSnapshot
 }
 
 rewards.use("/me/rewards", authenticate)
@@ -428,6 +430,7 @@ export function createRewardRehearsalHandler(
   services: RewardRehearsalRouteServices = {
     authenticate: operatorRouteDefaults.authenticate,
     enqueue: enqueueRewardRehearsalScenario,
+    snapshot: getRewardEpochCapRehearsalSnapshot,
   },
 ) {
   return async (c: Context<AuthenticatedEnv>) => {
@@ -453,7 +456,29 @@ export function createRewardRehearsalHandler(
       scenario: body.scenario,
       coordinator_ref: result.idempotencyKey,
       state: result.state,
+      payout_effect_id: result.payoutEffectId,
+      transaction_hash: result.transactionHash,
     }, 202, {
+      "cache-control": "private, no-store",
+    })
+  }
+}
+
+export function createRewardEpochCapRehearsalSnapshotHandler(
+  services: RewardRehearsalRouteServices = {
+    authenticate: operatorRouteDefaults.authenticate,
+    enqueue: enqueueRewardRehearsalScenario,
+    snapshot: getRewardEpochCapRehearsalSnapshot,
+  },
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_REHEARSAL_EXECUTE_SCOPE)
+    return c.json(await services.snapshot(c.env), 200, {
       "cache-control": "private, no-store",
     })
   }
@@ -471,5 +496,9 @@ rewards.get("/operator/reward_pools/refund_policy_readiness", createRewardRefund
 rewards.get("/operator/reward_settlements/backend_flip_readiness", createRewardBackendFlipReadinessHandler())
 rewards.get("/operator/reward_settlements/solvency_readiness", createRewardSolvencyReadinessHandler())
 rewards.post("/operator/reward_settlements/rehearsal", createRewardRehearsalHandler())
+rewards.get(
+  "/operator/reward_settlements/rehearsal/epoch-cap",
+  createRewardEpochCapRehearsalSnapshotHandler(),
+)
 
 export default rewards
