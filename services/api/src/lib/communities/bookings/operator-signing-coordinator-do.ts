@@ -904,11 +904,22 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private nextActive(): EffectRow | null {
+    const now = Date.now()
     const raw = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
       `SELECT * FROM effects
        WHERE state NOT IN ('confirmed', 'replaced', 'failed_onchain')
-       ORDER BY created_at ASC, idempotency_key ASC
+       ORDER BY
+         CASE
+           WHEN (next_attempt_at IS NULL OR next_attempt_at <= ?1)
+             AND (claim_token IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?1)
+           THEN 0
+           ELSE 1
+         END ASC,
+         COALESCE(next_attempt_at, 0) ASC,
+         created_at ASC,
+         idempotency_key ASC
        LIMIT 1`,
+      now,
     ).toArray()[0]
     return raw ? this.decode(raw) : null
   }

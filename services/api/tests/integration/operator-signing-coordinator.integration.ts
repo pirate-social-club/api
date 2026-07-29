@@ -314,6 +314,34 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     })
   })
 
+  it("does not let a delayed reconciliation row starve a newer runnable effect", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 14,
+      latest: 14,
+      liveness: { "0xhash_14": "failed" },
+      settlementFailure: {
+        selector: "0x01828959",
+        errorName: "OperationAlreadyUsed",
+        transactionHash: `0x${"11".repeat(32)}`,
+        blockHash: `0x${"22".repeat(32)}`,
+        classifiedAt: "2026-07-29T07:00:00.000Z",
+      },
+    })
+    const first = rewardsReq({ payoutEffectId: "rpe_first", idempotencyKey: "reward:first" })
+    const second = rewardsReq({ payoutEffectId: "rpe_second", idempotencyKey: "reward:second" })
+
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub) // first broadcasts
+    await stub.settle(second)
+    await stub.reconcile(first)
+    await runDurableObjectAlarm(stub) // first becomes delayed reconciliation_required
+    await runDurableObjectAlarm(stub) // second must run instead of waiting behind first
+
+    expect((await stub.lookup(first)).state).toBe("reconciliation_required")
+    expect((await stub.lookup(second)).state).toBe("broadcast")
+  })
+
   it("rejects rehearsal mutations outside the staging runtime", async () => {
     const stub = freshStub()
     await injectChain(stub, { pending: 15, latest: 15, liveness: {} })
