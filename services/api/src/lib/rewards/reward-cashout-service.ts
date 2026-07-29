@@ -301,12 +301,18 @@ async function currentBalanceCents(exec: Pick<Client | Transaction, "execute">, 
 export function planRewardPayoutAllocations(
   events: ReadonlyArray<RewardEventBalance>,
   amountCents: number,
+  legacyConfirmedUnallocatedCents = 0,
 ): RewardPayoutAllocation[] {
   let remaining = amountCents
+  let legacyPaidRemaining = legacyConfirmedUnallocatedCents
   const allocations: RewardPayoutAllocation[] = []
   for (const event of events) {
     if (remaining <= 0) break
-    const available = Math.max(0, Math.trunc(event.availableCents))
+    let available = Math.max(0, Math.trunc(event.availableCents))
+    if (available === 0) continue
+    const legacyPaid = Math.min(available, legacyPaidRemaining)
+    available -= legacyPaid
+    legacyPaidRemaining -= legacyPaid
     if (available === 0) continue
     const allocated = Math.min(available, remaining)
     allocations.push({
@@ -316,7 +322,7 @@ export function planRewardPayoutAllocations(
     })
     remaining -= allocated
   }
-  if (remaining !== 0) {
+  if (legacyPaidRemaining !== 0 || remaining !== 0) {
     throw conflictError("Rewards cashout allocation does not match the available balance")
   }
   return allocations
@@ -329,6 +335,34 @@ async function reservePayoutAllocations(input: {
   amountCents: number
   nowUtc: string
 }): Promise<void> {
+  // Migration 0150 deliberately left ambiguous historical confirmed payouts
+  // without allocation rows. They still consumed the user's oldest credits.
+  // Carry that legacy paid amount across the same FIFO stream before assigning
+  // a new payout, otherwise a new cashout reuses old events and advances the
+  // wrong campaign's paid projection.
+  const legacy = await input.tx.execute({
+    sql: `
+      SELECT
+        COALESCE((
+          SELECT SUM(amount_cents)
+          FROM reward_payout_effects
+          WHERE user_id = ?1 AND status = 'confirmed'
+        ), 0) AS confirmed_payout_cents,
+        COALESCE((
+          SELECT SUM(allocation.amount_cents)
+          FROM reward_payout_allocations allocation
+          JOIN reward_payout_effects payout
+            ON payout.reward_payout_effect_id = allocation.reward_payout_effect_id
+          WHERE payout.user_id = ?1 AND allocation.status = 'confirmed'
+        ), 0) AS confirmed_allocated_cents
+    `,
+    args: [input.userId],
+  })
+  const legacyConfirmedUnallocatedCents = Math.max(
+    0,
+    requiredNumber(legacy.rows[0], "confirmed_payout_cents")
+      - requiredNumber(legacy.rows[0], "confirmed_allocated_cents"),
+  )
   const result = await input.tx.execute({
     sql: `
       SELECT
@@ -356,6 +390,7 @@ async function reservePayoutAllocations(input: {
       availableCents: requiredNumber(row, "available_cents"),
     })),
     input.amountCents,
+    legacyConfirmedUnallocatedCents,
   )
   for (const allocation of allocations) {
     await input.tx.execute({
