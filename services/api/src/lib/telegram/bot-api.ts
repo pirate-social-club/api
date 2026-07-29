@@ -68,6 +68,34 @@ export function telegramBotUserId(input: Env | TelegramBotCredential): number {
   return parsed
 }
 
+/**
+ * Marks an error as "the request may have reached Telegram".
+ *
+ * A timeout or network failure is NOT evidence that nothing was sent: the
+ * request can be delivered and processed while the response is lost. Treating
+ * it as a clean failure is how a retry duplicates a channel post — observed on
+ * staging, where two sends timed out, both actually posted, and the retries
+ * posted them a second time.
+ *
+ * A response whose payload says `ok: false` is the opposite: Telegram answered
+ * and refused, so no message exists and retrying is safe.
+ */
+export const TELEGRAM_DISPATCH_UNCERTAIN = "telegram_dispatch_uncertain"
+
+function dispatchUncertain(error: Error): Error {
+  ;(error as Error & { [TELEGRAM_DISPATCH_UNCERTAIN]?: true })[TELEGRAM_DISPATCH_UNCERTAIN] = true
+  return error
+}
+
+/** True when the request may have been received by Telegram despite the error. */
+export function isTelegramDispatchUncertain(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && (error as Record<string, unknown>)[TELEGRAM_DISPATCH_UNCERTAIN] === true,
+  )
+}
+
 async function callTelegramBotApi<T>(
   bot: Env | TelegramBotCredential,
   method: string,
@@ -86,9 +114,11 @@ async function callTelegramBotApi<T>(
       signal: controller.signal,
     })
   } catch (error) {
-    throw providerUnavailable(error instanceof Error && error.name === "AbortError"
+    // The request left this Worker; its outcome is unknown. Callers that create
+    // side effects on Telegram MUST treat this as uncertain, not as a failure.
+    throw dispatchUncertain(providerUnavailable(error instanceof Error && error.name === "AbortError"
       ? `Telegram ${method} timed out`
-      : `Telegram ${method} failed`)
+      : `Telegram ${method} failed`))
   } finally {
     clearTimeout(timeout)
   }
@@ -117,9 +147,11 @@ async function callTelegramBotApiMultipart<T>(
       signal: controller.signal,
     })
   } catch (error) {
-    throw providerUnavailable(error instanceof Error && error.name === "AbortError"
+    // The request left this Worker; its outcome is unknown. Callers that create
+    // side effects on Telegram MUST treat this as uncertain, not as a failure.
+    throw dispatchUncertain(providerUnavailable(error instanceof Error && error.name === "AbortError"
       ? `Telegram ${method} timed out`
-      : `Telegram ${method} failed`)
+      : `Telegram ${method} failed`))
   } finally {
     clearTimeout(timeout)
   }

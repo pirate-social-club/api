@@ -7,6 +7,7 @@ import { rowValue } from "../sql-row"
 import type { Env } from "../../env"
 import type { CommunityPostProjectionRow } from "../auth/auth-db-community-rows"
 import {
+  isTelegramDispatchUncertain,
   editTelegramMessageCaption,
   editTelegramMessageText,
   sendTelegramMessage,
@@ -488,10 +489,17 @@ export async function publishPostProjectionToTelegram(input: {
     await markDeliverySucceeded({ client, deliveryId, messageId })
     return deliveryId
   } catch (error) {
-    if (sent) {
-      // Telegram already has the message; only the confirmation write failed.
-      // Recording 'uncertain' with no message id is what makes every later
-      // pass take the isAmbiguousDelivery branch instead of sending again.
+    // Two different unknowns collapse to the same conclusion:
+    //   sent                        -> Telegram has it; only our write failed
+    //   isTelegramDispatchUncertain -> the request left us and never answered
+    // Both mean a retry might post the message a second time. Only an explicit
+    // refusal from Telegram (a response saying ok:false, e.g.
+    // BUTTON_TYPE_INVALID) proves no message was created and is safe to retry.
+    //
+    // Classifying a timeout as a clean failure duplicated two channel posts on
+    // staging: the sends timed out, both had actually posted, and the retries
+    // posted them again.
+    if (sent || isTelegramDispatchUncertain(error)) {
       await markDeliveryUncertain({ client, deliveryId }).catch(() => undefined)
     } else {
       await markDeliveryFailure({ client, deliveryId, error }).catch(() => undefined)
