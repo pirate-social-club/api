@@ -14,6 +14,7 @@ const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
+export type RewardRehearsalScenario = "replay" | "over_limit" | "deadline_expired" | "stale_policy"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -39,6 +40,8 @@ export interface OperatorSettleRequest {
   amountCents?: number
   amountAtomic?: string
   recipientAddress: string
+  /** Server-derived staging fixture only; never caller-selected transaction data. */
+  rehearsalScenario?: RewardRehearsalScenario
 }
 
 export type OperatorSettleState =
@@ -88,6 +91,14 @@ export interface PreparationFailureDiagnostic {
   classifiedAt: number
 }
 
+export interface SettlementFailureDiagnostic {
+  selector: string
+  errorName: string | null
+  transactionHash: string
+  blockHash: string
+  classifiedAt: string
+}
+
 export class OperatorPreparationError extends Error {
   constructor(
     readonly stage: PreparationFailureStage,
@@ -107,6 +118,7 @@ export interface OperatorSettleResult {
   nonce: number | null
   state: OperatorSettleState
   preparationFailure?: PreparationFailureDiagnostic | null
+  settlementFailure?: SettlementFailureDiagnostic | null
   manualResolution?: {
     resolution: "confirmed" | "failed_onchain"
     reason: string
@@ -216,6 +228,7 @@ export interface ChainPrimitives {
     operatorKind?: OperatorKind
     effectKind: OperatorEffectKind
     effectId: string
+    rehearsalScenario?: RewardRehearsalScenario
   }) => Promise<{ signedTx: string; txHash: string; operationId?: string | null }>
   broadcast: (env: Env, input: { signedTx: string; operatorKind?: OperatorKind }) => Promise<void>
   txLiveness: (env: Env, txHash: string, operatorKind?: OperatorKind) => Promise<TxLiveness>
@@ -231,7 +244,7 @@ export interface ChainPrimitives {
     disposition: "capacity_deferred" | "reconciliation_required"
     reason: string
     retryAfterMs: number | null
-    compactEvidence: Record<string, string> | null
+    compactEvidence: SettlementFailureDiagnostic | null
   }>
   rewardVaultDecision?: (env: Env, input: {
     txHash: string
@@ -357,7 +370,26 @@ interface EffectRow {
   preparation_lit_error_token: PreparationLitErrorToken | null
   preparation_latency_ms: number | null
   preparation_classified_at: number | null
+  rehearsal_scenario: RewardRehearsalScenario | null
+  settlement_revert_selector: string | null
+  settlement_revert_name: string | null
+  settlement_transaction_hash: string | null
+  settlement_block_hash: string | null
+  settlement_classified_at: string | null
 }
+
+type MutableEffectFields = Partial<Omit<
+  EffectRow,
+  | "idempotency_key"
+  | "community_id"
+  | "booking_id"
+  | "effect_kind"
+  | "amount_cents"
+  | "amount_atomic"
+  | "recipient_address"
+  | "version"
+  | "rehearsal_scenario"
+>>
 
 export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -418,10 +450,22 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
           this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (6, ?1)", Date.now())
         })
       }
+      if (schemaVersion < 7) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN rehearsal_scenario TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN settlement_revert_selector TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN settlement_revert_name TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN settlement_transaction_hash TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN settlement_block_hash TEXT")
+          this.ctx.storage.sql.exec("ALTER TABLE effects ADD COLUMN settlement_classified_at TEXT")
+          this.ctx.storage.sql.exec("INSERT INTO _sql_schema_migrations (id, applied_at) VALUES (7, ?1)", Date.now())
+        })
+      }
     })
   }
 
   async settle(req: OperatorSettleRequest): Promise<OperatorSettleResult> {
+    this.assertRehearsalRequest(req)
     const key = this.deriveKey(req)
     const recipient = normalizeRecipient(req.recipientAddress)
     this.assertAmount(req)
@@ -577,9 +621,10 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         `INSERT INTO effects (
            idempotency_key, community_id, booking_id, effect_kind, amount_cents, amount_atomic, recipient_address,
            signed_tx, tx_hash, nonce, state, version, claim_token, claim_expires_at,
-           created_at, updated_at, attempt_count, next_attempt_at, last_error
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, 'reserving', 1, NULL, NULL, ?8, ?8, 0, NULL, NULL)`,
-        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents ?? 0, normalizeAtomicAmount(req.amountAtomic), recipient, now,
+           created_at, updated_at, attempt_count, next_attempt_at, last_error, rehearsal_scenario
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, 'reserving', 1, NULL, NULL, ?8, ?8, 0, NULL, NULL, ?9)`,
+        key, fields.communityId, fields.bookingId, fields.effectKind, req.amountCents ?? 0,
+        normalizeAtomicAmount(req.amountAtomic), recipient, now, req.rehearsalScenario ?? null,
       )
       return this.read(key)!
     })
@@ -727,6 +772,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
             reason: evidence.reason,
             evidence: evidence.compactEvidence,
           }).slice(0, 1_000),
+          settlement_revert_selector: evidence.compactEvidence?.selector ?? null,
+          settlement_revert_name: evidence.compactEvidence?.errorName ?? null,
+          settlement_transaction_hash: evidence.compactEvidence?.transactionHash ?? null,
+          settlement_block_hash: evidence.compactEvidence?.blockHash ?? null,
+          settlement_classified_at: evidence.compactEvidence?.classifiedAt ?? null,
         }) ?? this.read(row.idempotency_key)!
       }
       return this.cas(row.idempotency_key, row.version, {
@@ -768,6 +818,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         effectKind: "reward_cashout",
         amountCents: row.amount_cents,
         recipientAddress: row.recipient_address,
+        rehearsalScenario: row.rehearsal_scenario ?? undefined,
       }
     }
     if (row.effect_kind === "reward_funding_refund") {
@@ -958,6 +1009,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         operatorKind,
         effectKind: req.effectKind,
         effectId,
+        rehearsalScenario: req.rehearsalScenario,
       }))
       const operationId = signed.operationId ?? null
       if (operatorKind === "rewards" && (!operationId || !OPERATION_ID_RE.test(operationId))) {
@@ -1038,20 +1090,32 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       existing.community_id !== fields.communityId || existing.booking_id !== fields.bookingId ||
       existing.effect_kind !== fields.effectKind || existing.amount_cents !== (req.amountCents ?? 0) ||
       existing.amount_atomic !== normalizeAtomicAmount(req.amountAtomic) ||
-      existing.recipient_address !== recipient
+      existing.recipient_address !== recipient ||
+      existing.rehearsal_scenario !== (req.rehearsalScenario ?? null)
     ) {
       throw conflictError("Operator settlement idempotency key reused with different effect data")
     }
   }
 
+  private assertRehearsalRequest(req: OperatorSettleRequest): void {
+    if (req.rehearsalScenario == null) return
+    if (
+      this.env.ENVIRONMENT !== "staging"
+      || requestOperatorKind(req) !== "rewards"
+      || req.effectKind !== "reward_cashout"
+    ) {
+      throw badRequestError("Rewards rehearsal fixture is staging-only")
+    }
+  }
+
   /** Expected-state CAS on version; returns the new row or null if the row changed concurrently. */
-  private cas(key: string, fromVersion: number, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
+  private cas(key: string, fromVersion: number, fields: MutableEffectFields): EffectRow | null {
     return this.casInternal(key, fromVersion, null, fields)
   }
-  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
+  private casClaimed(key: string, fromVersion: number, claimToken: string, fields: MutableEffectFields): EffectRow | null {
     return this.casInternal(key, fromVersion, claimToken, fields)
   }
-  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: Partial<Pick<EffectRow, "operation_id" | "signed_tx" | "tx_hash" | "nonce" | "state" | "claim_token" | "claim_expires_at" | "attempt_count" | "next_attempt_at" | "last_error" | "reconciliation_count" | "manual_resolution" | "manual_resolution_reason" | "manual_resolved_by" | "manual_resolved_at" | "preparation_stage" | "preparation_transport_category" | "preparation_http_status" | "preparation_lit_error_token" | "preparation_latency_ms" | "preparation_classified_at">>): EffectRow | null {
+  private casInternal(key: string, fromVersion: number, claimToken: string | null, fields: MutableEffectFields): EffectRow | null {
     const cur = this.read(key)
     if (!cur) return null
     const next: EffectRow = { ...cur, ...fields }
@@ -1064,12 +1128,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
          preparation_stage = ?17, preparation_transport_category = ?18,
          preparation_http_status = ?19, preparation_lit_error_token = ?20,
          preparation_latency_ms = ?21, preparation_classified_at = ?22,
-         version = version + 1, updated_at = ?23
-       WHERE idempotency_key = ?1 AND version = ?24${claimToken == null ? "" : " AND claim_token = ?25"}
+         settlement_revert_selector = ?23, settlement_revert_name = ?24,
+         settlement_transaction_hash = ?25, settlement_block_hash = ?26,
+         settlement_classified_at = ?27,
+         version = version + 1, updated_at = ?28
+       WHERE idempotency_key = ?1 AND version = ?29${claimToken == null ? "" : " AND claim_token = ?30"}
        RETURNING idempotency_key`,
       ...(claimToken == null
-        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, Date.now(), fromVersion]
-        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, Date.now(), fromVersion, claimToken]),
+        ? [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, next.settlement_revert_selector, next.settlement_revert_name, next.settlement_transaction_hash, next.settlement_block_hash, next.settlement_classified_at, Date.now(), fromVersion]
+        : [key, next.operation_id, next.signed_tx, next.tx_hash, next.nonce, next.state, next.claim_token, next.claim_expires_at, next.attempt_count, next.next_attempt_at, next.last_error, next.reconciliation_count, next.manual_resolution, next.manual_resolution_reason, next.manual_resolved_by, next.manual_resolved_at, next.preparation_stage, next.preparation_transport_category, next.preparation_http_status, next.preparation_lit_error_token, next.preparation_latency_ms, next.preparation_classified_at, next.settlement_revert_selector, next.settlement_revert_name, next.settlement_transaction_hash, next.settlement_block_hash, next.settlement_classified_at, Date.now(), fromVersion, claimToken]),
     ).toArray()
     return matched.length === 1 ? this.read(key) : null
   }
@@ -1107,6 +1174,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         : String(r.preparation_lit_error_token) as PreparationLitErrorToken,
       preparation_latency_ms: r.preparation_latency_ms == null ? null : Number(r.preparation_latency_ms),
       preparation_classified_at: r.preparation_classified_at == null ? null : Number(r.preparation_classified_at),
+      rehearsal_scenario: r.rehearsal_scenario == null ? null : String(r.rehearsal_scenario) as RewardRehearsalScenario,
+      settlement_revert_selector: r.settlement_revert_selector == null ? null : String(r.settlement_revert_selector),
+      settlement_revert_name: r.settlement_revert_name == null ? null : String(r.settlement_revert_name),
+      settlement_transaction_hash: r.settlement_transaction_hash == null ? null : String(r.settlement_transaction_hash),
+      settlement_block_hash: r.settlement_block_hash == null ? null : String(r.settlement_block_hash),
+      settlement_classified_at: r.settlement_classified_at == null ? null : String(r.settlement_classified_at),
     }
   }
 
@@ -1126,6 +1199,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
             litErrorToken: row.preparation_lit_error_token,
             latencyMs: row.preparation_latency_ms,
             classifiedAt: row.preparation_classified_at,
+          }
+        : null,
+      settlementFailure: row.settlement_revert_selector && row.settlement_transaction_hash
+        && row.settlement_block_hash && row.settlement_classified_at
+        ? {
+            selector: row.settlement_revert_selector,
+            errorName: row.settlement_revert_name,
+            transactionHash: row.settlement_transaction_hash,
+            blockHash: row.settlement_block_hash,
+            classifiedAt: row.settlement_classified_at,
           }
         : null,
       manualResolution: row.manual_resolution && row.manual_resolution_reason

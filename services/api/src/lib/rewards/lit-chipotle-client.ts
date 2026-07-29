@@ -181,7 +181,12 @@ function litErrorTokenFromEnvelope(input: LitActionResponse): LitErrorToken {
   ) {
     return "action_fetch_failed"
   }
-  if (bounded.includes("invalid") || bounded.includes("missing parameter") || bounded.includes("invalid params")) {
+  if (
+    bounded.includes("invalid")
+    || bounded.includes("missing parameter")
+    || bounded.includes("invalid params")
+    || bounded.includes("pinned policy")
+  ) {
     return "invalid_params"
   }
   if (bounded.includes("timeout") || bounded.includes("timed out")) return "timeout"

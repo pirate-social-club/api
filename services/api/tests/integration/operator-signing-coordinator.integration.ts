@@ -24,6 +24,13 @@ interface ChainConfig {
     cause: { status: number; transportCategory: string; litErrorToken: string }
     latencyMs: number
   }
+  settlementFailure?: {
+    selector: string
+    errorName: string
+    transactionHash: string
+    blockHash: string
+    classifiedAt: string
+  }
 }
 
 type Stub = ReturnType<typeof env.OPERATOR_SIGNING_COORDINATOR.getByName>
@@ -50,19 +57,26 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
           txHash: config.encodeAtomicAmountInHash && input.amountAtomic != null
             ? `0xhash_${input.nonce}_${input.amountAtomic}`
             : `0xhash_${input.nonce}`,
+          operationId: input.operatorKind === "rewards" ? `0x${"ab".repeat(32)}` : null,
         }
       },
       broadcast: async () => {
         if (config.broadcastError) throw new Error(config.broadcastError)
       },
       txLiveness: async (_e, hash) => config.liveness[hash] ?? "absent",
+      rewardVaultFailureEvidence: async () => ({
+        disposition: "reconciliation_required",
+        reason: "bounded rehearsal revert",
+        retryAfterMs: null,
+        compactEvidence: config.settlementFailure ?? null,
+      }),
     })
   })
 }
 
 async function effects(stub: Stub): Promise<Array<Record<string, unknown>>> {
   return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at FROM effects ORDER BY nonce").toArray(),
+    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at, rehearsal_scenario, settlement_revert_selector, settlement_revert_name, settlement_transaction_hash, settlement_block_hash, settlement_classified_at FROM effects ORDER BY nonce").toArray(),
   )
 }
 
@@ -266,6 +280,47 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
       latencyMs: 4_321,
       classifiedAt: Number(row.preparation_classified_at),
     })
+  })
+
+  it("persists and returns bounded settlement revert evidence", async () => {
+    const stub = freshStub()
+    const failure = {
+      selector: "0x01828959",
+      errorName: "OperationAlreadyUsed",
+      transactionHash: `0x${"11".repeat(32)}`,
+      blockHash: `0x${"22".repeat(32)}`,
+      classifiedAt: "2026-07-29T07:00:00.000Z",
+    }
+    await injectChain(stub, {
+      pending: 14,
+      latest: 14,
+      liveness: { "0xhash_14": "failed" },
+      settlementFailure: failure,
+    })
+    await stub.settle(rewardsReq())
+    await runDurableObjectAlarm(stub)
+    await stub.reconcile(rewardsReq())
+    await runDurableObjectAlarm(stub)
+
+    const result = await stub.lookup(rewardsReq())
+    expect(result.state).toBe("reconciliation_required")
+    expect(result.settlementFailure).toEqual(failure)
+    expect((await effects(stub))[0]).toMatchObject({
+      settlement_revert_selector: failure.selector,
+      settlement_revert_name: failure.errorName,
+      settlement_transaction_hash: failure.transactionHash,
+      settlement_block_hash: failure.blockHash,
+      settlement_classified_at: failure.classifiedAt,
+    })
+  })
+
+  it("rejects rehearsal mutations outside the staging runtime", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 15, latest: 15, liveness: {} })
+    await expect(stub.settle(rewardsReq({ rehearsalScenario: "over_limit" }))).rejects.toThrow(
+      "staging-only",
+    )
+    expect(await effects(stub)).toHaveLength(0)
   })
 
   it("reconciles an ambiguous broadcast timeout without signing a replacement", async () => {

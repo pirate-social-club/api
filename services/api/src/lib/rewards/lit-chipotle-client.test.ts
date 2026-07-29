@@ -166,6 +166,24 @@ describe("LitChipotleClient", () => {
     }
   })
 
+  test("classifies pinned-policy action rejections as invalid_params", async () => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      fetchImpl: (async () => response(200, {
+        response: "deadline is outside pinned policy",
+        logs: "",
+        has_error: true,
+      })) as typeof fetch,
+    })
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+      throw new Error("expected rejection")
+    } catch (error) {
+      expect(error).toBeInstanceOf(LitChipotleError)
+      expect((error as LitChipotleError).litErrorToken).toBe("invalid_params")
+    }
+  })
+
   test("maps HTTP authorization failures to a bounded token without reading the body", async () => {
     const client = new LitChipotleClient({
       usageApiKey: SECRET,

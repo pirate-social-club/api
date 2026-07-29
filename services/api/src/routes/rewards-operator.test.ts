@@ -4,6 +4,7 @@ import rewards, {
   createRewardBackendFlipReadinessHandler,
   createRewardCampaignRecoveryHandler,
   createRewardRefundPolicyReadinessHandler,
+  createRewardRehearsalHandler,
   createRewardSettlementResolutionHandler,
   createRewardSolvencyReadinessHandler,
 } from "./rewards"
@@ -12,9 +13,11 @@ import type { Client } from "../lib/sql-client"
 import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_REHEARSAL_EXECUTE_SCOPE,
   REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
 } from "../lib/operator-credential-auth"
+import type { OperatorSettleResult } from "../lib/communities/bookings/operator-signing-coordinator-do"
 
 function withErrors(app: Hono<{ Bindings: Env }>): Hono<{ Bindings: Env }> {
   app.onError((error, c) => {
@@ -137,6 +140,91 @@ describe("reward settlement manual resolution route", () => {
       resolution: "confirmed",
       operatorActorId: "reward-operator",
     })
+  })
+})
+
+function rehearsalApp(input: {
+  environment: string
+  scope: typeof BOOKING_SETTLEMENT_RESOLVE_SCOPE | typeof REWARD_REHEARSAL_EXECUTE_SCOPE
+  invoked?: (scenario: string) => void
+}) {
+  const app = withErrors(new Hono<{ Bindings: Env }>())
+  app.post("/operator/reward_settlements/rehearsal", createRewardRehearsalHandler({
+    authenticate: async () => ({
+      authType: "operator_credential",
+      operatorCredentialId: "opc_test",
+      operatorActorId: "rehearsal-operator",
+      scopes: [input.scope],
+    }),
+    enqueue: async ({ scenario }) => {
+      input.invoked?.(scenario)
+      return {
+        idempotencyKey: `["reward_payout","rehearsal:${scenario}"]`,
+        operationId: null,
+        txHash: null,
+        nonce: null,
+        state: "reserving",
+      } satisfies OperatorSettleResult
+    },
+  }))
+  return {
+    app,
+    env: { ENVIRONMENT: input.environment } as Env,
+  }
+}
+
+describe("reward settlement rehearsal route", () => {
+  test("is absent outside staging before authentication or execution", async () => {
+    let invoked = false
+    const fixture = rehearsalApp({
+      environment: "production",
+      scope: REWARD_REHEARSAL_EXECUTE_SCOPE,
+      invoked: () => { invoked = true },
+    })
+    const response = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "replay" }),
+    }, fixture.env)
+    expect(response.status).toBe(404)
+    expect(invoked).toBe(false)
+  })
+
+  test("requires the dedicated operator scope", async () => {
+    const fixture = rehearsalApp({
+      environment: "staging",
+      scope: BOOKING_SETTLEMENT_RESOLVE_SCOPE,
+    })
+    const response = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "replay" }),
+    }, fixture.env)
+    expect(response.status).toBe(403)
+  })
+
+  test("accepts only one scenario enum and returns private no-store evidence", async () => {
+    const seen: string[] = []
+    const fixture = rehearsalApp({
+      environment: "staging",
+      scope: REWARD_REHEARSAL_EXECUTE_SCOPE,
+      invoked: (scenario) => seen.push(scenario),
+    })
+    const extra = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "replay", amount: 1 }),
+    }, fixture.env)
+    expect(extra.status).toBe(400)
+
+    const response = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "over_limit" }),
+    }, fixture.env)
+    expect(response.status).toBe(202)
+    expect(response.headers.get("cache-control")).toBe("private, no-store")
+    expect(seen).toEqual(["over_limit"])
   })
 })
 

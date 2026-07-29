@@ -30,6 +30,7 @@ export default defineWorkersConfig({
           },
           bindings: {
             ENVIRONMENT: "test",
+            PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",
             STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS: "1000",
             STORY_COORDINATOR_MAX_FEE_PER_GAS_WEI: "1000000000",
             STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI: "500000000",

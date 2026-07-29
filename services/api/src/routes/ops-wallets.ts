@@ -51,7 +51,11 @@ opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
     state: result.state,
     nonce: result.nonce,
     transaction_present: Boolean(result.txHash),
+    transaction_hash: result.txHash ?? null,
     preparation_failure: result.preparationFailure ?? null,
+    settlement_failure: result.settlementFailure ?? null,
+  }, 200, {
+    "cache-control": "private, no-store",
   })
 })
 

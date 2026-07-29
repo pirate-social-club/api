@@ -179,6 +179,19 @@ export const realChain: ChainPrimitives = {
       // effect is enqueued. A stale/queued effect can be safely re-signed with
       // fresh calldata because the vault replay key remains the operation ID.
       const deadline = rewardVaultSigningDeadline(Date.now(), lit.signingDeadlineSeconds)
+      if (input.rehearsalScenario && env.ENVIRONMENT !== "staging") {
+        throw preparationError(
+          "config_resolution",
+          new Error("Rewards rehearsal fixture is staging-only"),
+          startedAt,
+        )
+      }
+      const rehearsalDeadline = input.rehearsalScenario === "deadline_expired"
+        ? BigInt(Math.floor(Date.now() / 1_000) - 1)
+        : deadline
+      const rehearsalPolicyVersion = input.rehearsalScenario === "stale_policy"
+        ? lit.policyVersion + 1n
+        : lit.policyVersion
       let verified: Awaited<ReturnType<typeof executeAndVerifyRewardVaultTransaction>>
       try {
         verified = await executeAndVerifyRewardVaultTransaction(execute, {
@@ -186,8 +199,8 @@ export const realChain: ChainPrimitives = {
           effectId: input.effectId,
           recipient: to,
           amount,
-          deadline,
-          policyVersion: lit.policyVersion,
+          deadline: rehearsalDeadline,
+          policyVersion: rehearsalPolicyVersion,
           vaultAddress: lit.vaultAddress,
           signerAddress: c.operatorAddress,
           chainId: c.chainId,
@@ -296,12 +309,27 @@ export const realChain: ChainPrimitives = {
           },
         },
       })
-      if (evidence.disposition !== "capacity_deferred" || !evidence.evidence) {
+      if (!evidence.evidence) {
         return {
           disposition: "reconciliation_required" as const,
           reason: evidence.reason,
           retryAfterMs: null,
           compactEvidence: null,
+        }
+      }
+      const compactEvidence = {
+        transactionHash: evidence.evidence.transactionHash,
+        blockHash: evidence.evidence.blockHash,
+        selector: evidence.evidence.selector,
+        errorName: evidence.errorName,
+        classifiedAt: evidence.evidence.classifiedAt,
+      }
+      if (evidence.disposition !== "capacity_deferred") {
+        return {
+          disposition: "reconciliation_required" as const,
+          reason: evidence.reason,
+          retryAfterMs: null,
+          compactEvidence,
         }
       }
       const block = await provider.getBlock(receipt.blockHash)
@@ -316,13 +344,7 @@ export const realChain: ChainPrimitives = {
         disposition: "capacity_deferred" as const,
         reason: evidence.reason,
         retryAfterMs,
-        compactEvidence: {
-          method: evidence.evidence.method,
-          transaction_hash: evidence.evidence.transactionHash,
-          block_hash: evidence.evidence.blockHash,
-          selector: evidence.evidence.selector,
-          classified_at: evidence.evidence.classifiedAt,
-        },
+        compactEvidence,
       }
     } catch {
       return {
