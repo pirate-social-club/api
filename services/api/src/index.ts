@@ -1410,6 +1410,12 @@ export const SCHEDULED_COMMUNITY_JOB_LOCK_NAME = "scheduled-cron-community-jobs"
 // deadline. Bounded so a crashed lane self-heals rather than wedging the lane
 // permanently.
 const SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS = 150_000
+// EFP has an explicit 15-minute freshness gate. Keep its small incremental
+// scans and confirmed-write reconciliation off the deadline-trimmed maintenance
+// tail without adding per-job connections: one lane, one shared scope.
+export const SCHEDULED_EFP_LOCK_NAME = "scheduled-cron-efp"
+const SCHEDULED_EFP_DEADLINE_MS = 45_000
+const SCHEDULED_EFP_LEASE_TTL_MS = 180_000
 
 type ScheduledPriorityJobName =
   | "reconcile_reward_payouts"
@@ -1628,7 +1634,7 @@ const handler: ExportedHandler<Env> = {
       ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
       return
     }
-    // Two lanes, two leases, run concurrently.
+    // Three lanes, three leases, run concurrently.
     //
     // Community jobs are foreground delivery work — the retry engine for every
     // community job, including Telegram channel publishing. Maintenance
@@ -1696,6 +1702,17 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS,
         limit: 1,
         tasks: lanes.community,
+      }),
+      runLane({
+        lane: "efp",
+        lockName: SCHEDULED_EFP_LOCK_NAME,
+        deadlineMs: SCHEDULED_EFP_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_EFP_LEASE_TTL_MS,
+        limit: 1,
+        // The four tasks are one correctness unit: all three expected-chain
+        // cursors plus confirmed-write reconciliation must receive a start.
+        minimumStartsBeforeDeadline: lanes.efp.length,
+        tasks: lanes.efp,
       }),
       runLane({
         lane: "maintenance",

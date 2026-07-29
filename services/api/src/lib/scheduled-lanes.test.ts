@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { COMMUNITY_JOB_LANE_TASK, splitScheduledLanes } from "./scheduled-lanes"
+import {
+  COMMUNITY_JOB_LANE_TASK,
+  EFP_LANE_TASKS,
+  splitScheduledLanes,
+} from "./scheduled-lanes"
 import { runScheduledBatch, type CronLock } from "./scheduled-job-runner"
 
 describe("splitScheduledLanes", () => {
-  test("puts the community drain in its own lane and everything else in maintenance", () => {
+  test("isolates community delivery and EFP freshness from maintenance", () => {
     const lanes = splitScheduledLanes([
       { name: "reconcile_reward_payouts" },
       { name: COMMUNITY_JOB_LANE_TASK },
+      ...EFP_LANE_TASKS.map((name) => ({ name })),
       { name: "monitor_reward_campaigns" },
     ])
     expect(lanes.community.map((t) => t.name)).toEqual([COMMUNITY_JOB_LANE_TASK])
+    expect(lanes.efp.map((t) => t.name)).toEqual(EFP_LANE_TASKS)
     expect(lanes.maintenance.map((t) => t.name)).toEqual([
       "reconcile_reward_payouts",
       "monitor_reward_campaigns",
@@ -17,9 +23,9 @@ describe("splitScheduledLanes", () => {
   })
 
   test("loses no task and never duplicates one across lanes", () => {
-    const names = ["a", COMMUNITY_JOB_LANE_TASK, "b", "c"]
+    const names = ["a", COMMUNITY_JOB_LANE_TASK, "scan_efp_base", "b", "c"]
     const lanes = splitScheduledLanes(names.map((name) => ({ name })))
-    expect([...lanes.community, ...lanes.maintenance].map((t) => t.name).sort()).toEqual([...names].sort())
+    expect([...lanes.community, ...lanes.efp, ...lanes.maintenance].map((t) => t.name).sort()).toEqual([...names].sort())
   })
 })
 
@@ -123,6 +129,35 @@ describe("scheduler lane isolation", () => {
     expect(started).toEqual(["monitor_reward_campaigns", COMMUNITY_JOB_LANE_TASK])
     expect(community.result?.skipped ?? []).toEqual([])
     expect(communityStart).toBeGreaterThanOrEqual(95_000)
+  })
+
+  test("a held maintenance lease cannot defer EFP freshness work", async () => {
+    const started: string[] = []
+    const maintenance = runScheduledBatch({
+      deadlineMs: 30_000,
+      leaseTtlMs: 120_000,
+      limit: 2,
+      lock: heldLock(),
+      owner: "tick",
+      tasks: [{ name: "monitor_reward_campaigns", run: async () => undefined }],
+    })
+    const efp = runScheduledBatch({
+      deadlineMs: 45_000,
+      leaseTtlMs: 180_000,
+      limit: 1,
+      lock: freeLock([], "efp"),
+      minimumStartsBeforeDeadline: EFP_LANE_TASKS.length,
+      owner: "tick",
+      tasks: EFP_LANE_TASKS.map((name) => ({
+        name,
+        run: async () => { started.push(name) },
+      })),
+    })
+
+    const [maintenanceResult, efpResult] = await Promise.all([maintenance, efp])
+    expect(maintenanceResult.acquired).toBe(false)
+    expect(efpResult.acquired).toBe(true)
+    expect(started).toEqual(EFP_LANE_TASKS)
   })
 
   test("each lane still refuses to run twice concurrently", async () => {
