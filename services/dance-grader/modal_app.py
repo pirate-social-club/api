@@ -38,8 +38,8 @@ def _install_pose_model() -> None:
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .uv_sync(extras=["runtime", "service"])
-    .add_local_python_source("dance_grader")
     .run_function(_install_pose_model)
+    .add_local_python_source("dance_grader")
 )
 app = modal.App(APP_NAME)
 service_secret = modal.Secret.from_name("dance-grader-service")
