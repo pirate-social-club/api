@@ -15,8 +15,11 @@ import { badRequestError } from "../errors"
 const REHEARSAL_USER_ID = "usr_eb47ab813754497d8f107ca01d762bc9"
 const REHEARSAL_RECIPIENT = "0xCc4049cEd4ff4C3CA25F7e32eDb8c69dEA4bB12f"
 const CONSUMED_SCENARIO_1_EFFECT_ID = "rpe_4d49a8ee731d4fa2b6eab990a013c757"
+const SCENARIO_13_FUNDING_EFFECT_ID = "rcf_13000000000000000000000020260729"
 
-const FIXTURES: Record<RewardRehearsalScenario, {
+type PayoutScenario = Exclude<RewardRehearsalScenario, "refund_while_payouts_paused">
+
+const PAYOUT_FIXTURES: Record<PayoutScenario, {
   scenarioNumber: 3 | 4 | 5 | 6
   payoutEffectId: string
   amountCents: number
@@ -48,6 +51,7 @@ export function isRewardRehearsalScenario(value: unknown): value is RewardRehear
     || value === "over_limit"
     || value === "deadline_expired"
     || value === "stale_policy"
+    || value === "refund_while_payouts_paused"
 }
 
 export function rewardRehearsalRequest(
@@ -57,7 +61,18 @@ export function rewardRehearsalRequest(
   if (env.ENVIRONMENT !== "staging") {
     throw badRequestError("Rewards rehearsal fixture is staging-only")
   }
-  const fixture = FIXTURES[scenario]
+  if (scenario === "refund_while_payouts_paused") {
+    return {
+      operatorKind: "rewards",
+      fundingEffectId: SCENARIO_13_FUNDING_EFFECT_ID,
+      idempotencyKey: SCENARIO_13_FUNDING_EFFECT_ID,
+      effectKind: "reward_funding_refund",
+      amountAtomic: "500000",
+      recipientAddress: REHEARSAL_RECIPIENT,
+      rehearsalScenario: scenario,
+    }
+  }
+  const fixture = PAYOUT_FIXTURES[scenario]
   return {
     operatorKind: "rewards",
     userId: REHEARSAL_USER_ID,

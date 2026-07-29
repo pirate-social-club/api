@@ -14,7 +14,12 @@ const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
-export type RewardRehearsalScenario = "replay" | "over_limit" | "deadline_expired" | "stale_policy"
+export type RewardRehearsalScenario =
+  | "replay"
+  | "over_limit"
+  | "deadline_expired"
+  | "stale_policy"
+  | "refund_while_payouts_paused"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -1153,7 +1158,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (
       this.env.ENVIRONMENT !== "staging"
       || requestOperatorKind(req) !== "rewards"
-      || req.effectKind !== "reward_cashout"
+      || (
+        req.effectKind !== "reward_cashout"
+        && !(
+          req.effectKind === "reward_funding_refund"
+          && req.rehearsalScenario === "refund_while_payouts_paused"
+        )
+      )
     ) {
       throw badRequestError("Rewards rehearsal fixture is staging-only")
     }
