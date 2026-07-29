@@ -22,6 +22,7 @@ describe("reward rehearsal fixtures", () => {
 
     expect(replay.payoutEffectId).toBe("rpe_4d49a8ee731d4fa2b6eab990a013c757")
     expect(overLimit.amountCents).toBe(60)
+    expect(overLimit.idempotencyKey).toBe("rehearsal:scenario5:20260729:v2")
     expect([replay, deadline, stale].map((fixture) => fixture.amountCents)).toEqual([50, 50, 50])
     expect(new Set([deadline.payoutEffectId, overLimit.payoutEffectId, stale.payoutEffectId]).size).toBe(3)
     expect([replay, deadline, overLimit, stale].every((fixture) =>

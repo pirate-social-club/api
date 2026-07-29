@@ -184,6 +184,26 @@ describe("LitChipotleClient", () => {
     }
   })
 
+  test("classifies a Lit-shaped HTTP 500 policy rejection without persisting provider text", async () => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      maxAttempts: 1,
+      fetchImpl: (async () => response(500, {
+        response: `policyVersion is invalid ${SECRET}`,
+        logs: "",
+        has_error: true,
+      })) as typeof fetch,
+    })
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+      throw new Error("expected rejection")
+    } catch (error) {
+      expect(error).toBeInstanceOf(LitChipotleError)
+      expect((error as LitChipotleError).litErrorToken).toBe("invalid_params")
+      expect(String(error)).not.toContain(SECRET)
+    }
+  })
+
   test("maps HTTP authorization failures to a bounded token without reading the body", async () => {
     const client = new LitChipotleClient({
       usageApiKey: SECRET,

@@ -62,7 +62,7 @@ export function rewardRehearsalRequest(
     operatorKind: "rewards",
     userId: REHEARSAL_USER_ID,
     payoutEffectId: fixture.payoutEffectId,
-    idempotencyKey: `rehearsal:scenario${fixture.scenarioNumber}:20260729:v1`,
+    idempotencyKey: `rehearsal:scenario${fixture.scenarioNumber}:20260729:${scenario === "over_limit" ? "v2" : "v1"}`,
     effectKind: "reward_cashout",
     amountCents: fixture.amountCents,
     recipientAddress: REHEARSAL_RECIPIENT,

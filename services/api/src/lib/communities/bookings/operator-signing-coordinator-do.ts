@@ -638,13 +638,16 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return this.ctx.storage.transactionSync(() => {
       const current = this.read(row.idempotency_key)
       if (!current || current.nonce != null || (current.state !== "reserving" && current.state !== "failed_preparation")) return current ?? row
+      const used = new Set(this.ctx.storage.sql.exec<{ nonce: number }>(
+        "SELECT nonce FROM effects WHERE nonce IS NOT NULL AND idempotency_key <> ?1",
+        current.idempotency_key,
+      ).toArray().map(({ nonce }) => Number(nonce)))
+      let nonce = chainPending
+      while (used.has(nonce)) nonce += 1
       this.ctx.storage.sql.exec(
         "INSERT INTO nonce_state (id, next_nonce) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET next_nonce = MAX(next_nonce, ?1)",
-        chainPending,
+        nonce + 1,
       )
-      const nonce = Number(this.ctx.storage.sql.exec<{ n: number }>(
-        "UPDATE nonce_state SET next_nonce = next_nonce + 1 WHERE id = 1 RETURNING (next_nonce - 1) AS n",
-      ).one().n)
       return this.cas(current.idempotency_key, current.version, { nonce, state: "reserving", next_attempt_at: null, last_error: null }) ?? this.read(current.idempotency_key)!
     })
   }
@@ -953,10 +956,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   private recordRetry(row: EffectRow, error: unknown): EffectRow {
     const attemptCount = row.attempt_count + 1
     const diagnostic = boundedPreparationDiagnostic(error, Date.now())
+    const releaseUnsentNonce = row.signed_tx == null && row.tx_hash == null
     return this.cas(row.idempotency_key, row.version, {
       attempt_count: attemptCount,
       next_attempt_at: Date.now() + this.retryDelay(attemptCount),
       last_error: errMsg(error).slice(0, 1_000),
+      nonce: releaseUnsentNonce ? null : row.nonce,
+      claim_token: releaseUnsentNonce ? null : row.claim_token,
+      claim_expires_at: releaseUnsentNonce ? null : row.claim_expires_at,
       preparation_stage: diagnostic.stage,
       preparation_transport_category: diagnostic.transportCategory,
       preparation_http_status: diagnostic.httpStatus,
