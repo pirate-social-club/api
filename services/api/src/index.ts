@@ -200,14 +200,19 @@ function hasCredentialBearingHeader(request: Request): boolean {
 }
 
 app.use("*", async (c, next) => {
-  if (!hasCredentialBearingHeader(c.req.raw)) {
+  if (
+    !hasCredentialBearingHeader(c.req.raw)
+    || isPublicReadCacheRequest(c.req.raw)
+  ) {
     await next()
     return
   }
 
   // A credential-bearing response must never be reusable by another caller.
-  // Apply this at the outer app boundary rather than relying on every
-  // authenticated route to remember its own cache policy.
+  // Explicit public-read routes are the only exception: their response
+  // contract is authentication-invariant even when a client happens to send
+  // an Authorization header. Apply this at the outer app boundary rather than
+  // relying on every authenticated route to remember its own cache policy.
   try {
     await next()
   } finally {

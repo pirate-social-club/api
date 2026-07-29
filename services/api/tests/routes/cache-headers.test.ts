@@ -30,6 +30,9 @@ describe("public read cache headers", () => {
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home", {
       headers: { Authorization: "Bearer token" },
     }))).toBe(false)
+    expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/feed/home/public", {
+      headers: { Authorization: "Bearer ignored-by-public-route" },
+    }))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-posts/pst_1"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-comments/pst_1"))).toBe(true)
     expect(isPublicReadCacheRequest(new Request("https://api.pirate.sc/public-communities/community-slug"))).toBe(true)
