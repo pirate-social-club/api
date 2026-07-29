@@ -437,6 +437,26 @@ app.route("/auth", auth)
 app.route("/bookings", bookings)
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
+// Operational state must never be served from a cache. These endpoints report
+// live state an operator acts on — which deliveries are stranded, which wallets
+// are underfunded — and a replayed response is worse than no response: it shows
+// work that is already done, or hides work that just appeared.
+//
+// Observed on staging: the unfiltered uncertain-delivery count returned a
+// 19-minute-old body (cf-cache-status HIT, age 1164) reporting a stranded
+// delivery that had already been resolved. Filtered URLs looked correct only
+// because they were different cache keys that had not been populated yet.
+//
+// `no-store` is set BEFORE the handler runs and on every response, including
+// errors, so nothing downstream has to remember to opt out. It also applies to
+// the whole /admin/ops namespace rather than the one route that surfaced the
+// bug, because every endpoint here reports mutable operational state.
+
+app.use("/admin/ops/*", async (c, next) => {
+  await next()
+  c.header("cache-control", "private, no-store, max-age=0, must-revalidate")
+  c.header("pragma", "no-cache")
+})
 app.route("/admin/ops", opsWallets)
 app.route("/admin/ops/telegram", opsTelegramDeliveries)
 app.route("/internal/hns-edge-alerts", hnsEdgeAlerts)
