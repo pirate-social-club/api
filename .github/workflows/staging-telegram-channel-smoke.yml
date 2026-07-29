@@ -22,6 +22,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   real-telegram-delivery:
@@ -37,6 +38,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: api
+
+      - name: Read compatible Core commit
+        working-directory: api
+        run: echo "CORE_SHA=$(<.github/ci-refs/core.sha)" >> "$GITHUB_ENV"
+
+      - name: Check out compatible Core
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/core
+          ref: ${{ env.CORE_SHA }}
+          path: core
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -44,15 +58,15 @@ jobs:
           bun-version: 1.2.21
 
       - name: Install shared dependencies
-        working-directory: services/shared
+        working-directory: api/services/shared
         run: bun install --frozen-lockfile
 
       - name: Install API dependencies
-        working-directory: services/api
+        working-directory: api/services/api
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
       - name: Verify real Telegram delivery and cleanup
-        working-directory: services/api
+        working-directory: api/services/api
         run: bun run smoke:telegram-channel
