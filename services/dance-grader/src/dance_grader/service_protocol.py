@@ -7,6 +7,28 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+REFERENCE_PERMANENT_FAILURE_CODES = frozenset(
+    {
+        "video_invalid",
+        "video_limits_exceeded",
+        "invalid_timeline",
+        "multiple_people",
+        "pose_result_invalid",
+        "insufficient_pose_presence",
+        "insufficient_coverage",
+        "insufficient_motion",
+    }
+)
+
+
+def reference_failure_reason(error: BaseException) -> str:
+    code = getattr(error, "code", None)
+    return (
+        code
+        if isinstance(code, str) and code in REFERENCE_PERMANENT_FAILURE_CODES
+        else ("scoring_unavailable")
+    )
+
 
 def canonical_json(value: dict) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()

@@ -78,7 +78,11 @@ def _extract(path: Path):
 @app.function(image=image, secrets=[service_secret], cpu=1.0, memory=4096, timeout=300)
 def extract_reference_features(payload: dict) -> None:
     from dance_grader import ScorerConfig, build_reference_artifact
-    from dance_grader.service_protocol import download_verified, upload_bytes
+    from dance_grader.service_protocol import (
+        download_verified,
+        reference_failure_reason,
+        upload_bytes,
+    )
 
     result: dict
     try:
@@ -116,12 +120,18 @@ def extract_reference_features(payload: dict) -> None:
                 "outcome": "ready",
                 "reference_feature_sha256": artifact.sha256,
                 "reference_feature_size_bytes": len(body),
-                "metrics": extraction.metrics.__dict__,
+                "metrics": {
+                    **extraction.metrics.__dict__,
+                    "width": extraction.pose_sequence.width,
+                    "height": extraction.pose_sequence.height,
+                    "fps_millihertz": round(extraction.pose_sequence.fps * 1000),
+                },
                 "versions": {
                     "pose_model": extraction.pose_model_version,
                     "pose_model_sha256": extraction.pose_model_sha256,
                     "pose_runtime": extraction.pose_runtime_version,
                     "feature_schema": extraction.feature_schema_version,
+                    "scorer": config.version,
                     "artifact": artifact.artifact_version,
                 },
             }
@@ -129,7 +139,7 @@ def extract_reference_features(payload: dict) -> None:
         result = {
             "subject": payload["subject"],
             "outcome": "failed",
-            "reason": getattr(error, "code", "scoring_unavailable"),
+            "reason": reference_failure_reason(error),
         }
     _callback(payload, result)
 
@@ -202,11 +212,11 @@ def grade_attempt(payload: dict) -> None:
                 "grade": grade.to_dict(),
                 "extraction_metrics": extraction.metrics.__dict__,
             }
-    except Exception as error:  # noqa: BLE001 - terminal job boundary must callback on all failures
+    except Exception:  # noqa: BLE001 - terminal job boundary must callback on all failures
         result = {
             "subject": payload["subject"],
             "outcome": "failed",
-            "reason": getattr(error, "code", "scoring_unavailable"),
+            "reason": "scoring_unavailable",
         }
     _callback(payload, result)
 
