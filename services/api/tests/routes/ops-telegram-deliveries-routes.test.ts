@@ -162,6 +162,9 @@ describe("Telegram staging synthetic routes", () => {
 
     for (const request of [
       new Request("http://pirate.test/admin/ops/telegram/synthetic-fixture"),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-fixture/drain", {
+        method: "POST",
+      }),
       new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1"),
       new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1/cleanup", {
         method: "POST",

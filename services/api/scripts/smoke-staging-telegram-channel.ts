@@ -18,6 +18,7 @@ const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? "").trim()
 const configuredCommunity = String(process.env.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID ?? "").trim()
 const timeoutMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS ?? 20 * 60_000)
 const pollMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_POLL_MS ?? 15_000)
+const networkAttempts = 3
 
 if (!adminToken) throw new Error("PIRATE_ADMIN_TOKEN is required")
 if (!new URL(apiBase).hostname.includes("staging")) {
@@ -31,15 +32,30 @@ async function request(input: {
   asUserId?: string
   okStatuses?: number[]
 }): Promise<Json> {
-  const response = await fetch(`${apiBase}${input.path}`, {
-    method: input.method ?? "GET",
-    headers: {
-      "content-type": "application/json",
-      "x-admin-token": adminToken,
-      ...(input.asUserId ? { "x-admin-as-user-id": input.asUserId } : {}),
-    },
-    body: input.body ? JSON.stringify(input.body) : undefined,
-  })
+  let response: Response | null = null
+  let lastNetworkError: unknown
+  for (let attempt = 1; attempt <= networkAttempts; attempt += 1) {
+    try {
+      response = await fetch(`${apiBase}${input.path}`, {
+        method: input.method ?? "GET",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": adminToken,
+          ...(input.asUserId ? { "x-admin-as-user-id": input.asUserId } : {}),
+        },
+        body: input.body ? JSON.stringify(input.body) : undefined,
+      })
+      break
+    } catch (error) {
+      lastNetworkError = error
+      if (attempt < networkAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1_000))
+      }
+    }
+  }
+  if (!response) {
+    throw lastNetworkError
+  }
   const text = await response.text()
   const payload = text ? JSON.parse(text) as Json : {}
   if (!(input.okStatuses ?? [200, 201]).includes(response.status)) {
@@ -95,6 +111,13 @@ try {
 
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    const drained = await request({
+      method: "POST",
+      path: withCommunity("/admin/ops/telegram/synthetic-fixture/drain", communityId),
+    })
+    if (Number(drained.failed_communities) > 0) {
+      throw new Error("fixture-scoped community job drain failed")
+    }
     const state = await request({
       path: withCommunity(
         `/admin/ops/telegram/synthetic-deliveries/${encodeURIComponent(postId)}`,
