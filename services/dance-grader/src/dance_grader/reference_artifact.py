@@ -46,6 +46,55 @@ class ReferenceFeatureArtifact:
     def sha256(self) -> str:
         return hashlib.sha256(self.canonical_json()).hexdigest()
 
+    @classmethod
+    def from_json(cls, payload: bytes) -> ReferenceFeatureArtifact:
+        value = json.loads(payload)
+        artifact = cls(**value)
+        if artifact.canonical_json() != payload:
+            raise ValueError("reference artifact is not canonical JSON")
+        return artifact
+
+    def to_feature_sequence(self) -> FeatureSequence:
+        def restore_optional(values, scale: int) -> np.ndarray:
+            return np.asarray(
+                [
+                    [np.nan if component is None else component / scale for component in row]
+                    for row in values
+                ],
+                dtype=np.float64,
+            )
+
+        positions = np.asarray(
+            [
+                [
+                    [np.nan if component is None else component / 1_000_000 for component in point]
+                    for point in row
+                ]
+                for row in self.positions_microunits
+            ],
+            dtype=np.float64,
+        )
+        velocity = np.asarray(
+            [
+                [
+                    [np.nan if component is None else component / 1_000_000 for component in point]
+                    for point in row
+                ]
+                for row in self.velocity_microunits
+            ],
+            dtype=np.float64,
+        )
+        return FeatureSequence(
+            times=np.asarray(self.times_ms, dtype=np.float64) / 1000,
+            angles=restore_optional(self.angles_millidegrees, 1000),
+            angle_confidence=np.asarray(self.angle_confidence_bps, dtype=np.float64) / 10_000,
+            positions=positions,
+            position_confidence=np.asarray(self.position_confidence_bps, dtype=np.float64) / 10_000,
+            velocity=velocity,
+            velocity_confidence=np.asarray(self.velocity_confidence_bps, dtype=np.float64) / 10_000,
+            usable=np.asarray(self.usable_frames, dtype=bool),
+        )
+
 
 def _optional_integer(value: float, scale: int) -> int | None:
     if not np.isfinite(value):

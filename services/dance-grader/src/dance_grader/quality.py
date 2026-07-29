@@ -15,7 +15,15 @@ def assess_quality(
     attempt: PoseSequence,
     config: ScorerConfig,
 ) -> QualityMetrics:
-    duration_ratio = attempt.duration_sec / reference.duration_sec
+    return assess_attempt_quality(reference.duration_sec, attempt, config)
+
+
+def assess_attempt_quality(
+    reference_duration_sec: float,
+    attempt: PoseSequence,
+    config: ScorerConfig,
+) -> QualityMetrics:
+    duration_ratio = attempt.duration_sec / reference_duration_sec
     detected = np.asarray([frame.landmarks is not None for frame in attempt.frames])
     pose_presence = float(np.mean(detected))
 

@@ -19,7 +19,7 @@ from .models import (
     PoseSequence,
     ScorerConfig,
 )
-from .quality import assess_quality
+from .quality import assess_attempt_quality, assess_quality
 
 
 def _similarity(error: np.ndarray, confidence: np.ndarray, scale: float) -> float:
@@ -226,4 +226,117 @@ def grade_dance(
         components=components,
         canonical_fingerprint_material_hex=canonical_fingerprint_material(attempt_features).hex(),
         versions=versions,
+    )
+
+
+def grade_dance_against_features(
+    reference_features: FeatureSequence,
+    reference_duration_sec: float,
+    attempt: PoseSequence,
+    *,
+    mirror_policy: MirrorPolicy = MirrorPolicy.STRICT,
+    config: ScorerConfig | None = None,
+    calibration: CalibrationArtifact | None = None,
+    reference_versions: dict[str, str] | None = None,
+) -> GradeResult:
+    """Grade an attempt against a persisted reference artifact."""
+    config = config or ScorerConfig()
+    calibration = calibration or provisional_calibration()
+    quality = assess_attempt_quality(reference_duration_sec, attempt, config)
+    versions = {
+        "scorer": config.version,
+        "feature_schema": config.feature_schema_version,
+        "calibration": calibration.version,
+        "calibration_checksum": calibration.checksum,
+        "fingerprint": config.fingerprint_version,
+        **(reference_versions or {}),
+    }
+    if quality.outcome != "passed":
+        return GradeResult(
+            "rejected",
+            quality.reason,
+            None,
+            calibration.admitted,
+            "canonical",
+            quality,
+            None,
+            None,
+            None,
+            versions,
+        )
+
+    canonical_attempt = build_features(attempt, config)
+    reference_motion = _motion_energy(reference_features)
+    if reference_motion > 1e-8 and (
+        _motion_energy(canonical_attempt) / reference_motion < config.min_motion_energy_ratio
+    ):
+        return GradeResult(
+            "rejected",
+            "insufficient_motion",
+            None,
+            calibration.admitted,
+            "canonical",
+            quality,
+            None,
+            None,
+            None,
+            versions,
+        )
+
+    variants = [("canonical", canonical_attempt)]
+    if mirror_policy == MirrorPolicy.ALLOWED:
+        variants.append(("mirrored", build_features(attempt, config, mirrored=True)))
+    best: tuple[float, str, FeatureSequence, Alignment, ComponentScores] | None = None
+    for name, attempt_features in variants:
+        alignment = find_global_alignment(reference_features, attempt_features, config)
+        if alignment is None:
+            continue
+        raw, components = _score_variant(reference_features, attempt_features, alignment, config)
+        if best is None or raw > best[0]:
+            best = (raw, name, attempt_features, alignment, components)
+    if best is None:
+        return GradeResult(
+            "rejected",
+            "insufficient_alignment",
+            None,
+            calibration.admitted,
+            "canonical",
+            quality,
+            _empty_alignment(),
+            None,
+            None,
+            versions,
+        )
+
+    raw, name, attempt_features, alignment, components = best
+    if is_post_alignment_reference_replay(
+        reference_features,
+        attempt_features,
+        alignment.reference_indices,
+        alignment.attempt_indices,
+        config,
+    ):
+        return GradeResult(
+            "rejected",
+            "reference_replay",
+            None,
+            calibration.admitted,
+            name,
+            quality,
+            alignment.metrics,
+            None,
+            None,
+            versions,
+        )
+    return GradeResult(
+        "scored",
+        None,
+        calibration.score(raw),
+        calibration.admitted,
+        name,
+        quality,
+        alignment.metrics,
+        components,
+        canonical_fingerprint_material(attempt_features).hex(),
+        versions,
     )

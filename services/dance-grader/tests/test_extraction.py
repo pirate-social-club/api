@@ -10,8 +10,10 @@ from dance_grader import (
     ExtractionCaps,
     ExtractionError,
     MediaPipeTasksPoseDetector,
+    ReferenceFeatureArtifact,
     build_reference_artifact,
     extract_pose_sequence,
+    grade_dance_against_features,
 )
 from dance_grader.extraction import (
     DecodedFrame,
@@ -122,6 +124,17 @@ def test_extraction_preserves_timeline_and_builds_deterministic_reference_artifa
     assert artifact.canonical_json() == rebuilt.canonical_json()
     assert b"landmarks" not in artifact.canonical_json()
     assert artifact.pose_model_sha256 == "a" * 64
+    restored = ReferenceFeatureArtifact.from_json(artifact.canonical_json())
+    restored_features = restored.to_feature_sequence()
+    assert len(restored_features.times) == len(artifact.times_ms)
+    assert np.isfinite(restored_features.positions).any()
+    attempt = make_sequence(duration_sec=4.0, fps=15.0, noise=0.01)
+    grade = grade_dance_against_features(
+        restored_features,
+        artifact.duration_ms / 1000,
+        attempt,
+    )
+    assert grade.outcome == "scored"
 
 
 def test_multiple_people_fails_closed_and_closes_detector() -> None:
