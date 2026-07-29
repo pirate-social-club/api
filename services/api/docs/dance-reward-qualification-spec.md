@@ -29,6 +29,12 @@ V1 fixes the following product decisions:
 - Full landmark sequences are not retained by default.
 - Reference choreography is a versioned first-class resource. It is not only a new song artifact
   kind or a mutable field on the song post.
+- Choreography authorship is decoupled from music ownership. Any user's dance-video post that
+  references a song can host a choreography; the musician publishes an "official" one the same way,
+  and the official mark grants attribution and placement only — no scoring effect, no exclusivity.
+  There is no per-song permission over choreography creation in v1: rights and moderation govern the
+  video, third-party-reward consent governs money, and campaign revision pinning selects what earns.
+  A per-song policy can be added later as a purely additive column if demand appears.
 - Dance scoring and campaign qualification use integer basis points from `0` through `10000`.
 - Dance score terms are versioned independently from karaoke score terms.
 - The first production worker is a Modal asynchronous CPU function: the platform-independent
@@ -126,7 +132,7 @@ These are implementation and rollout gates.
 
 ## Terminology
 
-- **Choreography:** the logical dance attached to a song post.
+- **Choreography:** the logical dance, hosted by a dance-video post and referencing a song post.
 - **Choreography revision:** an immutable reference video and derived reference feature set.
 - **Dance session:** the authenticated, expiring authorization to upload one attempt.
 - **Dance attempt:** the durable record of one submitted recording and its terminal grading result.
@@ -175,9 +181,13 @@ Create `dance_choreographies`:
 
 - `dance_choreography_id TEXT PRIMARY KEY`;
 - `community_id TEXT NOT NULL`;
-- `post_id TEXT NOT NULL`;
-- `song_artifact_bundle_id TEXT NOT NULL`;
-- `creator_user_id TEXT NOT NULL`;
+- `host_post_id TEXT NOT NULL` — the dance-video post that presents this choreography (may be the
+  song post itself for a musician-authored dance); at most one choreography per host post;
+- `referenced_song_post_id TEXT NOT NULL` and `song_artifact_bundle_id TEXT NOT NULL` — the song
+  the host post references; reward accounting resolves through these;
+- `creator_user_id TEXT NOT NULL` — the host post's author, not necessarily the musician;
+- `official INTEGER NOT NULL DEFAULT 0` — set by the song owner for attribution and UI prominence
+  only;
 - `status TEXT NOT NULL` in `draft`, `processing`, `ready`, `disabled`, `failed`;
 - `active_revision_id TEXT`;
 - `created_at`, `updated_at`;
@@ -206,6 +216,25 @@ Create `dance_choreography_revisions`:
 A ready revision is immutable. Editing reference media creates a new revision. An attempt pins the
 active revision when its session is created; later activation of another revision cannot change an
 existing session or attempt.
+
+### Ownership and control
+
+Creation is open: any user may turn their own dance-video post that references a song into a
+choreography. A song accumulates many choreographies through many hosts; the song surface may
+aggregate them and feature the official one. V1 introduces no per-song permission over choreography
+creation — the existing control surfaces are sufficient: rights/moderation act on the host video,
+`requireThirdPartyRewardsAllowed` gates money, and campaign revision pinning decides exactly which
+dance earns.
+
+Disable semantics are fixed now so later controls stay additive: a rights or moderation action sets
+the choreography (or a revision) to `disabled`; disabled choreography accepts no new sessions;
+in-flight attempts finalize normally; a campaign pinned to a disabled revision stops admitting new
+qualifications, already-pending qualifications are unaffected, and unspent budget follows the
+existing campaign refund lifecycle.
+
+The v1 pilot operator-seeds a dance-video post referencing the pilot song and creates its
+choreography, so the eventual creator flow is exercised without assuming the musician authored the
+dance.
 
 The public reference video may reuse the existing durable song-media storage primitives, but the
 choreography row remains the canonical version and policy boundary. Derived reference features may
@@ -341,8 +370,9 @@ Request:
 }
 ```
 
-The API authenticates the user, resolves the song and ready active choreography revision, checks
-feature readiness and rollout flags, creates the attempt/session, and returns:
+The API authenticates the user, resolves the host post's choreography, its ready active revision,
+and the referenced song, checks feature readiness and rollout flags, creates the attempt/session,
+and returns:
 
 ```json
 {
@@ -634,8 +664,11 @@ Recommended policy version:
 dance_rank_eligible_v1
 ```
 
-The current outbox uniqueness of `(user_id, post_id, activity, reward_period_key)` remains. Multiple
-passing dance attempts on one UTC day therefore produce at most one dance qualification event.
+The current outbox uniqueness of `(user_id, post_id, activity, reward_period_key)` remains, with
+`post_id` being the referenced song post resolved from the pinned choreography — so many
+choreographies over one song still produce at most one dance qualification per user and UTC day,
+and the cross-activity practice-day fence keeps operating on the song. Multiple passing dance
+attempts on one UTC day therefore produce at most one dance qualification event.
 
 ### Campaign matching
 
